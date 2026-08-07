@@ -27,16 +27,16 @@ python manage.py createsuperuser
 # 7. Provision your first tenant
 python manage.py provision_tenant \
   --name "Demo Hospital" \
-  --slug demohospital \
+  --subdomain demo-hospital \
   --city Mumbai \
   --state Maharashtra \
+  --admin-mobile 9999999999 \
   --admin-email admin@demohospital.in \
-  --plan trial \
-  --band small
+  --tier growth
 
 echo ""
 echo "=== Setup Complete ==="
 echo "  Run: python manage.py runserver"
 echo "  API Docs: http://localhost:8000/api/docs/"
-echo "  Login: POST http://localhost:8000/api/auth/login/"
+echo "  Staff login: POST http://localhost:8000/api/v1/auth/login/staff/"
 echo ""
