@@ -44,7 +44,7 @@ python manage.py createsuperuser
 
 Use this account to log in as a platform admin.
 
-## Adding a hospital
+## Add a hospital
 
 ```bash
 python manage.py provision_tenant --name "Demo Hospital" --subdomain demo-hospital \
@@ -53,14 +53,6 @@ python manage.py provision_tenant --name "Demo Hospital" --subdomain demo-hospit
 
 This creates the hospital and its first admin login (staff mobile number +
 password shown in the command output).
-
-To load a full set of demo hospitals, staff, and patients instead:
-
-```bash
-python manage.py seed_full_demo
-```
-
-This creates a `DEMO_CREDENTIALS.md` file with login details for every account.
 
 ## Logging in
 
