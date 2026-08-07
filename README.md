@@ -36,9 +36,25 @@ npm run dev
 The app runs at `http://localhost:3000` and the backend at
 `http://localhost:8000`.
 
-## Adding a hospital / demo data
+## Create superadmin
 
-To load a full set of demo hospitals, staff, and patients:
+```bash
+python manage.py createsuperuser
+```
+
+Use this account to log in as a platform admin.
+
+## Adding a hospital
+
+```bash
+python manage.py provision_tenant --name "Demo Hospital" --subdomain demo-hospital \
+  --city Mumbai --state Maharashtra --admin-mobile 9999999999 --tier growth
+```
+
+This creates the hospital and its first admin login (staff mobile number +
+password shown in the command output).
+
+To load a full set of demo hospitals, staff, and patients instead:
 
 ```bash
 python manage.py seed_full_demo
