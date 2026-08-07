@@ -1,0 +1,32 @@
+from django.urls import path
+from .portal_views import (
+    PortalRegisterView, PortalHospitalListView, PortalPlatformStatsView, PortalSearchView, PortalDoctorListView,
+    PortalDoctorDetailView, PortalNextTokenView,
+    PortalSlotListView, PortalBookView, PortalMyBookingsView, PortalMyRecordsView,
+    PortalDocumentListCreateView, PortalLabOrderListView, PortalLabOrderChoiceView,
+    PortalLabReportFileView, PortalProfileView, PortalChangePasswordView, PortalForgotPasswordView,
+    PortalFamilyListCreateView, PortalHealthSummaryView,
+)
+
+urlpatterns = [
+    path("register/",                       PortalRegisterView.as_view(),     name="portal-register"),
+    path("forgot-password/",                PortalForgotPasswordView.as_view(), name="portal-forgot-password"),
+    path("hospitals/",                      PortalHospitalListView.as_view(), name="portal-hospitals"),
+    path("stats/",                          PortalPlatformStatsView.as_view(), name="portal-stats"),
+    path("search/",                         PortalSearchView.as_view(),       name="portal-search"),
+    path("hospitals/<int:tenant_id>/doctors/", PortalDoctorListView.as_view(), name="portal-doctors"),
+    path("hospitals/<int:tenant_id>/doctors/<int:doctor_id>/", PortalDoctorDetailView.as_view(), name="portal-doctor-detail"),
+    path("hospitals/<int:tenant_id>/doctors/<int:doctor_id>/slots/", PortalSlotListView.as_view(), name="portal-slots"),
+    path("hospitals/<int:tenant_id>/doctors/<int:doctor_id>/next-token/", PortalNextTokenView.as_view(), name="portal-next-token"),
+    path("book/",                           PortalBookView.as_view(),         name="portal-book"),
+    path("my-bookings/",                    PortalMyBookingsView.as_view(),   name="portal-my-bookings"),
+    path("my-records/",                     PortalMyRecordsView.as_view(),    name="portal-my-records"),
+    path("documents/",                      PortalDocumentListCreateView.as_view(), name="portal-documents"),
+    path("lab-orders/",                     PortalLabOrderListView.as_view(), name="portal-lab-orders"),
+    path("lab-orders/choice/",              PortalLabOrderChoiceView.as_view(), name="portal-lab-order-choice"),
+    path("lab-orders/<str:tenant_db>/<int:request_id>/report/", PortalLabReportFileView.as_view(), name="portal-lab-report-file"),
+    path("profile/",                        PortalProfileView.as_view(),      name="portal-profile"),
+    path("profile/change-password/",        PortalChangePasswordView.as_view(), name="portal-change-password"),
+    path("family/",                         PortalFamilyListCreateView.as_view(), name="portal-family"),
+    path("health-summary/",                 PortalHealthSummaryView.as_view(), name="portal-health-summary"),
+]

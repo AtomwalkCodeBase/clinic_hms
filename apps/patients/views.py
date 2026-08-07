@@ -1,0 +1,241 @@
+"""
+apps/patients/views.py
+-----------------------
+Thin view layer — delegates all logic to PatientService.
+Views only: validate input, call service, return standardised response.
+"""
+
+import logging
+
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+
+from core.response import success, created, error, not_found
+
+logger = logging.getLogger(__name__)
+from core.permissions import IsHospitalStaff, IsDoctorOrNurse, IsFrontDesk
+
+from .serializers import (
+    PatientRegisterSerializer,
+    PatientDetailSerializer,
+    PatientSearchSerializer,
+    AllergySerializer,
+    SharedDiagnosisSerializer,
+    SharedVitalSerializer,
+    SharedAllergySerializer,
+    SharedLabResultSerializer,
+    SharedPrescriptionSerializer,
+)
+from .services import PatientService
+from .models import Patient, Allergy
+
+
+class PatientRegisterView(APIView):
+    """POST /api/v1/patients/register/"""
+    permission_classes = [IsAuthenticated, IsFrontDesk | IsHospitalStaff]
+
+    def post(self, request):
+        serializer = PatientRegisterSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error(message="Validation error.", errors=serializer.errors)
+        try:
+            patient = PatientService.register(
+                data=serializer.validated_data,
+                tenant_id=request.tenant_id,
+                db_name=request.tenant_db,
+            )
+        except ValueError as exc:
+            return error(message=str(exc))
+        except Exception as exc:
+            logger.exception("Patient registration failed: %s", exc)
+            return error(
+                message=f"Registration failed: {exc}",
+                status=500,
+            )
+        return created(
+            data=PatientDetailSerializer(patient).data,
+            message="Patient registered successfully.",
+        )
+
+
+class PatientLookupView(APIView):
+    """
+    GET /api/v1/patients/lookup/?mobile=
+    Called live as front desk types a mobile number during registration —
+    tells them whether this patient already exists in the Atomwalk network
+    (and whether they're already registered at THIS hospital specifically),
+    so front desk never creates a disconnected duplicate. Never reveals
+    which other hospital a patient has visited.
+    """
+    permission_classes = [IsAuthenticated, IsFrontDesk | IsHospitalStaff]
+
+    def get(self, request):
+        mobile = (request.query_params.get("mobile") or "").strip()
+        if len(mobile) < 6:
+            return success(data={"exists_in_network": False, "already_registered_here": False})
+        result = PatientService.lookup_by_mobile(mobile_raw=mobile, db_name=request.tenant_db)
+        return success(data=result)
+
+
+class PatientSearchView(APIView):
+    """GET /api/v1/patients/search/?q=&branch_id="""
+    permission_classes = [IsAuthenticated, IsHospitalStaff]
+
+    def get(self, request):
+        query     = request.query_params.get("q", "").strip()
+        branch_id = request.query_params.get("branch_id")
+        if len(query) < 2:
+            return error(message="Search query must be at least 2 characters.")
+        qs = PatientService.search(
+            query=query,
+            branch_id=int(branch_id) if branch_id else None,
+            db_name=request.tenant_db,
+        )
+        # Typeahead search — not paginated with page controls (that'd be an
+        # unusual UX for a live-search box), but we cap results and tell the
+        # caller how many total matches exist so the UI can prompt the user
+        # to refine their search instead of silently truncating.
+        total_matches = qs.count()
+        limit = 50
+        return success(data={
+            "results": PatientSearchSerializer(qs[:limit], many=True).data,
+            "total_matches": total_matches,
+            "truncated": total_matches > limit,
+        })
+
+
+class PatientDetailView(APIView):
+    """GET /api/v1/patients/<id>/"""
+    permission_classes = [IsAuthenticated, IsHospitalStaff]
+
+    def get(self, request, pk):
+        try:
+            patient = Patient.objects.using(request.tenant_db).get(pk=pk)
+        except Patient.DoesNotExist:
+            return not_found("Patient not found.")
+        return success(data=PatientDetailSerializer(patient).data)
+
+
+class PatientHistoryView(APIView):
+    """
+    GET /api/v1/patients/<id>/history/
+    Returns cross-tenant shared clinical records from Registry HIE.
+    source_tenant_id is NEVER included in the response.
+
+    Gated on patient.hie_consent_given — a Patient record only carries this
+    flag as True if the patient (or front desk registering them in person)
+    explicitly agreed to cross-hospital sharing. Portal bookings always set
+    it via the consent modal; front-desk registration sets it from its own
+    consent checkbox. If neither ran (e.g. an older record from before this
+    flag existed, or consent was declined), no shared data is exposed here
+    — this hospital's staff only see what this hospital itself recorded.
+    """
+    permission_classes = [IsAuthenticated, IsDoctorOrNurse]
+
+    def get(self, request, pk):
+        try:
+            patient = Patient.objects.using(request.tenant_db).get(pk=pk)
+        except Patient.DoesNotExist:
+            return not_found("Patient not found.")
+
+        if not patient.hie_consent_given:
+            from core.audit import log_action
+            log_action(request, request.tenant_db, action="patient.history.view_blocked_no_consent",
+                        resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
+            return success(data={
+                "awpid": patient.awpid, "consent_given": False,
+                "diagnoses": [], "vitals": [], "allergies": [],
+                "lab_results": [], "prescriptions": [], "documents": [],
+            })
+
+        history = PatientService.get_shared_history(awpid=patient.awpid)
+        history["consent_given"] = True
+
+        from core.audit import log_action
+        log_action(request, request.tenant_db, action="patient.history.view",
+                    resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
+
+        return success(data=history)
+
+
+class PatientDocumentDetailView(APIView):
+    """
+    GET /api/v1/patients/documents/<doc_id>/
+    Full content (including file_data) for one document referenced from the
+    lightweight list inside get_shared_history(). Split out into its own
+    endpoint so the history payload itself stays small — a doctor only pays
+    for the full base64 file when they actually open one.
+    """
+    permission_classes = [IsAuthenticated, IsDoctorOrNurse]
+
+    def get(self, request, doc_id):
+        from apps.registry.models import SharedDocument
+        try:
+            doc = SharedDocument.objects.using("default").get(pk=doc_id)
+        except SharedDocument.DoesNotExist:
+            return not_found("Document not found.")
+
+        from core.audit import log_action
+        log_action(request, request.tenant_db, action="patient.document.view",
+                    resource_type="SharedDocument", resource_id=doc.id)
+
+        return success(data={
+            "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,
+            "file_name": doc.file_name, "mime_type": doc.mime_type,
+            "file_data": doc.file_data, "created_at": doc.created_at,
+        })
+
+
+class PatientLabResultDetailView(APIView):
+    """
+    GET /api/v1/patients/lab-results/<result_id>/
+    Full content (including file_data) for one cross-tenant shared lab
+    result, referenced from the lightweight list inside get_shared_history().
+    Mirrors PatientDocumentDetailView — same reasoning for keeping this split
+    out of the summary payload.
+    """
+    permission_classes = [IsAuthenticated, IsDoctorOrNurse]
+
+    def get(self, request, result_id):
+        from apps.registry.models import SharedLabResult
+        try:
+            r = SharedLabResult.objects.using("default").get(pk=result_id)
+        except SharedLabResult.DoesNotExist:
+            return not_found("Lab result not found.")
+
+        from core.audit import log_action
+        log_action(request, request.tenant_db, action="patient.lab_result.view",
+                    resource_type="SharedLabResult", resource_id=r.id)
+
+        return success(data={
+            "id": r.id, "test_name": r.test_name, "result_summary": r.result_summary,
+            "mime_type": r.mime_type, "file_data": r.file_data, "delivered_at": r.delivered_at,
+        })
+
+
+class PatientAllergyListCreateView(APIView):
+    """GET + POST /api/v1/patients/<id>/allergies/"""
+    permission_classes = [IsAuthenticated, IsDoctorOrNurse]
+
+    def get(self, request, pk):
+        try:
+            patient = Patient.objects.using(request.tenant_db).get(pk=pk)
+        except Patient.DoesNotExist:
+            return not_found("Patient not found.")
+        allergies = Allergy.objects.using(request.tenant_db).filter(patient=patient)
+        return success(data=AllergySerializer(allergies, many=True).data)
+
+    def post(self, request, pk):
+        try:
+            patient = Patient.objects.using(request.tenant_db).get(pk=pk)
+        except Patient.DoesNotExist:
+            return not_found("Patient not found.")
+        serializer = AllergySerializer(data=request.data)
+        if not serializer.is_valid():
+            return error(message="Validation error.", errors=serializer.errors)
+        allergy = Allergy.objects.using(request.tenant_db).create(
+            patient=patient,
+            recorded_by=request.user.id,
+            **serializer.validated_data,
+        )
+        return created(data=AllergySerializer(allergy).data)

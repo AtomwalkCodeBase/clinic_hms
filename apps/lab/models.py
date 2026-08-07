@@ -1,0 +1,172 @@
+"""
+apps/lab/models.py
+------------------
+Tables: LabTest (catalog), LabRequest, LabReport, LabReportItem
+
+Maps to FHIR DiagnosticReport.
+On report.deliver() signal writes to registry.SharedLabResult.
+feat_lab gate is enforced at API view level.
+"""
+
+from django.db import models
+from apps.org.models import StaffUser, Branch
+from apps.patients.models import Patient
+from apps.opd.models import OPDEncounter
+
+
+class LabTest(models.Model):
+    """Tenant-managed lab test catalog."""
+    SAMPLE_CHOICES = [
+        ("blood",  "Blood"),
+        ("urine",  "Urine"),
+        ("stool",  "Stool"),
+        ("sputum", "Sputum"),
+        ("swab",   "Swab"),
+        ("other",  "Other"),
+    ]
+
+    name            = models.CharField(max_length=200)
+    code            = models.CharField(max_length=50, blank=True)  # internal code
+    sample_type     = models.CharField(max_length=20, choices=SAMPLE_CHOICES, default="blood")
+    turnaround_hours= models.PositiveSmallIntegerField(default=24)
+    price           = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    description     = models.TextField(blank=True)
+    is_active       = models.BooleanField(default=True)
+    created_at      = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "lab"
+        db_table  = "lab_test"
+        ordering  = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class LabRequest(models.Model):
+    """
+    Lab test order raised by a doctor during a consultation (apps.opd.OPDEncounter
+    — the live consultation flow; apps.clinical.Encounter, this model's old FK
+    target, is legacy scaffolding nothing ever writes to). One LabRequest per
+    test (normalised).
+
+    patient_choice / payment_preference capture whether the patient wants the
+    test done at this hospital's own lab (in_house) or elsewhere (outside,
+    with the report attached later via the patient-document upload flow).
+    Nurses can set/override this on the patient's behalf via choice_made_by.
+    """
+    STATUS_CHOICES = [
+        ("ordered",     "Ordered"),
+        ("collected",   "Sample Collected"),
+        ("processing",  "Processing"),
+        ("completed",   "Completed"),
+        ("cancelled",   "Cancelled"),
+    ]
+    CHOICE_CHOICES = [
+        ("pending",  "Pending"),
+        ("in_house", "In-House"),
+        ("outside",  "Outside"),
+    ]
+    PAYMENT_PREF_CHOICES = [
+        ("pay_online", "Pay Online"),
+        ("pay_at_lab", "Pay at Lab"),
+    ]
+    PAYMENT_STATUS_CHOICES = [
+        ("unpaid",         "Unpaid"),
+        ("pending_online", "Pending Online Payment"),
+        ("paid",           "Paid"),
+    ]
+    CHOICE_MADE_BY_CHOICES = [
+        ("patient", "Patient"),
+        ("nurse",   "Nurse"),
+    ]
+
+    patient         = models.ForeignKey(Patient, on_delete=models.PROTECT,
+                                        related_name="lab_requests")
+    encounter       = models.ForeignKey(OPDEncounter, on_delete=models.PROTECT,
+                                        related_name="lab_requests")
+    # Denormalised for cheap filtering (nurse's queue works off appointment,
+    # not encounter) — Appointment's pk is a UUID, no cross-app FK needed.
+    appointment_id  = models.UUIDField(null=True, blank=True, db_index=True)
+    test            = models.ForeignKey(LabTest, on_delete=models.PROTECT)
+    requested_by    = models.ForeignKey(StaffUser, on_delete=models.PROTECT,
+                                        related_name="lab_requests_made",
+                                        limit_choices_to={"role": "doctor"})
+    branch          = models.ForeignKey(Branch, on_delete=models.PROTECT)
+    status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default="ordered", db_index=True)
+    urgency         = models.CharField(max_length=10, choices=[("routine","Routine"),("urgent","Urgent")],
+                                       default="routine")
+    clinical_notes  = models.TextField(blank=True)
+
+    patient_choice      = models.CharField(max_length=10, choices=CHOICE_CHOICES, default="pending")
+    payment_preference   = models.CharField(max_length=15, choices=PAYMENT_PREF_CHOICES, blank=True)
+    payment_status       = models.CharField(max_length=15, choices=PAYMENT_STATUS_CHOICES, default="unpaid", db_index=True)
+    choice_made_by       = models.CharField(max_length=10, choices=CHOICE_MADE_BY_CHOICES, blank=True)
+    choice_made_at       = models.DateTimeField(null=True, blank=True)
+
+    ordered_at      = models.DateTimeField(auto_now_add=True)
+    collected_at    = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        app_label = "lab"
+        db_table  = "lab_request"
+
+    def __str__(self):
+        return f"{self.patient.uhid} — {self.test.name} ({self.status})"
+
+
+class LabReport(models.Model):
+    """
+    Lab report header. report_number generated by NNTM (entity="lab_report").
+    On deliver() signal writes sanitized copy to registry.SharedLabResult.
+    """
+    STATUS_CHOICES = [
+        ("pending",   "Pending"),
+        ("delivered", "Delivered"),
+    ]
+
+    request         = models.OneToOneField(LabRequest, on_delete=models.PROTECT,
+                                           related_name="report")
+    patient         = models.ForeignKey(Patient, on_delete=models.PROTECT,
+                                        related_name="lab_reports")
+    report_number   = models.CharField(max_length=30, unique=True)
+    status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending", db_index=True)
+    result_summary  = models.TextField(blank=True)
+    file_url        = models.TextField(blank=True)  # uploaded PDF / result file (base64 data URI)
+    file_name       = models.CharField(max_length=255, blank=True)
+    mime_type       = models.CharField(max_length=100, blank=True)
+    performed_by    = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,
+                                        null=True, blank=True,
+                                        related_name="lab_reports_performed",
+                                        limit_choices_to={"role": "lab_tech"})
+    verified_by     = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,
+                                        null=True, blank=True,
+                                        related_name="lab_reports_verified")
+    delivered_at    = models.DateTimeField(null=True, blank=True)
+    created_at      = models.DateTimeField(auto_now_add=True)
+    updated_at      = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "lab"
+        db_table  = "lab_report"
+
+    def __str__(self):
+        return f"{self.report_number} ({self.status})"
+
+
+class LabReportItem(models.Model):
+    """Individual parameter result within a lab report."""
+    report          = models.ForeignKey(LabReport, on_delete=models.CASCADE,
+                                        related_name="items")
+    parameter_name  = models.CharField(max_length=100)
+    result_value    = models.CharField(max_length=100)
+    unit            = models.CharField(max_length=30, blank=True)
+    reference_range = models.CharField(max_length=100, blank=True)
+    is_abnormal     = models.BooleanField(default=False)
+
+    class Meta:
+        app_label = "lab"
+        db_table  = "lab_report_item"
+
+    def __str__(self):
+        return f"{self.parameter_name}: {self.result_value} {self.unit}"

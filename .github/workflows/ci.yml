@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: atomwalk
+          POSTGRES_PASSWORD: atomwalk
+          POSTGRES_DB: atomwalk_registry
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atomwalk"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DEBUG: "True"
+      SECRET_KEY: "ci-test-secret-key-not-for-production"
+      ALLOWED_HOSTS: "*"
+      REGISTRY_DB_NAME: atomwalk_registry
+      REGISTRY_DB_USER: atomwalk
+      REGISTRY_DB_PASSWORD: atomwalk
+      REGISTRY_DB_HOST: localhost
+      REGISTRY_DB_PORT: "5432"
+      TENANT_DB_USER: atomwalk
+      TENANT_DB_PASSWORD: atomwalk
+      TENANT_DB_HOST: localhost
+      TENANT_DB_PORT: "5432"
+      CORS_ALLOWED_ORIGINS: "http://localhost:3000"
+      PLATFORM_ADMIN_SECRET: "ci-placeholder"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Django system check
+        run: python manage.py check
+
+      - name: Check for missing migrations
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Run tests
+        run: python manage.py test
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
