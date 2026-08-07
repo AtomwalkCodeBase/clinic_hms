@@ -44,16 +44,6 @@ python manage.py createsuperuser
 
 Use this account to log in as a platform admin.
 
-## Add a hospital
-
-```bash
-python manage.py provision_tenant --name "Demo Hospital" --subdomain demo-hospital \
-  --city Mumbai --state Maharashtra --admin-mobile 9999999999 --tier growth
-```
-
-This creates the hospital and its first admin login (staff mobile number +
-password shown in the command output).
-
 ## Logging in
 
 - Staff: `POST /api/v1/auth/login/staff/`
