@@ -1,8 +1,8 @@
-# Atomwalk HMS — Hospital Management System
+# Hospital Management System (HMS)
 
-Atomwalk is a multi-tenant hospital management platform. One deployment serves many
-hospitals, each with its own isolated database, while a shared registry layer lets
-patients carry their medical identity across every hospital on the network (with their
+A multi-tenant hospital management platform. One deployment serves many hospitals,
+each with its own isolated database, while a shared registry layer lets patients
+carry their medical identity across every hospital on the network (with their
 consent) instead of being siloed at a single clinic.
 
 It has three sides:
@@ -16,7 +16,7 @@ It has three sides:
   network, book appointments, see their queue position live, view prescriptions and
   lab reports, upload their own documents, and manage a family (dependents without
   their own login).
-- **Platform admin console** — Atomwalk's own team onboards new hospitals, manages
+- **Admin console** — the platform team onboards new hospitals, manages
   subscription tiers and feature flags, and gets cross-hospital usage visibility.
 
 ## How the multi-tenancy works
@@ -29,19 +29,18 @@ It has three sides:
   hospital is onboarded. All of that hospital's day-to-day data — its staff,
   patients, appointments, encounters, invoices, lab orders, pharmacy stock — lives
   there, completely isolated from every other hospital.
-- A patient is identified across the network by an **AWPID** (Atomwalk Patient ID).
-  When they visit a hospital for the first time, front desk resolves their AWPID
-  instead of creating a disconnected new record, and — only if the patient consents
-  — that hospital can see their shared history from other hospitals they've visited.
+- A patient is identified across the network by a unique **patient ID**. When they
+  visit a hospital for the first time, front desk resolves their patient ID instead
+  of creating a disconnected new record, and — only if the patient consents — that
+  hospital can see their shared history from other hospitals they've visited.
 
 ## Tech stack
 
-- **Backend:** Django 4.2 + Django REST Framework, PyJWT for auth (not DRF
-  SimpleJWT's own views — a custom implementation in `apps/auth_app`), PostgreSQL.
+- **Backend:** Django 4.2 + Django REST Framework, PyJWT for auth, PostgreSQL.
 - **Frontend:** React + Vite single-page app.
-- **API docs:** auto-generated via `drf-spectacular` at `/api/schema/` and
-  `/api/docs/` (Swagger UI) once the server is running — always in sync with the
-  actual endpoints.
+- **API docs:** once the server is running, every endpoint is browsable and
+  testable from `http://localhost:8000/api/docs/` — a live page, auto-generated
+  from the code, so it never goes out of date.
 
 ## Project layout
 
@@ -59,13 +58,11 @@ apps/
   tenants/        Tenant provisioning + per-tenant database/migration management
   registry/       Cross-hospital registry models (Tenant, PatientAccount, shared history)
 frontend/         React + Vite SPA (staff app + patient portal)
-atomwalk/         Django project settings (base / development / production) and urls.py
 ```
 
-`apps/clinical` and `apps/prescriptions` also exist and are routed, but are legacy —
-earlier duplicate models that the live OPD flow (`apps/opd`) has since replaced.
-`apps/notifications`, `apps/compliance`, and `apps/ai_pipeline` have data models
-defined but no views/URLs wired up yet, so they aren't reachable via the API.
+Each folder under `apps/` is a self-contained Django app — its own models, views,
+and API routes for one part of the system (e.g. everything lab-related lives in
+`apps/lab/`).
 
 ## Getting started (local development)
 
@@ -92,10 +89,11 @@ Edit `.env` with your local PostgreSQL credentials. At minimum, set real values 
 `SECRET_KEY` and `JWT_SIGNING_KEY` (the file has a one-liner to generate one) —
 everything else has sane local defaults.
 
-Create the registry database once:
+Create the registry database once, using the name set in `REGISTRY_DB_NAME` in your
+`.env`:
 
 ```bash
-psql -U postgres -c "CREATE DATABASE atomwalk_registry;"
+psql -U postgres -c "CREATE DATABASE <your_registry_db_name>;"
 ```
 
 Run migrations. This is a **two-step process** — the registry DB and each hospital's
@@ -159,8 +157,8 @@ There is no single login form — the endpoint depends on who's logging in:
 | Who | Endpoint | Identifies with |
 |---|---|---|
 | Hospital staff | `POST /api/v1/auth/login/staff/` | Mobile number + password (or subdomain + employee ID + password) |
-| Patient | `POST /api/v1/auth/login/patient/` | Mobile number or AWPID + password |
-| Platform admin | `POST /api/v1/auth/login/platform/` | Django superuser username/email + password |
+| Patient | `POST /api/v1/auth/login/patient/` | Mobile number or patient ID + password |
+| Platform admin | `POST /api/v1/auth/login/platform/` | Admin username/email + password |
 
 Hospital staff roles: `hospital_admin`, `doctor`, `nurse`, `front_desk`, `lab_tech`,
 `pharmacist`. Each sees a different app shell after login, scoped to their
@@ -171,12 +169,6 @@ permissions.
 This app has two things a typical Django deploy doesn't: it creates a new Postgres
 database per hospital at runtime (so the database user needs `CREATEDB` privilege,
 and connection poolers like RDS Proxy don't work well with it), and the two-step
-migration process above needs to run on every deploy, not just the first one. See
-`atomwalk/settings/production.py` for the production-specific settings (HTTPS
-enforcement, proxy headers, static file serving via WhiteNoise).
-
-## API reference
-
-For a full endpoint-by-endpoint reference (every route, method, parameters, and
-example response), see `Atomwalk_HMS_API_Reference.xlsx` in this repo, or hit
-`/api/docs/` on a running server for the always-up-to-date interactive version.
+migration process above needs to run on every deploy, not just the first one. The
+project's production settings file has the production-specific configuration
+(HTTPS enforcement, proxy headers, static file serving via WhiteNoise).
