@@ -25,7 +25,7 @@
  */
 import { useState, useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp, Calendar } from "lucide-react";
+import { ChevronDown, ChevronUp, Calendar, Syringe, Activity, Building2, TrendingUp } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
@@ -37,7 +37,7 @@ import ROUTES from "../../config/routes.config";
 import { usePatientContext } from "../../context/PatientContext";
 import HealthSummaryCard from "./components/HealthSummaryCard";
 import VaccinationStats from "./components/VaccinationStats";
-import VaccinationSidebar from "./components/VaccinationSidebar";
+import VaccinationSidebar, { RecommendedByDoctor } from "./components/VaccinationSidebar";
 import HealthTimeline from "./components/HealthTimeline";
 import GrowthVaccinationChart from "./components/GrowthVaccinationChart";
 
@@ -241,154 +241,6 @@ function UploadVaccinationForm({ patientAwpid, prefillVaccine, prefillLabel, onD
         </button>
         <button className="btn-outline" onClick={onCancel} style={{ padding: "8px 16px", fontSize: 13 }}>Cancel</button>
       </div>
-    </div>
-  );
-}
-
-function formatShortDate(dateStr) {
-  return new Date(dateStr).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-}
-
-// Honest, non-clinical trend read: just compares the earliest and latest
-// recorded value for a metric. No growth-velocity math, no percentile
-// lookup — there's no real WHO/IAP reference data wired into this app, so
-// this only ever states a direction, never a judgement about whether that
-// direction is healthy.
-function trendDirection(series, field) {
-  const vals = series.map(p => p[field]).filter(v => v != null);
-  if (vals.length < 2) return null;
-  const first = vals[0];
-  const last = vals[vals.length - 1];
-  if (last > first) return "increasing";
-  if (last < first) return "decreasing";
-  return "stable";
-}
-
-const TREND_ICON = { increasing: TrendingUp, decreasing: TrendingDown, stable: Minus };
-
-function TrendBadge({ metricLabel, direction }) {
-  if (!direction) return null;
-  const Icon = TREND_ICON[direction];
-  return (
-    <span style={{
-      display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700,
-      padding: "2px 8px", borderRadius: 10, background: "var(--color-info-light)", color: "var(--color-info)",
-      whiteSpace: "nowrap",
-    }}>
-      <Icon size={11} />
-      {metricLabel} trend: {direction}
-    </span>
-  );
-}
-
-// Small hand-rolled inline SVG line chart — no charting library is a
-// dependency of this app yet (checked frontend/package.json), so rather
-// than pull one in for a single chart, this draws a plain polyline from the
-// series data with a light area fill and date labels at the first/last point.
-function GrowthLineChart({ series, field, color }) {
-  const points = series
-    .map(p => ({ date: p.date, value: p[field] }))
-    .filter(p => p.value != null);
-  if (points.length < 2) return null;
-
-  const width = 280, height = 110, padX = 10, padY = 16;
-  const values = points.map(p => p.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min || 1;
-  const stepX = (width - padX * 2) / (points.length - 1);
-
-  const coords = points.map((p, i) => ({
-    ...p,
-    x: padX + i * stepX,
-    y: padY + (height - padY * 2) * (1 - (p.value - min) / range),
-  }));
-
-  const linePath = coords.map((c, i) => `${i === 0 ? "M" : "L"}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
-  const areaPath = `${linePath} L${coords[coords.length - 1].x.toFixed(1)},${height - padY} L${coords[0].x.toFixed(1)},${height - padY} Z`;
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} preserveAspectRatio="xMidYMid meet">
-      <path d={areaPath} fill={color} opacity={0.1} />
-      <path d={linePath} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-      {coords.map((c, i) => <circle key={i} cx={c.x} cy={c.y} r={2.6} fill={color} />)}
-      <text x={coords[0].x} y={height - 2} fontSize={8} fill="var(--color-text-muted)" textAnchor="start">
-        {formatShortDate(coords[0].date)}
-      </text>
-      <text x={coords[coords.length - 1].x} y={height - 2} fontSize={8} fill="var(--color-text-muted)" textAnchor="end">
-        {formatShortDate(coords[coords.length - 1].date)}
-      </text>
-    </svg>
-  );
-}
-
-// Full-width, unchanged in this rebuild — height/weight chart, out of scope.
-function GrowthSection({ growth, growthLoading }) {
-  return (
-    <div className="card" style={{ padding: "16px 20px", marginBottom: 20 }}>
-      <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 15, marginBottom: 10 }}>Growth</div>
-      {growthLoading ? (
-        <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>Loading…</div>
-      ) : !growth?.series?.length ? (
-        <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>No height/weight recorded yet.</div>
-      ) : (
-        <div style={{ display: "grid", gap: 16 }}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-            {growth.latest?.height_cm != null && (
-              <div style={{
-                minWidth: 150, borderRadius: 12, border: "1px solid var(--color-border)",
-                padding: "10px 14px", display: "grid", gap: 6,
-              }}>
-                <div style={{ fontSize: 10, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: 0.5 }}>
-                  Height
-                </div>
-                <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "var(--font-display)" }}>
-                  {growth.latest.height_cm} <span style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-muted)" }}>cm</span>
-                </div>
-                <TrendBadge metricLabel="Height" direction={trendDirection(growth.series, "height_cm")} />
-              </div>
-            )}
-            {growth.latest?.weight_kg != null && (
-              <div style={{
-                minWidth: 150, borderRadius: 12, border: "1px solid var(--color-border)",
-                padding: "10px 14px", display: "grid", gap: 6,
-              }}>
-                <div style={{ fontSize: 10, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: 0.5 }}>
-                  Weight
-                </div>
-                <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "var(--font-display)" }}>
-                  {growth.latest.weight_kg} <span style={{ fontSize: 12, fontWeight: 500, color: "var(--color-text-muted)" }}>kg</span>
-                </div>
-                <TrendBadge metricLabel="Weight" direction={trendDirection(growth.series, "weight_kg")} />
-              </div>
-            )}
-          </div>
-          {growth.latest?.date && (
-            <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: -8 }}>
-              Last measured {formatShortDate(growth.latest.date)}
-              {growth.series.length === 1 && " · only one measurement recorded so far, not enough to show a trend"}
-            </div>
-          )}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
-            {trendDirection(growth.series, "height_cm") && (
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", marginBottom: 4 }}>
-                  Height over time (cm)
-                </div>
-                <GrowthLineChart series={growth.series} field="height_cm" color="var(--color-primary)" />
-              </div>
-            )}
-            {trendDirection(growth.series, "weight_kg") && (
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", marginBottom: 4 }}>
-                  Weight over time (kg)
-                </div>
-                <GrowthLineChart series={growth.series} field="weight_kg" color="var(--color-info)" />
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -796,10 +648,10 @@ function VaccinationTimeline({ patientAwpid, vax, vaxLoading, refetchVax, upload
 // Tab definitions — id maps to the rendered panel below.
 // The "vaccinations" tab is only shown for patients under 18.
 const ALL_TABS = [
-  { id: "vaccinations",    label: "💉 Vaccinations",    pediatricOnly: true },
-  { id: "health-timeline", label: "🩺 Health Timeline",  pediatricOnly: false },
-  { id: "visits",          label: "🏥 Visits",           pediatricOnly: false },
-  { id: "growth",          label: "📈 Growth",           pediatricOnly: false },
+  { id: "vaccinations",    label: "Vaccinations",    icon: Syringe,   pediatricOnly: true },
+  { id: "health-timeline", label: "Health Timeline",  icon: Activity,  pediatricOnly: false },
+  { id: "visits",          label: "Visits",           icon: Building2, pediatricOnly: false },
+  { id: "growth",          label: "Growth",           icon: TrendingUp, pediatricOnly: false },
 ];
 
 function TabBar({ active, onChange, isAdult }) {
@@ -817,6 +669,7 @@ function TabBar({ active, onChange, isAdult }) {
     }}>
       {tabs.map(tab => {
         const isActive = tab.id === active;
+        const Icon = tab.icon;
         return (
           <button
             key={tab.id}
@@ -825,6 +678,7 @@ function TabBar({ active, onChange, isAdult }) {
               padding: "8px 18px", fontSize: 13, fontWeight: isActive ? 700 : 500,
               cursor: "pointer", border: "none", borderRadius: 10,
               whiteSpace: "nowrap", transition: "all 0.15s ease",
+              display: "inline-flex", alignItems: "center", gap: 7,
               background: isActive
                 ? "linear-gradient(135deg, #1B5E43 0%, #123828 100%)"
                 : "transparent",
@@ -832,6 +686,7 @@ function TabBar({ active, onChange, isAdult }) {
               boxShadow: isActive ? "0 2px 8px rgba(15,61,43,0.25)" : "none",
             }}
           >
+            {Icon && <Icon size={15} />}
             {tab.label}
           </button>
         );
@@ -930,29 +785,42 @@ export default function PatientRecordsPage() {
         {activeTab === "vaccinations" && !isAdult && (
           <>
             <VaccinationStats vax={vax} />
-            <GrowthVaccinationChart
-              growth={growth}
-              growthLoading={growthLoading}
-              roadmap={vax?.roadmap}
-              roadmapLoading={vaxLoading}
-            />
+            {/* One grid, two independently-flowing columns — each column is
+                its own stack (Chart+Timeline on the left, Recommended by
+                Doctor+rest of the sidebar on the right), not a synchronized
+                2-row grid. A synchronized grid left a large empty gap under
+                "Recommended by Doctor" whenever the chart (left column) was
+                taller than it, because the second row couldn't start until
+                the first row — sized to the taller left cell — finished.
+                Independent column stacks let the right column's cards sit
+                flush against each other regardless of the chart's height. */}
             <div className="vax-two-col" style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 20, alignItems: "start" }}>
-              <VaccinationTimeline
-                patientAwpid={patientAwpid}
-                vax={vax}
-                vaxLoading={vaxLoading}
-                refetchVax={refetchVax}
-                uploadFor={uploadFor}
-                setUploadFor={setUploadFor}
-                uploadForLabel={uploadForLabel}
-                setUploadForLabel={setUploadForLabel}
-                vaxSectionRef={vaxSectionRef}
-              />
-              <VaccinationSidebar
-                patientAwpid={patientAwpid}
-                roadmap={vax?.roadmap}
-                onOpenUpload={openVaccineUpload}
-              />
+              <div style={{ display: "grid", gap: 20 }}>
+                <GrowthVaccinationChart
+                  growth={growth}
+                  growthLoading={growthLoading}
+                  roadmap={vax?.roadmap}
+                  roadmapLoading={vaxLoading}
+                />
+                <VaccinationTimeline
+                  patientAwpid={patientAwpid}
+                  vax={vax}
+                  vaxLoading={vaxLoading}
+                  refetchVax={refetchVax}
+                  uploadFor={uploadFor}
+                  setUploadFor={setUploadFor}
+                  uploadForLabel={uploadForLabel}
+                  setUploadForLabel={setUploadForLabel}
+                  vaxSectionRef={vaxSectionRef}
+                />
+              </div>
+              <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
+                <RecommendedByDoctor roadmap={vax?.roadmap} />
+                <VaccinationSidebar
+                  patientAwpid={patientAwpid}
+                  onOpenUpload={openVaccineUpload}
+                />
+              </div>
             </div>
           </>
         )}
@@ -1061,8 +929,19 @@ export default function PatientRecordsPage() {
         )}
 
         {/* ── Growth tab ────────────────────────────────────────── */}
+        {/* Same upgraded chart as the Vaccinations tab (gridlines, hover
+            tooltips, latest-value readout) instead of the old bare-bones
+            mini line charts with no axis at all — this tab is reachable by
+            every patient, adult or pediatric, so vaccination markers are
+            only passed through for minors (an adult's "roadmap" is just
+            the reference schedule with no real relevance to them). */}
         {activeTab === "growth" && (
-          <GrowthSection growth={growth} growthLoading={growthLoading} />
+          <GrowthVaccinationChart
+            growth={growth}
+            growthLoading={growthLoading}
+            roadmap={isAdult ? [] : vax?.roadmap}
+            roadmapLoading={isAdult ? false : vaxLoading}
+          />
         )}
       </PageShell>
     </AppShell>

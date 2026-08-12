@@ -12,6 +12,7 @@ import { PageShell }  from "../../components/common/PageShell";
 import { useToast }   from "../../hooks/useToast";
 import apiClient      from "../../services/api.client";
 import API_ENDPOINTS  from "../../config/api.config";
+import { AlertCircle, ClipboardList } from "lucide-react";
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -80,8 +81,8 @@ export default function NurseDashboardPage() {
         {waiting.length > 0 && (
           <div style={{ marginBottom: 24 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-              <div style={{ fontWeight: 700, fontSize: 15 }}>
-                🚨 Needs Vitals ({waiting.length})
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, fontSize: 15 }}>
+                <AlertCircle size={15} /> Needs Vitals ({waiting.length})
               </div>
               <button className="btn-primary" onClick={() => navigate("/nurse/vitals")}
                 style={{ fontSize: 13, padding: "7px 16px" }}>
@@ -127,7 +128,7 @@ export default function NurseDashboardPage() {
             </div>
           ) : appointments.length === 0 ? (
             <div className="card" style={{ padding: 60, textAlign: "center" }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
+              <ClipboardList size={40} style={{ color: "var(--color-text-muted)", marginBottom: 12 }} />
               <div style={{ fontWeight: 600, marginBottom: 6 }}>No appointments today</div>
               <div style={{ color: "var(--color-text-muted)", fontSize: 14 }}>
                 Patients will appear here once appointments are booked.

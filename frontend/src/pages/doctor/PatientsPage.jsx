@@ -18,6 +18,7 @@ import DependentBadge        from "../../components/common/DependentBadge";
 import apiClient             from "../../services/api.client";
 import API_ENDPOINTS         from "../../config/api.config";
 import { ROUTES }            from "../../config/routes.config";
+import { Search, AlertTriangle, FolderOpen, SearchX } from "lucide-react";
 
 function calcAge(dob) {
   if (!dob) return "—";
@@ -103,8 +104,8 @@ export default function DoctorPatientsPage() {
             <div style={{ flex: 1, position: "relative" }}>
               <span style={{
                 position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)",
-                fontSize: 16, color: "var(--color-text-muted)", pointerEvents: "none",
-              }}>🔍</span>
+                display: "inline-flex", color: "var(--color-text-muted)", pointerEvents: "none",
+              }}><Search size={16} /></span>
               <input
                 type="text"
                 value={query}
@@ -134,13 +135,13 @@ export default function DoctorPatientsPage() {
             <div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>Loading your patients…</div>
           ) : myPatientsError ? (
             <div style={{ textAlign: "center", padding: "48px 0" }}>
-              <div style={{ fontSize: 32, marginBottom: 10 }}>⚠️</div>
+              <AlertTriangle size={32} style={{ color: "var(--color-text-muted)", marginBottom: 10 }} />
               <div style={{ fontWeight: 600, marginBottom: 6 }}>Couldn't load your patients</div>
               <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>Try searching above instead.</div>
             </div>
           ) : myPatients.length === 0 ? (
             <div style={{ textAlign: "center", padding: "48px 0" }}>
-              <div style={{ fontSize: 32, marginBottom: 10 }}>🗂️</div>
+              <FolderOpen size={32} style={{ color: "var(--color-text-muted)", marginBottom: 10 }} />
               <div style={{ fontWeight: 600, marginBottom: 6 }}>No patients yet</div>
               <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
                 Patients you've seen will show up here. Search above to find any patient at this hospital.
@@ -227,7 +228,7 @@ export default function DoctorPatientsPage() {
           <>
             {results.length === 0 ? (
               <div style={{ textAlign: "center", padding: "48px 0" }}>
-                <div style={{ fontSize: 32, marginBottom: 10 }}>😕</div>
+                <SearchX size={32} style={{ color: "var(--color-text-muted)", marginBottom: 10 }} />
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>No patients found</div>
                 <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
                   Try a different name, UHID, or mobile number.

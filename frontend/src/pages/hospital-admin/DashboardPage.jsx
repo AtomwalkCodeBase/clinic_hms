@@ -16,6 +16,7 @@ import { usePermissions } from "../../hooks/usePermissions";
 import apiClient       from "../../services/api.client";
 import API_ENDPOINTS   from "../../config/api.config";
 import { ROUTES }      from "../../config/routes.config";
+import { Users, Building2, Settings } from "lucide-react";
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -47,7 +48,7 @@ function KpiCard({ label, value, sub, loading, dotClass = "dot-label--green" }) 
   );
 }
 
-function ActionRow({ icon, label, count, onClick }) {
+function ActionRow({ icon: Icon, label, count, onClick }) {
   return (
     <button onClick={onClick} style={{
       display: "flex", alignItems: "center", gap: 12, width: "100%",
@@ -55,7 +56,7 @@ function ActionRow({ icon, label, count, onClick }) {
       borderBottom: "1px solid var(--color-border)", cursor: "pointer",
       fontSize: 13, color: "var(--color-text-secondary)", textAlign: "left",
     }}>
-      <span style={{ fontSize: 15, width: 22, textAlign: "center" }}>{icon}</span>
+      <span style={{ display: "flex", width: 22, justifyContent: "center" }}><Icon size={15} /></span>
       <span style={{ flex: 1, fontWeight: 500 }}>{label}</span>
       {count !== undefined && (
         <span style={{
@@ -303,9 +304,9 @@ export default function DashboardPage() {
             <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--color-border)" }}>
               <span className="dot-label dot-label--red">The action center</span>
             </div>
-            <ActionRow icon="👥" label="Manage staff"     count={orgStats.doctors + orgStats.staff} onClick={() => navigate(ROUTES.ADMIN.STAFF)} />
-            <ActionRow icon="🏢" label="Manage branches"  count={orgStats.branches}                  onClick={() => navigate(ROUTES.ADMIN.BRANCHES)} />
-            <ActionRow icon="⚙️" label="Hospital settings"                                          onClick={() => navigate(ROUTES.ADMIN.SETTINGS)} />
+            <ActionRow icon={Users} label="Manage staff"     count={orgStats.doctors + orgStats.staff} onClick={() => navigate(ROUTES.ADMIN.STAFF)} />
+            <ActionRow icon={Building2} label="Manage branches"  count={orgStats.branches}                  onClick={() => navigate(ROUTES.ADMIN.BRANCHES)} />
+            <ActionRow icon={Settings} label="Hospital settings"                                          onClick={() => navigate(ROUTES.ADMIN.SETTINGS)} />
           </div>
         </div>
 

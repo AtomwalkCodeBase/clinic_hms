@@ -12,6 +12,7 @@ import { useToast }  from "../../hooks/useToast";
 import { usePermissions } from "../../hooks/usePermissions";
 import API_ENDPOINTS from "../../config/api.config";
 import { sanitizeMobileInput, mobileError } from "../../utils/validation";
+import { Building2 } from "lucide-react";
 
 const EMPTY_BRANCH = { name: "", address: "", city: "", state: "", pincode: "", phone: "" };
 
@@ -250,7 +251,7 @@ export default function BranchesPage() {
           <div style={{ textAlign: "center", padding: 60, color: "var(--color-text-muted)" }}>Loading…</div>
         ) : branches.length === 0 ? (
           <div className="card" style={{ textAlign: "center", padding: 60 }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>🏥</div>
+            <Building2 size={40} style={{ color: "var(--color-text-muted)", marginBottom: 12 }} />
             <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>No branches yet</div>
             <div style={{ color: "var(--color-text-muted)", marginBottom: 20 }}>Add your first branch to begin setup.</div>
             <button className="btn-primary" onClick={() => setModal("create")} disabled={branchCap}

@@ -21,6 +21,10 @@ import apiClient         from "../../services/api.client";
 import API_ENDPOINTS     from "../../config/api.config";
 import { calcAge }       from "../../utils/age";
 import { sanitizeMobileInput, isValidMobile } from "../../utils/validation";
+import {
+  Search, Contact, Phone, Building2, Shield, Lock, Smartphone,
+  AlertTriangle, User, Siren,
+} from "lucide-react";
 
 // ── Field helpers ─────────────────────────────────────────────────────────────
 function FieldGroup({ label, children }) {
@@ -56,7 +60,7 @@ function FSelect({ error, children, ...props }) {
   );
 }
 
-function SectionCard({ title, subtitle, color = "#5B52EE", bgColor = "#EDE9FF", emoji, children }) {
+function SectionCard({ title, subtitle, color = "#5B52EE", bgColor = "#EDE9FF", icon: Icon, children }) {
   return (
     <div className="card" style={{ padding: 0, marginBottom: 20, overflow: "hidden" }}>
       <div style={{
@@ -64,11 +68,11 @@ function SectionCard({ title, subtitle, color = "#5B52EE", bgColor = "#EDE9FF", 
         borderBottom: "1px solid var(--color-border)",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {emoji && <span style={{ fontSize: 18 }}>{emoji}</span>}
+          {Icon && <Icon size={18} style={{ color }} />}
           <span style={{ fontWeight: 700, fontSize: 14, color }}>{title}</span>
         </div>
         {subtitle && (
-          <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 3, marginLeft: emoji ? 28 : 0 }}>
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 3, marginLeft: Icon ? 28 : 0 }}>
             {subtitle}
           </div>
         )}
@@ -363,22 +367,24 @@ export default function RegisterPatientPage() {
 
         {/* ── Step 1: find the patient before anything else ── */}
         <SectionCard title="Find Patient" subtitle="Search first to avoid creating a duplicate record — then create a new one only if nothing matches."
-          emoji="🔍" bgColor="#EFF6FF" color="#1D4ED8">
+          icon={Search} bgColor="#EFF6FF" color="#1D4ED8">
 
           {/* Segmented tabs — mobile is the fast path (dedup-checked across
               every hospital); name/UHID only searches this hospital's own
               records, for when front desk doesn't have the mobile handy. */}
           <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-            {[["mobile", "📱 Mobile Number"], ["name", "🪪 Name / UHID"]].map(([key, label]) => (
+            {[["mobile", Smartphone, "Mobile Number"], ["name", Contact, "Name / UHID"]].map(([key, TabIcon, label]) => (
               <button key={key} type="button"
                 onClick={() => setSearchTab(key)}
                 style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
                   fontSize: 12, fontWeight: 700, padding: "6px 14px", borderRadius: 20,
                   border: `1.5px solid ${searchTab === key ? "var(--color-primary)" : "var(--color-border)"}`,
                   background: searchTab === key ? "var(--color-primary-light)" : "#fff",
                   color: searchTab === key ? "var(--color-primary)" : "var(--color-text-muted)",
                   cursor: "pointer",
                 }}>
+                <TabIcon size={13} />
                 {label}
               </button>
             ))}
@@ -409,8 +415,8 @@ export default function RegisterPatientPage() {
 
               {!proceeded && isBlocked && (
                 <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "14px 16px" }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#B91C1C", marginBottom: 8 }}>
-                    ⚠ Possible duplicate — patient already registered here
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700, color: "#B91C1C", marginBottom: 8 }}>
+                    <AlertTriangle size={13} /> Possible duplicate — patient already registered here
                   </div>
                   <div style={{
                     display: "flex", alignItems: "center", gap: 12, background: "#fff",
@@ -418,8 +424,8 @@ export default function RegisterPatientPage() {
                   }}>
                     <div style={{
                       width: 36, height: 36, borderRadius: "50%", background: "#FEE2E2", color: "#B91C1C",
-                      display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0,
-                    }}>👤</div>
+                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                    }}><User size={16} /></div>
                     <div>
                       <div style={{ fontWeight: 700, fontSize: 14 }}>{lookup.full_name}</div>
                       <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
@@ -449,8 +455,8 @@ export default function RegisterPatientPage() {
                   }}>
                     <div style={{
                       width: 36, height: 36, borderRadius: "50%", background: "#DBEAFE", color: "#1E40AF",
-                      display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0,
-                    }}>👤</div>
+                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                    }}><User size={16} /></div>
                     <div>
                       <div style={{ fontWeight: 700, fontSize: 14 }}>{lookup.full_name}</div>
                       <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
@@ -567,7 +573,7 @@ export default function RegisterPatientPage() {
                   textAlign: "center", padding: "28px 20px", marginTop: 4,
                   border: "1.5px dashed var(--color-border)", borderRadius: 10,
                 }}>
-                  <div style={{ fontSize: 28, marginBottom: 8 }}>👤</div>
+                  <User size={28} style={{ marginBottom: 8 }} />
                   <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Register a new patient</div>
                   <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 14 }}>
                     Search existing records first to avoid duplicate profiles.
@@ -615,7 +621,7 @@ export default function RegisterPatientPage() {
                       textAlign: "center", padding: "28px 16px", color: "var(--color-text-muted)",
                       background: "#F8FAFC", border: "1px dashed var(--color-border)", borderRadius: 10,
                     }}>
-                      <div style={{ fontSize: 24, marginBottom: 6 }}>🔍</div>
+                      <Search size={24} style={{ marginBottom: 6 }} />
                       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>
                         {nameIsBrowse ? "No patients registered here yet" : `No patients matched "${nameQuery}"`}
                       </div>
@@ -689,7 +695,7 @@ export default function RegisterPatientPage() {
           </div>
 
           {/* ── 1. Personal Information ── */}
-          <SectionCard title="Personal Information" emoji="🪪" bgColor="#F0FDF4" color="#15803D">
+          <SectionCard title="Personal Information" icon={Contact} bgColor="#F0FDF4" color="#15803D">
             <TwoCol>
               <FieldGroup label="Full Name *">
                 <Input value={form.full_name} onChange={set("full_name")}
@@ -739,7 +745,7 @@ export default function RegisterPatientPage() {
           </SectionCard>
 
           {/* ── 2. Contact Information ── */}
-          <SectionCard title="Contact Information" emoji="📞" bgColor="#F0FDF4" color="#15803D">
+          <SectionCard title="Contact Information" icon={Phone} bgColor="#F0FDF4" color="#15803D">
             {form.is_dependent && (
               <div style={{
                 background: "#FAF5FF", border: "1px solid #E9D5FF", borderRadius: 8,
@@ -806,8 +812,8 @@ export default function RegisterPatientPage() {
               background: "#FFFBEB", border: "1px solid #FDE68A",
               borderRadius: 8, padding: "14px 16px", marginTop: 8,
             }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#92400E", marginBottom: 14 }}>
-                🚨 Emergency Contact <span style={{ fontWeight: 400, color: "#b45309" }}>(optional)</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, color: "#92400E", marginBottom: 14 }}>
+                <Siren size={14} /> Emergency Contact <span style={{ fontWeight: 400, color: "#b45309" }}>(optional)</span>
               </div>
               <ThreeCol>
                 <FieldGroup label="Name">
@@ -834,7 +840,7 @@ export default function RegisterPatientPage() {
           </SectionCard>
 
           {/* ── 3. Registration Branch ── */}
-          <SectionCard title="Registration Branch" emoji="🏥" bgColor="#EDE9FF" color="#5B52EE">
+          <SectionCard title="Registration Branch" icon={Building2} bgColor="#EDE9FF" color="#5B52EE">
             <TwoCol>
               <FieldGroup label="Register at Branch *">
                 <FSelect value={form.branch_id} onChange={set("branch_id")}
@@ -873,7 +879,7 @@ export default function RegisterPatientPage() {
           </SectionCard>
 
           {/* ── 4. Insurance & Payment ── */}
-          <SectionCard title="Insurance & Payment" emoji="🛡️" bgColor="#F5F3FF" color="#5B52EE">
+          <SectionCard title="Insurance & Payment" icon={Shield} bgColor="#F5F3FF" color="#5B52EE">
             <FieldGroup label="Payer Type *">
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                 {[
@@ -926,7 +932,7 @@ export default function RegisterPatientPage() {
           </SectionCard>
 
           {/* ── 5. DPDP Consent ── */}
-          <SectionCard title="Privacy Consent (DPDP Act 2023)" emoji="🔑" bgColor="#FEF2F2" color="#B91C1C">
+          <SectionCard title="Privacy Consent (DPDP Act 2023)" icon={Lock} bgColor="#FEF2F2" color="#B91C1C">
             <div style={{
               background: "#FFF7ED", border: "1px solid #FED7AA",
               borderRadius: 8, padding: "10px 16px", marginBottom: 16,

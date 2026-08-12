@@ -13,6 +13,7 @@ import { useToast }  from "../../hooks/useToast";
 import { useAuth }   from "../../hooks/useAuth";
 import { usePermissions } from "../../hooks/usePermissions";
 import API_ENDPOINTS from "../../config/api.config";
+import { Mail, Users } from "lucide-react";
 import { calcAge }   from "../../utils/age";
 import { sanitizeMobileInput, isValidMobile, mobileError } from "../../utils/validation";
 
@@ -189,7 +190,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
         {result ? (
           <div>
             <div style={{ textAlign: "center", marginBottom: 20 }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>✉️</div>
+              <Mail size={40} style={{ color: "var(--color-text-muted)", marginBottom: 12 }} />
               <h2 style={{ margin: 0 }}>Invite Sent!</h2>
               <p style={{ color: "var(--color-text-muted)", fontSize: 14, marginTop: 6 }}>
                 Share the setup link with the staff member.
@@ -995,7 +996,7 @@ export default function StaffPage() {
           <div style={{ textAlign: "center", padding: 60, color: "var(--color-text-muted)" }}>Loading…</div>
         ) : filtered.length === 0 ? (
           <div className="card" style={{ textAlign: "center", padding: 60 }}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>👥</div>
+            <Users size={40} style={{ color: "var(--color-text-muted)", marginBottom: 12 }} />
             <div style={{ fontWeight: 600, marginBottom: 8 }}>
               {(!search && roleFilter === "all") ? "No staff yet" : "No results"}
             </div>

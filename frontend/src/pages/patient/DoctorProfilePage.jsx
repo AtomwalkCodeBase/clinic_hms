@@ -244,7 +244,7 @@ export default function PatientDoctorProfilePage() {
             padding: 28, textAlign: "center",
             background: "var(--color-primary-light)", border: "1.5px solid var(--color-primary)",
           }}>
-            <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
+            <CircleCheck size={32} style={{ color: "var(--color-success)", marginBottom: 8 }} />
             <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 20, marginBottom: 4 }}>
               Booked — {confirmation.time || selectedSlot}, token #{confirmation.token_number}
             </div>

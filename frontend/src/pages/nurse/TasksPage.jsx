@@ -13,7 +13,7 @@ import { useApi }    from "../../hooks/useApi";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
-import { Syringe }   from "lucide-react";
+import { Syringe, FlaskConical } from "lucide-react";
 
 const TODAY = new Date().toISOString().split("T")[0];
 
@@ -390,7 +390,7 @@ export default function NurseTasksPage() {
                       background: "var(--color-warning-light)", border: "1px solid var(--color-warning)",
                       borderRadius: 8, padding: "10px 14px", fontSize: 13,
                     }}>
-                      <strong style={{ color: "var(--color-warning)" }}>🧪 Other orders:</strong>{" "}
+                      <strong style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--color-warning)" }}><FlaskConical size={13} /> Other orders:</strong>{" "}
                       {t.investigations}
                       <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 4 }}>
                         Guide the patient to the laboratory and confirm samples are collected.

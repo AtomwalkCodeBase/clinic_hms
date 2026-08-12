@@ -12,6 +12,7 @@ import DependentBadge from "../../components/common/DependentBadge";
 import { useToast }   from "../../hooks/useToast";
 import apiClient      from "../../services/api.client";
 import API_ENDPOINTS  from "../../config/api.config";
+import { CheckCircle2, Stethoscope } from "lucide-react";
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -144,7 +145,7 @@ export default function VitalsPage() {
               </div>
             ) : appointments.length === 0 ? (
               <div className="card" style={{ padding: 30, textAlign: "center", color: "var(--color-text-muted)" }}>
-                <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
+                <CheckCircle2 size={32} style={{ color: "var(--color-success)", marginBottom: 8 }} />
                 No patients waiting for vitals.
               </div>
             ) : (
@@ -192,7 +193,7 @@ export default function VitalsPage() {
           <div>
             {!selected ? (
               <div className="card" style={{ padding: 60, textAlign: "center", color: "var(--color-text-muted)" }}>
-                <div style={{ fontSize: 40, marginBottom: 12 }}>🩺</div>
+                <Stethoscope size={40} style={{ color: "var(--color-text-muted)", marginBottom: 12 }} />
                 Select a patient from the queue to enter vitals.
               </div>
             ) : (

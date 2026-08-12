@@ -25,7 +25,7 @@ import API_ENDPOINTS   from "../../config/api.config";
 import {
   AlertTriangle, Stethoscope, Pill, FlaskConical, Activity, Clock, Paperclip,
   Sparkles, Printer, Download, CalendarClock, Cake, User, Upload,
-  TrendingUp, Syringe, Check, X as XIcon,
+  TrendingUp, Syringe, Check, X as XIcon, Mic, Square,
 } from "lucide-react";
 
 // ─── Common ICD-10 codes (expandable; backend search in Phase 2) ─────────────
@@ -162,20 +162,22 @@ function DictateButton({ onTranscript, disabled }) {
   }
 
   const looks = {
-    idle: { label: "🎙 Dictate", bg: "var(--color-primary-light)", color: "var(--color-primary)", border: "1px solid var(--color-primary)" },
-    rec:  { label: "⏹ Stop",    bg: "var(--color-error)",          color: "#fff",                   border: "1px solid var(--color-error)" },
-    busy: { label: "… Transcribing", bg: "var(--color-border)",     color: "var(--color-text-muted)", border: "1px solid var(--color-border)" },
+    idle: { label: "Dictate", icon: Mic,    bg: "var(--color-primary-light)", color: "var(--color-primary)", border: "1px solid var(--color-primary)" },
+    rec:  { label: "Stop",    icon: Square, bg: "var(--color-error)",          color: "#fff",                   border: "1px solid var(--color-error)" },
+    busy: { label: "… Transcribing", icon: null, bg: "var(--color-border)",     color: "var(--color-text-muted)", border: "1px solid var(--color-border)" },
   }[state];
 
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
       <button type="button" onClick={toggle} disabled={disabled || state === "busy"}
         style={{
+          display: "inline-flex", alignItems: "center", gap: 4,
           fontSize: 11, fontWeight: 700, padding: "4px 12px", borderRadius: 20,
           background: looks.bg, color: looks.color, border: looks.border,
           cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1,
           animation: state === "rec" ? "pulse 1.2s infinite" : "none",
         }}>
+        {looks.icon && <looks.icon size={11} />}
         {looks.label}
       </button>
       {/* Upload-audio alternative — lets you test the dictation pipeline with
@@ -799,6 +801,7 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
             )}
           </HistorySection>
 
+          {growthData?.is_minor === true && (
           <HistorySection title="Vaccinations" icon={<Syringe size={13} />} count={vaxData?.roadmap?.length}>
             <div style={{ marginBottom: 10 }}>
               <button
@@ -968,6 +971,7 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
               </div>
             )}
           </HistorySection>
+          )}
 
           <HistorySection title="Previous Visits" icon={<Clock size={13} />} count={timeline.length}>
             {timelineLoading ? <EmptyNote>Loading visit timeline…</EmptyNote> : timeline.length === 0 ? (

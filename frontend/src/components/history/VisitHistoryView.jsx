@@ -18,6 +18,7 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { FolderOpen } from "lucide-react";
 import apiClient      from "../../services/api.client";
 import API_ENDPOINTS  from "../../config/api.config";
 import { ROUTES }     from "../../config/routes.config";
@@ -110,7 +111,7 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
         <div style={{ textAlign: "center", padding: 60, color: "var(--color-text-muted)" }}>Loading…</div>
       ) : rows.length === 0 ? (
         <div className="card" style={{ textAlign: "center", padding: 60 }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>🗂️</div>
+          <FolderOpen size={40} style={{ color: "var(--color-text-muted)", marginBottom: 12 }} />
           <div style={{ fontWeight: 600, marginBottom: 8 }}>
             {hasFilters ? "No visits match your search" : "No visit history yet"}
           </div>

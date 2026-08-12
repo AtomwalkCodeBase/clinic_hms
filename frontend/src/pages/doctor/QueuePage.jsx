@@ -19,6 +19,7 @@ import { useActiveBranch }  from "../../hooks/useActiveBranch";
 import BranchSwitcher       from "../../components/common/BranchSwitcher";
 import apiClient            from "../../services/api.client";
 import API_ENDPOINTS        from "../../config/api.config";
+import { Building2 }        from "lucide-react";
 import { ROUTES }           from "../../config/routes.config";
 
 const TODAY = new Date().toISOString().split("T")[0];
@@ -142,7 +143,7 @@ export default function DoctorQueuePage() {
             </div>
           ) : appointments.length === 0 ? (
             <div style={{ padding: 48, textAlign: "center" }}>
-              <div style={{ fontSize: 36, marginBottom: 12 }}>🏥</div>
+              <Building2 size={36} style={{ color: "var(--color-text-muted)", marginBottom: 12 }} />
               <div style={{ fontWeight: 600, marginBottom: 6 }}>No patients in queue today</div>
               <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
                 Appointments booked by front desk will appear here.

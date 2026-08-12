@@ -23,6 +23,7 @@ import { useNavigate } from "react-router-dom";
 import {
   ShieldCheck, CalendarPlus, Building2, Droplet, CalendarClock, AlertTriangle,
   Smartphone, User, Cake, Fingerprint, Mail, Phone, HeartPulse, Stethoscope,
+  Baby, Heart, Users, UserRound,
 } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -52,7 +53,7 @@ const cardStyle = { padding: 0, marginTop: 16, overflow: "hidden" };
 const EMPTY_PW = { current_password: "", new_password: "", confirm_password: "" };
 const EMPTY_MEMBER = { full_name: "", date_of_birth: "", gender: "", relationship: "child" };
 const REL_LABELS = { child: "Child", parent: "Parent", spouse: "Spouse", sibling: "Sibling", ward: "Ward", other: "Other" };
-const REL_ICONS  = { child: "🧒", parent: "🧑", spouse: "💍", sibling: "🧑‍🤝‍🧑", ward: "🧑‍🦱", other: "👤" };
+const REL_ICONS  = { child: Baby, parent: User, spouse: Heart, sibling: Users, ward: UserRound, other: User };
 
 // Plain, light section header — small text label + thin bottom border.
 // Kept deliberately quiet (no color banner) so a page full of cards reads
@@ -546,11 +547,14 @@ export default function MyProfilePage() {
                   }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                       <div style={{
-                        width: 40, height: 40, borderRadius: "50%", flexShrink: 0, fontSize: 18,
+                        width: 40, height: 40, borderRadius: "50%", flexShrink: 0,
                         background: "var(--color-accent-light)",
                         display: "flex", alignItems: "center", justifyContent: "center",
                       }}>
-                        {REL_ICONS[m.relationship] || "👤"}
+                        {(() => {
+                          const RelIcon = REL_ICONS[m.relationship] || User;
+                          return <RelIcon size={18} />;
+                        })()}
                       </div>
                       <div>
                         <div style={{ fontWeight: 700, fontSize: 14 }}>{m.full_name}</div>
@@ -605,7 +609,7 @@ export default function MyProfilePage() {
                   <div><label style={labelStyle}>Relationship to You</label>
                     <select className="profile-edit-input" style={inputStyle} value={memberForm.relationship}
                       onChange={e => setMemberForm(f => ({ ...f, relationship: e.target.value }))}>
-                      {Object.entries(REL_LABELS).map(([v, l]) => <option key={v} value={v}>{REL_ICONS[v]} {l}</option>)}
+                      {Object.entries(REL_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                     </select>
                   </div>
                 </div>

@@ -1,10 +1,14 @@
 /**
  * pages/patient/components/VaccinationSidebar.jsx
  * ---------------------------------------------------
- * Right-hand column — visually rich cards with colour-coded headers:
- *   1. Recommended by Doctor  — gold/amber gradient header
- *   2. Update Your Records    — green accent header
- *   3. Helpful Tips           — warm neutral
+ * Two exported pieces, split so the page can lay them out separately
+ * (RecordsPage.jsx puts RecommendedByDoctor next to the Growth &
+ * Vaccination Chart, and the rest of this sidebar next to the Vaccination
+ * Timeline below it — both are the same width as whatever they sit beside
+ * instead of the old always-full-width single column):
+ *   - RecommendedByDoctor (named export) — gold/amber gradient header
+ *   - VaccinationSidebar  (default export) — Update Your Records + Helpful
+ *     Tips, green accent + warm neutral headers
  */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -53,16 +57,11 @@ function SectionCard({ headerBg, headerIcon, headerIconBg, title, children, styl
   );
 }
 
-export default function VaccinationSidebar({ patientAwpid, roadmap, onOpenUpload }) {
+export function RecommendedByDoctor({ roadmap }) {
   const navigate = useNavigate();
-  const [bannerDismissed, setBannerDismissed] = useState(false);
-
   const ordered = orderedVaccines(roadmap);
 
   return (
-    <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
-
-      {/* ── Recommended by Doctor ─────────────────────────────────── */}
       <SectionCard
         headerBg="linear-gradient(135deg, #7A5418 0%, #B07C24 100%)"
         headerIconBg="rgba(255,255,255,0.15)"
@@ -171,6 +170,15 @@ export default function VaccinationSidebar({ patientAwpid, roadmap, onOpenUpload
           </div>
         )}
       </SectionCard>
+  );
+}
+
+export default function VaccinationSidebar({ patientAwpid, onOpenUpload }) {
+  const navigate = useNavigate();
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+
+  return (
+    <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
 
       {/* ── Update Your Records ───────────────────────────────────── */}
       <SectionCard
