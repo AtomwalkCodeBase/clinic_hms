@@ -9,12 +9,14 @@
  * prescriptions from elsewhere).
  */
 import { useState, useRef } from "react";
+import { FlaskConical } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { useToast }  from "../../hooks/useToast";
 import apiClient      from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import { usePatientContext } from "../../context/PatientContext";
 
 const DOC_TYPES = [
   { value: "lab_report",        label: "Lab Report" },
@@ -76,9 +78,14 @@ function InHouseBody({ order, saving, chooseAndSave }) {
   const progress = LAB_PROGRESS_MESSAGE[order.status] || LAB_PROGRESS_MESSAGE.ordered;
 
   return (
-    <div style={{ background: "var(--color-warning-light)", border: "1px solid var(--color-warning)", borderRadius: 10, padding: "12px 16px" }}>
+    <div style={{
+      background: "linear-gradient(135deg, #FFFDF5 0%, #FEF9EC 100%)",
+      borderLeft: "4px solid var(--color-warning)",
+      borderRadius: "0 10px 10px 0",
+      padding: "12px 16px",
+    }}>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 8 }}>
-        <span>{order.price != null ? `₹${order.price}` : "Price not set"}</span>
+        <span style={{ fontWeight: 600 }}>{order.price != null ? `₹${order.price}` : "Price not set"}</span>
         {order.turnaround_hours && (
           <span style={{ color: "var(--color-text-muted)" }}>
             Est. ready {estimatedReady(order.ordered_at, order.turnaround_hours)}
@@ -89,10 +96,7 @@ function InHouseBody({ order, saving, chooseAndSave }) {
         Visit the laboratory at {order.hospital} with your token.
       </div>
 
-      {/* Single clear line for what's happening right now — replaces the
-          separate status text + still-open payment box that made this
-          confusing (e.g. "Completed" showing up with nothing to see). */}
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: "var(--color-warning)" }}>
         {progress}
       </div>
 
@@ -219,78 +223,104 @@ function LabOrderCard({ order, onChanged }) {
   const delivered = order.report?.status === "delivered";
 
   return (
-    <div className="card" style={{ padding: "16px 20px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-        <span style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 16 }}>{order.test_name}</span>
+    <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+      {/* Dark gradient strip header */}
+      <div style={{
+        background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+        padding: "12px 20px",
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        position: "relative", overflow: "hidden",
+      }}>
+        <div style={{
+          position: "absolute", width: 160, height: 160, borderRadius: "50%",
+          background: "radial-gradient(circle, rgba(201,162,75,0.14) 0%, transparent 70%)",
+          top: -60, right: -30, pointerEvents: "none",
+        }} />
+        <div style={{ position: "relative" }}>
+          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, color: "#fff" }}>
+            {order.test_name}
+          </div>
+          <div style={{ fontSize: 11, color: "#8FA89A", marginTop: 2 }}>
+            {order.hospital}{order.ordered_at ? ` · ordered ${new Date(order.ordered_at).toLocaleDateString("en-IN")}` : ""}
+          </div>
+        </div>
+        <div style={{ position: "relative", flexShrink: 0 }}>
+          {delivered ? (
+            <span className="badge badge--success">Ready</span>
+          ) : order.patient_choice === "pending" ? (
+            <span className="badge badge--warning">Choose an option</span>
+          ) : (
+            (() => {
+              const s = LAB_STATUS_BADGE[order.status] || LAB_STATUS_BADGE.ordered;
+              return (
+                <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 700, background: s.bg, color: s.color }}>
+                  {s.label}
+                </span>
+              );
+            })()
+          )}
+        </div>
+      </div>
+
+      <div style={{ padding: "14px 20px" }}>
+        {/* Result delivered — show it and stop, regardless of path taken */}
         {delivered ? (
-          <span className="badge badge--success">Ready</span>
+          <div style={{
+            background: "linear-gradient(135deg, #E9F1EC 0%, #E0EEE5 100%)",
+            borderLeft: "4px solid var(--color-success)",
+            borderRadius: "0 10px 10px 0", padding: "12px 16px",
+          }}>
+            <div style={{ fontWeight: 700, fontSize: 13, color: "var(--color-success)", marginBottom: 4 }}>✓ Result</div>
+            <div style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: order.report.has_file ? 10 : 0 }}>
+              {order.report.result_summary || "Report released — ask your hospital for the full file."}
+            </div>
+            {order.report.has_file && (
+              <ViewInHouseReportButton tenantDb={order.tenant_db} requestId={order.id} />
+            )}
+          </div>
+
+        /* Pending choice — patient hasn't decided yet */
         ) : order.patient_choice === "pending" ? (
-          <span className="badge badge--warning">Choose an option</span>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button className="btn-primary" disabled={saving} style={{ flex: 1 }}
+              onClick={() => chooseAndSave("in_house", "pay_at_lab")}>
+              {order.hospital ? `Conduct at ${order.hospital}` : "Conduct at this hospital"}
+            </button>
+            <button className="btn-outline" disabled={saving} style={{ flex: 1 }}
+              onClick={() => chooseAndSave("outside", "")}>
+              Conduct at an external facility
+            </button>
+          </div>
+
+        /* In-house, awaiting the lab */
+        ) : order.patient_choice === "in_house" ? (
+          <InHouseBody order={order} saving={saving} chooseAndSave={chooseAndSave} />
+
+        /* Outside — upload once they have the report */
         ) : (
-          (() => {
-            const s = LAB_STATUS_BADGE[order.status] || LAB_STATUS_BADGE.ordered;
-            return (
-              <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 700, background: s.bg, color: s.color }}>
-                {s.label}
-              </span>
-            );
-          })()
+          <div>
+            {order.attached_document ? (
+              <div style={{
+                background: "linear-gradient(135deg, #E9F1EC 0%, #E0EEE5 100%)",
+                borderLeft: "4px solid var(--color-success)",
+                borderRadius: "0 10px 10px 0", padding: "10px 14px", fontSize: 13, color: "#166534",
+              }}>
+                ✓ Report attached — {order.attached_document.title}
+                {order.attached_document.created_at && ` (${new Date(order.attached_document.created_at).toLocaleDateString("en-IN")})`}
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <input ref={fileRef} type="file" accept=".pdf,image/*" className="form-input" style={{ flex: 1, minWidth: 180 }}
+                  onChange={e => setFile(e.target.files?.[0] || null)} />
+                <button className="btn-primary" disabled={uploading} style={{ fontSize: 12, padding: "7px 16px" }}
+                  onClick={uploadOutsideReport}>
+                  {uploading ? "Uploading…" : "Upload report"}
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </div>
-      <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 12 }}>
-        {order.hospital} · ordered {order.ordered_at ? new Date(order.ordered_at).toLocaleDateString("en-IN") : ""}
-      </div>
-
-      {/* Result delivered — show it and stop, regardless of path taken */}
-      {delivered ? (
-        <div style={{ background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 10, padding: "12px 16px" }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: "#166534", marginBottom: 4 }}>✓ Result</div>
-          <div style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: order.report.has_file ? 10 : 0 }}>
-            {order.report.result_summary || "Report released — ask your hospital for the full file."}
-          </div>
-          {order.report.has_file && (
-            <ViewInHouseReportButton tenantDb={order.tenant_db} requestId={order.id} />
-          )}
-        </div>
-
-      /* Pending choice — patient hasn't decided yet */
-      ) : order.patient_choice === "pending" ? (
-        <div style={{ display: "flex", gap: 10 }}>
-          <button className="btn-primary" disabled={saving} style={{ flex: 1 }}
-            onClick={() => chooseAndSave("in_house", "pay_at_lab")}>
-            {order.hospital ? `Conduct at ${order.hospital}` : "Conduct at this hospital"}
-          </button>
-          <button className="btn-outline" disabled={saving} style={{ flex: 1 }}
-            onClick={() => chooseAndSave("outside", "")}>
-            Conduct at an external facility
-          </button>
-        </div>
-
-      /* In-house, awaiting the lab */
-      ) : order.patient_choice === "in_house" ? (
-        <InHouseBody order={order} saving={saving} chooseAndSave={chooseAndSave} />
-
-
-      /* Outside — upload once they have the report */
-      ) : (
-        <div>
-          {order.attached_document ? (
-            <div style={{ background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 10, padding: "10px 14px", fontSize: 13, color: "#166534" }}>
-              ✓ Report attached — {order.attached_document.title}
-              {order.attached_document.created_at && ` (${new Date(order.attached_document.created_at).toLocaleDateString("en-IN")})`}
-            </div>
-          ) : (
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <input ref={fileRef} type="file" accept=".pdf,image/*" className="form-input" style={{ flex: 1, minWidth: 180 }}
-                onChange={e => setFile(e.target.files?.[0] || null)} />
-              <button className="btn-primary" disabled={uploading} style={{ fontSize: 12, padding: "7px 16px" }}
-                onClick={uploadOutsideReport}>
-                {uploading ? "Uploading…" : "Upload report"}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -391,21 +421,53 @@ function MyDocumentsList({ docs, isLoading }) {
 }
 
 export default function PatientLabReportsPage() {
+  const { selectedPatient } = usePatientContext();
+  const patientAwpid = selectedPatient.awpid || "";
+
+  // NOTE: patient_awpid is wired through here so the query fires with the
+  // right param the moment the backend supports it, but as of this change
+  // neither endpoint actually filters by it yet — see PortalLabOrderListView
+  // and PortalDocumentListCreateView.get in apps/patients/portal_views.py,
+  // both of which always resolve to `acct.awpid` (the logged-in account
+  // owner) with no patient_awpid query-param handling at all (unlike
+  // PortalMyRecordsView / PortalHealthSummaryView / PortalGrowthView /
+  // PortalVaccinationListView, which already support it via
+  // _resolve_target_awpid_and_dob). Until that backend follow-up lands,
+  // selecting a dependent on this page will still silently show the
+  // account owner's own lab tests/documents.
   const { items: orders, isLoading: ordersLoading, refetch: refetchOrders } =
-    usePaginatedList(API_ENDPOINTS.PORTAL.LAB_ORDERS, { pageSize: 20 });
+    usePaginatedList(API_ENDPOINTS.PORTAL.LAB_ORDERS, {
+      pageSize: 20,
+      params: patientAwpid ? { patient_awpid: patientAwpid } : {},
+    });
   const { items: docs, isLoading: docsLoading, refetch: refetchDocs } =
-    usePaginatedList(API_ENDPOINTS.PORTAL.DOCUMENTS, { pageSize: 20 });
+    usePaginatedList(API_ENDPOINTS.PORTAL.DOCUMENTS, {
+      pageSize: 20,
+      params: patientAwpid ? { patient_awpid: patientAwpid } : {},
+    });
 
   return (
     <AppShell>
-      <PageShell title="Lab Tests & Reports">
+      <PageShell title={selectedPatient.isSelf ? "Lab Tests & Reports" : `${selectedPatient.name}'s Lab Tests & Reports`}>
         {ordersLoading ? (
           <div className="card" style={{ padding: 40, textAlign: "center", color: "var(--color-text-muted)", marginBottom: 18 }}>
             Loading…
           </div>
         ) : orders.length === 0 ? (
-          <div className="card" style={{ padding: 32, textAlign: "center", marginBottom: 18 }}>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>No tests ordered yet</div>
+          /* Empty state with Flask icon in gradient ring */
+          <div className="card" style={{ padding: 44, textAlign: "center", marginBottom: 18 }}>
+            <div style={{
+              width: 72, height: 72, borderRadius: "50%", margin: "0 auto 16px",
+              background: "linear-gradient(135deg, #E5EEF3 0%, #D0E3EE 100%)",
+              border: "3px solid rgba(44,93,124,0.22)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              boxShadow: "0 4px 16px rgba(44,93,124,0.12)",
+            }}>
+              <FlaskConical size={30} style={{ color: "#2C5D7C" }} />
+            </div>
+            <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 17, marginBottom: 4 }}>
+              No tests ordered yet
+            </div>
             <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
               When your doctor orders lab work, it'll appear here.
             </div>

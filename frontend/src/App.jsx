@@ -17,6 +17,7 @@ import { useAuth } from "./hooks/useAuth";
 import { ROUTES }  from "./config/routes.config";
 import { ROLES }   from "./constants/roles";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
+import { PatientProvider } from "./context/PatientContext";
 
 // ── Lazy-loaded pages ─────────────────────────────────────────────────────────
 // Each role has its own folder; import pages here as they are built.
@@ -33,12 +34,14 @@ const PlatformHospitals  = lazy(() => import("./pages/platform-admin/HospitalsPa
 const PlatformHospitalDetail = lazy(() => import("./pages/platform-admin/HospitalDetailPage"));
 const PlatformSubscriptions = lazy(() => import("./pages/platform-admin/SubscriptionsPage"));
 const PlatformUsers      = lazy(() => import("./pages/platform-admin/UsersPage"));
+const PlatformVaccinationTemplates = lazy(() => import("./pages/platform-admin/VaccinationTemplatesPage"));
 
 // Hospital Admin
 const AdminDashboard = lazy(() => import("./pages/hospital-admin/DashboardPage"));
 const AdminStaff     = lazy(() => import("./pages/hospital-admin/StaffPage"));
 const AdminBranches  = lazy(() => import("./pages/hospital-admin/BranchesPage"));
 const AdminRoles     = lazy(() => import("./pages/hospital-admin/RolesPage"));
+const AdminVaccinationSchedule = lazy(() => import("./pages/hospital-admin/VaccinationSchedulePage"));
 const AdminSettings  = lazy(() => import("./pages/hospital-admin/SettingsPage"));
 
 // Doctor
@@ -121,6 +124,20 @@ function getDefaultRoute(role) {
   return map[role] || ROUTES.LOGIN;
 }
 
+/** Wraps only the patient-portal page tree in PatientProvider — the shared
+ *  "which family member am I viewing" context. Kept as a small per-route
+ *  wrapper (rather than a single nested <Route> parent) so the existing flat
+ *  <Route path={ROUTES.PATIENT.X}> declarations below don't need to be
+ *  restructured into relative nested paths, and no other role's routes are
+ *  touched. */
+function PatientRoute({ children }) {
+  return (
+    <ProtectedRoute roles={[ROLES.PATIENT]}>
+      <PatientProvider>{children}</PatientProvider>
+    </ProtectedRoute>
+  );
+}
+
 function PageLoader() {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
@@ -164,6 +181,8 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformSubscriptions /></ProtectedRoute>} />
           <Route path={ROUTES.PLATFORM.USERS}
             element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformUsers /></ProtectedRoute>} />
+          <Route path={ROUTES.PLATFORM.VACCINATION_TEMPLATES}
+            element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformVaccinationTemplates /></ProtectedRoute>} />
 
           {/* Hospital Admin */}
           <Route path={ROUTES.ADMIN.DASHBOARD}
@@ -174,6 +193,8 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminBranches /></ProtectedRoute>} />
           <Route path={ROUTES.ADMIN.ROLES}
             element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminRoles /></ProtectedRoute>} />
+          <Route path={ROUTES.ADMIN.VACCINATION_SCHEDULE}
+            element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminVaccinationSchedule /></ProtectedRoute>} />
           <Route path={ROUTES.ADMIN.SETTINGS}
             element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminSettings /></ProtectedRoute>} />
           <Route path={ROUTES.ADMIN.MY_PROFILE}
@@ -243,25 +264,26 @@ export default function App() {
           <Route path={ROUTES.PHARMACIST.MY_PROFILE}
             element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><SharedMyProfile /></ProtectedRoute>} />
 
-          {/* Patient Portal */}
+          {/* Patient Portal — wrapped in PatientProvider so "which family
+              member am I viewing" is shared across every page below. */}
           <Route path={ROUTES.PATIENT.DASHBOARD}
-            element={<ProtectedRoute roles={[ROLES.PATIENT]}><PatientDashboard /></ProtectedRoute>} />
+            element={<PatientRoute><PatientDashboard /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.APPOINTMENTS}
-            element={<ProtectedRoute roles={[ROLES.PATIENT]}><PatientAppointments /></ProtectedRoute>} />
+            element={<PatientRoute><PatientAppointments /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.HOSPITALS}
-            element={<ProtectedRoute roles={[ROLES.PATIENT]}><PatientHospitals /></ProtectedRoute>} />
+            element={<PatientRoute><PatientHospitals /></PatientRoute>} />
           <Route path="/patient/hospitals/:tenantId/doctors"
-            element={<ProtectedRoute roles={[ROLES.PATIENT]}><PatientHospitalDoctors /></ProtectedRoute>} />
+            element={<PatientRoute><PatientHospitalDoctors /></PatientRoute>} />
           <Route path="/patient/hospitals/:tenantId/doctors/:doctorId"
-            element={<ProtectedRoute roles={[ROLES.PATIENT]}><PatientDoctorProfile /></ProtectedRoute>} />
+            element={<PatientRoute><PatientDoctorProfile /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.RECORDS}
-            element={<ProtectedRoute roles={[ROLES.PATIENT]}><PatientRecords /></ProtectedRoute>} />
+            element={<PatientRoute><PatientRecords /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.PRESCRIPTIONS}
-            element={<ProtectedRoute roles={[ROLES.PATIENT]}><PatientPrescriptions /></ProtectedRoute>} />
+            element={<PatientRoute><PatientPrescriptions /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.LAB_REPORTS}
-            element={<ProtectedRoute roles={[ROLES.PATIENT]}><PatientLabReports /></ProtectedRoute>} />
+            element={<PatientRoute><PatientLabReports /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.MY_PROFILE}
-            element={<ProtectedRoute roles={[ROLES.PATIENT]}><PatientMyProfile /></ProtectedRoute>} />
+            element={<PatientRoute><PatientMyProfile /></PatientRoute>} />
 
           {/* Catch-all */}
           <Route path="*" element={<Navigate to="/" replace />} />

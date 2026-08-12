@@ -20,6 +20,7 @@ import { useApi }        from "../../hooks/useApi";
 import apiClient         from "../../services/api.client";
 import API_ENDPOINTS     from "../../config/api.config";
 import { calcAge }       from "../../utils/age";
+import { sanitizeMobileInput, isValidMobile } from "../../utils/validation";
 
 // ── Field helpers ─────────────────────────────────────────────────────────────
 function FieldGroup({ label, children }) {
@@ -265,24 +266,52 @@ export default function RegisterPatientPage() {
   // ── Name / UHID search — a second way to find an existing patient without
   // knowing their mobile number. Reuses the same search endpoint the doctor
   // and nurse patient-search screens use (name/UHID/AWPID/mobile prefix).
+  //
+  // Live-searches as you type (same debounce pattern as the mobile tab
+  // above) instead of requiring an explicit Search click, and an empty
+  // query browses the most recently registered patients at this hospital
+  // instead of showing a blank box — front desk can scan a short list
+  // without needing an exact name/UHID first.
   const [searchTab, setSearchTab] = useState("mobile"); // "mobile" | "name"
   const [nameQuery, setNameQuery] = useState("");
-  const [nameResults, setNameResults] = useState(null); // null = not searched yet
+  const [nameResults, setNameResults] = useState(null); // null = not loaded yet
+  const [nameIsBrowse, setNameIsBrowse] = useState(true);
   const [nameSearchLoading, setNameSearchLoading] = useState(false);
+  const nameDebounce = useRef(null);
 
-  function runNameSearch() {
-    const q = nameQuery.trim();
-    if (q.length < 2) return;
+  function runNameSearch(q) {
     setNameSearchLoading(true);
-    apiClient.get(API_ENDPOINTS.PATIENTS.SEARCH, { params: { q } })
-      .then(({ data: res }) => setNameResults(res?.data?.results || []))
+    apiClient.get(API_ENDPOINTS.PATIENTS.SEARCH, { params: q ? { q } : {} })
+      .then(({ data: res }) => {
+        setNameResults(res?.data?.results || []);
+        setNameIsBrowse(!!res?.data?.is_browse);
+      })
       .catch(() => setNameResults([]))
       .finally(() => setNameSearchLoading(false));
   }
 
+  // Load the default "recently registered" browse list as soon as this tab
+  // is opened, then re-search (debounced) on every keystroke after that.
+  useEffect(() => {
+    if (searchTab !== "name") return;
+    clearTimeout(nameDebounce.current);
+    const q = nameQuery.trim();
+    if (q && q.length < 2) return; // too short to search, but not empty — wait for more input
+    nameDebounce.current = setTimeout(() => runNameSearch(q), q ? 300 : 0);
+    return () => clearTimeout(nameDebounce.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchTab, nameQuery]);
+
+  // Fields that must be a plain 10-digit mobile number — sanitized on every
+  // keystroke (strip non-digits, cap at 10) so the field can never end up
+  // holding too few/too many digits in the first place, rather than only
+  // catching it at submit time.
+  const MOBILE_FIELDS = new Set(["mobile", "alternate_mobile", "emergency_phone"]);
+
   function set(key) {
     return (e) => {
-      const val = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+      let val = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+      if (MOBILE_FIELDS.has(key)) val = sanitizeMobileInput(val);
       setForm(f => ({ ...f, [key]: val }));
       if (errors[key]) setErrors(er => ({ ...er, [key]: undefined }));
     };
@@ -293,8 +322,15 @@ export default function RegisterPatientPage() {
     if (!form.full_name.trim())      e.full_name      = "Full name is required.";
     if (!form.date_of_birth)         e.date_of_birth  = "Date of birth is required.";
     if (!form.gender)                e.gender         = "Gender is required.";
-    if (!form.is_dependent && !form.mobile.trim())
-                                      e.mobile         = "Mobile number is required.";
+    if (!form.is_dependent && !form.mobile.trim()) {
+      e.mobile = "Mobile number is required.";
+    } else if (form.mobile && !isValidMobile(form.mobile)) {
+      e.mobile = "Enter a valid 10-digit mobile number.";
+    }
+    if (form.alternate_mobile && !isValidMobile(form.alternate_mobile))
+                                      e.alternate_mobile = "Enter a valid 10-digit mobile number.";
+    if (form.emergency_phone && !isValidMobile(form.emergency_phone))
+                                      e.emergency_phone  = "Enter a valid 10-digit mobile number.";
     if (!form.branch_id)             e.branch_id      = "Branch is required.";
     if (!form.payer_type)            e.payer_type     = "Payer type is required.";
     if (!form.dpdp_consent)          e.dpdp_consent   = "DPDP consent is mandatory.";
@@ -546,54 +582,95 @@ export default function RegisterPatientPage() {
             </>
           ) : (
             <>
-              <FieldGroup label="Patient Name or UHID">
+              <FieldGroup label="Patient Name, UHID, AWPID, or Mobile">
                 <div style={{ display: "flex", gap: 8 }}>
-                  <div style={{ flex: 1 }}>
+                  <div style={{ flex: 1, position: "relative" }}>
                     <Input value={nameQuery}
                       onChange={e => setNameQuery(e.target.value)}
-                      onKeyDown={e => e.key === "Enter" && (e.preventDefault(), runNameSearch())}
-                      placeholder="e.g. Meera Krishnan or LKV-000013" autoFocus />
+                      onKeyDown={e => e.key === "Enter" && (e.preventDefault(), runNameSearch(nameQuery.trim()))}
+                      placeholder="Start typing a name, UHID, AWPID, or mobile…" autoFocus />
+                    {nameSearchLoading && (
+                      <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--color-text-muted)" }}>
+                        Searching…
+                      </span>
+                    )}
                   </div>
                   <button type="button" className="btn-primary" style={{ padding: "0 20px" }}
-                    onClick={runNameSearch} disabled={nameQuery.trim().length < 2 || nameSearchLoading}>
-                    {nameSearchLoading ? "Searching…" : "Search"}
+                    onClick={() => runNameSearch(nameQuery.trim())} disabled={nameQuery.trim().length === 1 || nameSearchLoading}>
+                    Search
                   </button>
                 </div>
               </FieldGroup>
 
               {nameResults != null && (
-                nameResults.length === 0 ? (
-                  <div style={{ fontSize: 12, color: "var(--color-text-muted)", padding: "10px 0" }}>
-                    No patients matched "{nameQuery}" at this hospital. Try Mobile Number, or create a new record.
+                <>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", margin: "4px 0 8px" }}>
+                    {nameIsBrowse
+                      ? `Recently registered at this hospital${nameResults.length ? ` (${nameResults.length})` : ""}`
+                      : `${nameResults.length} match${nameResults.length === 1 ? "" : "es"} for "${nameQuery}"`}
                   </div>
-                ) : (
-                  <div style={{ display: "grid", gap: 8 }}>
-                    {nameResults.map(p => (
-                      <div key={p.id} style={{
-                        display: "flex", alignItems: "center", justifyContent: "space-between",
-                        background: "#F8FAFC", border: "1px solid var(--color-border)", borderRadius: 8,
-                        padding: "10px 14px",
-                      }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                          <div style={{
-                            width: 34, height: 34, borderRadius: "50%", background: "#EDE9FF", color: "#5B52EE",
-                            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15,
-                          }}>👤</div>
-                          <div>
-                            <div style={{ fontWeight: 700, fontSize: 13 }}>{p.full_name}</div>
-                            <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
-                              UHID: {p.uhid} {p.mobile ? `· ${p.mobile}` : ""}
-                            </div>
-                          </div>
-                        </div>
-                        <button type="button" className="btn-outline" style={{ fontSize: 12, padding: "5px 12px" }}
-                          onClick={() => navigate("/front-desk/appointments")}>
-                          Book Appointment →
-                        </button>
+
+                  {nameResults.length === 0 ? (
+                    <div style={{
+                      textAlign: "center", padding: "28px 16px", color: "var(--color-text-muted)",
+                      background: "#F8FAFC", border: "1px dashed var(--color-border)", borderRadius: 10,
+                    }}>
+                      <div style={{ fontSize: 24, marginBottom: 6 }}>🔍</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>
+                        {nameIsBrowse ? "No patients registered here yet" : `No patients matched "${nameQuery}"`}
                       </div>
-                    ))}
-                  </div>
-                )
+                      <div style={{ fontSize: 12 }}>
+                        {nameIsBrowse ? "New registrations will show up here." : "Try Mobile Number, or create a new record below."}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 8, maxHeight: 420, overflowY: "auto" }}>
+                      {nameResults.map(p => {
+                        const age = calcAge(p.date_of_birth);
+                        const initials = (p.full_name || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
+                        return (
+                          <div key={p.id} style={{
+                            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                            background: "#fff", border: "1px solid var(--color-border)", borderRadius: 10,
+                            padding: "12px 16px", transition: "box-shadow 0.15s, border-color 0.15s",
+                          }}
+                            onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--color-primary)"; e.currentTarget.style.boxShadow = "0 2px 10px rgba(0,0,0,0.06)"; }}
+                            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--color-border)"; e.currentTarget.style.boxShadow = "none"; }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                              <div style={{
+                                width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
+                                background: "#EDE9FF", color: "#5B52EE",
+                                display: "flex", alignItems: "center", justifyContent: "center",
+                                fontSize: 13, fontWeight: 700,
+                              }}>{initials}</div>
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                  <span style={{ fontWeight: 700, fontSize: 13.5 }}>{p.full_name}</span>
+                                  {p.is_dependent && (
+                                    <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 10, background: "#F1E9FA", color: "#6B3FA0" }}>
+                                      Dependent{p.guardian_relation ? ` · ${p.guardian_relation}` : ""}
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginTop: 2, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                  <span>UHID {p.uhid}</span>
+                                  {p.mobile && <span>· {p.mobile}</span>}
+                                  {(age != null || p.gender) && <span>· {[age != null ? `${age}y` : null, p.gender].filter(Boolean).join(" ")}</span>}
+                                  {p.branch_name && <span>· {p.branch_name}</span>}
+                                </div>
+                              </div>
+                            </div>
+                            <button type="button" className="btn-outline" style={{ fontSize: 12, padding: "6px 14px", flexShrink: 0 }}
+                              onClick={() => navigate("/front-desk/appointments")}>
+                              Book Appointment →
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}
@@ -693,13 +770,13 @@ export default function RegisterPatientPage() {
             )}
             <TwoCol>
               <FieldGroup label={form.is_dependent ? "Mobile Number (optional)" : "Mobile Number *"}>
-                <Input type="tel" value={form.mobile} onChange={set("mobile")}
-                  placeholder={form.is_dependent ? "Only if they have their own phone" : "+91 XXXXX XXXXX"}
+                <Input type="tel" inputMode="numeric" maxLength={10} value={form.mobile} onChange={set("mobile")}
+                  placeholder={form.is_dependent ? "Only if they have their own phone" : "98xxxxxxxx"}
                   error={errors.mobile} required={!form.is_dependent} />
               </FieldGroup>
               <FieldGroup label="Alternate Mobile">
-                <Input type="tel" value={form.alternate_mobile} onChange={set("alternate_mobile")}
-                  placeholder="Optional" />
+                <Input type="tel" inputMode="numeric" maxLength={10} value={form.alternate_mobile} onChange={set("alternate_mobile")}
+                  placeholder="Optional" error={errors.alternate_mobile} />
               </FieldGroup>
             </TwoCol>
 
@@ -738,8 +815,8 @@ export default function RegisterPatientPage() {
                     placeholder="Contact name" error={errors.emergency_name} />
                 </FieldGroup>
                 <FieldGroup label="Phone">
-                  <Input type="tel" value={form.emergency_phone} onChange={set("emergency_phone")}
-                    placeholder="+91 XXXXX XXXXX" error={errors.emergency_phone} />
+                  <Input type="tel" inputMode="numeric" maxLength={10} value={form.emergency_phone} onChange={set("emergency_phone")}
+                    placeholder="98xxxxxxxx" error={errors.emergency_phone} />
                 </FieldGroup>
                 <FieldGroup label="Relationship">
                   <FSelect value={form.emergency_relation} onChange={set("emergency_relation")}>

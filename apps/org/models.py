@@ -380,3 +380,67 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.action} by {self.actor_email or self.actor_user_id} @ {self.created_at}"
+
+
+class DoctorSchedule(models.Model):
+    """
+    Working-hours configuration for one doctor — determines which time slots
+    are offered to patients in the booking flow.
+
+    One row per doctor (OneToOne).  Per-day availability is stored in the
+    related DoctorAvailabilitySlot rows.  slot_duration_minutes controls
+    how the booking engine carves the [start_time, end_time) window into
+    individual appointment slots (e.g. 15-minute or 30-minute slots).
+    """
+    doctor                = models.OneToOneField(
+        StaffUser, on_delete=models.CASCADE, related_name="schedule"
+    )
+    slot_duration_minutes = models.PositiveSmallIntegerField(default=15)
+    created_at            = models.DateTimeField(auto_now_add=True)
+    updated_at            = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "org"
+        db_table  = "doctor_schedule"
+
+    def __str__(self):
+        return f"Schedule for {self.doctor.get_full_name()} ({self.slot_duration_minutes} min slots)"
+
+
+class DoctorAvailabilitySlot(models.Model):
+    """
+    One row per day-of-week per doctor.  day_of_week follows Python's
+    weekday() convention: 0 = Monday … 6 = Sunday.
+
+    is_available=False marks a day off (start_time / end_time are ignored
+    on those rows but retained so toggling a day back on restores the last
+    configured window without the admin having to re-enter it).
+
+    A doctor can have a break mid-day by adding two rows for the same day
+    in the future (currently one row per day is enforced by unique_together
+    for simplicity — extend if split-shift support is needed).
+    """
+    DAY_CHOICES = [
+        (0, "Monday"), (1, "Tuesday"), (2, "Wednesday"),
+        (3, "Thursday"), (4, "Friday"), (5, "Saturday"), (6, "Sunday"),
+    ]
+
+    schedule     = models.ForeignKey(
+        DoctorSchedule, on_delete=models.CASCADE, related_name="days"
+    )
+    day_of_week  = models.SmallIntegerField(choices=DAY_CHOICES)
+    is_available = models.BooleanField(default=True)
+    start_time   = models.TimeField()
+    end_time     = models.TimeField()
+
+    class Meta:
+        app_label     = "org"
+        db_table      = "doctor_availability_slot"
+        unique_together = [("schedule", "day_of_week")]
+        ordering      = ["day_of_week"]
+
+    def __str__(self):
+        day = dict(self.DAY_CHOICES).get(self.day_of_week, self.day_of_week)
+        if not self.is_available:
+            return f"{day}: off"
+        return f"{day}: {self.start_time}–{self.end_time}"

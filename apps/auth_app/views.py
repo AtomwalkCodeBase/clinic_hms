@@ -19,6 +19,7 @@ import secrets
 from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import authenticate
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -83,8 +84,10 @@ class StaffLoginView(APIView):
 
     Two supported request shapes (see StaffLoginSerializer):
       1. {mobile, password} — profile-based routing, no subdomain needed.
-         Flow: mobile → StaffMobileIndex (registry DB) → tenant db_name →
-         StaffUser → verify password → JWT. This matches the design spec:
+         The "mobile" field also accepts an email address (detected by the
+         presence of "@") — either way it's resolved via StaffMobileIndex
+         (registry DB) → tenant db_name → StaffUser → verify password → JWT.
+         This matches the design spec:
          Request → Authenticated User → Profile → Hospital → DB Name → Tenant DB
       2. {subdomain, employee_id, password} — for hospitals using employee
          IDs. Employee IDs aren't globally unique (two hospitals can both
@@ -111,9 +114,16 @@ class StaffLoginView(APIView):
                 return error("Invalid credentials.")
             db_name, tenant_id = tenant.db_name, tenant.id
         else:
-            # ── Step 1 (mobile path): look up which tenant DB this number belongs to ──
+            # ── Step 1 (mobile/email path): look up which tenant DB this
+            # identifier belongs to. The "mobile" field also accepts an
+            # email address — detected by the presence of "@" — since staff
+            # may not know which identifier a given colleague registered with.
+            identifier = d["mobile"]
             try:
-                index = StaffMobileIndex.objects.using("default").get(mobile=d["mobile"])
+                if "@" in identifier:
+                    index = StaffMobileIndex.objects.using("default").get(email__iexact=identifier)
+                else:
+                    index = StaffMobileIndex.objects.using("default").get(mobile=identifier)
             except StaffMobileIndex.DoesNotExist:
                 return error("Invalid credentials.")
             db_name, tenant_id = index.db_name, index.tenant_id
@@ -134,7 +144,9 @@ class StaffLoginView(APIView):
             if login_by_employee_id:
                 staff = StaffUser.objects.using(db_name).get(employee_id=d["employee_id"], is_active=True)
             else:
-                staff = StaffUser.objects.using(db_name).get(phone=d["mobile"], is_active=True)
+                staff = StaffUser.objects.using(db_name).get(
+                    Q(phone=d["mobile"]) | Q(email__iexact=d["mobile"]), is_active=True
+                )
         except StaffUser.DoesNotExist:
             return error("Invalid credentials.")
 
@@ -234,7 +246,7 @@ class PlatformLoginView(APIView):
 class PatientLoginView(APIView):
     """
     POST /api/v1/auth/login/patient/
-    Body: {"mobile": ..., "password": ...}  (also accepts AWPID in the mobile field)
+    Body: {"mobile": ..., "password": ...}  (also accepts AWPID or email in the mobile field)
     """
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
@@ -251,6 +263,8 @@ class PatientLoginView(APIView):
         try:
             if login_id.upper().startswith("AWPID-"):
                 acct = PatientAccount.objects.using("default").get(awpid=login_id, is_active=True)
+            elif "@" in login_id:
+                acct = PatientAccount.objects.using("default").get(email__iexact=login_id, is_active=True)
             else:
                 acct = PatientAccount.objects.using("default").get(mobile=login_id, is_active=True)
         except PatientAccount.DoesNotExist:

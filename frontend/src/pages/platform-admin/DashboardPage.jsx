@@ -102,8 +102,12 @@ function ProvisionModal({ onClose, onProvisioned }) {
               {result.credentials && (
                 <>
                   <div style={{ marginTop: 10, borderTop: "1px solid var(--color-border)", paddingTop: 10 }}>
-                    <strong>Admin Mobile:</strong> {result.credentials.admin_mobile}
+                    <strong>Hospital Code:</strong> {result.credentials.subdomain}
                   </div>
+                  <div><strong>Admin Mobile:</strong> {result.credentials.admin_mobile}</div>
+                  {result.credentials.employee_id && (
+                    <div><strong>Employee ID:</strong> {result.credentials.employee_id}</div>
+                  )}
                   <div><strong>Temp Password:</strong> {result.credentials.temp_password}</div>
                   <div style={{ marginTop: 8, fontSize: 12, color: "var(--color-text-muted)" }}>
                     {result.credentials.note}
@@ -231,8 +235,10 @@ function TenantCard({ tenant, onTierChange }) {
   const [toggling, setToggling] = useState(false);
   const [tierPick, setTierPick] = useState(tenant.subscription?.license_tier || "starter");
   const [statusPick, setStatusPick] = useState(tenant.subscription?.status || "trial");
+  const [subdomainPick, setSubdomainPick] = useState(tenant.subdomain || "");
   const [savingTier, setSavingTier] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
+  const [savingSubdomain, setSavingSubdomain] = useState(false);
   const [auditLog, setAuditLog] = useState(null);
   const [auditLoading, setAuditLoading] = useState(false);
 
@@ -288,6 +294,22 @@ function TenantCard({ tenant, onTierChange }) {
       toastApiError(err, "Failed to change status.");
     } finally {
       setSavingStatus(false);
+    }
+  }
+
+  async function applySubdomain() {
+    const cleaned = subdomainPick.trim().toLowerCase();
+    if (!cleaned || cleaned === tenant.subdomain) return;
+    setSavingSubdomain(true);
+    try {
+      await api.patch(API_ENDPOINTS.PLATFORM.TENANT(tenant.id), { subdomain: cleaned });
+      toastSuccess(`Hospital Code changed to "${cleaned}".`);
+      setAuditLog(null);
+      onTierChange();
+    } catch (err) {
+      toastApiError(err, "Failed to change Hospital Code.");
+    } finally {
+      setSavingSubdomain(false);
     }
   }
 
@@ -358,6 +380,22 @@ function TenantCard({ tenant, onTierChange }) {
           </div>
 
           <div style={{ display: "flex", flexWrap: "wrap", gap: 24, marginBottom: 18 }}>
+            <div>
+              <div className="stat-label" style={{ marginBottom: 6 }}>Hospital Code</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input value={subdomainPick}
+                  onChange={e => setSubdomainPick(e.target.value.toLowerCase())}
+                  style={{ ...selectStyle, width: 150, fontFamily: "monospace" }} />
+                <button onClick={applySubdomain} disabled={savingSubdomain || !subdomainPick.trim() || subdomainPick.trim().toLowerCase() === tenant.subdomain}
+                  className="btn-outline" style={{ fontSize: 12, padding: "6px 14px" }}>
+                  {savingSubdomain ? "…" : "Apply"}
+                </button>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 4, maxWidth: 220 }}>
+                Used for Employee ID login at this hospital. Safe to change any time — doesn't affect the database name.
+              </div>
+            </div>
+
             <div>
               <div className="stat-label" style={{ marginBottom: 6 }}>Change tier</div>
               <div style={{ display: "flex", gap: 6 }}>

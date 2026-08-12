@@ -149,12 +149,31 @@ class AppointmentListCreateView(APIView):
         ).values_list("token_number", flat=True)
         next_token = (max(last_token) + 1) if last_token else 1
 
+        # Branch scoping — an appointment belongs to the branch the PATIENT
+        # is registered at, not wherever the booking staff member happens to
+        # be assigned. Using the booker's own branch_id here was the bug
+        # behind "patient not appearing in any queue": in a multi-branch
+        # hospital (or whenever the booking staff account has no branch_id
+        # set at all, e.g. a freshly provisioned hospital_admin), the
+        # appointment could end up on a different branch_id — or None — than
+        # the branch a queue view explicitly filters to, so the newly
+        # registered patient silently never shows up in anyone's queue.
+        # Falls back to the query param (explicit override) then the
+        # booking user's branch only if the patient itself has none on file.
+        from apps.patients.models import Patient
+        patient = Patient.objects.using(db).filter(uuid=data["patient_id"]).first()
+        branch_id = (
+            (patient.branch_id if patient else None)
+            or request.query_params.get("branch_id")
+            or getattr(request.user, "branch_id", None)
+        )
+
         appointment = Appointment.objects.using(db).create(
             **data,
             token_number=next_token,
             status=Appointment.STATUS_WAITING,
             booked_by_user_id=request.user.id,
-            branch_id=request.query_params.get("branch_id") or getattr(request.user, "branch_id", None),
+            branch_id=branch_id,
         )
         return Response(AppointmentSerializer(appointment, context={"db": db}).data, status=status.HTTP_201_CREATED)
 
@@ -386,6 +405,11 @@ class MonitoringListView(APIView):
             results.append({
                 "encounter_id":    str(enc.id),
                 "token_number":    appt.token_number,
+                # Patient's real numeric id (enc.patient_id is Patient.uuid,
+                # not the pk) — same convention as OPDEncounterSerializer's
+                # get_patient_pk(). The nurse monitoring feed needs this to
+                # fetch this patient's vaccination roadmap per row.
+                "patient_pk":      patient.id if patient else None,
                 "patient_name":    patient.full_name if patient else appt.patient_awpid,
                 "patient_uhid":    patient.uhid if patient else "",
                 "is_dependent":    bool(patient and patient.is_dependent),

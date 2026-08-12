@@ -178,8 +178,8 @@ class TenantListCreateView(APIView):
         admin_mobile = (d.get("admin_mobile") or "").strip()
         if not admin_mobile:
             return error("Admin mobile number is required.", errors={"admin_mobile": "Required."})
-        if not re.match(r"^\+?\d{7,15}$", admin_mobile):
-            return error("Enter a valid mobile number.", errors={"admin_mobile": "Invalid format."})
+        if not re.match(r"^\d{10}$", admin_mobile):
+            return error("Enter a valid 10-digit mobile number.", errors={"admin_mobile": "Invalid format."})
 
         # A mobile number already routed to another hospital must not be
         # silently reassigned — that would hijack that person's login there.
@@ -239,6 +239,7 @@ class TenantListCreateView(APIView):
 
         # ── Step 5: Create hospital_admin StaffUser ────────────────────────────
         temp_password = _gen_password()
+        admin_employee_id = None
         try:
             from apps.org.views import _next_employee_id
             admin_staff = StaffUser(
@@ -252,6 +253,7 @@ class TenantListCreateView(APIView):
             )
             admin_staff.set_password(temp_password)
             admin_staff.save(using=db_name)
+            admin_employee_id = admin_staff.employee_id
 
             # Write to registry index — login uses mobile, not subdomain
             StaffMobileIndex.objects.using("default").update_or_create(
@@ -270,10 +272,14 @@ class TenantListCreateView(APIView):
             "credentials": {
                 "subdomain":     subdomain,
                 "admin_mobile":  admin_mobile,
+                "employee_id":   admin_employee_id,
                 "temp_password": temp_password,
                 "note": (
                     "Share these credentials with the hospital admin. "
-                    "They should change the password on first login."
+                    "They should change the password on first login. Mobile + "
+                    "password is enough to log in — the Employee ID is only "
+                    "needed if they'd rather log in with subdomain + "
+                    "Employee ID instead of their mobile number."
                 ),
             } if temp_password else {
                 "note": "Admin account creation failed — create via /api/v1/org/staff/."
@@ -313,6 +319,30 @@ class TenantDetailView(APIView):
         d = request.data
         updated_fields = []
         actor_email = getattr(request.user, "email", "") or ""
+
+        # ── Hospital Code (subdomain) — separate from the plain profile
+        # fields below because it needs validation + a uniqueness check, and
+        # because it's login-relevant (see auth_app.views.StaffLoginView's
+        # employee-ID path) rather than purely cosmetic. Safe to change any
+        # time after creation — it's looked up live at login, and db_name
+        # (fixed forever once the tenant DB is created) never derives from
+        # it after the initial provisioning step.
+        if "subdomain" in d:
+            new_subdomain = slugify((d["subdomain"] or "").strip())
+            if not new_subdomain:
+                return error("Hospital Code is required.", errors={"subdomain": "Required."})
+            if not re.match(r"^[a-z0-9-]+$", new_subdomain):
+                return error("Hospital Code can only contain lowercase letters, numbers, and hyphens.",
+                             errors={"subdomain": "Invalid format."})
+            if Tenant.objects.exclude(pk=tenant.pk).filter(subdomain=new_subdomain).exists():
+                return error(f"Hospital Code '{new_subdomain}' is already taken.",
+                             errors={"subdomain": "Already exists."})
+            before_subdomain = tenant.subdomain
+            tenant.subdomain = new_subdomain
+            tenant.save(update_fields=["subdomain"])
+            updated_fields.append("subdomain")
+            if before_subdomain != new_subdomain:
+                _log_change(tenant, "subdomain_change", before_subdomain, new_subdomain, actor_email)
 
         # ── Profile fields — plain edits, no audit-log entry (that's reserved
         # for tier/status/active lifecycle changes; a name/city typo fix isn't

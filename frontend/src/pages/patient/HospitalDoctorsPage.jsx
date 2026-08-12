@@ -4,7 +4,7 @@
  * Step 2 of booking: doctors at the chosen hospital, as cards.
  */
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { ShieldCheck } from "lucide-react";
+import { Building2, MapPin, ShieldCheck } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import DoctorCard    from "../../components/common/DoctorCard";
@@ -29,23 +29,61 @@ export default function PatientHospitalDoctorsPage() {
           ← All hospitals
         </Link>
 
-        {hospital && (hospital.about || hospital.accreditations?.length > 0) && (
-          <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-            {hospital.about && (
-              <div style={{ fontSize: 13, color: "var(--color-text-secondary)", lineHeight: 1.5, marginBottom: hospital.accreditations?.length ? 10 : 0 }}>
-                {hospital.about}
+        {/* Hospital info card with dark gradient header */}
+        {hospital && (
+          <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 16 }}>
+            <div style={{
+              background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+              padding: "16px 20px",
+              display: "flex", alignItems: "center", gap: 14,
+              position: "relative", overflow: "hidden",
+            }}>
+              <div style={{
+                position: "absolute", width: 200, height: 200, borderRadius: "50%",
+                background: "radial-gradient(circle, rgba(201,162,75,0.16) 0%, transparent 70%)",
+                top: -80, right: -50, pointerEvents: "none",
+              }} />
+              <div style={{
+                width: 48, height: 48, borderRadius: 12, flexShrink: 0,
+                background: "rgba(255,255,255,0.14)",
+                display: "flex", alignItems: "center", justifyContent: "center", color: "#fff",
+                border: "1px solid rgba(255,255,255,0.2)",
+                position: "relative",
+              }}>
+                <Building2 size={24} />
               </div>
-            )}
-            {hospital.accreditations?.length > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {hospital.accreditations.map(a => (
-                  <span key={a} className="tag-pill" style={{
-                    background: "var(--color-success-light)", color: "var(--color-success)",
-                    display: "inline-flex", alignItems: "center", gap: 4,
-                  }}>
-                    <ShieldCheck size={11} />{a}
-                  </span>
-                ))}
+              <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 17, color: "#fff" }}>
+                  {hospital.name}
+                </div>
+                {(hospital.city || hospital.state) && (
+                  <div style={{ fontSize: 12, color: "#8FA89A", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                    <MapPin size={11} />
+                    {[hospital.city, hospital.state].filter(Boolean).join(", ")}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {(hospital.about || hospital.accreditations?.length > 0) && (
+              <div style={{ padding: "14px 20px" }}>
+                {hospital.about && (
+                  <div style={{ fontSize: 13, color: "var(--color-text-secondary)", lineHeight: 1.5, marginBottom: hospital.accreditations?.length ? 10 : 0 }}>
+                    {hospital.about}
+                  </div>
+                )}
+                {hospital.accreditations?.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {hospital.accreditations.map(a => (
+                      <span key={a} className="tag-pill" style={{
+                        background: "var(--color-success-light)", color: "var(--color-success)",
+                        display: "inline-flex", alignItems: "center", gap: 4,
+                      }}>
+                        <ShieldCheck size={11} />{a}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

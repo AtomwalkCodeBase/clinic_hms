@@ -14,12 +14,13 @@ import { useAuth }   from "../../hooks/useAuth";
 import { usePermissions } from "../../hooks/usePermissions";
 import API_ENDPOINTS from "../../config/api.config";
 import { calcAge }   from "../../utils/age";
+import { sanitizeMobileInput, isValidMobile, mobileError } from "../../utils/validation";
 
 const ROLE_LABELS = {
   hospital_admin: { label: "Hospital Admin", color: "#7c3aed" },
   doctor:         { label: "Doctor",         color: "#0ea5e9" },
   nurse:          { label: "Nurse",          color: "#16a34a" },
-  front_desk:     { label: "Front Desk",     color: "#d97706" },
+  front_desk:     { label: "Front Desk",     color: "#B07C24" },
   lab_tech:       { label: "Lab Tech",       color: "#0891b2" },
   pharmacist:     { label: "Pharmacist",     color: "#dc2626" },
 };
@@ -49,19 +50,42 @@ function RoleBadge({ role }) {
   );
 }
 
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
 function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) {
   const api = apiClient;
   const { toastSuccess, toastApiError } = useToast();
   const [form, setForm] = useState({
     email: "", first_name: "", last_name: "", role: "doctor",
     phone: "", branch_id: "", department_id: "",
-    // Basics — sent for every role, not just doctor. Keeps every profile
-    // (patient-facing doctor cards, admin staff list) from showing up blank;
-    // each person fills in the rest (bio, photo, signature, etc.) themselves
-    // after their first login.
     registration_no: "", specialisation: "", qualification: "", experience_years: "",
     council_name: "", registration_expiry: "",
+    consultation_fee: "",
   });
+
+  // Working-hours state: array of 7 day objects
+  const [schedule, setSchedule] = useState(
+    DAYS.map((_, i) => ({
+      day_of_week:  i,
+      is_available: i < 5,          // Mon–Fri on by default
+      start_time:   "09:00",
+      end_time:     "17:00",
+    }))
+  );
+  const [slotDuration, setSlotDuration] = useState(15);
+
+  // Per-invite fee toggle: true = admin sets fee now, false = doctor sets it themselves.
+  // Defaults to whatever the tenant's global setting is, but admin can flip it per invite.
+  const [adminSetsFee, setAdminSetsFee] = useState(false);
+  useEffect(() => {
+    api.get("/org/settings/")
+      .then(r => {
+        const fo = (r.data?.data ?? r.data)?.fee_ownership;
+        setAdminSetsFee(fo === "hospital");
+      })
+      .catch(() => setAdminSetsFee(false));
+  }, [api]);
+
   // Doctor-only: which branches beyond the single dropdown above they also
   // work at. Everyone else stays single-branch (see docs/onboarding_auth_
   // rbac_architecture.md 4.4 — doctors are the only role that realistically
@@ -90,6 +114,10 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
 
   async function handleSubmit(e) {
     e.preventDefault();
+    if (!isValidMobile(form.phone)) {
+      toastApiError(null, "Enter a valid 10-digit mobile number.");
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -112,8 +140,23 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
       // only apply to non-doctor roles with a professional license.
       if (form.role === "doctor") {
         delete payload.council_name; delete payload.registration_expiry;
+        // Consultation fee — only include when admin chose to set it now
+        if (adminSetsFee && form.consultation_fee) {
+          payload.consultation_fee = parseFloat(form.consultation_fee);
+        } else {
+          delete payload.consultation_fee;
+        }
+        // Working-hours schedule
+        const activeDays = schedule.filter(d => d.is_available);
+        if (activeDays.length > 0) {
+          payload.schedule = {
+            slot_duration_minutes: slotDuration,
+            days: schedule,
+          };
+        }
       } else {
         delete payload.specialisation;
+        delete payload.consultation_fee;
       }
       const { data: res } = await api.post(API_ENDPOINTS.ORG.STAFF + "invite/", payload);
       setResult(res.data);
@@ -208,7 +251,9 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
 
               <div>
                 <label style={labelStyle}>Mobile Number *</label>
-                <input style={inputStyle} type="tel" value={form.phone} onChange={set("phone")} placeholder="98xxxxxxxx" required />
+                <input style={inputStyle} type="tel" value={form.phone}
+                  onChange={e => setForm(f => ({ ...f, phone: sanitizeMobileInput(e.target.value) }))}
+                  placeholder="98xxxxxxxx" maxLength={10} inputMode="numeric" required />
               </div>
 
               <div>
@@ -303,8 +348,131 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                       <input style={inputStyle} type="number" min="0" value={form.experience_years} onChange={set("experience_years")} placeholder="10" />
                     </div>
                   </div>
+                  {/* Consultation fee toggle */}
+                  <div style={{
+                    borderRadius: 10, border: "1px solid var(--color-border)",
+                    overflow: "hidden",
+                  }}>
+                    {/* Toggle row */}
+                    <div style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      padding: "11px 14px",
+                      background: adminSetsFee ? "var(--color-primary-light)" : "var(--color-bg)",
+                    }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--color-text)" }}>
+                          Consultation Fee
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 1 }}>
+                          {adminSetsFee ? "Set by hospital admin" : "Doctor configures after first login"}
+                        </div>
+                      </div>
+                      {/* Toggle switch */}
+                      <button
+                        type="button"
+                        onClick={() => { setAdminSetsFee(v => !v); setForm(f => ({ ...f, consultation_fee: "" })); }}
+                        style={{
+                          width: 44, height: 24, borderRadius: 12, border: "none", flexShrink: 0,
+                          background: adminSetsFee ? "var(--color-primary)" : "var(--color-border)",
+                          cursor: "pointer", position: "relative", transition: "background 0.2s",
+                        }}
+                      >
+                        <span style={{
+                          position: "absolute", top: 3,
+                          left: adminSetsFee ? 23 : 3,
+                          width: 18, height: 18, borderRadius: "50%",
+                          background: "#fff", boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
+                          transition: "left 0.2s",
+                        }} />
+                      </button>
+                    </div>
+                    {/* Fee input — only when admin sets it */}
+                    {adminSetsFee && (
+                      <div style={{ padding: "12px 14px", borderTop: "1px solid var(--color-border)", background: "var(--color-surface)" }}>
+                        <label style={{ ...labelStyle, marginBottom: 4 }}>Amount (₹)</label>
+                        <input
+                          style={inputStyle} type="number" min="0" step="0.01"
+                          value={form.consultation_fee}
+                          onChange={set("consultation_fee")}
+                          placeholder="e.g. 500"
+                          autoFocus
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Working hours */}
+                  <div style={{ borderTop: "1px solid var(--color-border)", paddingTop: 14, marginTop: 2 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 12 }}>
+                      Working Hours
+                    </div>
+
+                    {/* Slot duration */}
+                    <div style={{ marginBottom: 14 }}>
+                      <label style={labelStyle}>Appointment Slot Duration</label>
+                      <select
+                        style={inputStyle}
+                        value={slotDuration}
+                        onChange={e => setSlotDuration(parseInt(e.target.value))}
+                      >
+                        {[10, 15, 20, 30, 45, 60].map(m => (
+                          <option key={m} value={m}>{m} minutes</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Per-day rows */}
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {schedule.map((day, i) => (
+                        <div key={i} style={{
+                          display: "grid",
+                          gridTemplateColumns: "110px 36px 1fr auto auto",
+                          alignItems: "center", gap: 10,
+                          padding: "8px 12px", borderRadius: 10,
+                          background: day.is_available ? "var(--color-primary-light)" : "var(--color-bg)",
+                          border: `1px solid ${day.is_available ? "var(--color-border)" : "var(--color-border)"}`,
+                          opacity: day.is_available ? 1 : 0.55,
+                        }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text)" }}>
+                            {DAYS[i]}
+                          </span>
+                          {/* Toggle available */}
+                          <button
+                            type="button"
+                            onClick={() => setSchedule(s => s.map((d, j) => j === i ? { ...d, is_available: !d.is_available } : d))}
+                            style={{
+                              width: 32, height: 18, borderRadius: 9, border: "none",
+                              background: day.is_available ? "var(--color-primary)" : "var(--color-border)",
+                              cursor: "pointer", position: "relative", flexShrink: 0,
+                            }}
+                          >
+                            <span style={{
+                              position: "absolute", top: 2,
+                              left: day.is_available ? 16 : 2,
+                              width: 14, height: 14, borderRadius: "50%",
+                              background: "#fff", transition: "left 0.15s",
+                            }} />
+                          </button>
+                          <input
+                            type="time" disabled={!day.is_available}
+                            value={day.start_time}
+                            onChange={e => setSchedule(s => s.map((d, j) => j === i ? { ...d, start_time: e.target.value } : d))}
+                            style={{ ...inputStyle, padding: "5px 8px", fontSize: 13, opacity: day.is_available ? 1 : 0.4 }}
+                          />
+                          <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>to</span>
+                          <input
+                            type="time" disabled={!day.is_available}
+                            value={day.end_time}
+                            onChange={e => setSchedule(s => s.map((d, j) => j === i ? { ...d, end_time: e.target.value } : d))}
+                            style={{ ...inputStyle, padding: "5px 8px", fontSize: 13, opacity: day.is_available ? 1 : 0.4 }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
                   <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
-                    Consultation fee, bio, photo, and e-signature are filled in by the doctor after their first login.
+                    Bio, photo, and e-signature are filled in by the doctor after their first login.
                   </div>
                 </div>
               )}
@@ -586,6 +754,10 @@ function EditStaffModal({ staff, branches, onClose, onSaved }) {
 
   async function handleSubmit(e) {
     e.preventDefault();
+    if (form.phone && !isValidMobile(form.phone)) {
+      toastApiError(null, "Enter a valid 10-digit mobile number.");
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -649,7 +821,9 @@ function EditStaffModal({ staff, branches, onClose, onSaved }) {
             </div>
             <div>
               <label style={labelStyle}>Phone</label>
-              <input style={inputStyle} value={form.phone} onChange={set("phone")} placeholder="+91 98765 43210" />
+              <input style={inputStyle} value={form.phone}
+                onChange={e => setForm(f => ({ ...f, phone: sanitizeMobileInput(e.target.value) }))}
+                placeholder="98xxxxxxxx" maxLength={10} inputMode="numeric" />
             </div>
             {staff.employee_id && (
               <div>
@@ -855,7 +1029,7 @@ export default function StaffPage() {
                     <span style={{ fontWeight: 700 }}>{s.first_name} {s.last_name}</span>
                     <RoleBadge role={s.role} />
                     {s.must_change_password && (
-                      <span style={{ padding: "2px 8px", borderRadius: 20, fontSize: 11, background: "#fef3c7", color: "#92400e", fontWeight: 600 }}>
+                      <span style={{ padding: "2px 8px", borderRadius: 20, fontSize: 11, background: "#F9F0DC", color: "#92400e", fontWeight: 600 }}>
                         Temp Password
                       </span>
                     )}

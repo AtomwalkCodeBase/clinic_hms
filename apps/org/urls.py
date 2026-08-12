@@ -7,6 +7,10 @@ from .views import (
     StaffProfileView, MyStaffProfileDetailsView,
     StaffBranchesView, MyBranchesView,
     PermissionListView, RoleListCreateView, RoleDetailView, StaffRolesView,
+    TenantSettingsView, DoctorScheduleView,
+)
+from .vaccination_schedule_views import (
+    VaccinationScheduleListCreateView, VaccinationScheduleDetailView, VaccinationScheduleActivateView,
 )
 
 urlpatterns = [
@@ -52,4 +56,16 @@ urlpatterns = [
     path("roles/",                 RoleListCreateView.as_view(),  name="role-list-create"),
     path("roles/<int:pk>/",        RoleDetailView.as_view(),      name="role-detail"),
     path("staff/<int:pk>/roles/",  StaffRolesView.as_view(),      name="staff-roles"),
+
+    # Vaccination schedules — per-hospital roadmap configuration (clone a
+    # system template, edit its rules, switch which schedule is active).
+    path("vaccination-schedules/",             VaccinationScheduleListCreateView.as_view(), name="vaccination-schedule-list-create"),
+    path("vaccination-schedules/<int:pk>/",    VaccinationScheduleDetailView.as_view(),     name="vaccination-schedule-detail"),
+    path("vaccination-schedules/<int:pk>/activate/", VaccinationScheduleActivateView.as_view(), name="vaccination-schedule-activate"),
+
+    # Tenant-level clinical settings (fee_ownership, etc.)
+    path("settings/",                          TenantSettingsView.as_view(),   name="tenant-settings"),
+
+    # Doctor working-hours schedule
+    path("staff/<int:pk>/schedule/",           DoctorScheduleView.as_view(),   name="doctor-schedule"),
 ]

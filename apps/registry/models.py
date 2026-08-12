@@ -56,6 +56,13 @@ class StaffMobileIndex(models.Model):
       - Deleted only if the staff account is permanently removed (medical records law: never)
     """
     mobile    = models.CharField(max_length=15, unique=True, db_index=True)
+    # Optional second identifier — lets staff log in with email instead of
+    # mobile, resolving to the same tenant DB. null=True (not blank string)
+    # so multiple staff without an email don't collide against the unique
+    # constraint. Kept on this same index table rather than a separate
+    # StaffEmailIndex (see deprecated model above) to avoid fragmenting
+    # cross-tenant identity resolution across two similar tables.
+    email     = models.EmailField(max_length=254, unique=True, null=True, blank=True, db_index=True)
     tenant_id = models.IntegerField()          # mirrors Tenant.id — no FK across DBs
     db_name   = models.CharField(max_length=100)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -301,6 +308,182 @@ class SharedVital(models.Model):
     class Meta:
         app_label = "registry"
         db_table  = "shared_vital"
+
+
+class SharedVaccination(models.Model):
+    """
+    Vaccination record for a patient, visible across every hospital in the
+    network — either administered by a hospital here (source="clinic",
+    auto-verified since a clinician logged it directly), self-reported by
+    the patient/parent with an uploaded certificate from outside the network
+    (source="self_reported", starts as verification_status="pending_review"
+    until a doctor or nurse at ANY hospital reviews the attached certificate
+    and marks it verified or rejected — see PatientVaccinationVerifyView), or
+    a doctor's ad-hoc clinical decision recorded before any administration
+    happens (source="doctor_ordered" — see the state-machine note below).
+
+    Deliberately NOT auto-verified just because it was uploaded — an
+    unreviewed self-reported record must never render identically to a
+    clinic-administered one in the UI; that distinction is the whole point
+    of tracking verification_status separately from "does a record exist".
+
+    file_data is a base64 data URI (same inline-storage pattern as
+    SharedDocument) for the uploaded certificate image/PDF, when there is one.
+
+    State-machine note (doctor order → nurse administers, or doctor
+    declines): verification_status was originally a narrow "has this
+    self-reported upload been reviewed" flag, but it's really the record's
+    overall lifecycle status, so it's reused (not duplicated into a second
+    field) for two more states instead of adding a parallel status column
+    that would need to be kept in sync with it:
+      - STATUS_ORDERED ("ordered"): a doctor recorded an ad-hoc vaccine
+        recommendation (PatientVaccinationOrderView) that hasn't been given
+        yet. administered_date is null until a nurse administers it
+        (PatientVaccinationAdministerView), at which point the SAME row
+        flips to source=SOURCE_CLINIC, verification_status=STATUS_VERIFIED,
+        and administered_date is filled in — "ordered" never needed its own
+        model, it's just an earlier point in one record's life.
+      - STATUS_DECLINED ("declined"): a doctor marked a schedule slot as not
+        clinically required for this patient (PatientVaccinationDeclineView).
+        Also administered_date-less — nothing was given, nothing ever will
+        be for this slot. build_roadmap() surfaces this as status="declined"
+        (never "unknown", never "due_now") so the UI stops prompting for it.
+    A dedicated "order status" field was considered and rejected: it would
+    only ever be meaningful for source=SOURCE_DOCTOR_ORDERED rows, which is
+    exactly the kind of confusing multi-purpose-field split the task brief
+    warned against — verification_status already models "where is this
+    record in its review/administration lifecycle" for every other source,
+    so ordered/declined are just two more values of the same lifecycle.
+    """
+    SOURCE_CLINIC = "clinic"
+    SOURCE_SELF_REPORTED = "self_reported"
+    SOURCE_DOCTOR_ORDERED = "doctor_ordered"
+    SOURCE_CHOICES = [
+        (SOURCE_CLINIC, "Clinic administered"),
+        (SOURCE_SELF_REPORTED, "Self reported"),
+        (SOURCE_DOCTOR_ORDERED, "Doctor ordered"),
+    ]
+
+    STATUS_VERIFIED = "verified"
+    STATUS_PENDING  = "pending_review"
+    STATUS_REJECTED = "rejected"
+    STATUS_ORDERED  = "ordered"
+    STATUS_DECLINED = "declined"
+    VERIFICATION_CHOICES = [
+        (STATUS_VERIFIED, "Verified"),
+        (STATUS_PENDING,  "Pending review"),
+        (STATUS_REJECTED, "Rejected"),
+        (STATUS_ORDERED,  "Ordered (not yet administered)"),
+        (STATUS_DECLINED, "Declined / not required"),
+    ]
+
+    awpid               = models.CharField(max_length=30, db_index=True)
+    vaccine_name        = models.CharField(max_length=100)
+    # The default-schedule label this fulfills (e.g. "18 months"), blank if
+    # it doesn't match a standard schedule slot (see vaccine_schedule.py).
+    scheduled_label     = models.CharField(max_length=50, blank=True)
+    # Null for an "ordered" (not yet given) or "declined" (never given)
+    # record — those describe a clinical decision, not an administration
+    # event, so there is no real date to store until/unless one happens.
+    administered_date   = models.DateField(null=True, blank=True)
+    # Only meaningful for source=SOURCE_DOCTOR_ORDERED / verification_status
+    # in (STATUS_ORDERED, STATUS_DECLINED) — when the doctor recommends the
+    # vaccine be given by, or blank if no target date was set.
+    due_date             = models.DateField(null=True, blank=True)
+    # Doctor's free-text clinical reason for an ad-hoc order or a decline —
+    # e.g. "catch-up dose, missed at birth" or "contraindicated: egg allergy".
+    reason               = models.TextField(blank=True)
+    dose_number          = models.PositiveIntegerField(null=True, blank=True)
+
+    source              = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_CLINIC)
+    verification_status = models.CharField(max_length=20, choices=VERIFICATION_CHOICES, default=STATUS_VERIFIED, db_index=True)
+    verified_by_name    = models.CharField(max_length=200, blank=True)  # snapshot — staff live in tenant DBs, no FK across DBs
+    verified_at         = models.DateTimeField(null=True, blank=True)
+    review_notes        = models.TextField(blank=True)
+
+    file_name           = models.CharField(max_length=255, blank=True)
+    mime_type            = models.CharField(max_length=100, blank=True)
+    file_data            = models.TextField(blank=True)
+
+    source_tenant_id    = models.IntegerField(null=True, blank=True)  # which hospital logged/verified this; null if purely self-reported and never reviewed
+    recorded_by          = models.CharField(max_length=20, default="patient")  # "patient" or "staff"
+
+    created_at           = models.DateTimeField(auto_now_add=True)
+    updated_at           = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "shared_vaccination"
+        indexes = [models.Index(fields=["awpid", "verification_status"])]
+        ordering  = ["administered_date"]
+
+    def __str__(self):
+        return f"{self.awpid} — {self.vaccine_name} ({self.verification_status})"
+
+
+class VaccinationSchedule(models.Model):
+    """
+    A named, ordered set of vaccination rules (VaccinationScheduleRule) that
+    a hospital's roadmap is built against — replaces the single hardcoded
+    DEFAULT_VACCINE_SCHEDULE list in vaccine_schedule.py with a configurable,
+    per-hospital schedule.
+
+    owner_tenant_id is null for system-level templates (e.g. the "Default
+    Schedule" seeded by this app's data migration from the old hardcoded
+    list) and set to a Tenant.id for a hospital's own editable copy. Plain
+    IntegerField, not a real FK — see the comment on Tenant.
+    active_vaccination_schedule_id in apps/tenants/models.py for why this
+    codebase avoids cross-app FKs even when both sides live in the same DB.
+
+    is_template marks a schedule meant to be cloned as a starting point
+    (system templates, or a hospital's own saved variant) rather than
+    edited in place by every tenant that points at it — primarily relevant
+    for the null-owner system templates in v1.
+    """
+    name            = models.CharField(max_length=200)
+    description     = models.TextField(blank=True)
+    owner_tenant_id = models.IntegerField(null=True, blank=True)  # null = system-level template; mirrors Tenant.id, no FK across apps
+    is_template     = models.BooleanField(default=False)
+    active          = models.BooleanField(default=True)  # soft-disable instead of delete
+    created_at      = models.DateTimeField(auto_now_add=True)
+    updated_at      = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "vaccination_schedule"
+
+    def __str__(self):
+        return self.name
+
+
+class VaccinationScheduleRule(models.Model):
+    """
+    One vaccine/dose slot within a VaccinationSchedule — e.g. "BCG, dose 1,
+    Birth, min_age_days=0". build_roadmap() iterates a schedule's rules
+    (ordered by sort_order) the same way it used to iterate the hardcoded
+    DEFAULT_VACCINE_SCHEDULE list.
+
+    min_age_days/max_age_days describe the recommended age window — used
+    only to compute the informational "timing" (upcoming vs due_now) on a
+    roadmap slot with no matching record. They are NOT used to fabricate an
+    "overdue" verdict; see vaccine_schedule.py's status-semantics comment.
+    """
+    schedule         = models.ForeignKey(VaccinationSchedule, on_delete=models.CASCADE, related_name="rules")
+    vaccine_name     = models.CharField(max_length=100)
+    dose_number      = models.PositiveIntegerField(default=1)
+    scheduled_label  = models.CharField(max_length=50)  # human milestone label, e.g. "Birth", "6 weeks", "9 months"
+    min_age_days     = models.PositiveIntegerField()
+    max_age_days     = models.PositiveIntegerField(null=True, blank=True)
+    mandatory        = models.BooleanField(default=True)
+    sort_order       = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "vaccination_schedule_rule"
+        ordering  = ["sort_order"]
+
+    def __str__(self):
+        return f"{self.schedule.name} — {self.vaccine_name} ({self.scheduled_label})"
 
 
 class BlacklistedToken(models.Model):

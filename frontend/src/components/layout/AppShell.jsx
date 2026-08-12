@@ -9,13 +9,14 @@
  *   { type: "section", label }                                  — non-clickable divider label
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useContext } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
 import { ROLES, ROLE_LABELS } from "../../constants/roles";
 import { ROUTES }    from "../../config/routes.config";
 import APP_CONFIG    from "../../config/app.config";
+import { PatientContext } from "../../context/PatientContext";
 
 // ── Icons (inline SVG so no extra dep needed) ────────────────────────────────
 const Icon = ({ d, size = 18, style = {}, className }) => (
@@ -58,6 +59,7 @@ const ICONS = {
   analytics:  "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z",
   ai:         "M12 2a2 2 0 012 2v2a2 2 0 01-2 2 2 2 0 01-2-2V4a2 2 0 012-2zM12 16a2 2 0 012 2v2a2 2 0 01-2 2 2 2 0 01-2-2v-2a2 2 0 012-2zM4 12a2 2 0 012-2h2a2 2 0 010 4H6a2 2 0 01-2-2zM16 12a2 2 0 012-2h2a2 2 0 010 4h-2a2 2 0 01-2-2z",
   users:      "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
+  vaccination: "M12 2L4 5v6c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V5l-8-3zm-1 14l-3-3 1.41-1.41L11 13.17l4.59-4.58L17 10l-6 6z",
 };
 
 // ── Hospital monogram (fallback logo) ────────────────────────────────────────
@@ -100,6 +102,7 @@ const NAV_BY_ROLE = {
     { type: "link",  label: "Hospitals",      iconKey: "hospitals",     to: ROUTES.PLATFORM.HOSPITALS },
     { type: "link",  label: "Subscriptions",  iconKey: "subscriptions", to: ROUTES.PLATFORM.SUBSCRIPTIONS },
     { type: "link",  label: "Users",          iconKey: "users",         to: ROUTES.PLATFORM.USERS },
+    { type: "link",  label: "Vaccination Templates", iconKey: "vaccination", to: ROUTES.PLATFORM.VACCINATION_TEMPLATES },
   ],
 
   [ROLES.HOSPITAL_ADMIN]: [
@@ -109,6 +112,7 @@ const NAV_BY_ROLE = {
       { label: "Staff List", iconKey: "staff",  to: ROUTES.ADMIN.STAFF },
       { label: "Branches",   iconKey: "branch", to: ROUTES.ADMIN.BRANCHES },
       { label: "Roles & Permissions", iconKey: "settings", to: ROUTES.ADMIN.ROLES },
+      { label: "Vaccination Schedule", iconKey: "settings", to: ROUTES.ADMIN.VACCINATION_SCHEDULE },
     ]},
     { type: "section", label: "System" },
     { type: "link",    label: "Settings",     iconKey: "settings", to: ROUTES.ADMIN.SETTINGS },
@@ -121,12 +125,18 @@ const NAV_BY_ROLE = {
     { type: "link",    label: "My Queue",     iconKey: "queue",     to: ROUTES.DOCTOR.QUEUE },
     { type: "link",    label: "Patients",     iconKey: "patient",   to: ROUTES.DOCTOR.PATIENTS },
     { type: "link",    label: "History",      iconKey: "history",   to: ROUTES.DOCTOR.HISTORY },
-    { type: "section", label: "Clinical" },
-    { type: "group",   label: "Laboratory",   iconKey: "lab", children: [
-      { label: "Pending Results",  iconKey: "lab",     to: ROUTES.LAB.REQUESTS },
-      { label: "Released Results", iconKey: "records", to: ROUTES.LAB.REPORTS },
-    ]},
-    { type: "link",    label: "Prescriptions", iconKey: "prescription", to: ROUTES.PHARMACIST.PRESCRIPTIONS },
+    // NOTE: no separate "Laboratory" or "Prescriptions" links here — both
+    // used to point at the lab-tech's and pharmacist's own working-queue
+    // pages (ROUTES.LAB.REQUESTS/REPORTS, ROUTES.PHARMACIST.PRESCRIPTIONS),
+    // which are role-gated to lab_tech/pharmacist (+ hospital_admin) only in
+    // App.jsx. A doctor clicking either link got silently bounced back to
+    // their dashboard by ProtectedRoute — and even with access, those pages
+    // are lab-tech/pharmacist WRITE queues (mark collected, upload result,
+    // dispense), not something a doctor should be driving. Doctors already
+    // see lab results and write prescriptions in context, per-patient,
+    // inside EncounterPage/HistoryPage — that's the correct doctor-facing
+    // surface for both, so the dead links were removed rather than granted
+    // write access to another role's queue.
     { type: "section", label: "Schedule" },
     { type: "link",    label: "Appointments",  iconKey: "appointments", to: ROUTES.FRONT_DESK.APPOINTMENTS },
     { type: "section", label: "Account" },
@@ -176,11 +186,14 @@ const NAV_BY_ROLE = {
   ],
 
   [ROLES.PATIENT]: [
+    { type: "section", label: "My Health" },
     { type: "link",  label: "Dashboard",     iconKey: "dashboard",    to: ROUTES.PATIENT.DASHBOARD },
     { type: "link",  label: "Appointments",  iconKey: "appointments", to: ROUTES.PATIENT.APPOINTMENTS },
-    { type: "link",  label: "My Records",    iconKey: "records",      to: ROUTES.PATIENT.RECORDS },
+    { type: "link",  label: "My Health Journey", iconKey: "records",  to: ROUTES.PATIENT.RECORDS },
     { type: "link",  label: "Prescriptions", iconKey: "prescription", to: ROUTES.PATIENT.PRESCRIPTIONS },
     { type: "link",  label: "Lab Reports",   iconKey: "lab",          to: ROUTES.PATIENT.LAB_REPORTS },
+    { type: "section", label: "Family Members" },
+    { type: "family-list" },
     { type: "section", label: "Account" },
     { type: "link",  label: "My Profile",    iconKey: "settings",     to: ROUTES.PATIENT.MY_PROFILE },
   ],
@@ -266,6 +279,102 @@ function SidebarGroup({ label, iconKey, children, collapsed, pathname }) {
   );
 }
 
+// ── Family Members nav list (patient portal only) ───────────────────────────
+// Renders each linked family member as a clickable nav item — selecting one
+// sets the shared "which patient am I viewing" context and jumps to Records
+// (no separate per-member routes needed). Falls back to nothing if this
+// AppShell instance has no PatientProvider ancestor (i.e. any non-patient
+// role), so it's safe to reference from the shared NAV_BY_ROLE renderer.
+function FamilyNavList({ collapsed }) {
+  const ctx = useContext(PatientContext);
+  const navigate = useNavigate();
+
+  if (!ctx) return null;
+  const { familyMembers, isLoadingFamily, selectedPatient, selectPatient } = ctx;
+
+  function viewMember(member) {
+    selectPatient(member.awpid, member.full_name);
+    navigate(ROUTES.PATIENT.RECORDS);
+  }
+
+  if (collapsed) return null;
+
+  return (
+    <div style={{ marginBottom: 2 }}>
+      {isLoadingFamily ? (
+        <div style={{ padding: "6px 12px", fontSize: 11, color: SB.caption }}>Loading…</div>
+      ) : familyMembers.length === 0 ? (
+        <div style={{ padding: "6px 12px", fontSize: 11, color: SB.caption }}>No family members added yet</div>
+      ) : (
+        familyMembers.map(m => {
+          const active = !selectedPatient.isSelf && selectedPatient.awpid === m.awpid;
+          return (
+            <button
+              key={m.awpid}
+              onClick={() => viewMember(m)}
+              className={`sb-link${active ? " sb-link--active" : ""}`}
+              title={m.full_name}
+              style={{ width: "100%" }}
+            >
+              <span style={{
+                width: 5, height: 5, minWidth: 5, borderRadius: "50%",
+                background: "currentColor", opacity: 0.5,
+              }} />
+              <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{m.full_name}</span>
+            </button>
+          );
+        })
+      )}
+      <div style={{ borderTop: `1px solid ${SB.border}`, marginTop: 4, paddingTop: 4 }}>
+        <SidebarLink label="Manage Family" iconKey="settings" to={ROUTES.PATIENT.MY_PROFILE} collapsed={collapsed} />
+      </div>
+    </div>
+  );
+}
+
+// ── "Viewing: <name>" indicator (patient portal only) ───────────────────────
+// Always-visible reminder of whose records are currently on screen — with a
+// one-click way back to self when a dependent is selected.
+function ViewingIndicator({ collapsed }) {
+  const ctx = useContext(PatientContext);
+  if (!ctx || collapsed) return null;
+  const { selectedPatient, selectPatient } = ctx;
+
+  return (
+    <div style={{
+      margin: "8px 8px 0", padding: "8px 10px", borderRadius: 8,
+      background: selectedPatient.isSelf ? "rgba(244, 241, 232, 0.12)" : "rgba(201, 162, 75, 0.28)",
+      border: `1px solid ${selectedPatient.isSelf ? SB.border : "rgba(201, 162, 75, 0.35)"}`,
+      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+    }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: SB.caption }}>
+          Viewing
+        </div>
+        <div style={{
+          fontSize: 12, fontWeight: 600, color: SB.textActive,
+          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+        }}>
+          {selectedPatient.isSelf ? "Myself" : selectedPatient.name}
+        </div>
+      </div>
+      {!selectedPatient.isSelf && (
+        <button
+          onClick={() => selectPatient(null, null)}
+          title="Switch back to my own records"
+          style={{
+            background: "none", border: `1px solid ${SB.border}`, color: SB.text,
+            borderRadius: 6, fontSize: 10, fontWeight: 600, padding: "4px 8px",
+            cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+          }}
+        >
+          Switch to self
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── AppShell ──────────────────────────────────────────────────────────────────
 export function AppShell({ children }) {
   const { user, logout } = useAuth();
@@ -327,6 +436,9 @@ export function AppShell({ children }) {
           )}
         </div>
 
+        {/* "Viewing: <name>" indicator — patient portal only (no-op elsewhere) */}
+        <ViewingIndicator collapsed={collapsed} />
+
         {/* Nav */}
         <nav style={{ flex: 1, padding: "10px 8px", overflowY: "auto", overflowX: "hidden" }}>
           {navItems.map((item, i) => {
@@ -346,6 +458,9 @@ export function AppShell({ children }) {
                   collapsed={collapsed} pathname={location.pathname}
                 />
               );
+            }
+            if (item.type === "family-list") {
+              return <FamilyNavList key={i} collapsed={collapsed} />;
             }
             return (
               <SidebarLink key={i}

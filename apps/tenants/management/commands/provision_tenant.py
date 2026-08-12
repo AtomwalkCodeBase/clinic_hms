@@ -96,6 +96,31 @@ class Command(BaseCommand):
         )
         self.stdout.write(self.style.SUCCESS(f"    Tenant created (id={tenant.id})"))
 
+        # Point the new tenant at the shared system "Default Schedule"
+        # vaccination-schedule template so it doesn't lose vaccination
+        # roadmap functionality on day one. This is v1's simplest-correct
+        # behavior: point directly at the shared template's id — NOT a
+        # clone-on-provision. The hospital can later clone it into its own
+        # editable copy via the admin UI (a separate task) if it wants to
+        # customize; until then it's reading (not owning) the template.
+        from apps.registry.models import VaccinationSchedule
+        default_schedule = (
+            VaccinationSchedule.objects.using("default")
+            .filter(owner_tenant_id__isnull=True, is_template=True, active=True)
+            .order_by("id")
+            .first()
+        )
+        if default_schedule:
+            tenant.active_vaccination_schedule_id = default_schedule.id
+            tenant.save(update_fields=["active_vaccination_schedule_id"])
+            self.stdout.write(self.style.SUCCESS(
+                f"    Assigned default vaccination schedule (id={default_schedule.id})"
+            ))
+        else:
+            self.stdout.write(self.style.WARNING(
+                "    No system 'Default Schedule' found — tenant provisioned without a vaccination schedule."
+            ))
+
         # ── 3. Create Subscription ───────────────────────────────────
         self.stdout.write("[ 2/5 ] Creating Subscription...")
         feats = TIER_FEATURE_DEFAULTS[tier]
@@ -146,7 +171,11 @@ class Command(BaseCommand):
             from apps.registry.models import StaffMobileIndex
             StaffMobileIndex.objects.using("default").update_or_create(
                 mobile=admin_mobile,
-                defaults={"tenant_id": tenant.id, "db_name": db_name},
+                defaults={
+                    "tenant_id": tenant.id,
+                    "db_name": db_name,
+                    "email": admin_email or None,
+                },
             )
             self.stdout.write(self.style.SUCCESS(f"    Admin user created: {admin_mobile}"))
         except Exception as e:

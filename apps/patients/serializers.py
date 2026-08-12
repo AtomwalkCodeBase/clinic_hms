@@ -10,8 +10,19 @@ AllergySerializer         — CRUD serializer for Allergy
 SharedRecordSerializer    — read-only: clinical records from HIE (cross-tenant safe)
 """
 
+from django.core.validators import RegexValidator
 from rest_framework import serializers
 from .models import Patient, Allergy
+
+# Central format check for every mobile-number field below — exactly 10
+# digits, no country code / spaces / punctuation. Applied via `validators=`
+# so it's skipped for blank optional fields (DRF short-circuits blank
+# CharFields before running validators) but always enforced once a value
+# is actually supplied, regardless of which frontend form sent it.
+mobile_validator = RegexValidator(
+    regex=r"^\d{10}$",
+    message="Enter a valid 10-digit mobile number.",
+)
 
 
 class PatientRegisterSerializer(serializers.Serializer):
@@ -26,7 +37,8 @@ class PatientRegisterSerializer(serializers.Serializer):
     # is_dependent is set, in which case guardian_awpid + date_of_birth are
     # required instead. A patient record must not depend on the person
     # having their own contact number.
-    mobile          = serializers.CharField(max_length=15, required=False, allow_blank=True)
+    mobile          = serializers.CharField(max_length=15, required=False, allow_blank=True,
+                                            validators=[mobile_validator])
     branch_id       = serializers.IntegerField()
     dpdp_consent    = serializers.BooleanField()
 
@@ -36,7 +48,8 @@ class PatientRegisterSerializer(serializers.Serializer):
     is_dependent    = serializers.BooleanField(required=False, default=False)
     guardian_awpid  = serializers.CharField(max_length=30, required=False, allow_blank=True)
     guardian_name   = serializers.CharField(max_length=200, required=False, allow_blank=True)
-    guardian_mobile = serializers.CharField(max_length=15, required=False, allow_blank=True)
+    guardian_mobile = serializers.CharField(max_length=15, required=False, allow_blank=True,
+                                            validators=[mobile_validator])
     relationship    = serializers.ChoiceField(
         choices=["child", "parent", "spouse", "sibling", "ward", "other"],
         required=False, default="other",
@@ -60,7 +73,8 @@ class PatientRegisterSerializer(serializers.Serializer):
     occupation      = serializers.CharField(max_length=100, required=False, allow_blank=True)
 
     # Contact
-    alternate_mobile = serializers.CharField(max_length=15,  required=False, allow_blank=True)
+    alternate_mobile = serializers.CharField(max_length=15,  required=False, allow_blank=True,
+                                             validators=[mobile_validator])
     email            = serializers.EmailField(required=False, allow_blank=True)
     address_line1    = serializers.CharField(max_length=255, required=False, allow_blank=True)
     city             = serializers.CharField(max_length=100, required=False, allow_blank=True)
@@ -69,7 +83,8 @@ class PatientRegisterSerializer(serializers.Serializer):
 
     # Emergency contact — frontend sends emergency_name / emergency_phone
     emergency_name     = serializers.CharField(max_length=100, required=False, allow_blank=True)
-    emergency_phone    = serializers.CharField(max_length=15,  required=False, allow_blank=True)
+    emergency_phone    = serializers.CharField(max_length=15,  required=False, allow_blank=True,
+                                               validators=[mobile_validator])
     emergency_relation = serializers.CharField(max_length=50,  required=False, allow_blank=True)
 
     # Insurance
@@ -120,12 +135,13 @@ class PatientDetailSerializer(serializers.ModelSerializer):
 
 class PatientSearchSerializer(serializers.ModelSerializer):
     """Lightweight result for patient search (name/mobile/UHID/AWPID)."""
+    branch_name = serializers.CharField(source="branch.name", read_only=True, default="")
 
     class Meta:
         model  = Patient
         fields = [
             "id", "uuid", "awpid", "uhid", "full_name", "mobile", "date_of_birth", "gender", "blood_group",
-            "is_dependent", "guardian_name", "guardian_relation",
+            "is_dependent", "guardian_name", "guardian_relation", "branch_name", "registered_at",
         ]
 
 

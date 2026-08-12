@@ -14,6 +14,7 @@ IsHospitalStaff allows read-only access where indicated.
 """
 
 import jwt
+import re
 import secrets
 import string
 import logging
@@ -368,7 +369,11 @@ class StaffInviteView(APIView):
             existing.save(using=request.tenant_db)
             StaffMobileIndex.objects.using("default").update_or_create(
                 mobile=d["phone"],
-                defaults={"tenant_id": request.tenant_id, "db_name": request.tenant_db},
+                defaults={
+                    "tenant_id": request.tenant_id,
+                    "db_name": request.tenant_db,
+                    "email": existing.email or None,
+                },
             )
             if "branch_ids" in d:
                 from .branch_utils import set_staff_branches
@@ -427,15 +432,45 @@ class StaffInviteView(APIView):
         # Doctor basics — admin enters these now so patient-facing cards are
         # never blank; the doctor fills in the rest themselves after login.
         if d["role"] == "doctor" and any(
-            d.get(f) for f in ("registration_no", "specialisation", "qualification", "experience_years")
+            d.get(f) for f in ("registration_no", "specialisation", "qualification", "experience_years",
+                               "consultation_fee")
         ):
+            # consultation_fee is only written when the hospital controls it;
+            # when fee_ownership == "doctor" the field belongs to the doctor's
+            # self-service profile and is intentionally left null here.
+            from apps.tenants.models import Tenant as _Tenant
+            try:
+                _tenant = _Tenant.objects.using("default").get(pk=request.tenant_id)
+                fee_value = d.get("consultation_fee") if _tenant.fee_ownership == "hospital" else None
+            except _Tenant.DoesNotExist:
+                fee_value = None
+
             DoctorProfile.objects.using(request.tenant_db).create(
                 staff=staff,
                 registration_no=d.get("registration_no", ""),
                 specialisation=d.get("specialisation", ""),
                 qualification=d.get("qualification", ""),
                 experience_years=d.get("experience_years"),
+                consultation_fee=fee_value,
             )
+
+        # Working-hours schedule — optional at registration; doctor can also
+        # configure it later via PATCH /org/staff/<pk>/schedule/.
+        if d["role"] == "doctor" and d.get("schedule"):
+            from .models import DoctorSchedule, DoctorAvailabilitySlot
+            from .serializers import DoctorScheduleSerializer as _SchedSer
+            sched_ser = _SchedSer(data=d["schedule"])
+            if sched_ser.is_valid():
+                sched_ser._db = request.tenant_db
+                sched_data = sched_ser.validated_data
+                days_data  = sched_data.pop("days", [])
+                sched = DoctorSchedule.objects.using(request.tenant_db).create(
+                    doctor=staff, **sched_data
+                )
+                for day in days_data:
+                    DoctorAvailabilitySlot.objects.using(request.tenant_db).create(
+                        schedule=sched, **day
+                    )
         # Same basics for every other role — nursing/pharmacy council
         # registration is legally required before those accounts should be
         # treated as active, and nobody should end up with a blank profile.
@@ -455,7 +490,11 @@ class StaffInviteView(APIView):
         # Write to registry index so login can route by mobile (no subdomain needed)
         StaffMobileIndex.objects.using("default").update_or_create(
             mobile=d["phone"],
-            defaults={"tenant_id": request.tenant_id, "db_name": request.tenant_db},
+            defaults={
+                "tenant_id": request.tenant_id,
+                "db_name": request.tenant_db,
+                "email": staff.email or None,
+            },
         )
 
         return created(data={
@@ -491,6 +530,9 @@ class StaffDetailView(APIView):
             return not_found("Staff member not found.")
 
         d = request.data
+
+        if "phone" in d and d["phone"] and not re.match(r"^\d{10}$", d["phone"]):
+            return error("Enter a valid 10-digit mobile number.", errors={"phone": "Invalid format."})
 
         # Changing the login mobile number needs the registry-wide index kept
         # in sync — otherwise the old number stays routed here and the new
@@ -574,9 +616,17 @@ class StaffDetailView(APIView):
         staff.save(using=request.tenant_db)
 
         if "phone" in d:
+            # NOTE: "email" is deliberately not in `allowed` above (no endpoint
+            # currently lets staff email be edited), but we still sync whatever
+            # the current staff.email is into the index here so the two never
+            # drift apart when the mobile number changes.
             StaffMobileIndex.objects.using("default").update_or_create(
                 mobile=staff.phone,
-                defaults={"tenant_id": request.tenant_id, "db_name": request.tenant_db},
+                defaults={
+                    "tenant_id": request.tenant_id,
+                    "db_name": request.tenant_db,
+                    "email": staff.email or None,
+                },
             )
 
         if "branch_id" in d:
@@ -951,23 +1001,34 @@ class MyDoctorProfileView(APIView):
     """
     permission_classes = [IsAuthenticated, IsDoctor]
 
+    def _fee_editable(self, request):
+        """Returns True when this hospital delegates fee-setting to the doctor."""
+        from apps.tenants.models import Tenant as _Tenant
+        try:
+            t = _Tenant.objects.using("default").get(pk=request.tenant_id)
+            return t.fee_ownership == "doctor"
+        except _Tenant.DoesNotExist:
+            return False
+
     def get(self, request):
         profile, _ = DoctorProfile.objects.using(request.tenant_db).get_or_create(
             staff_id=request.user.id
         )
-        return success(data=DoctorSelfProfileSerializer(profile).data)
+        ctx = {"fee_editable": self._fee_editable(request)}
+        return success(data=DoctorSelfProfileSerializer(profile, context=ctx).data)
 
     def patch(self, request):
         profile, _ = DoctorProfile.objects.using(request.tenant_db).get_or_create(
             staff_id=request.user.id
         )
-        s = DoctorSelfProfileSerializer(profile, data=request.data, partial=True)
+        ctx = {"fee_editable": self._fee_editable(request)}
+        s = DoctorSelfProfileSerializer(profile, data=request.data, partial=True, context=ctx)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         for attr, val in s.validated_data.items():
             setattr(profile, attr, val)
         profile.save(using=request.tenant_db)
-        return success(data=DoctorSelfProfileSerializer(profile).data, message="Profile updated.")
+        return success(data=DoctorSelfProfileSerializer(profile, context=ctx).data, message="Profile updated.")
 
 
 # ── Staff Profile (every non-doctor role) ─────────────────────────────────────
@@ -1118,3 +1179,124 @@ class DoctorListView(APIView):
             role="doctor", is_active=True
         ).prefetch_related("doctor_profile")
         return success(data=StaffSerializer(qs, many=True).data)
+
+
+# ── Tenant-level clinical settings ───────────────────────────────────────────
+
+class TenantSettingsView(APIView):
+    """
+    GET   /api/v1/org/settings/  — read tenant-level clinical config
+    PATCH /api/v1/org/settings/  — update (hospital admin only)
+
+    Currently exposes fee_ownership.  Add other per-tenant knobs here rather
+    than scattering them across unrelated endpoints.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def _get_tenant(self, request):
+        from apps.tenants.models import Tenant as _Tenant
+        try:
+            return _Tenant.objects.using("default").get(pk=request.tenant_id)
+        except _Tenant.DoesNotExist:
+            return None
+
+    def get(self, request):
+        tenant = self._get_tenant(request)
+        if not tenant:
+            return not_found("Tenant not found.")
+        return success(data={
+            "fee_ownership": tenant.fee_ownership,
+            # Read-only here — staff need this to log in with Employee ID
+            # instead of mobile (see auth_app.views.StaffLoginView), but it's
+            # not exposed for editing on this endpoint; see
+            # platform_admin.views.TenantDetailView for that.
+            "subdomain": tenant.subdomain,
+        })
+
+    def patch(self, request):
+        tenant = self._get_tenant(request)
+        if not tenant:
+            return not_found("Tenant not found.")
+        allowed = {"fee_ownership"}
+        for key, val in request.data.items():
+            if key not in allowed:
+                return error(f"Field '{key}' is not configurable here.")
+        if "fee_ownership" in request.data:
+            fo = request.data["fee_ownership"]
+            from apps.tenants.models import Tenant as _Tenant
+            valid = [c[0] for c in _Tenant.FEE_OWNERSHIP_CHOICES]
+            if fo not in valid:
+                return error(f"fee_ownership must be one of: {valid}.")
+            tenant.fee_ownership = fo
+        tenant.save(using="default")
+        return success(data={"fee_ownership": tenant.fee_ownership}, message="Settings updated.")
+
+
+# ── Doctor working-hours schedule ─────────────────────────────────────────────
+
+class DoctorScheduleView(APIView):
+    """
+    GET   /api/v1/org/staff/<pk>/schedule/  — get doctor's working hours
+    PUT   /api/v1/org/staff/<pk>/schedule/  — full replace (admin or the doctor themselves)
+
+    Both the hospital admin and the doctor whose schedule it is can call PUT.
+    Any other staff role is rejected.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalStaff]
+
+    def _get_doctor(self, request, pk):
+        try:
+            staff = StaffUser.objects.using(request.tenant_db).get(pk=pk, is_active=True)
+            if staff.role != "doctor":
+                return None, error("Schedule is only supported for doctors.")
+            return staff, None
+        except StaffUser.DoesNotExist:
+            return None, not_found("Doctor not found.")
+
+    def _can_edit(self, request, staff):
+        """Admin always can; the doctor can edit their own schedule."""
+        if request.user.role == "hospital_admin":
+            return True
+        if request.user.role == "doctor" and request.user.id == staff.id:
+            return True
+        return False
+
+    def get(self, request, pk):
+        from .models import DoctorSchedule as _DS
+        from .serializers import DoctorScheduleSerializer as _SS
+        staff, err = self._get_doctor(request, pk)
+        if err:
+            return err
+        try:
+            sched = _DS.objects.using(request.tenant_db).prefetch_related("days").get(doctor=staff)
+        except _DS.DoesNotExist:
+            return success(data=None)   # no schedule configured yet
+        return success(data=_SS(sched).data)
+
+    def put(self, request, pk):
+        from .models import DoctorSchedule as _DS, DoctorAvailabilitySlot as _DAS
+        from .serializers import DoctorScheduleSerializer as _SS
+        staff, err = self._get_doctor(request, pk)
+        if err:
+            return err
+        if not self._can_edit(request, staff):
+            return error("You do not have permission to edit this schedule.", status=403)
+
+        s = _SS(data=request.data)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+
+        vd        = s.validated_data
+        days_data = vd.pop("days", [])
+
+        sched, _ = _DS.objects.using(request.tenant_db).get_or_create(doctor=staff)
+        sched.slot_duration_minutes = vd.get("slot_duration_minutes", sched.slot_duration_minutes)
+        sched.save(using=request.tenant_db)
+
+        # Full replace of day rows
+        sched.days.using(request.tenant_db).all().delete()
+        for day in days_data:
+            _DAS.objects.using(request.tenant_db).create(schedule=sched, **day)
+
+        sched.refresh_from_db(using=request.tenant_db)
+        return success(data=_SS(sched).data, message="Schedule updated.")

@@ -72,6 +72,7 @@ export default function DoctorMyProfilePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sigUploading, setSigUploading] = useState(false);
+  const [feeEditable, setFeeEditable] = useState(false); // true when fee_ownership=doctor
   // View mode by default once there's something to show; edit mode opens
   // the form. Cancel reverts to whatever was last saved (snapshot below).
   const [editing, setEditing] = useState(false);
@@ -82,19 +83,20 @@ export default function DoctorMyProfilePage() {
     Promise.all([
       apiClient.get(API_ENDPOINTS.ORG.MY_DOCTOR_PROFILE),
       apiClient.get(API_ENDPOINTS.ORG.MY_PROFILE),
+      apiClient.get("/org/settings/").catch(() => ({ data: { data: { fee_ownership: "doctor" } } })),
     ])
-      .then(([profileRes, meRes]) => {
+      .then(([profileRes, meRes, settingsRes]) => {
         if (profileRes.data?.data) {
           setForm(f => ({ ...f, ...profileRes.data.data }));
           const d = profileRes.data.data;
-          // Nothing filled in yet — open straight into edit mode instead of
-          // showing an empty view card with nothing to look at.
           if (!(d.bio || d.languages || d.digital_signature || d.gender)) {
             setEditing(true);
           }
         }
         if (meRes.data?.data?.photo) setPhoto(meRes.data.data.photo);
         if (meRes.data?.data?.date_of_birth) setDob(meRes.data.data.date_of_birth);
+        const fo = (settingsRes?.data?.data ?? settingsRes?.data)?.fee_ownership;
+        setFeeEditable(fo === "doctor");
       })
       .catch(err => toastApiError(err, "Could not load your profile."))
       .finally(() => setLoading(false));
@@ -142,6 +144,10 @@ export default function DoctorMyProfilePage() {
         digital_signature: form.digital_signature,
         bio: form.bio,
         languages: form.languages,
+        // Only send consultation_fee when the hospital delegates it to the doctor
+        ...(feeEditable && form.consultation_fee !== "" && {
+          consultation_fee: form.consultation_fee || null,
+        }),
       };
       const [{ data: res }] = await Promise.all([
         apiClient.patch(API_ENDPOINTS.ORG.MY_DOCTOR_PROFILE, payload),
@@ -210,10 +216,20 @@ export default function DoctorMyProfilePage() {
               </div>
               <div>
                 <label style={labelStyle}>Consultation Fee (₹)</label>
-                <input style={readOnlyStyle} value={form.consultation_fee ? `₹${form.consultation_fee}` : "Not set yet"} readOnly />
-                <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 4 }}>
-                  On hold — this will likely be set by front desk, not here. Coming soon.
-                </div>
+                <input
+                  style={feeEditable && editing ? inputStyle : readOnlyStyle}
+                  type={feeEditable && editing ? "number" : "text"}
+                  value={feeEditable && editing
+                    ? form.consultation_fee
+                    : form.consultation_fee ? `₹${form.consultation_fee}` : "Not set"}
+                  onChange={e => feeEditable && setForm(f => ({ ...f, consultation_fee: e.target.value }))}
+                  readOnly={!feeEditable || !editing}
+                />
+                {!feeEditable && (
+                  <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 4 }}>
+                    Set by your hospital admin.
+                  </div>
+                )}
               </div>
             </div>
           </div>

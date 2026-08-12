@@ -78,13 +78,18 @@ class PatientLookupView(APIView):
 
 
 class PatientSearchView(APIView):
-    """GET /api/v1/patients/search/?q=&branch_id="""
+    """
+    GET /api/v1/patients/search/?q=&branch_id=
+    Empty/missing q browses the most recently registered patients at this
+    hospital instead of erroring — lets front desk scan a short list to
+    pick from when they don't have an exact name/UHID/mobile to search yet.
+    """
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
         query     = request.query_params.get("q", "").strip()
         branch_id = request.query_params.get("branch_id")
-        if len(query) < 2:
+        if query and len(query) < 2:
             return error(message="Search query must be at least 2 characters.")
         qs = PatientService.search(
             query=query,
@@ -101,6 +106,7 @@ class PatientSearchView(APIView):
             "results": PatientSearchSerializer(qs[:limit], many=True).data,
             "total_matches": total_matches,
             "truncated": total_matches > limit,
+            "is_browse": not query,
         })
 
 

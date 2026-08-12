@@ -6,6 +6,8 @@ from .portal_views import (
     PortalDocumentListCreateView, PortalLabOrderListView, PortalLabOrderChoiceView,
     PortalLabReportFileView, PortalProfileView, PortalChangePasswordView, PortalForgotPasswordView,
     PortalFamilyListCreateView, PortalHealthSummaryView,
+    PortalVaccinationListView, PortalVaccinationUploadView, PortalVaccinationFileView, PortalGrowthView,
+    PortalHealthTimelineView,
 )
 
 urlpatterns = [
@@ -29,4 +31,9 @@ urlpatterns = [
     path("profile/change-password/",        PortalChangePasswordView.as_view(), name="portal-change-password"),
     path("family/",                         PortalFamilyListCreateView.as_view(), name="portal-family"),
     path("health-summary/",                 PortalHealthSummaryView.as_view(), name="portal-health-summary"),
+    path("vaccinations/",                   PortalVaccinationListView.as_view(), name="portal-vaccinations"),
+    path("vaccinations/upload/",            PortalVaccinationUploadView.as_view(), name="portal-vaccinations-upload"),
+    path("vaccinations/<int:record_id>/file/", PortalVaccinationFileView.as_view(), name="portal-vaccinations-file"),
+    path("growth/",                         PortalGrowthView.as_view(), name="portal-growth"),
+    path("timeline/",                       PortalHealthTimelineView.as_view(), name="portal-timeline"),
 ]

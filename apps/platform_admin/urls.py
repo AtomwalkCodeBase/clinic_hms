@@ -5,6 +5,9 @@ from .views import (
     TenantStaffDetailView, TenantStaffResetPasswordView,
     PlatformUserListView, PlanListView,
 )
+from .vaccination_template_views import (
+    VaccinationTemplateListCreateView, VaccinationTemplateDetailView,
+)
 
 urlpatterns = [
     path("stats/",          PlatformStatsView.as_view(), name="platform-stats"),
@@ -19,4 +22,10 @@ urlpatterns = [
     path("tenants/<int:pk>/staff/<int:staff_id>/", TenantStaffDetailView.as_view(), name="platform-tenant-staff-detail"),
     path("tenants/<int:pk>/staff/<int:staff_id>/reset-password/",
          TenantStaffResetPasswordView.as_view(), name="platform-tenant-staff-reset-password"),
+
+    # System-level vaccination schedule templates (owner_tenant_id=None,
+    # is_template=True) — cloned by hospital admins via
+    # apps.org.vaccination_schedule_views.VaccinationScheduleListCreateView.
+    path("vaccination-templates/", VaccinationTemplateListCreateView.as_view(), name="platform-vaccination-template-list-create"),
+    path("vaccination-templates/<int:pk>/", VaccinationTemplateDetailView.as_view(), name="platform-vaccination-template-detail"),
 ]

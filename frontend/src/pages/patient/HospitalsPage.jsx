@@ -19,6 +19,10 @@ export default function PatientHospitalsPage() {
   return (
     <AppShell>
       <PageShell title="Find a Hospital">
+        <style>{`
+          .hospital-card { transition: transform 160ms ease, box-shadow 160ms ease; }
+          .hospital-card:hover { transform: translateY(-3px); box-shadow: 0 12px 32px rgba(0,0,0,0.12) !important; }
+        `}</style>
         <p style={{ color: "var(--color-text-secondary)", fontSize: 13, marginBottom: 20, marginTop: -8 }}>
           Choose a hospital to see its doctors and book an appointment.
         </p>
@@ -45,33 +49,46 @@ export default function PatientHospitalsPage() {
               <button
                 key={h.tenant_id}
                 onClick={() => navigate(ROUTES.PATIENT.HOSPITAL_DOCTORS(h.tenant_id))}
-                className="card card--interactive"
+                className="card card--interactive hospital-card"
                 style={{
                   textAlign: "left", padding: 0, cursor: "pointer", overflow: "hidden",
                   display: "flex", flexDirection: "column",
                 }}
               >
+                {/* Dark gradient header strip */}
                 <div style={{
-                  height: 64, background: "linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%)",
-                  display: "flex", alignItems: "center", padding: "0 20px", gap: 12,
+                  background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+                  padding: "18px 20px",
+                  display: "flex", alignItems: "center", gap: 12,
+                  position: "relative", overflow: "hidden",
                 }}>
+                  {/* Gold glow */}
                   <div style={{
-                    width: 40, height: 40, borderRadius: 10, background: "rgba(255,255,255,0.16)",
-                    display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", flexShrink: 0,
+                    position: "absolute", width: 160, height: 160, borderRadius: "50%",
+                    background: "radial-gradient(circle, rgba(201,162,75,0.18) 0%, transparent 70%)",
+                    top: -60, right: -40, pointerEvents: "none",
+                  }} />
+                  <div style={{
+                    width: 44, height: 44, borderRadius: 12, flexShrink: 0,
+                    background: "rgba(255,255,255,0.14)",
+                    display: "flex", alignItems: "center", justifyContent: "center", color: "#fff",
+                    border: "1px solid rgba(255,255,255,0.18)",
+                    position: "relative",
                   }}>
-                    <Building2 size={20} />
+                    <Building2 size={22} />
                   </div>
-                  <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, color: "#fff", lineHeight: 1.25 }}>
-                    {h.name}
+                  <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, color: "#fff", lineHeight: 1.25 }}>
+                      {h.name}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#8FA89A", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                      <MapPin size={11} style={{ flexShrink: 0 }} />
+                      {[h.city, h.state].filter(Boolean).join(", ") || "Location not listed"}
+                    </div>
                   </div>
                 </div>
 
-                <div style={{ padding: "14px 20px 18px", display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
-                  <div style={{ fontSize: 12, color: "var(--color-text-muted)", display: "flex", alignItems: "center", gap: 5 }}>
-                    <MapPin size={13} style={{ flexShrink: 0 }} />
-                    {[h.city, h.state].filter(Boolean).join(", ") || "Location not listed"}
-                  </div>
-
+                <div style={{ padding: "14px 20px 16px", display: "flex", flexDirection: "column", gap: 8, flex: 1, background: "#fff" }}>
                   {h.about && (
                     <div style={{ fontSize: 12, color: "var(--color-text-secondary)", lineHeight: 1.5 }}>
                       {h.about.length > 110 ? `${h.about.slice(0, 110)}…` : h.about}
@@ -91,10 +108,16 @@ export default function PatientHospitalsPage() {
                     </div>
                   )}
 
-                  <div style={{
-                    marginTop: "auto", paddingTop: 8, fontSize: 12, color: "var(--color-primary)", fontWeight: 700,
-                  }}>
-                    View doctors →
+                  {/* Gold gradient CTA */}
+                  <div style={{ marginTop: "auto" }}>
+                    <div style={{
+                      display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8,
+                      padding: "7px 16px", borderRadius: 20, fontSize: 12, fontWeight: 700,
+                      background: "linear-gradient(135deg, #C9A24B 0%, #B07C24 100%)",
+                      color: "#fff", boxShadow: "0 2px 8px rgba(201,162,75,0.30)",
+                    }}>
+                      View doctors →
+                    </div>
                   </div>
                 </div>
               </button>

@@ -19,6 +19,7 @@ import { ROLES }      from "../../constants/roles";
 import APP_CONFIG     from "../../config/app.config";
 import API_ENDPOINTS  from "../../config/api.config";
 import { ROUTES }     from "../../config/routes.config";
+import { sanitizeMobileInput, isValidMobile } from "../../utils/validation";
 
 const TABS = [
   { key: "staff",    label: "Staff" },
@@ -251,6 +252,10 @@ export default function LoginPage() {
 
   async function handlePatientRegister(e) {
     e.preventDefault();
+    if (!isValidMobile(regForm.mobile)) {
+      setFieldErrors({ mobile: "Enter a valid 10-digit mobile number." });
+      return;
+    }
     setLoading(true);
     try {
       const { publicClient } = await import("../../services/api.client");
@@ -582,9 +587,9 @@ export default function LoginPage() {
                 </Field>
 
                 <label style={labelStyle}>Mobile Number</label>
-                <Field icon={IconPhone}>
-                  <input style={bareInput} type="tel" value={regForm.mobile}
-                    onChange={e => setRegForm(f => ({ ...f, mobile: e.target.value }))}
+                <Field icon={IconPhone} error={fieldErrors.mobile}>
+                  <input style={bareInput} type="tel" inputMode="numeric" maxLength={10} value={regForm.mobile}
+                    onChange={e => { setRegForm(f => ({ ...f, mobile: sanitizeMobileInput(e.target.value) })); if (fieldErrors.mobile) setFieldErrors(er => ({ ...er, mobile: undefined })); }}
                     placeholder="98xxxxxxxx" required />
                 </Field>
 

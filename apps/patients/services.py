@@ -7,6 +7,7 @@ Views are thin wrappers; they call these methods and return the result.
 
 import logging
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from core.utils.hashing  import hash_mobile, normalize_mobile
@@ -350,14 +351,35 @@ class PatientService:
         """
         Search patients by UHID, AWPID, name, or mobile (prefix match).
         Returns a queryset.
+
+        An empty query is "browse mode" — the most recently registered
+        patients at this hospital, so front desk can scan a short list
+        instead of being forced to type an exact match first.
+
+        A multi-word query (e.g. "rohan john varghese") requires each word
+        to match somewhere (name/UHID/AWPID/mobile) rather than the whole
+        phrase matching literally in one field — a plain
+        full_name__icontains=query on the combined string used to miss
+        anyone typed with a middle name skipped, reordered, or with extra
+        whitespace, even though the patient record itself was correct.
         """
-        qs = Patient.objects.using(db_name)
+        qs = Patient.objects.using(db_name).select_related("branch")
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
-        return qs.filter(
-            # icontains for name; exact for UHID/AWPID
-            full_name__icontains=query
-        ) | qs.filter(uhid__icontains=query) | qs.filter(awpid=query) | qs.filter(mobile__startswith=query)
+
+        query = (query or "").strip()
+        if not query:
+            return qs.order_by("-registered_at")
+
+        combined = Q()
+        for word in query.split():
+            combined &= (
+                Q(full_name__icontains=word)
+                | Q(uhid__icontains=word)
+                | Q(awpid__icontains=word)
+                | Q(mobile__startswith=word)
+            )
+        return qs.filter(combined).distinct().order_by("full_name")
 
     # ── Cross-tenant HIE history ──────────────────────────────────────────
     @staticmethod

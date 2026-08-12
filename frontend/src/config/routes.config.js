@@ -20,6 +20,7 @@ export const ROUTES = {
     SUBSCRIPTIONS:      "/platform/subscriptions",
     USERS:              "/platform/users",
     USAGE:              "/platform/usage",
+    VACCINATION_TEMPLATES: "/platform/vaccination-templates",
   },
 
   // Hospital Admin
@@ -30,6 +31,7 @@ export const ROUTES = {
     DEPARTMENTS:        "/admin/departments",
     SERVICES:           "/admin/services",
     ROLES:              "/admin/roles",
+    VACCINATION_SCHEDULE: "/admin/vaccination-schedule",
     SETTINGS:           "/admin/settings",
     MY_PROFILE:         "/admin/my-profile",
   },

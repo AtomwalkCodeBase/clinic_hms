@@ -6,6 +6,8 @@ from .models import (
     SharedLabResult,
     SharedAllergy,
     SharedVital,
+    VaccinationSchedule,
+    VaccinationScheduleRule,
 )
 
 
@@ -31,3 +33,16 @@ class SharedLabResultAdmin(admin.ModelAdmin):
 admin.site.register(SharedPrescription)
 admin.site.register(SharedAllergy)
 admin.site.register(SharedVital)
+
+
+class VaccinationScheduleRuleInline(admin.TabularInline):
+    model = VaccinationScheduleRule
+    extra = 1
+
+
+@admin.register(VaccinationSchedule)
+class VaccinationScheduleAdmin(admin.ModelAdmin):
+    list_display  = ["name", "owner_tenant_id", "is_template", "active", "updated_at"]
+    search_fields = ["name"]
+    list_filter   = ["is_template", "active"]
+    inlines       = [VaccinationScheduleRuleInline]

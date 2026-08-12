@@ -39,8 +39,13 @@ function StepProgress({ current }) {
               width: 22, height: 22, borderRadius: "50%",
               display: "flex", alignItems: "center", justifyContent: "center",
               fontSize: 11, fontWeight: 700,
-              background: i <= current ? "var(--color-primary)" : "var(--color-border)",
+              background: i < current
+                ? "linear-gradient(135deg, #2C7A5A 0%, #1B5E43 100%)"
+                : i === current
+                ? "linear-gradient(135deg, #1B5E43 0%, #123828 100%)"
+                : "var(--color-border)",
               color: i <= current ? "#fff" : "var(--color-text-muted)",
+              boxShadow: i <= current ? "0 2px 6px rgba(15,61,43,0.3)" : "none",
             }}>
               {i < current ? "✓" : i + 1}
             </div>
@@ -204,11 +209,16 @@ export default function PatientDoctorProfilePage() {
               style={{
                 padding: "7px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 700,
                 cursor: s.available ? "pointer" : "not-allowed",
-                border: `1.5px solid ${isSelected ? "var(--color-primary)" : s.available ? "var(--color-success)" : "var(--color-border)"}`,
-                background: isSelected ? "var(--color-primary)" : s.available ? "var(--color-success-light)" : "var(--color-surface-secondary, #f6f4ee)",
+                border: `1.5px solid ${isSelected ? "#1B5E43" : s.available ? "var(--color-success)" : "var(--color-border)"}`,
+                background: isSelected
+                  ? "linear-gradient(135deg, #2C7A5A 0%, #1B5E43 100%)"
+                  : s.available
+                  ? "var(--color-success-light)"
+                  : "var(--color-surface-secondary, #f6f4ee)",
                 color: isSelected ? "#fff" : s.available ? "var(--color-success)" : "var(--color-text-muted)",
                 textDecoration: s.available ? "none" : "line-through",
                 transition: "all 120ms ease",
+                boxShadow: isSelected ? "0 2px 8px rgba(27,94,67,0.35)" : "none",
               }}
             >
               {s.time}
@@ -253,16 +263,27 @@ export default function PatientDoctorProfilePage() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
             {/* Profile card */}
             <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+              {/* Full dark green gradient hero header */}
               <div style={{
-                background: "linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%)",
-                padding: "28px 24px 20px", display: "flex", flexDirection: "column", alignItems: "center",
+                background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+                padding: "32px 24px 24px", display: "flex", flexDirection: "column", alignItems: "center",
+                position: "relative", overflow: "hidden",
               }}>
-                <div style={{ position: "relative", marginBottom: 14 }}>
+                {/* Radial gold glow */}
+                <div style={{
+                  position: "absolute", width: 280, height: 280, borderRadius: "50%",
+                  background: "radial-gradient(circle, rgba(201,162,75,0.20) 0%, transparent 68%)",
+                  top: -100, right: -80, pointerEvents: "none",
+                }} />
+                <div style={{ position: "relative", marginBottom: 16 }}>
+                  {/* Avatar with large gold ring */}
                   <div style={{
-                    width: 128, height: 128, borderRadius: "50%", background: "#fff",
-                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: 44, fontWeight: 700,
-                    color: "var(--color-primary)", overflow: "hidden", boxShadow: "0 8px 24px rgba(0,0,0,.25)",
-                    border: "4px solid rgba(255,255,255,0.5)",
+                    width: 88, height: 88, borderRadius: "50%",
+                    border: "3px solid rgba(201,162,75,0.55)",
+                    background: "#fff",
+                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32, fontWeight: 700,
+                    color: "var(--color-primary)", overflow: "hidden",
+                    boxShadow: "0 8px 24px rgba(0,0,0,.30), 0 0 0 6px rgba(201,162,75,0.15)",
                   }}>
                     {doctor?.photo
                       ? <img src={doctor.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -274,16 +295,16 @@ export default function PatientDoctorProfilePage() {
                       background: "var(--color-success)", whiteSpace: "nowrap",
                       color: "#fff", fontSize: 10, fontWeight: 700, padding: "4px 11px", borderRadius: 12,
                       display: "flex", alignItems: "center", gap: 5, boxShadow: "0 2px 6px rgba(0,0,0,.3)",
-                      border: "2px solid var(--color-primary)",
+                      border: "2px solid rgba(255,255,255,0.3)",
                     }}>
                       <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#fff", flexShrink: 0 }} /> Available today
                     </div>
                   )}
                 </div>
-                <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 21, color: "#fff", textAlign: "center", marginTop: availableToday ? 8 : 0 }}>
+                <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 22, color: "#fff", textAlign: "center", marginTop: availableToday ? 10 : 0, position: "relative" }}>
                   {doctor?.name}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#E8C77A", marginTop: 2 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#C9A24B", marginTop: 4, position: "relative" }}>
                   {doctor?.specialisation || "Specialisation not listed yet"}
                 </div>
               </div>
@@ -344,10 +365,11 @@ export default function PatientDoctorProfilePage() {
                 {doctor?.consultation_fee && (
                   <div style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between",
-                    padding: "12px 16px", borderRadius: 10, background: "var(--color-accent-light)", marginBottom: 16,
+                    padding: "12px 16px", borderRadius: 10, background: "#FFF8E1",
+                    border: "1px solid rgba(201,162,75,0.35)", marginBottom: 16,
                   }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--color-accent)" }}>Consultation fee</span>
-                    <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 18, color: "var(--color-accent)" }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "#B07C24" }}>Consultation fee</span>
+                    <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 18, color: "#C9A24B" }}>
                       ₹{doctor.consultation_fee}
                     </span>
                   </div>
@@ -574,8 +596,18 @@ export default function PatientDoctorProfilePage() {
                 </div>
               )}
 
+              {/* Gold gradient CTA confirm button */}
               <button
-                className="btn-primary" style={{ width: "100%", padding: "10px 0" }}
+                style={{
+                  width: "100%", padding: "12px 0", fontSize: 14, fontWeight: 700,
+                  border: "none", borderRadius: "var(--radius-button)", cursor: !date || !selectedSlot || booking ? "not-allowed" : "pointer",
+                  background: !date || !selectedSlot || booking
+                    ? "var(--color-border)"
+                    : "linear-gradient(135deg, #C9A24B 0%, #B07C24 100%)",
+                  color: !date || !selectedSlot || booking ? "var(--color-text-muted)" : "#fff",
+                  boxShadow: !date || !selectedSlot || booking ? "none" : "0 4px 14px rgba(201,162,75,0.40)",
+                  transition: "all 140ms ease",
+                }}
                 disabled={!date || !selectedSlot || booking}
                 onClick={() => book(false)}
               >

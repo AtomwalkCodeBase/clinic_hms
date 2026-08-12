@@ -30,6 +30,41 @@ class Tenant(models.Model):
     accreditations = models.CharField(max_length=300, blank=True)
     about          = models.TextField(blank=True)
     is_active   = models.BooleanField(default=True)
+    # Which VaccinationSchedule (apps.registry.models.VaccinationSchedule)
+    # this hospital's staff-facing vaccination roadmap is built against.
+    # Plain IntegerField, not a real Django FK — even though Tenant
+    # (app_label "tenants") and VaccinationSchedule (app_label "registry")
+    # both route to the "default" registry DB (see core/db_router.py:
+    # REGISTRY_APPS includes both "tenants" and "registry"), this codebase's
+    # established convention is to never put a real cross-app FK to/from
+    # Tenant — every other cross-app reference to Tenant.id in this codebase
+    # (StaffMobileIndex.tenant_id, PortalBooking.tenant_id, TenantAuditLog
+    # uses a real FK only because it's declared *inside* the tenants app
+    # itself) uses a plain mirrored IntegerField instead, to keep the
+    # registry app and the tenants app decoupled from each other's model
+    # imports. Matching that pattern here for consistency rather than
+    # introducing the first cross-app FK. null=True: a tenant with no
+    # schedule assigned yet (shouldn't normally happen post-migration, but
+    # the field must tolerate it) falls back to the global "Default
+    # Schedule" template at the call site.
+    active_vaccination_schedule_id = models.IntegerField(null=True, blank=True)
+
+    # Who controls the consultation fee for doctors at this hospital.
+    #   "doctor"   — each doctor sets their own fee from their profile.
+    #   "hospital" — the hospital admin sets the fee at registration and
+    #                can edit it later; the field is read-only for doctors.
+    FEE_OWNERSHIP_DOCTOR   = "doctor"
+    FEE_OWNERSHIP_HOSPITAL = "hospital"
+    FEE_OWNERSHIP_CHOICES  = [
+        (FEE_OWNERSHIP_DOCTOR,   "Doctor self-configures"),
+        (FEE_OWNERSHIP_HOSPITAL, "Hospital controls"),
+    ]
+    fee_ownership = models.CharField(
+        max_length=10,
+        choices=FEE_OWNERSHIP_CHOICES,
+        default=FEE_OWNERSHIP_DOCTOR,
+    )
+
     created_at  = models.DateTimeField(auto_now_add=True)
     updated_at  = models.DateTimeField(auto_now=True)
 
@@ -122,10 +157,11 @@ class TenantAuditLog(models.Model):
     created_at.
     """
     ACTION_CHOICES = [
-        ("created",       "Hospital Created"),
-        ("tier_change",   "Tier Change"),
-        ("status_change", "Subscription Status Change"),
-        ("active_change", "Active/Suspended Toggle"),
+        ("created",          "Hospital Created"),
+        ("tier_change",      "Tier Change"),
+        ("status_change",    "Subscription Status Change"),
+        ("active_change",    "Active/Suspended Toggle"),
+        ("subdomain_change", "Hospital Code Change"),
     ]
 
     tenant       = models.ForeignKey(Tenant, on_delete=models.CASCADE,

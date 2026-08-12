@@ -76,6 +76,7 @@ export function AuthProvider({ children }) {
     const onExpired = () => {
       setUser(null);
       tokenStore.clear();
+      localStorage.removeItem("atomwalk:portal_selected_patient");
     };
     window.addEventListener("atomwalk:session-expired", onExpired);
     return () => window.removeEventListener("atomwalk:session-expired", onExpired);
@@ -129,6 +130,13 @@ export function AuthProvider({ children }) {
   // ── Logout ────────────────────────────────────────────────────────────────
   const logout = useCallback(() => {
     tokenStore.clear();
+    // "Which family member am I viewing" (patient portal) is stored in
+    // localStorage keyed globally, not per-account — clear it here so the
+    // next login on this browser (a different patient, or the same one)
+    // doesn't inherit a stranger's family-member selection. See also the
+    // ownership check in PatientContext, which catches the case where this
+    // didn't run (token just expired, no explicit logout).
+    localStorage.removeItem("atomwalk:portal_selected_patient");
     setUser(null);
   }, []);
 

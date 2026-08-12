@@ -40,6 +40,8 @@ export const API_ENDPOINTS = {
     USERS:            `${API_V1}/platform/users/`,
     SUBSCRIPTIONS:    `${API_V1}/platform/subscriptions/`,
     USAGE:            `${API_V1}/platform/usage/`,
+    VACCINATION_TEMPLATES:      `${API_V1}/platform/vaccination-templates/`,
+    VACCINATION_TEMPLATE: (id) => `${API_V1}/platform/vaccination-templates/${id}/`,
   },
 
   ORG: {
@@ -59,6 +61,9 @@ export const API_ENDPOINTS = {
     ROLES:             `${API_V1}/org/roles/`,
     ROLE:       (id) => `${API_V1}/org/roles/${id}/`,
     STAFF_ROLES:(id) => `${API_V1}/org/staff/${id}/roles/`,
+    VACCINATION_SCHEDULES:        `${API_V1}/org/vaccination-schedules/`,
+    VACCINATION_SCHEDULE:  (id) => `${API_V1}/org/vaccination-schedules/${id}/`,
+    VACCINATION_SCHEDULE_ACTIVATE: (id) => `${API_V1}/org/vaccination-schedules/${id}/activate/`,
   },
 
   PATIENTS: {
@@ -71,6 +76,12 @@ export const API_ENDPOINTS = {
     ALLERGIES:  (id) => `${API_V1}/patients/${id}/allergies/`,
     DOCUMENT:   (id) => `${API_V1}/patients/documents/${id}/`,
     LAB_RESULT: (id) => `${API_V1}/patients/lab-results/${id}/`,
+    GROWTH:            (id) => `${API_V1}/patients/${id}/growth/`,
+    VACCINATIONS:      (id) => `${API_V1}/patients/${id}/vaccinations/`,
+    VACCINATION_VERIFY:(id) => `${API_V1}/patients/vaccinations/${id}/verify/`,
+    VACCINATION_ORDER:     (id) => `${API_V1}/patients/${id}/vaccinations/order/`,
+    VACCINATION_DECLINE:   (id) => `${API_V1}/patients/${id}/vaccinations/decline/`,
+    VACCINATION_ADMINISTER:(id) => `${API_V1}/patients/${id}/vaccinations/administer/`,
   },
 
   SCHEDULING: {
@@ -124,6 +135,11 @@ export const API_ENDPOINTS = {
     FORGOT_PASSWORD:        `${API_V1}/portal/forgot-password/`,
     FAMILY:                 `${API_V1}/portal/family/`,
     HEALTH_SUMMARY:         `${API_V1}/portal/health-summary/`,
+    VACCINATIONS:           `${API_V1}/portal/vaccinations/`,
+    VACCINATION_UPLOAD:     `${API_V1}/portal/vaccinations/upload/`,
+    VACCINATION_FILE: (recordId) => `${API_V1}/portal/vaccinations/${recordId}/file/`,
+    GROWTH:                 `${API_V1}/portal/growth/`,
+    TIMELINE:               `${API_V1}/portal/timeline/`,
   },
 
   CLINICAL: {
@@ -166,6 +182,7 @@ export const API_ENDPOINTS = {
     STOCK:            `${API_V1}/pharmacy/stock/`,
     TRANSACTIONS:     `${API_V1}/pharmacy/transactions/`,
     DISPENSE:         `${API_V1}/pharmacy/dispense/`,
+    PRESCRIPTIONS:    `${API_V1}/pharmacy/prescriptions/`,
   },
 
   AI: {

@@ -25,6 +25,7 @@ import API_ENDPOINTS   from "../../config/api.config";
 import {
   AlertTriangle, Stethoscope, Pill, FlaskConical, Activity, Clock, Paperclip,
   Sparkles, Printer, Download, CalendarClock, Cake, User, Upload,
+  TrendingUp, Syringe, Check, X as XIcon,
 } from "lucide-react";
 
 // ─── Common ICD-10 codes (expandable; backend search in Phase 2) ─────────────
@@ -432,6 +433,131 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
   );
   const timeline = timelineData?.results || [];
 
+  // Growth trend + vaccination roadmap — reuses the same patient record this
+  // sidebar already has open. Growth blends this hospital's own vitals with
+  // cross-hospital ones (gated on hie_consent, same as the rest of this
+  // sidebar); vaccinations merges real records with the default schedule so
+  // a nurse/doctor sees exactly what's due, not just what's been logged.
+  const { data: growthData, isLoading: growthLoading } = useApi(
+    patientPk ? API_ENDPOINTS.PATIENTS.GROWTH(patientPk) : null, { skip: !patientPk }
+  );
+  const { data: vaxData, isLoading: vaxLoading, refetch: refetchVax } = useApi(
+    patientPk ? API_ENDPOINTS.PATIENTS.VACCINATIONS(patientPk) : null, { skip: !patientPk }
+  );
+  const { toastSuccess, toastApiError } = useToast();
+
+  // Ad-hoc "Order Vaccine" inline form — matches this file's existing
+  // lightweight-inline-form convention (LabOrderSection's search box,
+  // DrugForm's "+ Add Drug" panel) rather than a modal.
+  const [orderFormOpen, setOrderFormOpen] = useState(false);
+  const [orderForm, setOrderForm] = useState({ vaccine_name: "", reason: "", due_date: "", dose_number: "" });
+  const [ordering, setOrdering] = useState(false);
+  const [decliningId, setDecliningId] = useState(null);
+  const [administeringId, setAdministeringId] = useState(null);
+
+  const knownVaccineNames = Array.from(
+    new Set((vaxData?.roadmap || []).map(v => v.vaccine_name).filter(Boolean))
+  );
+
+  function updOrderForm(k, v) { setOrderForm(p => ({ ...p, [k]: v })); }
+
+  async function submitOrder(e) {
+    e.preventDefault();
+    if (!orderForm.vaccine_name.trim() || !orderForm.reason.trim() || !patientPk) return;
+    setOrdering(true);
+    try {
+      await apiClient.post(API_ENDPOINTS.PATIENTS.VACCINATION_ORDER(patientPk), {
+        vaccine_name: orderForm.vaccine_name.trim(),
+        reason: orderForm.reason.trim(),
+        due_date: orderForm.due_date || undefined,
+        dose_number: orderForm.dose_number || undefined,
+      });
+      toastSuccess("Vaccine order recorded.");
+      setOrderForm({ vaccine_name: "", reason: "", due_date: "", dose_number: "" });
+      setOrderFormOpen(false);
+      refetchVax?.();
+    } catch (err) {
+      toastApiError(err, "Could not record the vaccine order.");
+    } finally {
+      setOrdering(false);
+    }
+  }
+
+  async function reviewVaccination(recordId, action) {
+    try {
+      await apiClient.patch(API_ENDPOINTS.PATIENTS.VACCINATION_VERIFY(recordId), { action });
+      toastSuccess(action === "verify" ? "Marked verified." : "Marked rejected.");
+      refetchVax?.();
+    } catch (err) {
+      toastApiError(err, "Could not update that record.");
+    }
+  }
+
+  // Quick, low-friction "not required" action — window.prompt for an
+  // optional reason matches this file's existing convention for quick
+  // secondary actions (no dedicated modal/inline-text-input elsewhere for
+  // something this minor).
+  async function declineVaccination(v) {
+    if (!patientPk) return;
+    const reason = window.prompt("Reason (optional) — why isn't this vaccine required for this patient?", v.reason || "");
+    if (reason === null) return; // cancelled
+    setDecliningId(v.record_id ?? v.vaccine_name);
+    try {
+      await apiClient.post(API_ENDPOINTS.PATIENTS.VACCINATION_DECLINE(patientPk), {
+        record_id: v.record_id || undefined,
+        vaccine_name: v.vaccine_name,
+        scheduled_label: v.scheduled_label,
+        reason: reason.trim(),
+      });
+      toastSuccess("Marked as not required.");
+      refetchVax?.();
+    } catch (err) {
+      toastApiError(err, "Could not update that record.");
+    } finally {
+      setDecliningId(null);
+    }
+  }
+
+  // Nurse/doctor "give it now" shortcut — administers an ordered/due
+  // vaccine right from this sidebar instead of routing through TasksPage.
+  async function administerVaccination(v) {
+    if (!patientPk) return;
+    setAdministeringId(v.record_id ?? v.vaccine_name);
+    try {
+      await apiClient.post(API_ENDPOINTS.PATIENTS.VACCINATION_ADMINISTER(patientPk), {
+        record_id: v.record_id || undefined,
+        vaccine_name: v.vaccine_name,
+        scheduled_label: v.scheduled_label,
+      });
+      toastSuccess("Vaccination recorded as administered.");
+      refetchVax?.();
+    } catch (err) {
+      toastApiError(err, "Could not record the vaccination.");
+    } finally {
+      setAdministeringId(null);
+    }
+  }
+
+  // Status values from build_roadmap() (apps/registry/vaccine_schedule.py):
+  // "completed"/"pending_review"/"rejected"/"ordered"/"declined" when a real
+  // record matches the slot, or "unknown" when none does — "unknown" is
+  // never shown as "due"/"overdue"/"not yet due"; the backend genuinely
+  // doesn't know whether the vaccine was given elsewhere, only that
+  // nothing's on file. `timing` ("upcoming"/"due_now"/"past_window") is
+  // separate informational metadata, surfaced in the subtitle text below
+  // rather than the status badge. "past_window" = the age window opened
+  // long ago with no record — still "unknown" status, just needs copy that
+  // doesn't read as "recommended now" (misleading once the window's long
+  // closed, e.g. a birth-window vaccine on a 5-year-old).
+  const VAX_STATUS_STYLE = {
+    completed:       { label: "Done",              bg: "#D1FAE5", color: "#065F46" },
+    pending_review:  { label: "Unverified upload", bg: "#F9F0DC", color: "#92400E" },
+    rejected:        { label: "Rejected",          bg: "#FEE2E2", color: "#991B1B" },
+    ordered:         { label: "Ordered",           bg: "#DBEAFE", color: "#1E40AF" },
+    declined:        { label: "Not required",      bg: "var(--color-border)", color: "var(--color-text-muted)" },
+    unknown:         { label: "Record unavailable", bg: "var(--color-border)", color: "var(--color-text-muted)" },
+  };
+
   // Collapsed: thin icon rail — doesn't reflow the workspace next to it.
   if (!open) {
     return (
@@ -638,6 +764,207 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </HistorySection>
+
+          <HistorySection title="Growth" icon={<TrendingUp size={13} />} count={growthData?.series?.length}>
+            {growthLoading ? <EmptyNote>Loading growth data…</EmptyNote> : !growthData?.series?.length ? (
+              <EmptyNote>No height/weight recorded yet.</EmptyNote>
+            ) : (
+              <div style={{ display: "grid", gap: 6 }}>
+                {growthData.is_minor === false && (
+                  <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginBottom: 2 }}>
+                    Adult patient — trend shown, no pediatric percentile applies.
+                  </div>
+                )}
+                {growthData.series.slice(-6).reverse().map((p, i) => (
+                  <div key={i} style={{ fontSize: 11, borderBottom: "1px dashed var(--color-border)", paddingBottom: 6 }}>
+                    <div style={{ color: "var(--color-text-muted)", marginBottom: 2 }}>
+                      {new Date(p.date).toLocaleDateString("en-IN")}{p.source === "other_hospital" ? " · other hospital" : ""}
+                    </div>
+                    <div>
+                      {p.height_cm != null && `${p.height_cm} cm  `}
+                      {p.weight_kg != null && `${p.weight_kg} kg  `}
+                      {p.bmi != null && `BMI ${p.bmi}`}
+                    </div>
+                  </div>
+                ))}
+                {growthData.consent_given === false && (
+                  <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+                    Only this hospital's own records — patient hasn't consented to cross-hospital sharing.
+                  </div>
+                )}
+              </div>
+            )}
+          </HistorySection>
+
+          <HistorySection title="Vaccinations" icon={<Syringe size={13} />} count={vaxData?.roadmap?.length}>
+            <div style={{ marginBottom: 10 }}>
+              <button
+                type="button"
+                onClick={() => setOrderFormOpen(o => !o)}
+                disabled={!patientPk}
+                style={{
+                  width: "100%", fontSize: 11, fontWeight: 700, padding: "6px 10px", borderRadius: 6,
+                  border: "1px dashed var(--color-primary)", background: orderFormOpen ? "var(--color-primary-light)" : "var(--color-bg)",
+                  color: "var(--color-primary)", cursor: patientPk ? "pointer" : "not-allowed",
+                }}
+              >
+                {orderFormOpen ? "− Cancel Order" : "+ Order Vaccine"}
+              </button>
+              {orderFormOpen && (
+                <form onSubmit={submitOrder} style={{
+                  marginTop: 8, background: "#FBF9F5", borderRadius: 10, padding: 10,
+                  border: "1px dashed var(--color-primary)", display: "grid", gap: 8,
+                }}>
+                  <div>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>VACCINE *</label>
+                    <input
+                      className="form-input" list="known-vaccine-names"
+                      value={orderForm.vaccine_name}
+                      onChange={e => updOrderForm("vaccine_name", e.target.value)}
+                      placeholder="e.g. Hepatitis B - 2"
+                      required
+                      style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }}
+                    />
+                    <datalist id="known-vaccine-names">
+                      {knownVaccineNames.map(n => <option key={n} value={n} />)}
+                    </datalist>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>REASON *</label>
+                    <input
+                      className="form-input"
+                      value={orderForm.reason}
+                      onChange={e => updOrderForm("reason", e.target.value)}
+                      placeholder="Clinical reason for this order"
+                      required
+                      style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }}
+                    />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>DUE DATE</label>
+                      <input
+                        type="date" className="form-input"
+                        value={orderForm.due_date}
+                        onChange={e => updOrderForm("due_date", e.target.value)}
+                        style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>DOSE #</label>
+                      <input
+                        type="number" min="1" className="form-input"
+                        value={orderForm.dose_number}
+                        onChange={e => updOrderForm("dose_number", e.target.value)}
+                        style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }}
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="submit" className="btn-primary" style={{ fontSize: 12, padding: "6px 10px" }}
+                    disabled={ordering || !orderForm.vaccine_name.trim() || !orderForm.reason.trim()}
+                  >
+                    {ordering ? "Ordering…" : "Order Vaccine"}
+                  </button>
+                </form>
+              )}
+            </div>
+
+            {vaxLoading ? <EmptyNote>Loading vaccination roadmap…</EmptyNote> : !vaxData?.roadmap?.length ? (
+              <EmptyNote>No vaccination schedule available.</EmptyNote>
+            ) : (
+              <div style={{ display: "grid", gap: 6 }}>
+                {vaxData.roadmap.map((v, i) => {
+                  const st = VAX_STATUS_STYLE[v.status] || VAX_STATUS_STYLE.unknown;
+                  const needsReview = v.status === "pending_review";
+                  const itemKey = v.record_id ?? v.vaccine_name;
+                  const canDecline = v.status === "unknown" || v.status === "ordered";
+                  const canAdminister = v.status === "ordered" || (v.status === "unknown" && (v.timing === "due_now" || v.timing === "past_window"));
+                  return (
+                    <div key={i} style={{
+                      borderRadius: 8, border: "1px solid var(--color-border)", padding: "8px 10px",
+                      background: needsReview ? "#FFFBEB" : "var(--color-bg)",
+                    }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text)" }}>{v.vaccine_name}</span>
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10,
+                          background: st.bg, color: st.color, whiteSpace: "nowrap",
+                        }}>{st.label}</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 3 }}>
+                        {v.scheduled_label}
+                        {v.administered_date && ` · given ${new Date(v.administered_date).toLocaleDateString("en-IN")}`}
+                        {v.source === "self_reported" && " · reported by parent"}
+                        {v.status === "unknown" && v.timing === "due_now" && " · recommended now"}
+                        {v.status === "unknown" && v.timing === "past_window" && " · no record on file — past the usual window, ask about catch-up"}
+                        {v.status === "ordered" && ` · ordered by ${v.verified_by_name || "doctor"}${v.due_date ? ` — due ${new Date(v.due_date).toLocaleDateString("en-IN")}` : ""}`}
+                        {v.status === "declined" && ` · marked not required${v.reason ? ` — ${v.reason}` : ""}`}
+                      </div>
+                      {needsReview && (
+                        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                          <button
+                            onClick={() => reviewVaccination(v.record_id, "verify")}
+                            style={{
+                              flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                              fontSize: 11, fontWeight: 700, padding: "5px 8px", borderRadius: 6,
+                              border: "1px solid #10B981", background: "#ECFDF5", color: "#047857", cursor: "pointer",
+                            }}
+                          >
+                            <Check size={12} /> Verify
+                          </button>
+                          <button
+                            onClick={() => reviewVaccination(v.record_id, "reject")}
+                            style={{
+                              flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                              fontSize: 11, fontWeight: 700, padding: "5px 8px", borderRadius: 6,
+                              border: "1px solid #EF4444", background: "#FEF2F2", color: "#B91C1C", cursor: "pointer",
+                            }}
+                          >
+                            <XIcon size={12} /> Reject
+                          </button>
+                        </div>
+                      )}
+                      {(canDecline || canAdminister) && (
+                        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                          {canAdminister && (
+                            <button
+                              onClick={() => administerVaccination(v)}
+                              disabled={administeringId === itemKey}
+                              style={{
+                                flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                                fontSize: 11, fontWeight: 700, padding: "5px 8px", borderRadius: 6,
+                                border: "1px solid #10B981", background: "#ECFDF5", color: "#047857",
+                                cursor: administeringId === itemKey ? "not-allowed" : "pointer",
+                                opacity: administeringId === itemKey ? 0.6 : 1,
+                              }}
+                            >
+                              <Syringe size={12} /> {administeringId === itemKey ? "Recording…" : "Administer"}
+                            </button>
+                          )}
+                          {canDecline && (
+                            <button
+                              onClick={() => declineVaccination(v)}
+                              disabled={decliningId === itemKey}
+                              style={{
+                                flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                                fontSize: 11, fontWeight: 700, padding: "5px 8px", borderRadius: 6,
+                                border: "1px solid var(--color-border)", background: "var(--color-bg)", color: "var(--color-text-secondary)",
+                                cursor: decliningId === itemKey ? "not-allowed" : "pointer",
+                                opacity: decliningId === itemKey ? 0.6 : 1,
+                              }}
+                            >
+                              <XIcon size={12} /> Not Required
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </HistorySection>

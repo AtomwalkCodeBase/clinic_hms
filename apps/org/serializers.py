@@ -1,7 +1,9 @@
+import re
+
 from rest_framework import serializers
 from .models import (
     Branch, Department, StaffUser, DoctorProfile, StaffProfile, StaffBranchMapping,
-    Permission, Role, UserRole,
+    Permission, Role, UserRole, DoctorSchedule, DoctorAvailabilitySlot,
 )
 
 
@@ -11,6 +13,17 @@ class BranchSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "address", "city", "state", "pincode",
                   "phone", "lat", "lng", "is_active"]
         read_only_fields = ["id"]
+
+    def validate_phone(self, value):
+        # Branch.phone is optional (blank=True) — only enforce the format
+        # when something was actually entered, same 10-digit convention used
+        # for every other phone field in the app (patient mobile, staff
+        # mobile, etc.). A plain RegexValidator on the model field would
+        # also fire on an empty string, which is why this is a method
+        # validator instead.
+        if value and not re.match(r"^\d{10}$", value):
+            raise serializers.ValidationError("Enter a valid 10-digit phone number.")
+        return value
 
 
 class DepartmentSerializer(serializers.ModelSerializer):
@@ -34,24 +47,69 @@ class DoctorSelfProfileSerializer(serializers.ModelSerializer):
     """
     Self-service view/edit for the logged-in doctor's own profile.
 
-    admin_fields are always read-only here — they were set by the hospital
-    admin at onboarding (registration no., specialisation, qualification,
-    experience) and can only be changed by an admin via DoctorProfileView.
-    consultation_fee is also read-only for now: pending a decision on
-    whether it should instead be set by front desk (see MyDoctorProfileView
-    docstring) — on hold, not editable from here.
-    Everything else (signature, bio, languages, known_for) the doctor owns. Profile
-    photo lives on StaffUser (shared across all staff roles), not here —
-    see StaffMeSerializer / MyStaffProfileView.
+    admin_fields (registration_no, specialisation, qualification,
+    experience_years) are always read-only here — set by the hospital admin
+    at onboarding, changeable only via DoctorProfileView.
+
+    consultation_fee is conditionally read-only: when the hospital's
+    fee_ownership == "hospital" the field is locked for doctors; when
+    fee_ownership == "doctor" they can edit it freely.  The view
+    (MyDoctorProfileView) passes fee_editable=True/False as context so this
+    serializer doesn't need to query the Tenant itself.
     """
+    def get_fields(self):
+        fields = super().get_fields()
+        if not self.context.get("fee_editable", False):
+            fields["consultation_fee"].read_only = True
+        return fields
+
     class Meta:
         model  = DoctorProfile
         fields = ["registration_no", "specialisation", "qualification",
                   "gender", "experience_years", "consultation_fee",
                   "digital_signature", "bio", "languages", "known_for"]
         read_only_fields = ["registration_no", "specialisation",
-                             "qualification", "experience_years",
-                             "consultation_fee"]
+                             "qualification", "experience_years"]
+
+
+# ── Doctor schedule serializers ───────────────────────────────────────────────
+
+class DoctorAvailabilitySlotSerializer(serializers.ModelSerializer):
+    day_label = serializers.CharField(source="get_day_of_week_display", read_only=True)
+
+    class Meta:
+        model  = DoctorAvailabilitySlot
+        fields = ["id", "day_of_week", "day_label", "is_available", "start_time", "end_time"]
+        read_only_fields = ["id", "day_label"]
+
+
+class DoctorScheduleSerializer(serializers.ModelSerializer):
+    days = DoctorAvailabilitySlotSerializer(many=True)
+
+    class Meta:
+        model  = DoctorSchedule
+        fields = ["id", "slot_duration_minutes", "days"]
+        read_only_fields = ["id"]
+
+    def create(self, validated_data):
+        days_data = validated_data.pop("days", [])
+        schedule = DoctorSchedule.objects.using(self._db).create(**validated_data)
+        for day in days_data:
+            DoctorAvailabilitySlot.objects.using(self._db).create(schedule=schedule, **day)
+        return schedule
+
+    def update(self, instance, validated_data):
+        days_data = validated_data.pop("days", None)
+        instance.slot_duration_minutes = validated_data.get(
+            "slot_duration_minutes", instance.slot_duration_minutes
+        )
+        instance.save(using=self._db)
+        if days_data is not None:
+            # Full replace — delete existing days and re-create
+            instance.days.using(self._db).all().delete()
+            for day in days_data:
+                DoctorAvailabilitySlot.objects.using(self._db).create(schedule=instance, **day)
+        return instance
 
 
 class StaffProfileSerializer(serializers.ModelSerializer):
@@ -137,6 +195,12 @@ class StaffInviteSerializer(serializers.Serializer):
     (see registry.StaffMobileIndex) — email is optional/informational only."""
     phone         = serializers.CharField(max_length=20)
     email         = serializers.EmailField(required=False, allow_blank=True)
+
+    def validate_phone(self, value):
+        if not re.match(r"^\d{10}$", value):
+            raise serializers.ValidationError("Enter a valid 10-digit mobile number.")
+        return value
+
     # Employee ID is NOT accepted as input — it's auto-generated via NNTM
     # (see apps.org.views._next_employee_id), same as UHID/invoice/etc.
     # Never manually typed in, so it isn't part of this input contract.
@@ -167,6 +231,17 @@ class StaffInviteSerializer(serializers.Serializer):
     specialisation       = serializers.CharField(max_length=100, required=False, allow_blank=True)
     qualification        = serializers.CharField(max_length=200, required=False, allow_blank=True)
     experience_years     = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+
+    # ── Doctor-only fields — ignored for non-doctor roles ────────────────────
+    # consultation_fee: accepted here when the hospital's fee_ownership is
+    # "hospital" — the view checks the tenant setting and writes it to
+    # DoctorProfile.consultation_fee; ignored silently for non-doctor roles.
+    consultation_fee = serializers.DecimalField(
+        max_digits=8, decimal_places=2, required=False, allow_null=True
+    )
+    # Working-hours schedule: list of up to 7 day objects.  Optional at
+    # registration — can also be set later via /staff/<pk>/schedule/.
+    schedule = DoctorScheduleSerializer(required=False, allow_null=True)
 
 
 # ── Table-driven RBAC (see apps.org.rbac / docs/onboarding_auth_rbac_architecture.md 4.3) ──

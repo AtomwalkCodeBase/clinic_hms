@@ -13,6 +13,7 @@ import { useApi }    from "../../hooks/useApi";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import { Syringe }   from "lucide-react";
 
 const TODAY = new Date().toISOString().split("T")[0];
 
@@ -217,6 +218,82 @@ function LabOrdersForEncounter({ encounterId }) {
   );
 }
 
+// ─── Vaccinations due today — mirrors the LabOrdersForEncounter pattern:
+// fetch this patient's roadmap (apps/registry/vaccine_schedule.py
+// build_roadmap(), same GET the doctor's EncounterPage history sidebar
+// uses) and surface only what's actionable for a nurse right now: a
+// doctor-ordered vaccine not yet given ("ordered"), or a routine schedule
+// slot that's reached its recommended age window with no record on file
+// ("unknown" + timing "due_now"). Nothing renders if there's nothing to do
+// — same "only show if there's something real" convention as LabOrders.
+function VaccinationsForPatient({ patientPk }) {
+  const { toastSuccess, toastApiError } = useToast();
+  const { data, refetch } = useApi(
+    patientPk ? API_ENDPOINTS.PATIENTS.VACCINATIONS(patientPk) : null, { skip: !patientPk }
+  );
+  const [administeringKey, setAdministeringKey] = useState(null);
+  const roadmap = data?.roadmap || [];
+  const actionable = roadmap.filter(
+    v => v.status === "ordered" || (v.status === "unknown" && v.timing === "due_now")
+  );
+  if (!patientPk || actionable.length === 0) return null;
+
+  async function administer(v) {
+    const key = v.record_id ?? v.vaccine_name;
+    setAdministeringKey(key);
+    try {
+      await apiClient.post(API_ENDPOINTS.PATIENTS.VACCINATION_ADMINISTER(patientPk), {
+        record_id: v.record_id || undefined,
+        vaccine_name: v.vaccine_name,
+        scheduled_label: v.scheduled_label,
+      });
+      toastSuccess(`${v.vaccine_name} recorded as administered.`);
+      refetch?.();
+    } catch (err) {
+      toastApiError(err, "Could not record the vaccination.");
+    } finally {
+      setAdministeringKey(null);
+    }
+  }
+
+  return (
+    <div style={{
+      background: "var(--color-primary-light)", border: "1px solid var(--color-primary)",
+      borderRadius: 8, padding: "10px 14px",
+    }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "var(--color-primary)", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+        <Syringe size={13} /> Vaccinations due
+      </div>
+      <div style={{ display: "grid", gap: 8 }}>
+        {actionable.map((v, i) => {
+          const key = v.record_id ?? v.vaccine_name;
+          const busy = administeringKey === key;
+          return (
+            <div key={i} style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap",
+              background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: 8, padding: "8px 10px",
+            }}>
+              <span style={{ fontSize: 12 }}>
+                <strong>{v.vaccine_name}</strong>
+                {v.scheduled_label && <span style={{ color: "var(--color-text-muted)" }}> · {v.scheduled_label}</span>}
+                {v.status === "ordered" && (
+                  <span style={{ color: "var(--color-text-muted)" }}> · ordered by {v.verified_by_name || "doctor"}{v.due_date ? ` — due ${new Date(v.due_date).toLocaleDateString("en-IN")}` : ""}</span>
+                )}
+              </span>
+              <button
+                type="button" className="btn-primary" style={{ fontSize: 11, padding: "4px 10px" }}
+                disabled={busy} onClick={() => administer(v)}
+              >
+                {busy ? "Recording…" : "Administer"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function NurseTasksPage() {
   const [page, setPage] = useState(1);
   const { data, isLoading, refetch } = useApi(API_ENDPOINTS.OPD.MONITORING, {
@@ -322,6 +399,8 @@ export default function NurseTasksPage() {
                   )}
 
                   <LabOrdersForEncounter encounterId={t.encounter_id} />
+
+                  <VaccinationsForPatient patientPk={t.patient_pk} />
 
                   {t.prescription.length > 0 && (
                     <div style={{ fontSize: 13 }}>

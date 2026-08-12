@@ -11,6 +11,7 @@ import apiClient     from "../../services/api.client";
 import { useToast }  from "../../hooks/useToast";
 import { usePermissions } from "../../hooks/usePermissions";
 import API_ENDPOINTS from "../../config/api.config";
+import { sanitizeMobileInput, mobileError } from "../../utils/validation";
 
 const EMPTY_BRANCH = { name: "", address: "", city: "", state: "", pincode: "", phone: "" };
 
@@ -36,7 +37,7 @@ function Modal({ title, children, onClose }) {
   );
 }
 
-function Field({ label, value, onChange, placeholder, required }) {
+function Field({ label, value, onChange, placeholder, required, error, ...inputProps }) {
   return (
     <div style={{ marginBottom: 14 }}>
       <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 5 }}>{label}</label>
@@ -45,11 +46,13 @@ function Field({ label, value, onChange, placeholder, required }) {
         placeholder={placeholder} required={required}
         style={{
           width: "100%", boxSizing: "border-box",
-          border: "1.5px solid var(--color-border)", borderRadius: 8,
+          border: `1.5px solid ${error ? "var(--color-error)" : "var(--color-border)"}`, borderRadius: 8,
           padding: "9px 12px", fontSize: 14,
           background: "var(--color-surface)", color: "var(--color-text)", outline: "none",
         }}
+        {...inputProps}
       />
+      {error && <div style={{ color: "var(--color-error)", fontSize: 12, marginTop: 4 }}>{error}</div>}
     </div>
   );
 }
@@ -57,9 +60,16 @@ function Field({ label, value, onChange, placeholder, required }) {
 function BranchForm({ initial, onSave, onCancel, saving }) {
   const [form, setForm] = useState(initial || EMPTY_BRANCH);
   const set = (k) => (v) => setForm(f => ({ ...f, [k]: v }));
+  const phoneErr = mobileError(form.phone);
+
+  function submit(e) {
+    e.preventDefault();
+    if (phoneErr) return;
+    onSave(form);
+  }
 
   return (
-    <form onSubmit={e => { e.preventDefault(); onSave(form); }}>
+    <form onSubmit={submit}>
       <Field label="Branch Name *" value={form.name} onChange={set("name")} placeholder="Main Hospital" required />
       <Field label="Address" value={form.address} onChange={set("address")} placeholder="123 Main Street" />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -68,14 +78,15 @@ function BranchForm({ initial, onSave, onCancel, saving }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <Field label="Pincode" value={form.pincode} onChange={set("pincode")} placeholder="400001" />
-        <Field label="Phone" value={form.phone} onChange={set("phone")} placeholder="+91 98765 43210" />
+        <Field label="Phone" value={form.phone} onChange={v => set("phone")(sanitizeMobileInput(v))}
+          placeholder="98xxxxxxxx" error={phoneErr} maxLength={10} inputMode="numeric" />
       </div>
       <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
         <button type="button" onClick={onCancel}
           style={{ flex: 1, padding: "9px 0", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "none", cursor: "pointer", fontSize: 14, fontWeight: 600 }}>
           Cancel
         </button>
-        <button type="submit" disabled={saving} className="btn-primary" style={{ flex: 2 }}>
+        <button type="submit" disabled={saving || !!phoneErr} className="btn-primary" style={{ flex: 2 }}>
           {saving ? "Saving…" : (initial ? "Update Branch" : "Create Branch")}
         </button>
       </div>

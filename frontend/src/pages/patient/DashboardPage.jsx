@@ -29,12 +29,20 @@ const BADGE = {
   cancelled:   "badge--error",
 };
 
+// Map chip class to accent colors for left border + tint
+const CHIP_COLORS = {
+  "icon-chip--green": { border: "#1B5E43", tint: "#E9F1EC" },
+  "icon-chip--blue":  { border: "#2C5D7C", tint: "#E5EEF3" },
+  "icon-chip--gold":  { border: "#C9A24B", tint: "#FFF8E1" },
+  "icon-chip--rose":  { border: "#B3402E", tint: "#F9E7E3" },
+};
+
 const QUICK_LINKS = [
-  { label: "Browse Hospitals", icon: Building2,     chip: "icon-chip--green", to: ROUTES.PATIENT.HOSPITALS,     desc: "See every hospital on the platform" },
-  { label: "My Appointments",  icon: Calendar,      chip: "icon-chip--blue",  to: ROUTES.PATIENT.APPOINTMENTS,  desc: "Upcoming and past visits" },
-  { label: "My Records",       icon: ClipboardList, chip: "icon-chip--gold",  to: ROUTES.PATIENT.RECORDS,       desc: "Diagnoses, allergies, vitals" },
-  { label: "Prescriptions",    icon: Pill,          chip: "icon-chip--rose",  to: ROUTES.PATIENT.PRESCRIPTIONS, desc: "Medicines prescribed to you" },
-  { label: "Lab Reports",      icon: FlaskConical,  chip: "icon-chip--blue",  to: ROUTES.PATIENT.LAB_REPORTS,   desc: "Test results and reports" },
+  { label: "Browse Hospitals",  icon: Building2,     chip: "icon-chip--green", to: ROUTES.PATIENT.HOSPITALS,     desc: "See every hospital on the platform" },
+  { label: "My Appointments",   icon: Calendar,      chip: "icon-chip--blue",  to: ROUTES.PATIENT.APPOINTMENTS,  desc: "Upcoming and past visits" },
+  { label: "My Health Journey", icon: ClipboardList, chip: "icon-chip--gold",  to: ROUTES.PATIENT.RECORDS,       desc: "Diagnoses, allergies, vitals" },
+  { label: "Prescriptions",     icon: Pill,          chip: "icon-chip--rose",  to: ROUTES.PATIENT.PRESCRIPTIONS, desc: "Medicines prescribed to you" },
+  { label: "Lab Reports",       icon: FlaskConical,  chip: "icon-chip--blue",  to: ROUTES.PATIENT.LAB_REPORTS,   desc: "Test results and reports" },
 ];
 
 function HospitalResultCard({ h, onClick }) {
@@ -71,7 +79,9 @@ function HospitalResultCard({ h, onClick }) {
 
       <div style={{
         marginTop: "auto", padding: "10px 16px", borderTop: "1px solid var(--color-border)",
-        fontSize: 12, color: "var(--color-primary)", fontWeight: 700, background: "var(--color-primary-light)",
+        fontSize: 12, fontWeight: 700,
+        background: "linear-gradient(135deg, #C9A24B 0%, #B07C24 100%)",
+        color: "#fff",
       }}>
         View doctors →
       </div>
@@ -85,6 +95,16 @@ const SORT_OPTIONS = [
   { value: "fee",         label: "Consultation fee (low to high)" },
   { value: "name",        label: "Name (A–Z)" },
 ];
+
+// Status color map for booking cards
+const STATUS_COLORS = {
+  scheduled:   { bg: "var(--color-primary-light)", border: "var(--color-primary)" },
+  waiting:     { bg: "var(--color-warning-light)",  border: "var(--color-warning)" },
+  vitals_done: { bg: "var(--color-success-light)",  border: "var(--color-success)" },
+  in_progress: { bg: "var(--color-info-light)",     border: "var(--color-info)" },
+  done:        { bg: "var(--color-success-light)",  border: "var(--color-success)" },
+  cancelled:   { bg: "var(--color-error-light)",    border: "var(--color-error)" },
+};
 
 export default function PatientDashboardPage() {
   const { user } = useAuth();
@@ -157,6 +177,7 @@ export default function PatientDashboardPage() {
             Find the right doctor or hospital for your care.
           </div>
 
+          {/* Search — white card-style with shadow, rounded */}
           <div style={{ position: "relative" }}>
             <Search size={16} style={{
               position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: "var(--color-text-muted)",
@@ -167,7 +188,8 @@ export default function PatientDashboardPage() {
               placeholder="Search hospitals, doctors, or a reason for visit — e.g. cardiologist, eye doctor, GreenLeaf Clinic"
               style={{
                 width: "100%", boxSizing: "border-box", padding: "14px 16px 14px 42px", fontSize: 14,
-                borderRadius: 12, border: "none", background: "#fff", color: "var(--color-text)",
+                borderRadius: 50, border: "none", background: "#fff", color: "var(--color-text)",
+                boxShadow: "0 2px 12px rgba(0,0,0,0.10)",
               }}
             />
           </div>
@@ -207,18 +229,28 @@ export default function PatientDashboardPage() {
             )}
           </div>
 
+          {/* Hero stats — each in a tinted mini-card with accent color */}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 24 }}>
-            <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 10, padding: "12px 20px", minWidth: 140 }}>
-              <div className="hero-number" style={{ fontSize: 26 }}>{stats ? stats.hospitals : "—"}</div>
-              <div className="stat-label" style={{ marginTop: 2 }}>Hospitals on the platform</div>
+            <div style={{
+              background: "rgba(44,93,124,0.18)", borderRadius: 12, padding: "12px 20px", minWidth: 140,
+              border: "1px solid rgba(44,93,124,0.25)",
+            }}>
+              <div className="hero-number" style={{ fontSize: 26, color: "#B9D3E0" }}>{stats ? stats.hospitals : "—"}</div>
+              <div className="stat-label" style={{ marginTop: 2, color: "#C9D9E5" }}>Hospitals on the platform</div>
             </div>
-            <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 10, padding: "12px 20px", minWidth: 140 }}>
-              <div className="hero-number" style={{ fontSize: 26 }}>{stats ? stats.doctors : "—"}</div>
-              <div className="stat-label" style={{ marginTop: 2 }}>Doctors available</div>
+            <div style={{
+              background: "rgba(27,94,67,0.18)", borderRadius: 12, padding: "12px 20px", minWidth: 140,
+              border: "1px solid rgba(27,94,67,0.25)",
+            }}>
+              <div className="hero-number" style={{ fontSize: 26, color: "#7FA091" }}>{stats ? stats.doctors : "—"}</div>
+              <div className="stat-label" style={{ marginTop: 2, color: "#B0D8BF" }}>Doctors available</div>
             </div>
-            <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 10, padding: "12px 20px", minWidth: 140 }}>
-              <div className="hero-number" style={{ fontSize: 26 }}>{isLoading ? "—" : upcoming.length}</div>
-              <div className="stat-label" style={{ marginTop: 2 }}>Upcoming visits</div>
+            <div style={{
+              background: "rgba(201,162,75,0.16)", borderRadius: 12, padding: "12px 20px", minWidth: 140,
+              border: "1px solid rgba(201,162,75,0.28)",
+            }}>
+              <div className="hero-number" style={{ fontSize: 26, color: "#C9A24B" }}>{isLoading ? "—" : upcoming.length}</div>
+              <div className="stat-label" style={{ marginTop: 2, color: "#D4B86A" }}>Upcoming visits</div>
             </div>
           </div>
         </div>
@@ -274,29 +306,39 @@ export default function PatientDashboardPage() {
         ) : (
           // ── Default landing — quick links + bookings summary ───────────
           <>
+            <style>{`
+              .ql-tile { transition: transform 160ms ease, box-shadow 160ms ease; }
+              .ql-tile:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.10) !important; }
+            `}</style>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 14, marginBottom: 24 }}>
-              {QUICK_LINKS.map(q => (
-                <button key={q.label} onClick={() => navigate(q.to)} className="card card--interactive" style={{
-                  textAlign: "left", padding: 18, cursor: "pointer",
-                  display: "flex", flexDirection: "column", gap: 6,
-                }}>
-                  <div className={`icon-chip ${q.chip}`} style={{ width: 40, height: 40 }}>
-                    <q.icon size={19} />
-                  </div>
-                  <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginTop: 6 }}>{q.label}</div>
-                  <div style={{ fontSize: 12, color: "var(--color-text-muted)", lineHeight: 1.4 }}>{q.desc}</div>
-                </button>
-              ))}
+              {QUICK_LINKS.map(q => {
+                const colors = CHIP_COLORS[q.chip] || CHIP_COLORS["icon-chip--green"];
+                return (
+                  <button key={q.label} onClick={() => navigate(q.to)}
+                    className="card card--interactive ql-tile"
+                    style={{
+                      textAlign: "left", padding: 18, cursor: "pointer",
+                      display: "flex", flexDirection: "column", gap: 6,
+                      borderLeft: `4px solid ${colors.border}`,
+                    }}>
+                    <div className={`icon-chip ${q.chip}`} style={{ width: 40, height: 40 }}>
+                      <q.icon size={19} />
+                    </div>
+                    <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, marginTop: 6 }}>{q.label}</div>
+                    <div style={{ fontSize: 12, color: "var(--color-text-muted)", lineHeight: 1.4 }}>{q.desc}</div>
+                  </button>
+                );
+              })}
             </div>
 
-            <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-              <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
+            <div>
+              <div style={{ marginBottom: 12 }}>
                 <span className="dot-label dot-label--green">Your bookings</span>
               </div>
               {isLoading ? (
-                <div style={{ padding: 32, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
+                <div className="card" style={{ padding: 32, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
               ) : bookings.length === 0 ? (
-                <div style={{ padding: 44, textAlign: "center" }}>
+                <div className="card" style={{ padding: 44, textAlign: "center" }}>
                   <div style={{ fontFamily: "var(--font-display)", fontSize: 18, fontWeight: 600, marginBottom: 6 }}>
                     No bookings yet
                   </div>
@@ -305,36 +347,68 @@ export default function PatientDashboardPage() {
                   </div>
                 </div>
               ) : (
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Hospital</th>
-                      <th>Doctor</th>
-                      <th>Date</th>
-                      <th>Time</th>
-                      <th>Token</th>
-                      <th>Reason</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {bookings.map(b => (
-                      <tr key={b.id}>
-                        <td style={{ fontWeight: 600 }}>{b.hospital}</td>
-                        <td style={{ fontSize: 12 }}>{b.doctor}</td>
-                        <td style={{ fontSize: 12 }}>{b.date}</td>
-                        <td style={{ fontSize: 12, fontWeight: 700 }}>{b.time || "—"}</td>
-                        <td style={{ fontWeight: 800, color: "var(--color-primary)" }}>{b.token_number ?? "—"}</td>
-                        <td style={{ fontSize: 12, color: "var(--color-text-muted)" }}>{b.chief_complaint || "—"}</td>
-                        <td>
-                          <span className={`badge ${BADGE[b.status] || "badge--neutral"}`}>
-                            {b.status?.replace("_", " ")}
+                <div style={{ display: "grid", gap: 12 }}>
+                  {bookings.map((b) => {
+                    const statusStyle = STATUS_COLORS[b.status] || { bg: "#F8F8F6", border: "var(--color-border)" };
+                    return (
+                      <div key={b.id} style={{
+                        borderRadius: 14, overflow: "hidden",
+                        border: `1.5px solid ${statusStyle.border}`,
+                        boxShadow: "0 2px 10px rgba(0,0,0,0.07)",
+                      }}>
+                        {/* Header strip */}
+                        <div style={{
+                          background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+                          padding: "12px 18px",
+                          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                        }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, color: "#fff" }}>
+                              {b.hospital}
+                            </div>
+                            <div style={{ fontSize: 12, color: "#8FA89A", marginTop: 3 }}>
+                              {b.doctor}{b.date ? ` · ${b.date}` : ""}{b.time ? ` · ${b.time}` : ""}
+                            </div>
+                          </div>
+                          <span className={`badge ${BADGE[b.status] || "badge--neutral"}`} style={{ flexShrink: 0 }}>
+                            {b.status?.replace(/_/g, " ")}
                           </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        </div>
+
+                        {/* Body */}
+                        <div style={{
+                          padding: "12px 18px", background: statusStyle.bg,
+                          display: "flex", alignItems: "center", gap: 16,
+                        }}>
+                          {b.token_number != null && (
+                            <div style={{
+                              flexShrink: 0, textAlign: "center",
+                              background: "#fff", border: "1px solid #EDD49A",
+                              borderRadius: 10, padding: "6px 14px",
+                            }}>
+                              <div style={{ fontSize: 9, fontWeight: 700, color: "#9B7B40", textTransform: "uppercase", letterSpacing: "0.07em" }}>Token</div>
+                              <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 22, color: "#C9A24B", lineHeight: 1.1 }}>
+                                #{b.token_number}
+                              </div>
+                            </div>
+                          )}
+                          {b.chief_complaint ? (
+                            <div style={{
+                              fontSize: 13, color: "var(--color-text-secondary)", fontStyle: "italic",
+                              borderLeft: `3px solid ${statusStyle.border}`, paddingLeft: 12, lineHeight: 1.5,
+                            }}>
+                              "{b.chief_complaint}"
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                              No chief complaint recorded
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           </>
