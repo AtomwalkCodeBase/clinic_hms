@@ -25,6 +25,7 @@ frontend/node_modules/
 frontend/dist/
 frontend/build/
 frontend/.env.local
+frontend/.env.production
 
 # Editors / OS
 .vscode/
