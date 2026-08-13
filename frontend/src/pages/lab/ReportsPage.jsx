@@ -9,6 +9,7 @@ import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useApi }    from "../../hooks/useApi";
 import API_ENDPOINTS from "../../config/api.config";
+import { dataUrlToBlob } from "../../utils/fileViewer";
 
 export default function ReportsPage() {
   const { data, isLoading } = useApi(API_ENDPOINTS.LAB.REQUESTS, { params: { status: "completed", page_size: 100 } });
@@ -54,11 +55,15 @@ export default function ReportsPage() {
                     </td>
                     <td>
                       {o.report?.file_data ? (
-                        <a href={o.report.file_data} target="_blank" rel="noreferrer"
-                          download={o.report.file_name || `${o.test_name}.pdf`}
-                          className="btn-outline" style={{ fontSize: 11, padding: "4px 10px", textDecoration: "none", display: "inline-block" }}>
+                        <button type="button"
+                          onClick={() => {
+                            const url = URL.createObjectURL(dataUrlToBlob(o.report.file_data));
+                            window.open(url, "_blank");
+                            setTimeout(() => URL.revokeObjectURL(url), 60000);
+                          }}
+                          className="btn-outline" style={{ fontSize: 11, padding: "4px 10px" }}>
                           View
-                        </a>
+                        </button>
                       ) : "—"}
                     </td>
                   </tr>

@@ -107,19 +107,13 @@ function HeroAppointment({ b, ownAwpid }) {
   const meta = STATUS_META[b.status] || STATUS_META.scheduled;
   return (
     <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 22 }}>
-      {/* Dark hero gradient header with radial gold glow */}
+      {/* Dark hero gradient header */}
       <div style={{
-        background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+        background: "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
         padding: "18px 24px",
         display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10,
         position: "relative", overflow: "hidden",
       }}>
-        {/* Gold glow */}
-        <div style={{
-          position: "absolute", width: 260, height: 260, borderRadius: "50%",
-          background: "radial-gradient(circle, rgba(201,162,75,0.18) 0%, transparent 70%)",
-          top: -100, right: -60, pointerEvents: "none",
-        }} />
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", position: "relative" }}>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#7EE0A8" }} />
           <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase" }}>
@@ -147,10 +141,10 @@ function HeroAppointment({ b, ownAwpid }) {
           {b.token_number != null && (
             <div style={{
               display: "flex", alignItems: "center", gap: 8, padding: "6px 16px", borderRadius: 12,
-              background: "#FFF8E1", border: "1.5px solid rgba(201,162,75,0.4)",
+              background: "#FFF8E1", border: "1.5px solid color-mix(in srgb, var(--color-accent) 40%, transparent)",
             }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#B07C24", textTransform: "uppercase", letterSpacing: "0.06em" }}>Token</span>
-              <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 22, color: "#C9A24B", lineHeight: 1 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--color-warning)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Token</span>
+              <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 22, color: "var(--color-accent)", lineHeight: 1 }}>
                 #{b.token_number}
               </span>
             </div>
@@ -201,13 +195,12 @@ function HeroAppointment({ b, ownAwpid }) {
                 width: 18, height: 18, borderRadius: "50%", flexShrink: 0,
                 display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10,
                 background: step.done
-                  ? "linear-gradient(135deg, #2C7A5A 0%, #1B5E43 100%)"
+                  ? "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)"
                   : step.active
-                  ? "linear-gradient(135deg, #C9A24B 0%, #B07C24 100%)"
+                  ? "linear-gradient(135deg, var(--color-accent) 0%, var(--color-warning) 100%)"
                   : "var(--color-border)",
                 color: step.done || step.active ? "#fff" : "var(--color-text-muted)",
                 fontWeight: 700,
-                boxShadow: step.done ? "0 1px 4px rgba(27,94,67,0.35)" : step.active ? "0 1px 4px rgba(201,162,75,0.35)" : "none",
               }}>
                 {step.done ? "✓" : step.active ? "•" : ""}
               </span>
@@ -284,7 +277,7 @@ function AppointmentCard({ b, onOpenPrescriptions, ownAwpid }) {
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 8 }}>
           {b.token_number != null ? (
-            <div style={{ fontSize: 12, fontWeight: 800, color: "#C9A24B", fontFamily: "var(--font-display)" }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "var(--color-accent)", fontFamily: "var(--font-display)" }}>
               Token #{b.token_number}
             </div>
           ) : <span />}
@@ -353,37 +346,30 @@ export default function PatientAppointmentsPage() {
             {/* CTA into the browse flow — proper hero card gradient */}
             <div style={{
               marginBottom: 22, borderRadius: "var(--radius-card)", overflow: "hidden",
-              background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+              background: "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
               display: "flex", alignItems: "center", justifyContent: "space-between",
               gap: 16, flexWrap: "wrap", position: "relative",
-              boxShadow: "var(--shadow-card)",
             }}>
-              {/* Gold glow */}
-              <div style={{
-                position: "absolute", width: 300, height: 300, borderRadius: "50%",
-                background: "radial-gradient(circle, rgba(201,162,75,0.16) 0%, transparent 70%)",
-                top: -120, right: -60, pointerEvents: "none",
-              }} />
               <div style={{ padding: "20px 24px", position: "relative" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 17, marginBottom: 4, color: "#C9A24B" }}>
-                  <Sparkles size={16} style={{ color: "#C9A24B" }} /> Find a doctor
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 17, marginBottom: 4, color: "var(--color-accent)" }}>
+                  <Sparkles size={16} style={{ color: "var(--color-accent)" }} /> Find a doctor
                 </div>
-                <div style={{ fontSize: 13, color: "#8FA89A", marginBottom: 10 }}>
+                <div style={{ fontSize: 13, color: "var(--color-hero-muted)", marginBottom: 10 }}>
                   Find a doctor near you and book your consultation in a couple of taps.
                 </div>
                 <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
                   {stats?.doctors > 0 && (
-                    <span style={{ fontSize: 12, fontWeight: 600, color: "#8FA89A", display: "flex", alignItems: "center", gap: 5 }}>
-                      <Users2 size={13} style={{ color: "#7FA091" }} /> {stats.doctors} doctors available
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--color-hero-muted)", display: "flex", alignItems: "center", gap: 5 }}>
+                      <Users2 size={13} style={{ color: "var(--color-hero-muted)" }} /> {stats.doctors} doctors available
                     </span>
                   )}
                   {stats?.hospitals > 0 && (
-                    <span style={{ fontSize: 12, fontWeight: 600, color: "#8FA89A", display: "flex", alignItems: "center", gap: 5 }}>
-                      <Building2 size={13} style={{ color: "#7FA091" }} /> {stats.hospitals} hospitals on the platform
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--color-hero-muted)", display: "flex", alignItems: "center", gap: 5 }}>
+                      <Building2 size={13} style={{ color: "var(--color-hero-muted)" }} /> {stats.hospitals} hospitals on the platform
                     </span>
                   )}
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "#8FA89A", display: "flex", alignItems: "center", gap: 5 }}>
-                    <CircleCheck size={13} style={{ color: "#7FA091" }} /> Instant confirmation
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--color-hero-muted)", display: "flex", alignItems: "center", gap: 5 }}>
+                    <CircleCheck size={13} style={{ color: "var(--color-hero-muted)" }} /> Instant confirmation
                   </span>
                 </div>
               </div>
@@ -392,10 +378,9 @@ export default function PatientAppointmentsPage() {
                   to={ROUTES.PATIENT.HOSPITALS}
                   style={{
                     display: "inline-flex", alignItems: "center", gap: 6, padding: "10px 24px",
-                    background: "linear-gradient(135deg, #C9A24B 0%, #B07C24 100%)",
+                    background: "linear-gradient(135deg, var(--color-accent) 0%, var(--color-warning) 100%)",
                     color: "#fff", fontWeight: 700, fontSize: 13, borderRadius: "var(--radius-button)",
                     textDecoration: "none", whiteSpace: "nowrap",
-                    boxShadow: "0 4px 14px rgba(201,162,75,0.35)",
                   }}
                 >
                   Find a doctor <ChevronRight size={15} />

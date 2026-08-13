@@ -20,6 +20,17 @@ import APP_CONFIG     from "../../config/app.config";
 import API_ENDPOINTS  from "../../config/api.config";
 import { ROUTES }     from "../../config/routes.config";
 import { sanitizeMobileInput, isValidMobile } from "../../utils/validation";
+import { getThemeById } from "../../config/themes.config";
+import { deriveThemeVars } from "../../utils/theme";
+
+// The login screen is shared brand identity, shown before any user is
+// signed in — it must always render in "Emerald Glass", never whatever
+// in-app theme a previous user on this browser last picked. ThemeProvider
+// applies the active theme's CSS vars globally on <html>, so we re-pin them
+// back to Emerald Glass right here on the root wrapper; CSS custom
+// properties cascade, so this override wins for this whole subtree without
+// touching ThemeProvider or any other page.
+const FIXED_BRAND_VARS = deriveThemeVars(getThemeById("emerald-glass"));
 
 const TABS = [
   { key: "staff",    label: "Staff" },
@@ -298,7 +309,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", display: "flex", background: "var(--color-bg)" }}>
+    <div style={{ minHeight: "100vh", display: "flex", background: "var(--color-bg)", ...FIXED_BRAND_VARS }}>
       <style>{`
         .aw-field:focus-within {
           border-color: var(--color-primary) !important;
@@ -329,7 +340,7 @@ export default function LoginPage() {
         flex: "0 0 42%",
         position: "relative",
         overflow: "hidden",
-        background: "radial-gradient(circle at 18% 14%, #16412c 0%, var(--color-hero) 48%, #071a10 100%)",
+        background: "radial-gradient(circle at 18% 14%, var(--color-hero-2) 0%, var(--color-hero) 48%, color-mix(in srgb, var(--color-hero) 65%, black 35%) 100%)",
         color: "var(--color-hero-text)",
         padding: "64px 56px",
         display: "flex",
@@ -345,7 +356,7 @@ export default function LoginPage() {
         {/* soft gold glow accent */}
         <div style={{
           position: "absolute", width: 420, height: 420, borderRadius: "50%",
-          background: "radial-gradient(circle, rgba(201,162,75,0.16) 0%, transparent 70%)",
+          background: "radial-gradient(circle, color-mix(in srgb, var(--color-accent) 16%, transparent) 0%, transparent 70%)",
           top: -120, right: -140, pointerEvents: "none",
         }} />
 
@@ -365,7 +376,7 @@ export default function LoginPage() {
         <div style={{ position: "relative" }}>
           <div style={{
             fontSize: 11, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase",
-            color: "#E8C77A", marginBottom: 16,
+            color: "var(--color-accent)", marginBottom: 16,
           }}>
             Cared, coordinated
           </div>
@@ -376,7 +387,7 @@ export default function LoginPage() {
             One system for every step of the patient journey.
           </h1>
           <p style={{
-            fontSize: 14.5, color: "#CBD8D0", lineHeight: 1.65, marginTop: 18, maxWidth: 380,
+            fontSize: 14.5, color: "color-mix(in srgb, var(--color-hero-text) 55%, var(--color-hero-muted) 45%)", lineHeight: 1.65, marginTop: 18, maxWidth: 380,
           }}>
             From booking to consultation to prescription — front desk, nurses, doctors
             and patients, all working off the same live record.
@@ -389,8 +400,8 @@ export default function LoginPage() {
               "A patient portal your patients actually use",
             ].map((line) => (
               <div key={line} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#E8C77A", flexShrink: 0 }} />
-                <span style={{ fontSize: 13.5, color: "#DCE6DF" }}>{line}</span>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-accent)", flexShrink: 0 }} />
+                <span style={{ fontSize: 13.5, color: "color-mix(in srgb, var(--color-hero-text) 70%, var(--color-hero-muted) 30%)" }}>{line}</span>
               </div>
             ))}
           </div>

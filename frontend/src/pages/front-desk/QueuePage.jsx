@@ -157,7 +157,10 @@ export default function FrontDeskQueuePage() {
                         {a.status === "scheduled" && (
                           <button className="btn-primary" style={{ fontSize: 11, padding: "5px 12px" }}
                             disabled={busy === a.id}
-                            onClick={() => moveStatus(a.id, "waiting")}>
+                            onClick={() => {
+                              if (!window.confirm(`Check in ${a.patient_name || "this patient"} (Token ${a.token_number})?`)) return;
+                              moveStatus(a.id, "waiting");
+                            }}>
                             Check In
                           </button>
                         )}
@@ -167,7 +170,10 @@ export default function FrontDeskQueuePage() {
                             color: "var(--color-error)", borderColor: "var(--color-error)",
                           }}
                             disabled={busy === a.id}
-                            onClick={() => moveStatus(a.id, "cancelled")}>
+                            onClick={() => {
+                              if (!window.confirm(`Cancel the appointment for ${a.patient_name || "this patient"} (Token ${a.token_number})? This cannot be undone.`)) return;
+                              moveStatus(a.id, "cancelled");
+                            }}>
                             Cancel
                           </button>
                         )}

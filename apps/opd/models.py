@@ -250,6 +250,12 @@ class PrescriptionItem(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     prescription = models.ForeignKey(Prescription, on_delete=models.CASCADE, related_name="items")
+    # Optional link back to the pharmacist-maintained catalog (apps.prescriptions.Drug).
+    # Nullable — a doctor can still type a drug that isn't in the catalog yet.
+    # SET_NULL rather than PROTECT: deactivating/removing a catalog entry must
+    # never block or corrupt a prescription already written against it.
+    drug = models.ForeignKey("prescriptions.Drug", on_delete=models.SET_NULL,
+                             null=True, blank=True, related_name="+")
     drug_name = models.CharField(max_length=255)
     generic_name = models.CharField(max_length=255, blank=True)
     dosage = models.CharField(max_length=50)          # e.g. "500mg", "1 tablet"

@@ -14,6 +14,7 @@ import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { Syringe, FlaskConical } from "lucide-react";
+import { dataUrlToBlob, openDataUrlInNewTab } from "../../utils/fileViewer";
 
 const TODAY = new Date().toISOString().split("T")[0];
 
@@ -156,7 +157,7 @@ function LabOrderRow({ order, onChoiceSaved }) {
 
       {order.report?.file_data && (
         <button type="button" className="btn-outline" style={{ fontSize: 11, padding: "3px 10px", marginTop: 8 }}
-          onClick={() => { const w = window.open(); if (w) w.location.href = order.report.file_data; }}>
+          onClick={() => { const url = URL.createObjectURL(dataUrlToBlob(order.report.file_data)); window.open(url, "_blank"); setTimeout(() => URL.revokeObjectURL(url), 60000); }}>
           View Report
         </button>
       )}
@@ -182,15 +183,18 @@ function ViewUploadedReportButton({ documentId }) {
   const [loading, setLoading] = useState(false);
 
   async function open() {
+    const win = window.open("", "_blank");
     setLoading(true);
     try {
       const res = await apiClient.get(API_ENDPOINTS.PATIENTS.DOCUMENT(documentId));
       const doc = res.data?.data || res.data;
       if (doc?.file_data) {
-        const win = window.open();
-        if (win) win.location.href = doc.file_data;
+        openDataUrlInNewTab(win, doc.file_data);
+      } else if (win) {
+        win.close();
       }
     } catch (err) {
+      if (win) win.close();
       toastApiError(err, "Could not load the report.");
     } finally {
       setLoading(false);

@@ -31,9 +31,9 @@ const BADGE = {
 
 // Map chip class to accent colors for left border + tint
 const CHIP_COLORS = {
-  "icon-chip--green": { border: "#1B5E43", tint: "#E9F1EC" },
+  "icon-chip--green": { border: "var(--color-primary)", tint: "var(--color-primary-light)" },
   "icon-chip--blue":  { border: "#2C5D7C", tint: "#E5EEF3" },
-  "icon-chip--gold":  { border: "#C9A24B", tint: "#FFF8E1" },
+  "icon-chip--gold":  { border: "var(--color-accent)", tint: "var(--color-accent-light)" },
   "icon-chip--rose":  { border: "#B3402E", tint: "#F9E7E3" },
 };
 
@@ -80,7 +80,7 @@ function HospitalResultCard({ h, onClick }) {
       <div style={{
         marginTop: "auto", padding: "10px 16px", borderTop: "1px solid var(--color-border)",
         fontSize: 12, fontWeight: 700,
-        background: "linear-gradient(135deg, #C9A24B 0%, #B07C24 100%)",
+        background: "linear-gradient(135deg, var(--color-accent) 0%, var(--color-warning) 100%)",
         color: "#fff",
       }}>
         View doctors →
@@ -189,7 +189,6 @@ export default function PatientDashboardPage() {
               style={{
                 width: "100%", boxSizing: "border-box", padding: "14px 16px 14px 42px", fontSize: 14,
                 borderRadius: 50, border: "none", background: "#fff", color: "var(--color-text)",
-                boxShadow: "0 2px 12px rgba(0,0,0,0.10)",
               }}
             />
           </div>
@@ -239,18 +238,18 @@ export default function PatientDashboardPage() {
               <div className="stat-label" style={{ marginTop: 2, color: "#C9D9E5" }}>Hospitals on the platform</div>
             </div>
             <div style={{
-              background: "rgba(27,94,67,0.18)", borderRadius: 12, padding: "12px 20px", minWidth: 140,
-              border: "1px solid rgba(27,94,67,0.25)",
+              background: "color-mix(in srgb, var(--color-primary) 18%, transparent)", borderRadius: 12, padding: "12px 20px", minWidth: 140,
+              border: "1px solid color-mix(in srgb, var(--color-primary) 25%, transparent)",
             }}>
-              <div className="hero-number" style={{ fontSize: 26, color: "#7FA091" }}>{stats ? stats.doctors : "—"}</div>
-              <div className="stat-label" style={{ marginTop: 2, color: "#B0D8BF" }}>Doctors available</div>
+              <div className="hero-number" style={{ fontSize: 26, color: "color-mix(in srgb, var(--color-primary) 60%, white 40%)" }}>{stats ? stats.doctors : "—"}</div>
+              <div className="stat-label" style={{ marginTop: 2, color: "color-mix(in srgb, var(--color-primary) 40%, white 60%)" }}>Doctors available</div>
             </div>
             <div style={{
-              background: "rgba(201,162,75,0.16)", borderRadius: 12, padding: "12px 20px", minWidth: 140,
-              border: "1px solid rgba(201,162,75,0.28)",
+              background: "color-mix(in srgb, var(--color-accent) 16%, transparent)", borderRadius: 12, padding: "12px 20px", minWidth: 140,
+              border: "1px solid color-mix(in srgb, var(--color-accent) 28%, transparent)",
             }}>
-              <div className="hero-number" style={{ fontSize: 26, color: "#C9A24B" }}>{isLoading ? "—" : upcoming.length}</div>
-              <div className="stat-label" style={{ marginTop: 2, color: "#D4B86A" }}>Upcoming visits</div>
+              <div className="hero-number" style={{ fontSize: 26, color: "var(--color-accent)" }}>{isLoading ? "—" : upcoming.length}</div>
+              <div className="stat-label" style={{ marginTop: 2, color: "color-mix(in srgb, var(--color-accent) 60%, white 40%)" }}>Upcoming visits</div>
             </div>
           </div>
         </div>
@@ -354,11 +353,10 @@ export default function PatientDashboardPage() {
                       <div key={b.id} style={{
                         borderRadius: 14, overflow: "hidden",
                         border: `1.5px solid ${statusStyle.border}`,
-                        boxShadow: "0 2px 10px rgba(0,0,0,0.07)",
                       }}>
                         {/* Header strip */}
                         <div style={{
-                          background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+                          background: "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
                           padding: "12px 18px",
                           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
                         }}>
@@ -366,7 +364,7 @@ export default function PatientDashboardPage() {
                             <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, color: "#fff" }}>
                               {b.hospital}
                             </div>
-                            <div style={{ fontSize: 12, color: "#8FA89A", marginTop: 3 }}>
+                            <div style={{ fontSize: 12, color: "var(--color-hero-muted)", marginTop: 3 }}>
                               {b.doctor}{b.date ? ` · ${b.date}` : ""}{b.time ? ` · ${b.time}` : ""}
                             </div>
                           </div>
@@ -387,7 +385,7 @@ export default function PatientDashboardPage() {
                               borderRadius: 10, padding: "6px 14px",
                             }}>
                               <div style={{ fontSize: 9, fontWeight: 700, color: "#9B7B40", textTransform: "uppercase", letterSpacing: "0.07em" }}>Token</div>
-                              <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 22, color: "#C9A24B", lineHeight: 1.1 }}>
+                              <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 22, color: "var(--color-accent)", lineHeight: 1.1 }}>
                                 #{b.token_number}
                               </div>
                             </div>

@@ -35,6 +35,7 @@ import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import ROUTES from "../../config/routes.config";
 import { usePatientContext } from "../../context/PatientContext";
+import { openDataUrlInNewTab } from "../../utils/fileViewer";
 import HealthSummaryCard from "./components/HealthSummaryCard";
 import VaccinationStats from "./components/VaccinationStats";
 import VaccinationSidebar, { RecommendedByDoctor } from "./components/VaccinationSidebar";
@@ -124,15 +125,18 @@ function ViewCertificateButton({ recordId }) {
   const [loading, setLoading] = useState(false);
 
   async function open() {
+    const win = window.open("", "_blank");
     setLoading(true);
     try {
       const res = await apiClient.get(API_ENDPOINTS.PORTAL.VACCINATION_FILE(recordId));
       const data = res.data?.data || res.data;
       if (data?.file_data) {
-        const win = window.open();
-        if (win) win.location.href = data.file_data;
+        openDataUrlInNewTab(win, data.file_data);
+      } else if (win) {
+        win.close();
       }
     } catch (err) {
+      if (win) win.close();
       toastApiError(err, "Could not load the certificate.");
     } finally {
       setLoading(false);
@@ -329,10 +333,10 @@ function VaccinationTimeline({ patientAwpid, vax, vaxLoading, refetchVax, upload
         >
           <div style={{
             width: 34, height: 34, borderRadius: 10,
-            background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+            background: "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
             display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
           }}>
-            <Calendar size={16} style={{ color: "#C9A24B" }} />
+            <Calendar size={16} style={{ color: "var(--color-accent)" }} />
           </div>
           <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, color: "var(--color-text)" }}>
             Vaccination Timeline
@@ -351,7 +355,6 @@ function VaccinationTimeline({ patientAwpid, vax, vaxLoading, refetchVax, upload
                 border: "none", borderRadius: 7,
                 background: viewMode === "age" ? "var(--color-surface)" : "transparent",
                 color: viewMode === "age" ? "var(--color-primary)" : "var(--color-text-muted)",
-                boxShadow: viewMode === "age" ? "0 1px 4px rgba(0,0,0,0.1)" : "none",
               }}
             >Group by age</button>
             <button
@@ -361,7 +364,6 @@ function VaccinationTimeline({ patientAwpid, vax, vaxLoading, refetchVax, upload
                 border: "none", borderRadius: 7,
                 background: viewMode === "date" ? "var(--color-surface)" : "transparent",
                 color: viewMode === "date" ? "var(--color-primary)" : "var(--color-text-muted)",
-                boxShadow: viewMode === "date" ? "0 1px 4px rgba(0,0,0,0.1)" : "none",
               }}
             >By date</button>
           </div>
@@ -665,7 +667,6 @@ function TabBar({ active, onChange, isAdult }) {
       display: "flex", gap: 4,
       marginBottom: 20,
       overflowX: "auto",
-      boxShadow: "var(--shadow-card)",
     }}>
       {tabs.map(tab => {
         const isActive = tab.id === active;
@@ -680,10 +681,9 @@ function TabBar({ active, onChange, isAdult }) {
               whiteSpace: "nowrap", transition: "all 0.15s ease",
               display: "inline-flex", alignItems: "center", gap: 7,
               background: isActive
-                ? "linear-gradient(135deg, #1B5E43 0%, #123828 100%)"
+                ? "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)"
                 : "transparent",
-              color: isActive ? "#F4F1E8" : "var(--color-text-muted)",
-              boxShadow: isActive ? "0 2px 8px rgba(15,61,43,0.25)" : "none",
+              color: isActive ? "var(--color-hero-text)" : "var(--color-text-muted)",
             }}
           >
             {Icon && <Icon size={15} />}
@@ -853,7 +853,6 @@ export default function PatientRecordsPage() {
                   border: "1px solid var(--color-border)",
                   borderRadius: 16,
                   overflow: "hidden",
-                  boxShadow: "var(--shadow-card)",
                 }}>
                   {/* Card header strip */}
                   <div style={{

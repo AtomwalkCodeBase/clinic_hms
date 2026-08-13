@@ -84,6 +84,7 @@ export const ROUTES = {
     PRESCRIPTIONS:      "/pharmacist/prescriptions",
     STOCK:              "/pharmacist/stock",
     TRANSACTIONS:       "/pharmacist/transactions",
+    CATALOG:            "/pharmacist/catalog",
     MY_PROFILE:         "/pharmacist/my-profile",
   },
 

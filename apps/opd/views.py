@@ -827,9 +827,25 @@ class PrescriptionItemView(APIView):
         except Prescription.DoesNotExist:
             return api_not_found("Prescription not found.")
 
-        serializer = PrescriptionItemSerializer(data=request.data)
+        # `drug` is looked up manually against the tenant DB rather than left
+        # to the serializer's auto-generated PrimaryKeyRelatedField, which
+        # would validate against the default connection — wrong database
+        # entirely under per-tenant physical DBs. Same pattern as LabRequest's
+        # `test` FK in apps/lab/views.py. A missing/invalid id is treated as
+        # "no catalog match" rather than a hard error, so a doctor can still
+        # save a free-text drug the pharmacist hasn't catalogued yet.
+        payload = dict(request.data)
+        drug_id = payload.pop("drug", None)
+        drug_obj = None
+        if drug_id:
+            from apps.prescriptions.models import Drug
+            drug_obj = Drug.objects.using(db).filter(pk=drug_id, is_active=True).first()
+
+        serializer = PrescriptionItemSerializer(data=payload)
         serializer.is_valid(raise_exception=True)
-        item = PrescriptionItem.objects.using(db).create(prescription=rx, **serializer.validated_data)
+        item = PrescriptionItem.objects.using(db).create(
+            prescription=rx, drug=drug_obj, **serializer.validated_data
+        )
         return Response(PrescriptionItemSerializer(item).data, status=201)
 
     def delete(self, request, pk, item_id):

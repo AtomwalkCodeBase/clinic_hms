@@ -20,6 +20,7 @@ import useApi from "../../../hooks/useApi";
 import apiClient from "../../../services/api.client";
 import API_ENDPOINTS from "../../../config/api.config";
 import { useToast } from "../../../hooks/useToast";
+import { openDataUrlInNewTab } from "../../../utils/fileViewer";
 
 const ICON_MAP = {
   stethoscope: Stethoscope,
@@ -52,15 +53,18 @@ function ViewFileButton({ label, fetchUrl }) {
   const [loading, setLoading] = useState(false);
 
   async function open() {
+    const win = window.open("", "_blank");
     setLoading(true);
     try {
       const res = await apiClient.get(fetchUrl);
       const data = res.data?.data || res.data;
       if (data?.file_data) {
-        const win = window.open();
-        if (win) win.location.href = data.file_data;
+        openDataUrlInNewTab(win, data.file_data);
+      } else if (win) {
+        win.close();
       }
     } catch (err) {
+      if (win) win.close();
       toastApiError(err, "Could not load that file.");
     } finally {
       setLoading(false);

@@ -316,7 +316,7 @@ export default function MyProfilePage() {
                 button against the photo. */}
             <ProfilePhotoUpload
               photo={profile?.photo} initials={initials} size={62} variant="dark"
-              avatarBorderColor="rgba(201,162,75,0.7)"
+              avatarBorderColor="color-mix(in srgb, var(--color-accent) 70%, transparent)"
               endpoint={API_ENDPOINTS.PORTAL.PROFILE}
               onUploaded={(newPhoto) => { setProfile(p => ({ ...p, photo: newPhoto })); refreshUser(); }}
             />

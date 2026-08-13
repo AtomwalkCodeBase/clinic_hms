@@ -38,12 +38,11 @@ export default function PatientPrescriptionsPage() {
           <div className="card" style={{ padding: 56, textAlign: "center" }}>
             <div style={{
               width: 72, height: 72, borderRadius: "50%", margin: "0 auto 18px",
-              background: "linear-gradient(135deg, #E9F1EC 0%, #D4E8DC 100%)",
-              border: "3px solid rgba(27,94,67,0.25)",
+              background: "linear-gradient(135deg, var(--color-primary-light) 0%, color-mix(in srgb, var(--color-primary-light) 55%, var(--color-primary) 45%) 100%)",
+              border: "3px solid color-mix(in srgb, var(--color-primary) 25%, transparent)",
               display: "flex", alignItems: "center", justifyContent: "center",
-              boxShadow: "0 4px 16px rgba(27,94,67,0.12)",
             }}>
-              <span style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 800, color: "#1B5E43" }}>Rx</span>
+              <span style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 800, color: "var(--color-primary)" }}>Rx</span>
             </div>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 18, fontWeight: 600, marginBottom: 6 }}>
               No prescriptions yet
@@ -58,22 +57,16 @@ export default function PatientPrescriptionsPage() {
               <div key={idx} className="card" style={{ padding: 0, overflow: "hidden" }}>
                 {/* Visit header — dark gradient strip */}
                 <div style={{
-                  background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+                  background: "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
                   padding: "13px 20px",
                   display: "flex", alignItems: "center", justifyContent: "space-between",
                   position: "relative", overflow: "hidden",
                 }}>
-                  {/* Subtle gold glow */}
-                  <div style={{
-                    position: "absolute", width: 180, height: 180, borderRadius: "50%",
-                    background: "radial-gradient(circle, rgba(201,162,75,0.14) 0%, transparent 70%)",
-                    top: -80, right: -40, pointerEvents: "none",
-                  }} />
                   <div style={{ position: "relative" }}>
                     <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, color: "#fff" }}>
                       {r.hospital}
                     </div>
-                    <div style={{ fontSize: 12, color: "#8FA89A", marginTop: 2 }}>
+                    <div style={{ fontSize: 12, color: "var(--color-hero-muted)", marginTop: 2 }}>
                       Dr. {r.doctor} · {r.date}{r.time ? ` · ${r.time}` : ""}
                     </div>
                   </div>
@@ -132,7 +125,6 @@ export default function PatientPrescriptionsPage() {
                       borderLeft: "4px solid var(--color-warning)",
                       borderRadius: "0 10px 10px 0",
                       padding: "12px 16px",
-                      boxShadow: "inset 2px 0 0 rgba(176,124,36,0.12)",
                     }}>
                       <div style={{ fontWeight: 700, fontSize: 13, color: "var(--color-warning)", marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
                         <FlaskConical size={15} style={{ flexShrink: 0 }} />
@@ -145,11 +137,10 @@ export default function PatientPrescriptionsPage() {
                   {/* Advice + follow-up — green gradient box */}
                   {(r.advice || r.follow_up_in_days) && (
                     <div style={{
-                      background: "linear-gradient(135deg, #E9F1EC 0%, #E0EEE5 100%)",
+                      background: "linear-gradient(135deg, var(--color-primary-light) 0%, color-mix(in srgb, var(--color-primary-light) 55%, var(--color-primary) 45%) 100%)",
                       borderLeft: "4px solid var(--color-success)",
                       borderRadius: "0 10px 10px 0",
                       padding: "12px 16px",
-                      boxShadow: "inset 2px 0 0 rgba(27,94,67,0.12)",
                     }}>
                       {r.advice && (
                         <div style={{ fontSize: 13, marginBottom: r.follow_up_in_days ? 6 : 0, color: "var(--color-text)" }}>

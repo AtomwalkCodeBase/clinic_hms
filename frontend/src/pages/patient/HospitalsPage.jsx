@@ -20,8 +20,8 @@ export default function PatientHospitalsPage() {
     <AppShell>
       <PageShell title="Find a Hospital">
         <style>{`
-          .hospital-card { transition: transform 160ms ease, box-shadow 160ms ease; }
-          .hospital-card:hover { transform: translateY(-3px); box-shadow: 0 12px 32px rgba(0,0,0,0.12) !important; }
+          .hospital-card { transition: transform 160ms ease; }
+          .hospital-card:hover { transform: translateY(-3px); }
         `}</style>
         <p style={{ color: "var(--color-text-secondary)", fontSize: 13, marginBottom: 20, marginTop: -8 }}>
           Choose a hospital to see its doctors and book an appointment.
@@ -57,17 +57,11 @@ export default function PatientHospitalsPage() {
               >
                 {/* Dark gradient header strip */}
                 <div style={{
-                  background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+                  background: "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
                   padding: "18px 20px",
                   display: "flex", alignItems: "center", gap: 12,
                   position: "relative", overflow: "hidden",
                 }}>
-                  {/* Gold glow */}
-                  <div style={{
-                    position: "absolute", width: 160, height: 160, borderRadius: "50%",
-                    background: "radial-gradient(circle, rgba(201,162,75,0.18) 0%, transparent 70%)",
-                    top: -60, right: -40, pointerEvents: "none",
-                  }} />
                   <div style={{
                     width: 44, height: 44, borderRadius: 12, flexShrink: 0,
                     background: "rgba(255,255,255,0.14)",
@@ -81,7 +75,7 @@ export default function PatientHospitalsPage() {
                     <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, color: "#fff", lineHeight: 1.25 }}>
                       {h.name}
                     </div>
-                    <div style={{ fontSize: 12, color: "#8FA89A", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                    <div style={{ fontSize: 12, color: "var(--color-hero-muted)", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
                       <MapPin size={11} style={{ flexShrink: 0 }} />
                       {[h.city, h.state].filter(Boolean).join(", ") || "Location not listed"}
                     </div>
@@ -113,8 +107,8 @@ export default function PatientHospitalsPage() {
                     <div style={{
                       display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8,
                       padding: "7px 16px", borderRadius: 20, fontSize: 12, fontWeight: 700,
-                      background: "linear-gradient(135deg, #C9A24B 0%, #B07C24 100%)",
-                      color: "#fff", boxShadow: "0 2px 8px rgba(201,162,75,0.30)",
+                      background: "linear-gradient(135deg, var(--color-accent) 0%, var(--color-warning) 100%)",
+                      color: "#fff",
                     }}>
                       View doctors →
                     </div>

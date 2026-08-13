@@ -25,7 +25,6 @@ function SectionCard({ headerBg, headerIcon, headerIconBg, title, children, styl
     <div style={{
       borderRadius: 16, overflow: "hidden",
       border: "1px solid var(--color-border)",
-      boxShadow: "0 2px 12px rgba(15,61,43,0.07)",
       ...style,
     }}>
       {/* Gradient header */}
@@ -38,13 +37,12 @@ function SectionCard({ headerBg, headerIcon, headerIconBg, title, children, styl
           width: 30, height: 30, borderRadius: 9,
           background: headerIconBg,
           display: "flex", alignItems: "center", justifyContent: "center",
-          boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
         }}>
           {headerIcon}
         </div>
         <span style={{
           fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 14,
-          color: "#F4F1E8",
+          color: "var(--color-hero-text)",
         }}>
           {title}
         </span>
@@ -106,10 +104,10 @@ export function RecommendedByDoctor({ roadmap }) {
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                         <div style={{
                           width: 26, height: 26, borderRadius: "50%",
-                          background: "linear-gradient(135deg, #2C7A5A 0%, #1B5E43 100%)",
+                          background: "linear-gradient(135deg, var(--color-hero-2) 0%, var(--color-hero) 100%)",
                           color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
                           fontSize: 11, fontWeight: 700, flexShrink: 0,
-                          border: "2px solid rgba(27,94,67,0.25)",
+                          border: "2px solid color-mix(in srgb, var(--color-primary) 25%, transparent)",
                         }}>
                           {docInitial}
                         </div>
@@ -158,7 +156,6 @@ export function RecommendedByDoctor({ roadmap }) {
                         background: "linear-gradient(135deg, #B07C24 0%, #7A5418 100%)",
                         color: "#fff", border: "none", borderRadius: 9, cursor: "pointer",
                         display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                        boxShadow: "0 3px 8px rgba(176,124,36,0.3)",
                       }}
                     >
                       <Calendar size={13} /> Book Appointment
@@ -182,14 +179,14 @@ export default function VaccinationSidebar({ patientAwpid, onOpenUpload }) {
 
       {/* ── Update Your Records ───────────────────────────────────── */}
       <SectionCard
-        headerBg="linear-gradient(135deg, #1B5E43 0%, #123828 100%)"
+        headerBg="linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)"
         headerIconBg="rgba(255,255,255,0.12)"
-        headerIcon={<Upload size={14} color="#C9A24B" />}
+        headerIcon={<Upload size={14} color="var(--color-accent)" />}
         title="Update Your Records"
       >
         {!bannerDismissed && (
           <div style={{
-            background: "linear-gradient(135deg, #E9F1EC 0%, #F4F1E8 100%)",
+            background: "linear-gradient(135deg, var(--color-primary-light) 0%, var(--color-hero-text) 100%)",
             border: "1px solid var(--color-success-light)",
             borderRadius: 10, padding: "10px 12px", marginBottom: 14,
             display: "flex", alignItems: "flex-start", gap: 8,
@@ -214,7 +211,6 @@ export default function VaccinationSidebar({ patientAwpid, onOpenUpload }) {
             background: "var(--color-primary)", color: "#fff",
             border: "none", borderRadius: 10, cursor: "pointer",
             display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
-            boxShadow: "0 3px 8px rgba(27,94,67,0.25)",
             marginBottom: 12,
           }}
         >
@@ -281,7 +277,7 @@ export default function VaccinationSidebar({ patientAwpid, onOpenUpload }) {
       <SectionCard
         headerBg="linear-gradient(135deg, #4A3010 0%, #7A5418 100%)"
         headerIconBg="rgba(255,255,255,0.12)"
-        headerIcon={<Lightbulb size={14} color="#C9A24B" />}
+        headerIcon={<Lightbulb size={14} color="var(--color-accent)" />}
         title="Helpful Tips"
       >
         <div style={{ display: "grid", gap: 10 }}>

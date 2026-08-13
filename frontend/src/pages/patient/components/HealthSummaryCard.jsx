@@ -27,8 +27,8 @@ export default function HealthSummaryCard({
     return (
       <div style={{
         borderRadius: 20, marginBottom: 20, overflow: "hidden",
-        background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
-        padding: "28px 28px 24px", color: "#8FA89A", fontSize: 13,
+        background: "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
+        padding: "28px 28px 24px", color: "var(--color-hero-muted)", fontSize: 13,
       }}>
         Loading patient profile…
       </div>
@@ -39,8 +39,8 @@ export default function HealthSummaryCard({
     return (
       <div style={{
         borderRadius: 20, marginBottom: 20, overflow: "hidden",
-        background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
-        padding: "28px 28px 24px", color: "#8FA89A", fontSize: 13,
+        background: "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
+        padding: "28px 28px 24px", color: "var(--color-hero-muted)", fontSize: 13,
       }}>
         Could not load patient profile right now.
       </div>
@@ -62,32 +62,23 @@ export default function HealthSummaryCard({
   const noVaxHistory = !isAdult && (vax ? (vax.total_count > 0 && vax.completed_count === 0) : true);
 
   return (
-    <div style={{ borderRadius: 20, marginBottom: 20, overflow: "hidden", boxShadow: "0 12px 32px rgba(15,61,43,0.22)" }}>
+    <div style={{ borderRadius: 20, marginBottom: 20, overflow: "hidden" }}>
       {/* ── Dark gradient hero section ─────────────────────────────── */}
       <div style={{
-        background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+        background: "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
         padding: "24px 28px 22px",
         position: "relative",
         overflow: "hidden",
       }}>
-        {/* subtle radial glow */}
-        <div style={{
-          position: "absolute", top: -40, right: -40,
-          width: 200, height: 200, borderRadius: "50%",
-          background: "radial-gradient(circle, rgba(201,162,75,0.12) 0%, transparent 70%)",
-          pointerEvents: "none",
-        }} />
-
         <div style={{ display: "flex", alignItems: "center", gap: 20, position: "relative" }}>
           {/* Avatar */}
           <div style={{
             width: 72, height: 72, borderRadius: "50%", flexShrink: 0,
             overflow: "hidden", position: "relative",
-            border: "3px solid rgba(201,162,75,0.55)",
-            boxShadow: "0 0 0 4px rgba(201,162,75,0.15), 0 8px 20px rgba(0,0,0,0.3)",
-            background: "linear-gradient(135deg, #2C7A5A 0%, #1B5E43 100%)",
+            border: "3px solid color-mix(in srgb, var(--color-accent) 55%, transparent)",
+            background: "linear-gradient(135deg, var(--color-hero-2) 0%, var(--color-hero) 100%)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            color: "#F4F1E8", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 28,
+            color: "var(--color-hero-text)", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 28,
           }}>
             {photo
               ? <img src={photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -98,11 +89,11 @@ export default function HealthSummaryCard({
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{
               fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 22,
-              color: "#F4F1E8", letterSpacing: "-0.01em", lineHeight: 1.2,
+              color: "var(--color-hero-text)", letterSpacing: "-0.01em", lineHeight: 1.2,
             }}>
               {name ?? "—"}
             </div>
-            <div style={{ fontSize: 13, color: "#8FA89A", marginTop: 5, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 13, color: "var(--color-hero-muted)", marginTop: 5, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
               {[ageLabel, genderLabel].filter(Boolean).map((t, i) => (
                 <span key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
                   {i > 0 && <span style={{ opacity: 0.4 }}>•</span>}
@@ -112,14 +103,14 @@ export default function HealthSummaryCard({
             </div>
             {hospitalName && (
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-                <Building2 size={12} style={{ color: "#C9A24B", flexShrink: 0 }} />
-                <span style={{ fontSize: 12, color: "#C9A24B", fontWeight: 500 }}>{hospitalName}</span>
+                <Building2 size={12} style={{ color: "var(--color-accent)", flexShrink: 0 }} />
+                <span style={{ fontSize: 12, color: "var(--color-accent)", fontWeight: 500 }}>{hospitalName}</span>
               </div>
             )}
             {lastVisitDate && (
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-                <CalendarDays size={12} style={{ color: "#8FA89A", flexShrink: 0 }} />
-                <span style={{ fontSize: 12, color: "#8FA89A" }}>Last visit: {lastVisitDate}</span>
+                <CalendarDays size={12} style={{ color: "var(--color-hero-muted)", flexShrink: 0 }} />
+                <span style={{ fontSize: 12, color: "var(--color-hero-muted)" }}>Last visit: {lastVisitDate}</span>
               </div>
             )}
           </div>
@@ -130,15 +121,15 @@ export default function HealthSummaryCard({
       {noVaxHistory && !bannerDismissed && (
         <div style={{
           background: "#FFFDF5",
-          borderTop: "1px solid rgba(201,162,75,0.25)",
+          borderTop: "1px solid color-mix(in srgb, var(--color-accent) 25%, transparent)",
           padding: "14px 24px",
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap",
         }}>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#1A1F1B", marginBottom: 2 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text)", marginBottom: 2 }}>
               Vaccination history not complete
             </div>
-            <div style={{ fontSize: 12, color: "#8A9088" }}>
+            <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
               Add previous records to get a personalised recommendation.
             </div>
           </div>
@@ -156,7 +147,7 @@ export default function HealthSummaryCard({
             </button>
             <button
               onClick={() => setBannerDismissed(true)}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "#8A9088", display: "flex", padding: 2 }}
+              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)", display: "flex", padding: 2 }}
             >
               <X size={14} />
             </button>

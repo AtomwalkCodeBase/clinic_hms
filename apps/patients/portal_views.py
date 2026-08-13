@@ -1299,9 +1299,32 @@ class PortalProfileView(APIView):
             acct.full_name = full_name
             fields.append("full_name")
         if "mobile" in d:
+            from apps.registry.models import PatientIdentity
+            from core.utils.hashing import hash_mobile, normalize_mobile
+
             mobile = (d.get("mobile") or "").strip()
             if mobile and not re.match(r"^\d{10}$", mobile):
                 return error("Enter a valid 10-digit mobile number.", errors={"mobile": "Invalid format."})
+            if mobile and PatientAccount.objects.using("default").filter(mobile=mobile).exclude(pk=acct.id).exists():
+                return error("Another account already uses this mobile number.", errors={"mobile": "Already in use."})
+
+            # Keep the network-wide PatientIdentity.mobile_hash in sync — it's
+            # what front desk's cross-hospital dedup search actually queries
+            # (see PatientService.lookup_by_mobile). Without this, a patient
+            # who changes their number here still shows up to every
+            # hospital's "Find Patient" search under their OLD number, and a
+            # search for their new number comes back "No patient found" even
+            # though their portal profile displays it correctly.
+            if mobile:
+                mobile_hash = hash_mobile(normalize_mobile(mobile))
+                # mobile_hash is unique at the DB level — check for a
+                # collision against another identity (e.g. a walk-in-only
+                # patient with no portal account of their own) before
+                # writing, so this returns a clean 400 instead of a 500.
+                if PatientIdentity.objects.using("default").filter(mobile_hash=mobile_hash).exclude(awpid=acct.awpid).exists():
+                    return error("Another patient record already uses this mobile number.", errors={"mobile": "Already in use."})
+                PatientIdentity.objects.using("default").filter(awpid=acct.awpid).update(mobile_hash=mobile_hash)
+
             acct.mobile = mobile
             fields.append("mobile")
         if "gender" in d:

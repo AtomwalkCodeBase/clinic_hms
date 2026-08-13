@@ -157,6 +157,7 @@ export const API_ENDPOINTS = {
     DETAIL:     (id) => `${API_V1}/prescriptions/${id}/`,
     FINALIZE:   (id) => `${API_V1}/prescriptions/${id}/finalize/`,
     DRUGS:            `${API_V1}/prescriptions/drugs/`,
+    DRUG_ITEM:  (id) => `${API_V1}/prescriptions/drugs/${id}/`,
     DRUG_SEARCH:      `${API_V1}/prescriptions/drugs/search/`,
   },
 

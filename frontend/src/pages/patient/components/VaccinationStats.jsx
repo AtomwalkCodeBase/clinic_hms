@@ -15,19 +15,19 @@ function nextUpcoming(roadmap) {
 
 const CARD_THEMES = {
   completed: {
-    bg: "linear-gradient(135deg, #E9F1EC 0%, #F4F1E8 100%)",
-    iconBg: "#1B5E43",
+    bg: "linear-gradient(135deg, var(--color-primary-light) 0%, var(--color-bg) 100%)",
+    iconBg: "var(--color-primary)",
     iconColor: "#fff",
-    numColor: "#1B5E43",
-    labelColor: "#1B5E43",
-    border: "#C2DFCb",
+    numColor: "var(--color-primary)",
+    labelColor: "var(--color-primary)",
+    border: "color-mix(in srgb, var(--color-primary) 30%, white)",
   },
   upcoming: {
     bg: "linear-gradient(135deg, #FEF3DC 0%, #FFF9EF 100%)",
-    iconBg: "#B07C24",
+    iconBg: "var(--color-warning)",
     iconColor: "#fff",
     numColor: "#7A5418",
-    labelColor: "#B07C24",
+    labelColor: "var(--color-warning)",
     border: "#EDD49A",
   },
   needs_review: {
@@ -58,7 +58,6 @@ function StatCard({ icon: Icon, theme, value, label, subtext }) {
       padding: "18px 20px",
       display: "flex", flexDirection: "column", gap: 0,
       position: "relative", overflow: "hidden",
-      boxShadow: "0 2px 8px rgba(15,61,43,0.06)",
     }}>
       {/* Background circle decoration */}
       <div style={{
@@ -73,7 +72,6 @@ function StatCard({ icon: Icon, theme, value, label, subtext }) {
         width: 38, height: 38, borderRadius: 12,
         background: t.iconBg, color: t.iconColor,
         display: "flex", alignItems: "center", justifyContent: "center",
-        boxShadow: `0 4px 10px ${t.iconBg}44`,
         marginBottom: 12, flexShrink: 0,
       }}>
         <Icon size={18} />

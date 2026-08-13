@@ -33,16 +33,11 @@ export default function PatientHospitalDoctorsPage() {
         {hospital && (
           <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 16 }}>
             <div style={{
-              background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+              background: "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
               padding: "16px 20px",
               display: "flex", alignItems: "center", gap: 14,
               position: "relative", overflow: "hidden",
             }}>
-              <div style={{
-                position: "absolute", width: 200, height: 200, borderRadius: "50%",
-                background: "radial-gradient(circle, rgba(201,162,75,0.16) 0%, transparent 70%)",
-                top: -80, right: -50, pointerEvents: "none",
-              }} />
               <div style={{
                 width: 48, height: 48, borderRadius: 12, flexShrink: 0,
                 background: "rgba(255,255,255,0.14)",
@@ -57,7 +52,7 @@ export default function PatientHospitalDoctorsPage() {
                   {hospital.name}
                 </div>
                 {(hospital.city || hospital.state) && (
-                  <div style={{ fontSize: 12, color: "#8FA89A", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                  <div style={{ fontSize: 12, color: "var(--color-hero-muted)", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
                     <MapPin size={11} />
                     {[hospital.city, hospital.state].filter(Boolean).join(", ")}
                   </div>

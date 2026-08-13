@@ -40,12 +40,11 @@ function StepProgress({ current }) {
               display: "flex", alignItems: "center", justifyContent: "center",
               fontSize: 11, fontWeight: 700,
               background: i < current
-                ? "linear-gradient(135deg, #2C7A5A 0%, #1B5E43 100%)"
+                ? "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)"
                 : i === current
-                ? "linear-gradient(135deg, #1B5E43 0%, #123828 100%)"
+                ? "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)"
                 : "var(--color-border)",
               color: i <= current ? "#fff" : "var(--color-text-muted)",
-              boxShadow: i <= current ? "0 2px 6px rgba(15,61,43,0.3)" : "none",
             }}>
               {i < current ? "✓" : i + 1}
             </div>
@@ -209,16 +208,15 @@ export default function PatientDoctorProfilePage() {
               style={{
                 padding: "7px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 700,
                 cursor: s.available ? "pointer" : "not-allowed",
-                border: `1.5px solid ${isSelected ? "#1B5E43" : s.available ? "var(--color-success)" : "var(--color-border)"}`,
+                border: `1.5px solid ${isSelected ? "var(--color-primary)" : s.available ? "var(--color-success)" : "var(--color-border)"}`,
                 background: isSelected
-                  ? "linear-gradient(135deg, #2C7A5A 0%, #1B5E43 100%)"
+                  ? "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)"
                   : s.available
                   ? "var(--color-success-light)"
                   : "var(--color-surface-secondary, #f6f4ee)",
                 color: isSelected ? "#fff" : s.available ? "var(--color-success)" : "var(--color-text-muted)",
                 textDecoration: s.available ? "none" : "line-through",
                 transition: "all 120ms ease",
-                boxShadow: isSelected ? "0 2px 8px rgba(27,94,67,0.35)" : "none",
               }}
             >
               {s.time}
@@ -265,25 +263,18 @@ export default function PatientDoctorProfilePage() {
             <div className="card" style={{ padding: 0, overflow: "hidden" }}>
               {/* Full dark green gradient hero header */}
               <div style={{
-                background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+                background: "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
                 padding: "32px 24px 24px", display: "flex", flexDirection: "column", alignItems: "center",
                 position: "relative", overflow: "hidden",
               }}>
-                {/* Radial gold glow */}
-                <div style={{
-                  position: "absolute", width: 280, height: 280, borderRadius: "50%",
-                  background: "radial-gradient(circle, rgba(201,162,75,0.20) 0%, transparent 68%)",
-                  top: -100, right: -80, pointerEvents: "none",
-                }} />
                 <div style={{ position: "relative", marginBottom: 16 }}>
                   {/* Avatar with large gold ring */}
                   <div style={{
                     width: 88, height: 88, borderRadius: "50%",
-                    border: "3px solid rgba(201,162,75,0.55)",
+                    border: "3px solid color-mix(in srgb, var(--color-accent) 55%, transparent)",
                     background: "#fff",
                     display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32, fontWeight: 700,
                     color: "var(--color-primary)", overflow: "hidden",
-                    boxShadow: "0 8px 24px rgba(0,0,0,.30), 0 0 0 6px rgba(201,162,75,0.15)",
                   }}>
                     {doctor?.photo
                       ? <img src={doctor.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -294,7 +285,7 @@ export default function PatientDoctorProfilePage() {
                       position: "absolute", bottom: -10, left: "50%", transform: "translateX(-50%)",
                       background: "var(--color-success)", whiteSpace: "nowrap",
                       color: "#fff", fontSize: 10, fontWeight: 700, padding: "4px 11px", borderRadius: 12,
-                      display: "flex", alignItems: "center", gap: 5, boxShadow: "0 2px 6px rgba(0,0,0,.3)",
+                      display: "flex", alignItems: "center", gap: 5,
                       border: "2px solid rgba(255,255,255,0.3)",
                     }}>
                       <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#fff", flexShrink: 0 }} /> Available today
@@ -304,7 +295,7 @@ export default function PatientDoctorProfilePage() {
                 <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 22, color: "#fff", textAlign: "center", marginTop: availableToday ? 10 : 0, position: "relative" }}>
                   {doctor?.name}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#C9A24B", marginTop: 4, position: "relative" }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--color-accent)", marginTop: 4, position: "relative" }}>
                   {doctor?.specialisation || "Specialisation not listed yet"}
                 </div>
               </div>
@@ -366,10 +357,10 @@ export default function PatientDoctorProfilePage() {
                   <div style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between",
                     padding: "12px 16px", borderRadius: 10, background: "#FFF8E1",
-                    border: "1px solid rgba(201,162,75,0.35)", marginBottom: 16,
+                    border: "1px solid color-mix(in srgb, var(--color-accent) 35%, transparent)", marginBottom: 16,
                   }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: "#B07C24" }}>Consultation fee</span>
-                    <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 18, color: "#C9A24B" }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--color-warning)" }}>Consultation fee</span>
+                    <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 18, color: "var(--color-accent)" }}>
                       ₹{doctor.consultation_fee}
                     </span>
                   </div>
@@ -603,9 +594,8 @@ export default function PatientDoctorProfilePage() {
                   border: "none", borderRadius: "var(--radius-button)", cursor: !date || !selectedSlot || booking ? "not-allowed" : "pointer",
                   background: !date || !selectedSlot || booking
                     ? "var(--color-border)"
-                    : "linear-gradient(135deg, #C9A24B 0%, #B07C24 100%)",
+                    : "linear-gradient(135deg, var(--color-accent) 0%, var(--color-warning) 100%)",
                   color: !date || !selectedSlot || booking ? "var(--color-text-muted)" : "#fff",
-                  boxShadow: !date || !selectedSlot || booking ? "none" : "0 4px 14px rgba(201,162,75,0.40)",
                   transition: "all 140ms ease",
                 }}
                 disabled={!date || !selectedSlot || booking}

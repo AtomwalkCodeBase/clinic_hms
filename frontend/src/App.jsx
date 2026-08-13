@@ -77,6 +77,7 @@ const LabCatalog   = lazy(() => import("./pages/lab/CatalogPage"));
 const PharmacistDashboard     = lazy(() => import("./pages/pharmacist/DashboardPage"));
 const PharmacistPrescriptions = lazy(() => import("./pages/pharmacist/PrescriptionsPage"));
 const PharmacistStock         = lazy(() => import("./pages/pharmacist/StockPage"));
+const PharmacistCatalog       = lazy(() => import("./pages/pharmacist/CatalogPage"));
 
 // Shared — generic self-service "My Profile" (photo upload) for any
 // non-doctor staff role. Doctor has its own richer version.
@@ -261,6 +262,8 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><PharmacistPrescriptions /></ProtectedRoute>} />
           <Route path={ROUTES.PHARMACIST.STOCK}
             element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><PharmacistStock /></ProtectedRoute>} />
+          <Route path={ROUTES.PHARMACIST.CATALOG}
+            element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><PharmacistCatalog /></ProtectedRoute>} />
           <Route path={ROUTES.PHARMACIST.MY_PROFILE}
             element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><SharedMyProfile /></ProtectedRoute>} />
 

@@ -321,7 +321,7 @@ function WeekBars({ data = [] }) {
             height: `${Math.max((v / max) * 80, 4)}%`,
             borderRadius: "6px 6px 2px 2px",
             background: i === values.length - 1
-              ? "linear-gradient(180deg, var(--color-accent), #B08A38)"
+              ? "linear-gradient(180deg, var(--color-accent), var(--color-warning))"
               : "linear-gradient(180deg, var(--color-primary), var(--color-primary-dark))",
             opacity: i === values.length - 1 ? 1 : 0.55,
             transition: "height 300ms ease",

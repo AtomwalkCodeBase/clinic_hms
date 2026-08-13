@@ -17,6 +17,7 @@ import { useToast }  from "../../hooks/useToast";
 import apiClient      from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { usePatientContext } from "../../context/PatientContext";
+import { openDataUrlInNewTab } from "../../utils/fileViewer";
 
 const DOC_TYPES = [
   { value: "lab_report",        label: "Lab Report" },
@@ -152,15 +153,18 @@ function ViewInHouseReportButton({ tenantDb, requestId }) {
   const [loading, setLoading] = useState(false);
 
   async function open() {
+    const win = window.open("", "_blank");
     setLoading(true);
     try {
       const res = await apiClient.get(API_ENDPOINTS.PORTAL.LAB_REPORT_FILE(tenantDb, requestId));
       const data = res.data?.data || res.data;
       if (data?.file_data) {
-        const win = window.open();
-        if (win) win.location.href = data.file_data;
+        openDataUrlInNewTab(win, data.file_data);
+      } else if (win) {
+        win.close();
       }
     } catch (err) {
+      if (win) win.close();
       toastApiError(err, "Could not load the report.");
     } finally {
       setLoading(false);
@@ -226,21 +230,16 @@ function LabOrderCard({ order, onChanged }) {
     <div className="card" style={{ padding: 0, overflow: "hidden" }}>
       {/* Dark gradient strip header */}
       <div style={{
-        background: "linear-gradient(135deg, #1B5E43 0%, #123828 100%)",
+        background: "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
         padding: "12px 20px",
         display: "flex", alignItems: "center", justifyContent: "space-between",
         position: "relative", overflow: "hidden",
       }}>
-        <div style={{
-          position: "absolute", width: 160, height: 160, borderRadius: "50%",
-          background: "radial-gradient(circle, rgba(201,162,75,0.14) 0%, transparent 70%)",
-          top: -60, right: -30, pointerEvents: "none",
-        }} />
         <div style={{ position: "relative" }}>
           <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, color: "#fff" }}>
             {order.test_name}
           </div>
-          <div style={{ fontSize: 11, color: "#8FA89A", marginTop: 2 }}>
+          <div style={{ fontSize: 11, color: "var(--color-hero-muted)", marginTop: 2 }}>
             {order.hospital}{order.ordered_at ? ` · ordered ${new Date(order.ordered_at).toLocaleDateString("en-IN")}` : ""}
           </div>
         </div>
@@ -266,7 +265,7 @@ function LabOrderCard({ order, onChanged }) {
         {/* Result delivered — show it and stop, regardless of path taken */}
         {delivered ? (
           <div style={{
-            background: "linear-gradient(135deg, #E9F1EC 0%, #E0EEE5 100%)",
+            background: "linear-gradient(135deg, var(--color-primary-light) 0%, color-mix(in srgb, var(--color-primary-light) 55%, var(--color-primary) 45%) 100%)",
             borderLeft: "4px solid var(--color-success)",
             borderRadius: "0 10px 10px 0", padding: "12px 16px",
           }}>
@@ -301,7 +300,7 @@ function LabOrderCard({ order, onChanged }) {
           <div>
             {order.attached_document ? (
               <div style={{
-                background: "linear-gradient(135deg, #E9F1EC 0%, #E0EEE5 100%)",
+                background: "linear-gradient(135deg, var(--color-primary-light) 0%, color-mix(in srgb, var(--color-primary-light) 55%, var(--color-primary) 45%) 100%)",
                 borderLeft: "4px solid var(--color-success)",
                 borderRadius: "0 10px 10px 0", padding: "10px 14px", fontSize: 13, color: "#166534",
               }}>
@@ -461,7 +460,6 @@ export default function PatientLabReportsPage() {
               background: "linear-gradient(135deg, #E5EEF3 0%, #D0E3EE 100%)",
               border: "3px solid rgba(44,93,124,0.22)",
               display: "flex", alignItems: "center", justifyContent: "center",
-              boxShadow: "0 4px 16px rgba(44,93,124,0.12)",
             }}>
               <FlaskConical size={30} style={{ color: "#2C5D7C" }} />
             </div>

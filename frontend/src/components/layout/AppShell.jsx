@@ -17,6 +17,7 @@ import { ROLES, ROLE_LABELS } from "../../constants/roles";
 import { ROUTES }    from "../../config/routes.config";
 import APP_CONFIG    from "../../config/app.config";
 import { PatientContext } from "../../context/PatientContext";
+import { ThemeSwitcher } from "./ThemeSwitcher";
 
 // ── Icons (inline SVG so no extra dep needed) ────────────────────────────────
 const Icon = ({ d, size = 18, style = {}, className }) => (
@@ -181,6 +182,8 @@ const NAV_BY_ROLE = {
     { type: "link",    label: "Prescriptions", iconKey: "prescription", to: ROUTES.PHARMACIST.PRESCRIPTIONS },
     { type: "section", label: "Inventory" },
     { type: "link",    label: "Stock",         iconKey: "stock",        to: ROUTES.PHARMACIST.STOCK },
+    { type: "section", label: "Catalogue" },
+    { type: "link",    label: "Drug Catalog",  iconKey: "tasks",        to: ROUTES.PHARMACIST.CATALOG },
     { type: "section", label: "Account" },
     { type: "link",    label: "My Profile",    iconKey: "settings",     to: ROUTES.PHARMACIST.MY_PROFILE },
   ],
@@ -208,11 +211,11 @@ function isGroupActive(children, pathname) {
 // ── Sub-components ───────────────────────────────────────────────────────────
 // Dark-sidebar palette
 const SB = {
-  text:       "#9DB4A6",
-  textActive: "#F4F1E8",
-  bgActive:   "rgba(244, 241, 232, 0.12)",
-  caption:    "#5F7A6B",
-  border:     "rgba(244, 241, 232, 0.10)",
+  text:       "var(--color-hero-muted)",
+  textActive: "var(--color-hero-text)",
+  bgActive:   "color-mix(in srgb, var(--color-hero-text) 12%, transparent)",
+  caption:    "color-mix(in srgb, var(--color-hero-muted) 75%, black 25%)",
+  border:     "color-mix(in srgb, var(--color-hero-text) 10%, transparent)",
 };
 
 function SidebarLink({ label, iconKey, to, collapsed, indent = false }) {
@@ -343,8 +346,8 @@ function ViewingIndicator({ collapsed }) {
   return (
     <div style={{
       margin: "8px 8px 0", padding: "8px 10px", borderRadius: 8,
-      background: selectedPatient.isSelf ? "rgba(244, 241, 232, 0.12)" : "rgba(201, 162, 75, 0.28)",
-      border: `1px solid ${selectedPatient.isSelf ? SB.border : "rgba(201, 162, 75, 0.35)"}`,
+      background: selectedPatient.isSelf ? "color-mix(in srgb, var(--color-hero-text) 12%, transparent)" : "color-mix(in srgb, var(--color-accent) 28%, transparent)",
+      border: `1px solid ${selectedPatient.isSelf ? SB.border : "color-mix(in srgb, var(--color-accent) 35%, transparent)"}`,
       display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
     }}>
       <div style={{ minWidth: 0 }}>
@@ -522,7 +525,7 @@ export function AppShell({ children }) {
           padding: "0 24px",
           boxShadow: "0 4px 18px -6px rgba(12, 42, 31, 0.35)",
           position: "relative", zIndex: 2,
-          borderBottom: "1px solid rgba(201, 162, 75, 0.15)",
+          borderBottom: "1px solid color-mix(in srgb, var(--color-accent) 15%, transparent)",
         }}>
           {/* Left: tenant logo + clinic name — driven by the logged-in staff
               member's own hospital (from the JWT), not a fixed hospital.
@@ -553,7 +556,7 @@ export function AppShell({ children }) {
             ) : (
               <span style={{
                 fontSize: 11, fontWeight: 700,
-                background: "rgba(244, 241, 232, 0.12)",
+                background: "color-mix(in srgb, var(--color-hero-text) 12%, transparent)",
                 color: "var(--color-hero-text)",
                 padding: "3px 12px", borderRadius: 20,
                 letterSpacing: "0.06em", textTransform: "uppercase",
@@ -563,7 +566,7 @@ export function AppShell({ children }) {
             )}
           </div>
 
-          {/* Right: avatar */}
+          {/* Right: theme switcher + avatar */}
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{
               fontSize: 12, color: "var(--color-hero-muted)",
@@ -571,12 +574,13 @@ export function AppShell({ children }) {
             }}>
               {user?.email}
             </div>
+            <ThemeSwitcher />
             <div style={{
               width: 34, height: 34,
-              background: user?.photo ? "transparent" : "linear-gradient(135deg, var(--color-accent) 0%, #a67f2f 100%)",
+              background: user?.photo ? "transparent" : "linear-gradient(135deg, var(--color-accent) 0%, var(--color-warning) 100%)",
               borderRadius: "50%", overflow: "hidden",
               display: "flex", alignItems: "center", justifyContent: "center",
-              color: "#1A1F1B", fontWeight: 700, fontSize: 13,
+              color: "var(--color-text)", fontWeight: 700, fontSize: 13,
               boxShadow: "0 0 0 2px rgba(244, 241, 232, 0.18), 0 2px 8px rgba(0, 0, 0, 0.25)",
             }}>
               {user?.photo

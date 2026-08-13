@@ -55,6 +55,7 @@ export default function ProfilePhotoUpload({
 }) {
   const inputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const { toastSuccess, toastApiError } = useToast();
 
   async function handleFile(e) {
@@ -78,13 +79,31 @@ export default function ProfilePhotoUpload({
     }
   }
 
+  async function handleRemove() {
+    if (!window.confirm("Remove your profile photo?")) return;
+    setRemoving(true);
+    try {
+      // Both StaffUser.photo and PatientAccount.photo are TextField(blank=True)
+      // with no null=True, so "no photo" is represented as "" — not null —
+      // matching the model's own storage convention.
+      await apiClient.patch(endpoint, { photo: "" });
+      onUploaded?.("");
+      toastSuccess("Photo removed.");
+    } catch (err) {
+      toastApiError(err, "Could not remove photo.");
+    } finally {
+      setRemoving(false);
+    }
+  }
+
   const dark = variant === "dark";
+  const busy = uploading || removing;
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
       <div style={{
         width: size, height: size, borderRadius: "50%", overflow: "hidden",
-        background: dark ? "rgba(244, 241, 232, 0.10)" : "var(--color-primary-light)",
+        background: dark ? "color-mix(in srgb, var(--color-hero-text) 10%, transparent)" : "var(--color-primary-light)",
         color: dark ? "#fff" : "var(--color-primary)",
         display: "flex", alignItems: "center", justifyContent: "center",
         fontFamily: dark ? "var(--font-display)" : undefined,
@@ -95,19 +114,34 @@ export default function ProfilePhotoUpload({
           ? <img src={photo} alt="Profile" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
           : initials}
       </div>
-      <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <button
           type="button"
           className={dark ? undefined : "btn-outline"}
           style={dark ? {
             fontSize: 12, padding: "6px 14px", fontWeight: 700, borderRadius: "var(--radius-button)",
-            background: "rgba(244, 241, 232, 0.14)", color: "#fff", border: "1px solid rgba(244, 241, 232, 0.35)",
+            background: "color-mix(in srgb, var(--color-hero-text) 14%, transparent)", color: "#fff", border: "1px solid color-mix(in srgb, var(--color-hero-text) 35%, transparent)",
           } : { fontSize: 12, padding: "6px 14px" }}
-          disabled={uploading}
+          disabled={busy}
           onClick={() => inputRef.current?.click()}
         >
           {uploading ? "Uploading…" : photo ? "Change photo" : "Upload photo"}
         </button>
+        {photo && (
+          <button
+            type="button"
+            style={{
+              fontSize: 12, padding: "6px 10px", fontWeight: 600,
+              background: "none", border: "none", cursor: busy ? "not-allowed" : "pointer",
+              color: dark ? "color-mix(in srgb, var(--color-hero-text) 70%, transparent)" : "var(--color-error, #b91c1c)",
+              textDecoration: "underline",
+            }}
+            disabled={busy}
+            onClick={handleRemove}
+          >
+            {removing ? "Removing…" : "Remove photo"}
+          </button>
+        )}
         <input
           ref={inputRef} type="file" accept="image/*" hidden
           onChange={handleFile}

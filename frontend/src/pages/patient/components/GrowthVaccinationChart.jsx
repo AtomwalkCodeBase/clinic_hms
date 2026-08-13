@@ -37,9 +37,10 @@ import { useMemo, useState } from "react";
 import apiClient from "../../../services/api.client";
 import API_ENDPOINTS from "../../../config/api.config";
 import { useToast } from "../../../hooks/useToast";
+import { openDataUrlInNewTab } from "../../../utils/fileViewer";
 
 const METRICS = [
-  { id: "height_cm", label: "Height", unit: "cm", color: "#1B5E43", light: "#E4F0EA" },
+  { id: "height_cm", label: "Height", unit: "cm", color: "var(--color-primary)", light: "var(--color-primary-light)" },
   { id: "weight_kg", label: "Weight", unit: "kg", color: "#2E6FA3", light: "#E3EDF5" },
 ];
 
@@ -148,17 +149,19 @@ export default function GrowthVaccinationChart({ growth, growthLoading, roadmap,
     : null;
 
   async function viewCertificate(recordId) {
+    const win = window.open("", "_blank");
     setCertLoading(true);
     try {
       const res = await apiClient.get(API_ENDPOINTS.PORTAL.VACCINATION_FILE(recordId));
       const data = res.data?.data || res.data;
       if (data?.file_data) {
-        const win = window.open();
-        if (win) win.location.href = data.file_data;
+        openDataUrlInNewTab(win, data.file_data);
       } else {
+        if (win) win.close();
         toastApiError(null, "No file is attached to that record.");
       }
     } catch (err) {
+      if (win) win.close();
       toastApiError(err, "Could not load the certificate.");
     } finally {
       setCertLoading(false);
@@ -214,7 +217,7 @@ export default function GrowthVaccinationChart({ growth, growthLoading, roadmap,
             <span style={{
               display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 700,
               padding: "2px 8px", borderRadius: 10,
-              background: trend === "up" ? "#E4F0EA" : trend === "down" ? "#FBEAEA" : "#F0F0EE",
+              background: trend === "up" ? "var(--color-primary-light)" : trend === "down" ? "var(--color-error-light)" : "var(--color-border)",
               color: trend === "up" ? "#1B8A5A" : trend === "down" ? "#B3392C" : "var(--color-text-muted)",
             }}>
               {trend === "up" ? "▲" : trend === "down" ? "▼" : "—"} since {formatDateShort(first.date)}
@@ -340,17 +343,17 @@ function ChartTooltip({ x, y, viewW, viewH, children, align = "top" }) {
     <div style={{
       position: "absolute", left: `${left}%`, top: `${top}%`,
       transform: align === "top" ? "translate(-50%, -100%) translateY(-12px)" : "translate(-50%, 0) translateY(12px)",
-      background: "#17281F", color: "#F4F1E8", padding: "9px 13px", borderRadius: 9,
+      background: "var(--color-hero)", color: "var(--color-hero-text)", padding: "9px 13px", borderRadius: 9,
       fontSize: 12, lineHeight: 1.55, whiteSpace: "nowrap", pointerEvents: "none",
-      boxShadow: "0 8px 24px rgba(0,0,0,0.28)", zIndex: 30,
+      zIndex: 30,
     }}>
       {children}
       <div style={{
         position: "absolute", left: "50%", transform: "translateX(-50%)",
         width: 0, height: 0, borderLeft: "6px solid transparent", borderRight: "6px solid transparent",
         ...(align === "top"
-          ? { bottom: -6, borderTop: "6px solid #17281F" }
-          : { top: -6, borderBottom: "6px solid #17281F" }),
+          ? { bottom: -6, borderTop: "6px solid var(--color-hero)" }
+          : { top: -6, borderBottom: "6px solid var(--color-hero)" }),
       }} />
     </div>
   );
