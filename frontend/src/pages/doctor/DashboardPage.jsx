@@ -130,10 +130,10 @@ export default function DoctorDashboardPage() {
               {photo ? <img src={photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "Dr"}
             </div>
             <div>
-              <div style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 500, color: "var(--color-text)" }}>
+              <div className="page-greeting-title">
                 {greeting()}, <em style={{ fontStyle: "italic", color: "var(--color-primary)" }}>Dr. {lastName}</em>
               </div>
-              <div style={{ fontSize: 13, color: "var(--color-text-muted)", marginTop: 4 }}>
+              <div className="page-greeting-sub">
                 Your OPD summary · {dateStr}
               </div>
             </div>

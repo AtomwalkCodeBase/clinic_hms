@@ -578,6 +578,7 @@ class PortalSlotListView(APIView):
             results.append({
                 "time": s,
                 "available": (s not in booked) and not past,
+                "past": past,
             })
         return Response({"results": results})
 
@@ -605,6 +606,19 @@ class PortalBookView(APIView):
 
         if not tenant_id or not doctor_id:
             return Response({"error": "tenant_id and doctor_id are required."}, status=400)
+
+        # Booking window capped at 2 months out (mirrors the date picker's
+        # own max= on the frontend) — enforced here too since the frontend
+        # limit is trivial to bypass by calling this endpoint directly.
+        try:
+            requested_date = date.fromisoformat(scheduled_date)
+        except ValueError:
+            return Response({"error": "Invalid date."}, status=400)
+        if requested_date < date.today():
+            return Response({"error": "Can't book a date in the past."}, status=400)
+        if requested_date > date.today() + timedelta(days=62):
+            return Response({"error": "Appointments can only be booked up to 2 months in advance."}, status=400)
+
         # scheduled_time is optional — the patient portal is token/queue-based
         # (pick a date, get the next token) rather than fixed-time-slot booking.
         # Front desk's own booking flow still uses PortalSlotListView/exact times.

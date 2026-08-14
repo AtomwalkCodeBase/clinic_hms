@@ -141,6 +141,16 @@ class AppointmentListCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
+        scheduled_time = data.get("scheduled_time")
+        if scheduled_time:
+            taken = Appointment.objects.using(db).filter(
+                scheduled_date=data.get("scheduled_date", date.today()),
+                doctor_user_id=data["doctor_user_id"],
+                scheduled_time=scheduled_time,
+            ).exclude(status="cancelled").exists()
+            if taken:
+                return api_error(message="That slot was just taken. Please pick another.", status=409)
+
         # Auto-assign token number for the day
         appt_date = data.get("scheduled_date", date.today())
         last_token = Appointment.objects.using(db).filter(

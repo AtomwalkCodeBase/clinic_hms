@@ -3,9 +3,10 @@
  * -------------------------------------
  * Palette-icon trigger in AppShell's topbar (present for every role, since
  * AppShell is the one shared shell) that opens a popover to browse and pick
- * a color theme — grouped into families (Green, Teal, Navy, ...), each with
- * a few shades, same browsing pattern as every other search/select dropdown
- * in this app (ref + mousedown-outside-closes).
+ * a color theme. Flat grid of ~12 curated swatches (no family tabs — the
+ * list is short enough now that a second navigation layer just adds
+ * clicks), same outside-click-closes pattern as every other dropdown in
+ * this app.
  */
 import { useState, useRef, useEffect } from "react";
 import { useTheme } from "../../context/ThemeContext";
@@ -23,10 +24,18 @@ function PaletteIcon({ size = 18 }) {
   );
 }
 
+function CheckIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 6L9 17l-5-5" />
+    </svg>
+  );
+}
+
 export function ThemeSwitcher() {
-  const { theme, families, setTheme } = useTheme();
+  const { theme, themes, setTheme } = useTheme();
   const [open, setOpen] = useState(false);
-  const [browsingFamily, setBrowsingFamily] = useState(theme.family);
   const ref = useRef(null);
 
   useEffect(() => {
@@ -36,12 +45,6 @@ export function ThemeSwitcher() {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
-
-  useEffect(() => {
-    if (open) setBrowsingFamily(theme.family);
-  }, [open, theme.family]);
-
-  const activeFamily = families.find(f => f.key === browsingFamily) || families[0];
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
@@ -63,51 +66,54 @@ export function ThemeSwitcher() {
       {open && (
         <div style={{
           position: "absolute", top: "calc(100% + 10px)", right: 0, zIndex: 200,
-          width: 320, background: "var(--color-surface)", border: "1px solid var(--color-border)",
-          borderRadius: 12, boxShadow: "var(--shadow-dropdown)", padding: 14,
+          width: 292, background: "var(--color-surface)", border: "1px solid var(--color-border)",
+          borderRadius: 14, boxShadow: "var(--shadow-dropdown)", padding: 16,
         }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text)" }}>Color theme</span>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "var(--color-text)", letterSpacing: "-0.01em" }}>Color theme</span>
             {theme.id !== DEFAULT_THEME_ID && (
               <button type="button" onClick={() => setTheme(DEFAULT_THEME_ID)}
-                style={{ background: "none", border: "none", color: "var(--color-primary)", fontSize: 11, fontWeight: 600, cursor: "pointer", padding: 0 }}>
+                style={{ background: "none", border: "none", color: "var(--color-primary)", fontSize: 11.5, fontWeight: 600, cursor: "pointer", padding: 0 }}>
                 Reset to default
               </button>
             )}
           </div>
 
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
-            {families.map(f => (
-              <button key={f.key} type="button"
-                onClick={() => setBrowsingFamily(f.key)}
-                style={{
-                  fontSize: 11, padding: "5px 10px", borderRadius: 20, cursor: "pointer",
-                  border: f.key === browsingFamily ? "1.5px solid var(--color-primary)" : "1px solid var(--color-border)",
-                  background: f.key === browsingFamily ? "var(--color-primary-light)" : "transparent",
-                  color: f.key === browsingFamily ? "var(--color-primary)" : "var(--color-text-secondary)",
-                  fontWeight: f.key === browsingFamily ? 600 : 400,
-                }}>
-                {f.label}
-              </button>
-            ))}
-          </div>
-
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {activeFamily.themes.map(t => {
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+            {themes.map(t => {
               const active = t.id === theme.id;
               return (
                 <button key={t.id} type="button"
                   onClick={() => setTheme(t.id)}
                   title={t.name}
                   style={{
-                    display: "flex", alignItems: "center", gap: 6, fontSize: 11.5,
-                    padding: "5px 10px 5px 6px", borderRadius: 20, cursor: "pointer",
-                    border: active ? "1.5px solid var(--color-primary)" : "1px solid var(--color-border)",
-                    background: active ? "var(--color-primary-light)" : "var(--color-surface)",
-                    color: "var(--color-text)",
+                    display: "flex", flexDirection: "column", alignItems: "center", gap: 5,
+                    padding: 0, border: "none", background: "none", cursor: "pointer",
                   }}>
-                  <span style={{ width: 13, height: 13, borderRadius: "50%", background: t.primary, flexShrink: 0 }} />
-                  {t.name}
+                  <span style={{
+                    position: "relative", width: "100%", aspectRatio: "1 / 1", borderRadius: 10,
+                    background: t.primary, flexShrink: 0,
+                    boxShadow: active
+                      ? "0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-primary)"
+                      : "0 0 0 1px color-mix(in srgb, var(--color-text) 12%, transparent)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>
+                    {active && (
+                      <span style={{
+                        width: 20, height: 20, borderRadius: "50%",
+                        background: "color-mix(in srgb, black 22%, transparent)",
+                        color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>
+                        <CheckIcon size={12} />
+                      </span>
+                    )}
+                  </span>
+                  <span style={{
+                    fontSize: 10.5, fontWeight: active ? 700 : 500, lineHeight: 1.2, textAlign: "center",
+                    color: active ? "var(--color-primary)" : "var(--color-text-secondary)",
+                  }}>
+                    {t.name}
+                  </span>
                 </button>
               );
             })}

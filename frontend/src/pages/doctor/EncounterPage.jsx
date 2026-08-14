@@ -1121,7 +1121,7 @@ function DocumentViewerDrawer({ doc, onClose }) {
         <div style={{
           width: handleActive ? 4 : 3, height: 56, borderRadius: 4,
           background: handleActive ? "var(--color-primary)" : "var(--color-border)",
-          boxShadow: handleActive ? "0 0 0 3px rgba(27,94,67,0.12)" : "none",
+          boxShadow: handleActive ? "0 0 0 3px color-mix(in srgb, var(--color-primary) 12%, transparent)" : "none",
           transition: "background 0.15s, width 0.1s, box-shadow 0.15s",
         }} />
       </div>
@@ -2032,7 +2032,7 @@ export default function EncounterPage() {
                     {saving ? "Saving…" : "Save Draft"}
                   </button>
                 )}
-                <button className="btn-primary" disabled={signing} onClick={signAndClose} style={{ background: "#10B981", minWidth: 130 }}>
+                <button className="btn-primary" disabled={signing} onClick={signAndClose} style={{ minWidth: 130 }}>
                   {signing ? "Signing…" : "Sign & Close"}
                 </button>
               </>
@@ -2329,13 +2329,13 @@ export default function EncounterPage() {
                   {saving ? "Saving…" : "Save Draft"}
                 </button>
               )}
-              <button className="btn-primary" disabled={signing} onClick={signAndClose} style={{ background: "#10B981", minWidth: 160 }}>
+              <button className="btn-primary" disabled={signing} onClick={signAndClose} style={{ minWidth: 160 }}>
                 {signing ? "Signing…" : "Sign & Close Encounter"}
               </button>
             </div>
           ) : (
             <div style={{ textAlign: "center", padding: "12px 0" }}>
-              <div style={{ color: "#10B981", fontWeight: 700, marginBottom: 10 }}>
+              <div style={{ color: "var(--color-success)", fontWeight: 700, marginBottom: 10 }}>
                 ✓ Encounter signed and submitted to Health Exchange.
               </div>
               <button className="btn-outline" onClick={() => navigate("/doctor/queue")}>← Back to Queue</button>

@@ -156,6 +156,7 @@ const NAV_BY_ROLE = {
     { type: "link",    label: "Dashboard",       iconKey: "dashboard",    to: ROUTES.FRONT_DESK.DASHBOARD },
     { type: "section", label: "Patients" },
     { type: "link",    label: "Register Patient", iconKey: "patient",      to: ROUTES.FRONT_DESK.REGISTER_PATIENT },
+    { type: "link",    label: "All Patients",     iconKey: "users",        to: ROUTES.FRONT_DESK.PATIENTS },
     { type: "link",    label: "Appointments",     iconKey: "appointments", to: ROUTES.FRONT_DESK.APPOINTMENTS },
     { type: "link",    label: "OPD Queue",        iconKey: "queue",        to: ROUTES.FRONT_DESK.QUEUE },
     { type: "link",    label: "History",          iconKey: "history",      to: ROUTES.FRONT_DESK.HISTORY },
@@ -183,7 +184,8 @@ const NAV_BY_ROLE = {
     { type: "section", label: "Inventory" },
     { type: "link",    label: "Stock",         iconKey: "stock",        to: ROUTES.PHARMACIST.STOCK },
     { type: "section", label: "Catalogue" },
-    { type: "link",    label: "Drug Catalog",  iconKey: "tasks",        to: ROUTES.PHARMACIST.CATALOG },
+    { type: "link",    label: "Drug Catalog Setup", iconKey: "tasks",   to: ROUTES.PHARMACIST.CATALOG },
+    { type: "link",    label: "Drug Form Setup", iconKey: "tasks",      to: ROUTES.PHARMACIST.DRUG_FORM_SETUP },
     { type: "section", label: "Account" },
     { type: "link",    label: "My Profile",    iconKey: "settings",     to: ROUTES.PHARMACIST.MY_PROFILE },
   ],
@@ -409,16 +411,20 @@ export function AppShell({ children }) {
         transition: "width 200ms ease, min-width 200ms ease",
         overflow: "hidden",
         zIndex: 10,
-        boxShadow: "4px 0 24px rgba(12, 42, 31, 0.22)",
         position: "relative",
       }}>
 
-        {/* Brand */}
+        {/* Brand — same "highlighted card" treatment as the user chip at the
+            bottom of the sidebar (tinted fill + thin border + rounded
+            corners) instead of a hard divider line, so the two bookend
+            each other. */}
         <div style={{
           height: 60, display: "flex", alignItems: "center",
           padding: collapsed ? "0 14px" : "0 16px",
-          borderBottom: `1px solid ${SB.border}`,
-          boxShadow: "0 6px 16px -8px rgba(0, 0, 0, 0.35)",
+          margin: collapsed ? "8px 8px 4px" : "10px 10px 4px",
+          borderRadius: 12,
+          background: "color-mix(in srgb, var(--color-hero-text) 8%, transparent)",
+          border: "1px solid color-mix(in srgb, var(--color-hero-text) 12%, transparent)",
           gap: 10, flexShrink: 0,
           position: "relative", zIndex: 1,
         }}>
@@ -476,7 +482,7 @@ export function AppShell({ children }) {
 
         {/* Bottom: user info + logout + collapse toggle */}
         <div style={{
-          borderTop: `1px solid ${SB.border}`, flexShrink: 0,
+          flexShrink: 0,
           background: "rgba(0, 0, 0, 0.12)",
         }}>
           {/* User chip */}
@@ -523,9 +529,7 @@ export function AppShell({ children }) {
           display: "flex", alignItems: "center",
           justifyContent: "space-between",
           padding: "0 24px",
-          boxShadow: "0 4px 18px -6px rgba(12, 42, 31, 0.35)",
           position: "relative", zIndex: 2,
-          borderBottom: "1px solid color-mix(in srgb, var(--color-accent) 15%, transparent)",
         }}>
           {/* Left: tenant logo + clinic name — driven by the logged-in staff
               member's own hospital (from the JWT), not a fixed hospital.
@@ -535,7 +539,7 @@ export function AppShell({ children }) {
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {user?.db_name ? (
               <>
-                <div style={{ boxShadow: "0 0 0 2px rgba(201, 162, 75, 0.3)", borderRadius: "50%" }}>
+                <div style={{ boxShadow: "0 0 0 2px color-mix(in srgb, var(--color-accent) 30%, transparent)", borderRadius: "50%" }}>
                   <HospitalMonogram name={user.hospital_name} tenantId={user.tenant_id} />
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.25 }}>
@@ -581,7 +585,7 @@ export function AppShell({ children }) {
               borderRadius: "50%", overflow: "hidden",
               display: "flex", alignItems: "center", justifyContent: "center",
               color: "var(--color-text)", fontWeight: 700, fontSize: 13,
-              boxShadow: "0 0 0 2px rgba(244, 241, 232, 0.18), 0 2px 8px rgba(0, 0, 0, 0.25)",
+              boxShadow: "0 0 0 2px color-mix(in srgb, var(--color-hero-text) 18%, transparent), 0 2px 8px rgba(0, 0, 0, 0.25)",
             }}>
               {user?.photo
                 ? <img src={user.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />

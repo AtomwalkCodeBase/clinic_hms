@@ -24,10 +24,14 @@ function StatCard({ label, value, tone }) {
 
 export default function DashboardPage() {
   const { data: rxData, isLoading: rxLoading } = useApi(API_ENDPOINTS.PHARMACY.PRESCRIPTIONS, { params: { status: "finalized", page_size: 1 } });
-  const { data: stockData, isLoading: stockLoading } = useApi(API_ENDPOINTS.PHARMACY.STOCK, { params: { page_size: 500 } });
+  // page_size: 1 — these are count-only calls (the stat cards just need
+  // pagination.total_count), not a list to render, so no need to pull real
+  // rows over the wire.
+  const { data: stockData, isLoading: stockLoading } = useApi(API_ENDPOINTS.PHARMACY.STOCK, { params: { page_size: 1 } });
+  const { data: lowStockData, isLoading: lowLoading } = useApi(API_ENDPOINTS.PHARMACY.STOCK, { params: { low_only: 1, page_size: 1 } });
 
-  const stock = stockData?.results || [];
-  const lowCount = stock.filter(s => s.is_low).length;
+  const stockCount = stockData?.pagination?.total_count ?? 0;
+  const lowCount = lowStockData?.pagination?.total_count ?? 0;
   const pendingCount = rxData?.pagination?.total_count ?? rxData?.results?.length ?? 0;
 
   return (
@@ -35,8 +39,8 @@ export default function DashboardPage() {
       <PageShell title="Dashboard">
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
           <StatCard label="Prescriptions waiting" value={rxLoading ? "…" : pendingCount} />
-          <StatCard label="Batches on hand" value={stockLoading ? "…" : stock.length} />
-          <StatCard label="Low on stock" value={stockLoading ? "…" : lowCount} tone={lowCount > 0 ? "warn" : "default"} />
+          <StatCard label="Batches on hand" value={stockLoading ? "…" : stockCount} />
+          <StatCard label="Low on stock" value={lowLoading ? "…" : lowCount} tone={lowCount > 0 ? "warn" : "default"} />
         </div>
       </PageShell>
     </AppShell>

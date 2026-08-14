@@ -5,6 +5,8 @@
  * Lists today's appointments below the booking card.
  */
 import { useState, useCallback, useRef, useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { Search, User, CalendarPlus } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import DependentBadge from "../../components/common/DependentBadge";
@@ -19,22 +21,55 @@ const TODAY = new Date().toISOString().split("T")[0];
 export default function AppointmentsPage() {
   const { toastSuccess, toastApiError } = useToast();
   const { user } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Arrives here two ways: from PatientsPage's "Book Appointment" button, or
+  // straight after RegisterPatientPage's submit (justRegistered) — either
+  // way, a patient was handed off via navigation state and the booking form
+  // should already have them selected instead of front desk having to
+  // search for the person they just came from. Captured once into plain
+  // state (not read from location.state on every render) because the
+  // history-cleanup effect below clears location.state right after mount —
+  // reading it directly would make the "just registered" banner vanish on
+  // the very next re-render.
+  const [justRegistered] = useState(() => !!location.state?.justRegistered);
 
   // ── Booking form state ──────────────────────────────────────────────
-  const [patientQuery,  setPatientQuery]  = useState("");
+  // prefillQuery arrives from RegisterPatientPage's duplicate-match panels —
+  // they only have the matched patient's name/UHID (not the tenant-local
+  // uuid the booking API needs), so rather than a fragile "pre-selected but
+  // secretly incomplete" patient object, this just pre-fills and opens the
+  // search so the right match is one click away instead of retyped from
+  // scratch.
+  const [patientQuery,  setPatientQuery]  = useState(() => location.state?.prefillQuery || "");
   const [patientOpts,   setPatientOpts]   = useState([]);
-  const [patient,       setPatient]       = useState(null);   // selected patient
+  const [patient,       setPatient]       = useState(() => location.state?.patient || null);   // selected patient
   const [doctorId,      setDoctorId]      = useState("");
   const [date,          setDate]          = useState(TODAY);
   const [slots,         setSlots]         = useState([]);
   const [slot,          setSlot]          = useState("");
   const [complaint,     setComplaint]     = useState("");
   const [booking,       setBooking]       = useState(false);
-  const [searchOpen,    setSearchOpen]    = useState(false);
+  const [searchOpen,    setSearchOpen]    = useState(() => !!location.state?.prefillQuery);
   const searchRef = useRef(null);
 
   const { data: doctors } = useApi(API_ENDPOINTS.ORG.DOCTORS);
   const doctorList = doctors || [];
+
+  // ── Registered today, not yet booked — the whole point of registration is
+  // to get someone in front of a doctor, so surface today's new patients
+  // right here instead of making front desk remember to go search for them.
+  const [todayPatients, setTodayPatients] = useState([]);
+  const fetchTodayPatients = useCallback(() => {
+    apiClient.get(API_ENDPOINTS.PATIENTS.SEARCH, { params: { page: 1, page_size: 25 } })
+      .then(({ data }) => {
+        const results = data?.data?.results || data?.results || [];
+        setTodayPatients(results.filter(p => (p.registered_at || "").slice(0, 10) === TODAY));
+      })
+      .catch(() => setTodayPatients([]));
+  }, []);
+  useEffect(() => { fetchTodayPatients(); }, [fetchTodayPatients]);
 
   // page_size: 100 — this is an informational "today's bookings" list under
   // the booking form, not a paged screen; request the max page size so it
@@ -44,20 +79,27 @@ export default function AppointmentsPage() {
   });
   const appointments = apptData?.results || [];
 
-  // ── Patient search (debounced) ─────────────────────────────────────
+  // ── Patient search / browse ──────────────────────────────────────────
+  // Two modes sharing one dropdown: focus the field with nothing typed yet
+  // and it immediately shows the most recently registered patients (browse
+  // mode — same endpoint, just no ?q=) so front desk can pick someone they
+  // just registered without typing a single character. Type 2+ characters
+  // and it becomes a live filtered search, debounced.
+  const [isBrowseMode, setIsBrowseMode] = useState(true);
   useEffect(() => {
-    if (patientQuery.length < 2) { setPatientOpts([]); return; }
+    if (!searchOpen) return;
+    if (patientQuery.length === 1) { setPatientOpts([]); return; }
     const t = setTimeout(async () => {
       try {
         const { data } = await apiClient.get(API_ENDPOINTS.PATIENTS.SEARCH, {
-          params: { q: patientQuery },
+          params: patientQuery.length >= 2 ? { q: patientQuery } : {},
         });
-        setPatientOpts(data?.data || data?.results || data || []);
-        setSearchOpen(true);
-      } catch { /* ignore */ }
-    }, 300);
+        setPatientOpts(data?.data?.results || data?.results || []);
+        setIsBrowseMode(!!(data?.data?.is_browse ?? data?.is_browse ?? patientQuery.length < 2));
+      } catch { setPatientOpts([]); }
+    }, patientQuery.length >= 2 ? 300 : 0);
     return () => clearTimeout(t);
-  }, [patientQuery]);
+  }, [patientQuery, searchOpen]);
 
   useEffect(() => {
     function handler(e) {
@@ -67,12 +109,23 @@ export default function AppointmentsPage() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  // Clear the handed-off navigation state once consumed, so browsing back
+  // to this page later (or refreshing) doesn't keep re-showing the
+  // "just registered" banner for a patient booked ages ago.
+  useEffect(() => {
+    if (location.state) navigate(location.pathname, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Load slots when doctor / date changes
   useEffect(() => {
     setSlots([]); setSlot("");
     if (!doctorId || !date || !user?.tenant_id) return;
     apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(user.tenant_id, doctorId), { params: { date } })
-      .then(({ data }) => setSlots(data?.results || []))
+      // Slots whose time has already passed today aren't a real option —
+      // drop them instead of showing a struck-through button for them.
+      // Booked-but-still-upcoming slots stay, shown disabled as before.
+      .then(({ data }) => setSlots((data?.results || []).filter(s => !s.past)))
       .catch(() => setSlots([]));
   }, [doctorId, date, user]);
 
@@ -94,16 +147,71 @@ export default function AppointmentsPage() {
       toastSuccess(`Appointment booked for ${patient.full_name}.`);
       setPatient(null); setPatientQuery(""); setComplaint(""); setSlot("");
       refetch();
+      fetchTodayPatients();
     } catch (err) {
       toastApiError(err, "Could not book appointment.");
     } finally {
       setBooking(false);
     }
-  }, [patient, doctorId, date, complaint, doctorList, refetch, toastSuccess, toastApiError]);
+  }, [patient, doctorId, date, complaint, doctorList, refetch, fetchTodayPatients, toastSuccess, toastApiError]);
 
   return (
     <AppShell>
       <PageShell title="Appointments">
+
+        {justRegistered && patient && (
+          <div className="card" style={{
+            marginBottom: 16, padding: "12px 18px", display: "flex", alignItems: "center", gap: 10,
+            border: "1px solid var(--color-primary)", background: "var(--color-primary-light)",
+          }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-primary)" }}>
+              {patient.full_name} is registered — book their first appointment below.
+            </span>
+          </div>
+        )}
+
+        {todayPatients.length > 0 && (
+          <div className="card" style={{ marginBottom: 22, padding: 0, overflow: "hidden" }}>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 8,
+              padding: "12px 20px", borderBottom: "1px solid var(--color-border)",
+              background: "var(--color-primary-light)",
+            }}>
+              <CalendarPlus size={15} style={{ color: "var(--color-primary)" }} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--color-primary)" }}>
+                Registered today ({todayPatients.length}) — book their appointment
+              </span>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, padding: 16 }}>
+              {todayPatients.map(p => (
+                <div key={p.uuid || p.id} style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  border: "1px solid var(--color-border)", borderRadius: 10,
+                  padding: "8px 10px 8px 8px", background: "var(--color-surface)",
+                }}>
+                  <span style={{
+                    width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                    background: "var(--color-primary-light)", color: "var(--color-primary)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>
+                    <User size={14} />
+                  </span>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 600 }}>
+                      {p.full_name}
+                      <DependentBadge patient={p} />
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{p.uhid}</div>
+                  </div>
+                  <button type="button" className="btn-outline" style={{ fontSize: 11.5, padding: "5px 12px", marginLeft: 4 }}
+                    onClick={() => { setPatient(p); setPatientQuery(""); setSearchOpen(false); }}>
+                    Book Appointment →
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ── Booking card ──────────────────────────────────────────── */}
         <div className="card" style={{ marginBottom: 22, padding: 24 }}>
@@ -126,28 +234,63 @@ export default function AppointmentsPage() {
                     style={{ border: "none", background: "none", color: "var(--color-error)", fontWeight: 700 }}>✕</button>
                 </div>
               ) : (
-                <input className="form-input" placeholder="Search name / UHID / mobile…"
-                  value={patientQuery} onChange={e => setPatientQuery(e.target.value)} />
+                <div style={{ position: "relative" }}>
+                  <Search size={15} style={{
+                    position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)",
+                    color: "var(--color-text-muted)", pointerEvents: "none",
+                  }} />
+                  <input className="form-input" style={{ paddingLeft: 32 }}
+                    placeholder="Type a name, mobile number, or UHID…"
+                    value={patientQuery}
+                    onFocus={() => setSearchOpen(true)}
+                    onChange={e => setPatientQuery(e.target.value)} />
+                </div>
               )}
-              {searchOpen && !patient && patientOpts.length > 0 && (
+              {searchOpen && !patient && (
                 <div style={{
                   position: "absolute", top: "100%", left: 0, right: 0, zIndex: 30,
                   background: "var(--color-surface)", border: "1px solid var(--color-border)",
                   borderRadius: 10, boxShadow: "var(--shadow-dropdown)", marginTop: 4,
-                  maxHeight: 220, overflowY: "auto",
+                  maxHeight: 280, overflowY: "auto",
                 }}>
-                  {patientOpts.map(p => (
+                  {patientOpts.length > 0 && (
+                    <div style={{
+                      padding: "8px 12px", fontSize: 10.5, fontWeight: 700, letterSpacing: "0.06em",
+                      textTransform: "uppercase", color: "var(--color-text-muted)",
+                      background: "var(--color-bg)", borderBottom: "1px solid var(--color-border)",
+                    }}>
+                      {isBrowseMode ? "Recently registered — click to select" : "Search results"}
+                    </div>
+                  )}
+                  {patientOpts.length === 0 ? (
+                    <div style={{ padding: "16px 14px", fontSize: 12.5, color: "var(--color-text-muted)" }}>
+                      {patientQuery.length >= 2 ? `No patients matched "${patientQuery}".` : "No patients registered here yet."}
+                    </div>
+                  ) : patientOpts.map(p => (
                     <button key={p.uuid || p.id}
-                      onClick={() => { setPatient(p); setSearchOpen(false); }}
+                      onClick={() => { setPatient(p); setSearchOpen(false); setPatientQuery(""); }}
                       style={{
-                        display: "block", width: "100%", textAlign: "left",
+                        display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left",
                         padding: "9px 12px", border: "none", background: "transparent",
-                        borderBottom: "1px solid var(--color-border)", cursor: "pointer", fontSize: 13,
+                        borderBottom: "1px solid var(--color-border)", cursor: "pointer",
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = "var(--color-bg)"}
+                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                      <span style={{
+                        width: 30, height: 30, borderRadius: "50%", flexShrink: 0,
+                        background: "var(--color-primary-light)", color: "var(--color-primary)",
+                        display: "flex", alignItems: "center", justifyContent: "center",
                       }}>
-                      <span style={{ fontWeight: 600 }}>{p.full_name}</span>{" "}
-                      <DependentBadge patient={p} style={{ marginLeft: 4 }} />
-                      <span style={{ color: "var(--color-text-muted)", marginLeft: 8, fontSize: 12 }}>
-                        {p.uhid} · {p.mobile || (p.is_dependent ? "no mobile (dependent)" : "no mobile")}
+                        <User size={15} />
+                      </span>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 600 }}>
+                          {p.full_name}
+                          <DependentBadge patient={p} />
+                        </span>
+                        <span style={{ display: "block", fontSize: 11.5, color: "var(--color-text-muted)", marginTop: 1 }}>
+                          {p.uhid} · {p.mobile || (p.is_dependent ? "no mobile (dependent)" : "no mobile")}
+                        </span>
                       </span>
                     </button>
                   ))}

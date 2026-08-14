@@ -13,27 +13,45 @@ from apps.patients.models import Patient
 from apps.clinical.models import Encounter
 
 
+class DrugFormType(models.Model):
+    """
+    Configurable list of drug forms (Tablet, Capsule, Syrup, ...) — was
+    previously a hardcoded Python FORM_CHOICES list on Drug itself, which
+    meant a hospital could never add a form the original list didn't happen
+    to include. Tenant-managed via the pharmacist's "Drug Form Setup"
+    screen, same pattern as the Drug catalog itself.
+
+    Drug.form stays a plain CharField (not a ForeignKey here) storing this
+    row's `name` directly — avoids a data migration on existing Drug rows
+    and keeps PrescriptionItem/serializers untouched; this table exists to
+    drive the pick-list, not to enforce referential integrity on it.
+    """
+    name        = models.CharField(max_length=50, unique=True)
+    is_active   = models.BooleanField(default=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "prescriptions"
+        db_table  = "drug_form_type"
+        ordering  = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
 class Drug(models.Model):
     """
     Hospital drug catalog. Tenant-managed.
     drug_code is the internal code (not a standard code — optional).
-    """
-    FORM_CHOICES = [
-        ("tablet",     "Tablet"),
-        ("capsule",    "Capsule"),
-        ("syrup",      "Syrup"),
-        ("injection",  "Injection"),
-        ("drops",      "Drops"),
-        ("cream",      "Cream / Ointment"),
-        ("inhaler",    "Inhaler"),
-        ("patch",      "Patch"),
-        ("other",      "Other"),
-    ]
 
+    form is free text (validated against DrugFormType's configurable list
+    in the frontend/serializer layer, not a DB-level choices= constraint —
+    see DrugFormType's docstring for why).
+    """
     name        = models.CharField(max_length=200)
     generic_name= models.CharField(max_length=200, blank=True)
     drug_code   = models.CharField(max_length=50, blank=True)
-    form        = models.CharField(max_length=20, choices=FORM_CHOICES, default="tablet")
+    form        = models.CharField(max_length=50, default="Tablet")
     strength    = models.CharField(max_length=50, blank=True)   # e.g. "500mg"
     unit        = models.CharField(max_length=20, default="mg")
     is_active   = models.BooleanField(default=True)

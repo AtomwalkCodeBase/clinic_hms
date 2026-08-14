@@ -27,6 +27,16 @@ import ROUTES        from "../../config/routes.config";
 
 const TODAY = new Date().toISOString().split("T")[0];
 
+// Booking window capped at 2 months out — nobody realistically books an OPD
+// slot a year in advance, and an unbounded date picker just invites picking
+// a date so far out that the whole booking is more likely to be forgotten
+// or go stale (doctor leaves, schedule changes, etc.) than kept.
+const MAX_BOOKING_DATE = (() => {
+  const d = new Date();
+  d.setMonth(d.getMonth() + 2);
+  return d.toISOString().split("T")[0];
+})();
+
 const STEPS = ["Choose date", "Select time", "Your concern", "Confirm"];
 
 function StepProgress({ current }) {
@@ -483,7 +493,7 @@ export default function PatientDoctorProfilePage() {
 
               <label className="stat-label" style={{ display: "block", marginBottom: 6 }}>Date</label>
               <input
-                type="date" className="form-input" value={date} min={TODAY}
+                type="date" className="form-input" value={date} min={TODAY} max={MAX_BOOKING_DATE}
                 onChange={e => setDate(e.target.value)}
                 style={{ marginBottom: 16, width: "100%" }}
               />

@@ -61,6 +61,7 @@ export const ROUTES = {
   FRONT_DESK: {
     DASHBOARD:          "/front-desk/dashboard",
     REGISTER_PATIENT:   "/front-desk/register-patient",
+    PATIENTS:           "/front-desk/patients",
     APPOINTMENTS:       "/front-desk/appointments",
     QUEUE:              "/front-desk/queue",
     BILLING:            "/front-desk/billing",
@@ -85,6 +86,7 @@ export const ROUTES = {
     STOCK:              "/pharmacist/stock",
     TRANSACTIONS:       "/pharmacist/transactions",
     CATALOG:            "/pharmacist/catalog",
+    DRUG_FORM_SETUP:    "/pharmacist/drug-form-setup",
     MY_PROFILE:         "/pharmacist/my-profile",
   },
 

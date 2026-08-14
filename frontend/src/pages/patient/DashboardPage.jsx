@@ -170,10 +170,10 @@ export default function PatientDashboardPage() {
       <PageShell title="">
         {/* Hero — greeting, search, and live platform stats */}
         <div className="hero-card" style={{ marginBottom: 24, padding: "28px 28px 24px" }}>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 500, color: "var(--color-hero-text)" }}>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 600, letterSpacing: "-0.01em", lineHeight: 1.25, color: "var(--color-hero-text)" }}>
             {greeting()}, <em style={{ fontStyle: "italic" }}>{firstName}</em>
           </div>
-          <div style={{ fontSize: 13, color: "var(--color-hero-muted)", marginTop: 4, marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--color-hero-muted)", marginTop: 4, marginBottom: 20 }}>
             Find the right doctor or hospital for your care.
           </div>
 

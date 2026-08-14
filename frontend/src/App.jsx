@@ -62,6 +62,7 @@ const NurseHistory   = lazy(() => import("./pages/nurse/HistoryPage"));
 // Front Desk
 const FrontDeskDashboard      = lazy(() => import("./pages/front-desk/DashboardPage"));
 const FrontDeskRegisterPatient= lazy(() => import("./pages/front-desk/RegisterPatientPage"));
+const FrontDeskPatients       = lazy(() => import("./pages/front-desk/PatientsPage"));
 const FrontDeskAppointments   = lazy(() => import("./pages/front-desk/AppointmentsPage"));
 const FrontDeskQueue          = lazy(() => import("./pages/front-desk/QueuePage"));
 const FrontDeskBilling        = lazy(() => import("./pages/front-desk/BillingPage"));
@@ -78,6 +79,7 @@ const PharmacistDashboard     = lazy(() => import("./pages/pharmacist/DashboardP
 const PharmacistPrescriptions = lazy(() => import("./pages/pharmacist/PrescriptionsPage"));
 const PharmacistStock         = lazy(() => import("./pages/pharmacist/StockPage"));
 const PharmacistCatalog       = lazy(() => import("./pages/pharmacist/CatalogPage"));
+const PharmacistDrugFormSetup = lazy(() => import("./pages/pharmacist/DrugFormSetupPage"));
 
 // Shared — generic self-service "My Profile" (photo upload) for any
 // non-doctor staff role. Doctor has its own richer version.
@@ -232,6 +234,8 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskDashboard /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.REGISTER_PATIENT}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskRegisterPatient /></ProtectedRoute>} />
+          <Route path={ROUTES.FRONT_DESK.PATIENTS}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskPatients /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.APPOINTMENTS}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskAppointments /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.QUEUE}
@@ -264,6 +268,8 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><PharmacistStock /></ProtectedRoute>} />
           <Route path={ROUTES.PHARMACIST.CATALOG}
             element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><PharmacistCatalog /></ProtectedRoute>} />
+          <Route path={ROUTES.PHARMACIST.DRUG_FORM_SETUP}
+            element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><PharmacistDrugFormSetup /></ProtectedRoute>} />
           <Route path={ROUTES.PHARMACIST.MY_PROFILE}
             element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><SharedMyProfile /></ProtectedRoute>} />
 

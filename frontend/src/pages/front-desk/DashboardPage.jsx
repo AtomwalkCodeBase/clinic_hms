@@ -76,10 +76,10 @@ export default function FrontDeskDashboardPage() {
               {photo ? <img src={photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : firstName?.charAt(0)}
             </div>
             <div>
-              <div style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 500 }}>
+              <div className="page-greeting-title">
                 {greeting()}, <em style={{ fontStyle: "italic", color: "var(--color-primary)" }}>{firstName}</em>
               </div>
-              <div style={{ fontSize: 13, color: "var(--color-text-muted)", marginTop: 4 }}>
+              <div className="page-greeting-sub">
                 Front desk overview · {dateStr}
               </div>
             </div>

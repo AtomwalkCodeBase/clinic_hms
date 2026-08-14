@@ -13,11 +13,18 @@
  * across all of them without needing a synced per-user setting.
  */
 import { createContext, useContext, useState, useEffect, useMemo, useCallback } from "react";
-import { THEME_FAMILIES, THEMES, DEFAULT_THEME_ID, getThemeById } from "../config/themes.config";
+import { THEMES, DEFAULT_THEME_ID, getThemeById } from "../config/themes.config";
 import { deriveThemeVars } from "../utils/theme";
 
 const STORAGE_KEY = "atomwalk_theme";
 const ThemeContext = createContext(null);
+
+// "forest" is the only theme with hand-tuned values baked directly into
+// styles/variables.css (every other theme, including the app default, is
+// derived at apply-time). Kept as its own constant — decoupled from
+// DEFAULT_THEME_ID — so picking "Forest" from the switcher always gets the
+// exact original stylesheet, regardless of which theme the app defaults to.
+const ORIGINAL_STYLESHEET_THEME_ID = "forest";
 
 function readStoredThemeId() {
   try {
@@ -34,9 +41,9 @@ export function ThemeProvider({ children }) {
   useEffect(() => {
     const root = document.documentElement;
     const vars = deriveThemeVars(getThemeById(themeId));
-    if (themeId === DEFAULT_THEME_ID) {
-      // Original theme — clear any inline overrides so the hand-tuned
-      // values in variables.css take over again, unmodified.
+    if (themeId === ORIGINAL_STYLESHEET_THEME_ID) {
+      // Forest — clear any inline overrides so the hand-tuned values in
+      // variables.css take over again, unmodified.
       Object.keys(vars).forEach(key => root.style.removeProperty(key));
     } else {
       Object.entries(vars).forEach(([key, value]) => root.style.setProperty(key, value));
@@ -57,7 +64,7 @@ export function ThemeProvider({ children }) {
     themeId,
     theme: getThemeById(themeId),
     setTheme,
-    families: THEME_FAMILIES,
+    themes: THEMES,
   }), [themeId, setTheme]);
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

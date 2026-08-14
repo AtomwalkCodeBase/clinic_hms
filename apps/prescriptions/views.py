@@ -5,8 +5,8 @@ from core.response import success, created, error, not_found
 from core.permissions import IsDoctor, IsPharmacist, IsHospitalStaff, RequireFeature
 from core.utils.nntm import get_next_number
 from core.pagination import paginate_queryset
-from .serializers import DrugSerializer, PrescriptionSerializer, PrescriptionItemSerializer
-from .models import Drug, Prescription, PrescriptionItem
+from .serializers import DrugSerializer, DrugFormTypeSerializer, PrescriptionSerializer, PrescriptionItemSerializer
+from .models import Drug, DrugFormType, Prescription, PrescriptionItem
 
 
 class DrugSearchView(APIView):
@@ -29,7 +29,13 @@ class DrugCatalogView(APIView):
                                           pharmacy's "receive stock" picker).
                                           Pass ?include_inactive=1 (pharmacist
                                           catalog management screen) to also
-                                          see deactivated ones.
+                                          see deactivated ones. Pass ?page=
+                                          (pharmacist's Drug Catalog Setup
+                                          list) for a paginated {results,
+                                          pagination} shape instead — the
+                                          doctor dropdown and stock picker
+                                          never pass ?page=, so they keep
+                                          getting the plain full list.
     POST /api/v1/prescriptions/drugs/  — pharmacist adds a new drug to the
                                           catalog. Doctors/nurses/etc. only
                                           get read access — the catalog is
@@ -44,6 +50,14 @@ class DrugCatalogView(APIView):
         drugs = Drug.objects.using(request.tenant_db)
         if request.query_params.get("include_inactive") != "1":
             drugs = drugs.filter(is_active=True)
+
+        if "page" in request.query_params:
+            page_items, meta = paginate_queryset(request, drugs)
+            return success(data={
+                "results": DrugSerializer(page_items, many=True).data,
+                "pagination": meta,
+            })
+
         return success(data=DrugSerializer(drugs, many=True).data)
 
     def post(self, request):
@@ -79,6 +93,51 @@ class DrugCatalogView(APIView):
         )
         code, _ = get_next_number(branch_id=branch_id, entity="drug", using=db)
         return code
+
+
+class DrugFormTypeListCreateView(APIView):
+    """
+    GET  /api/v1/prescriptions/drug-forms/  — active list, for the Drug
+                                               Catalog's "Drug Form" dropdown.
+                                               Pass ?include_inactive=1 (Drug
+                                               Form Setup screen) to also see
+                                               deactivated ones.
+    POST /api/v1/prescriptions/drug-forms/  — pharmacist adds a new drug
+                                               form (e.g. "Suppository").
+    """
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAuthenticated(), IsPharmacist(), RequireFeature("feat_pharmacy")()]
+        return [IsAuthenticated(), IsHospitalStaff(), RequireFeature("feat_pharmacy")()]
+
+    def get(self, request):
+        forms = DrugFormType.objects.using(request.tenant_db)
+        if request.query_params.get("include_inactive") != "1":
+            forms = forms.filter(is_active=True)
+        return success(data=DrugFormTypeSerializer(forms, many=True).data)
+
+    def post(self, request):
+        s = DrugFormTypeSerializer(data=request.data)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        form = DrugFormType.objects.using(request.tenant_db).create(**s.validated_data)
+        return created(data=DrugFormTypeSerializer(form).data, message="Drug form added.")
+
+
+class DrugFormTypeDetailView(APIView):
+    """PATCH /api/v1/prescriptions/drug-forms/{id}/ — edit or deactivate a drug form."""
+    permission_classes = [IsAuthenticated, IsPharmacist, RequireFeature("feat_pharmacy")]
+
+    def patch(self, request, pk):
+        try:
+            form = DrugFormType.objects.using(request.tenant_db).get(pk=pk)
+        except DrugFormType.DoesNotExist:
+            return not_found("Drug form not found.")
+        s = DrugFormTypeSerializer(form, data=request.data, partial=True)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        s.save()
+        return success(data=DrugFormTypeSerializer(form).data, message="Drug form updated.")
 
 
 class DrugCatalogDetailView(APIView):

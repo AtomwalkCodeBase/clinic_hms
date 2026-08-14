@@ -13,23 +13,12 @@ import { useApi }    from "../../hooks/useApi";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import PaginationControls from "../../components/common/PaginationControls";
 
-const FORMS = [
-  { value: "tablet",    label: "Tablet" },
-  { value: "capsule",   label: "Capsule" },
-  { value: "syrup",     label: "Syrup" },
-  { value: "injection", label: "Injection" },
-  { value: "drops",     label: "Drops" },
-  { value: "cream",     label: "Cream / Ointment" },
-  { value: "inhaler",   label: "Inhaler" },
-  { value: "patch",     label: "Patch" },
-  { value: "other",     label: "Other" },
-];
+const EMPTY_FORM = { name: "", generic_name: "", drug_code: "", form: "", strength: "" };
 
-const EMPTY_FORM = { name: "", generic_name: "", drug_code: "", form: "tablet", strength: "" };
-
-function DrugForm({ initial, onSave, onCancel, saving }) {
-  const [form, setForm] = useState(initial || EMPTY_FORM);
+function DrugForm({ initial, drugForms, onSave, onCancel, saving }) {
+  const [form, setForm] = useState(() => initial || { ...EMPTY_FORM, form: drugForms[0]?.name || "" });
   function upd(k, v) { setForm(f => ({ ...f, [k]: v })); }
 
   function submit(e) {
@@ -57,9 +46,10 @@ function DrugForm({ initial, onSave, onCancel, saving }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
         <div>
-          <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>FORM</label>
+          <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>DRUG FORM</label>
           <select className="form-input" value={form.form} onChange={e => upd("form", e.target.value)}>
-            {FORMS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+            {drugForms.length === 0 && <option value="">No drug forms set up yet</option>}
+            {drugForms.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
           </select>
         </div>
         <div>
@@ -79,8 +69,17 @@ function DrugForm({ initial, onSave, onCancel, saving }) {
 
 export default function CatalogPage() {
   const { toastSuccess, toastApiError } = useToast();
-  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.PRESCRIPTIONS.DRUGS, { params: { include_inactive: 1 } });
-  const drugs = data || [];
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.PRESCRIPTIONS.DRUGS, {
+    params: { include_inactive: 1, page, page_size: pageSize },
+  });
+  const drugs = data?.results || [];
+  const pagination = data?.pagination || null;
+  // Drug-form dropdown needs every active form regardless of page — no
+  // ?page= passed here, so this stays the plain unpaginated list.
+  const { data: formsData } = useApi(API_ENDPOINTS.PRESCRIPTIONS.DRUG_FORMS);
+  const drugForms = formsData || [];
 
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -126,7 +125,7 @@ export default function CatalogPage() {
 
   return (
     <AppShell>
-      <PageShell title="Drug Catalog">
+      <PageShell title="Drug Catalog Setup">
         {!adding && editingId === null && (
           <button className="btn-primary" style={{ fontSize: 13, padding: "8px 18px", marginBottom: 16 }}
             onClick={() => setAdding(true)}>
@@ -135,12 +134,12 @@ export default function CatalogPage() {
         )}
 
         {adding && (
-          <DrugForm onSave={createDrug} onCancel={() => setAdding(false)} saving={saving} />
+          <DrugForm drugForms={drugForms} onSave={createDrug} onCancel={() => setAdding(false)} saving={saving} />
         )}
 
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
-            <span className="dot-label dot-label--green">Drugs ({drugs.length})</span>
+            <span className="dot-label dot-label--green">Drugs ({pagination ? pagination.total_count : drugs.length})</span>
           </div>
           {isLoading ? (
             <div style={{ padding: 40, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
@@ -167,6 +166,7 @@ export default function CatalogPage() {
                       <td colSpan={6}>
                         <DrugForm
                           initial={{ ...d }}
+                          drugForms={drugForms}
                           onSave={payload => updateDrug(d.id, payload)}
                           onCancel={() => setEditingId(null)}
                           saving={saving}
@@ -177,7 +177,7 @@ export default function CatalogPage() {
                     <tr key={d.id} style={{ opacity: d.is_active ? 1 : 0.5 }}>
                       <td style={{ fontWeight: 600, fontSize: 13 }}>{d.name}{d.drug_code && <span style={{ color: "var(--color-text-muted)", fontWeight: 400 }}> ({d.drug_code})</span>}</td>
                       <td style={{ fontSize: 12 }}>{d.generic_name || "—"}</td>
-                      <td style={{ fontSize: 12, textTransform: "capitalize" }}>{d.form}</td>
+                      <td style={{ fontSize: 12 }}>{d.form}</td>
                       <td style={{ fontSize: 13 }}>{d.strength || "—"}</td>
                       <td>
                         <span className={`badge ${d.is_active ? "badge--success" : "badge--neutral"}`}>
@@ -200,6 +200,11 @@ export default function CatalogPage() {
               </tbody>
             </table>
           )}
+          <PaginationControls
+            pagination={pagination}
+            page={page} pageSize={pageSize}
+            onPageChange={setPage} onPageSizeChange={setPageSize}
+          />
         </div>
       </PageShell>
     </AppShell>

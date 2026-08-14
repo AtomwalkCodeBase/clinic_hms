@@ -8,7 +8,8 @@
  *   - Recent invoices — "Record Payment" collects cash/card/UPI against
  *     whatever's still outstanding.
  */
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useApi }    from "../../hooks/useApi";
@@ -239,8 +240,19 @@ function PaymentModal({ invoice, onClose, onRecorded }) {
 
 export default function BillingPage() {
   const { toastApiError } = useToast();
-  const [billModal, setBillModal] = useState(null);
+  const location = useLocation();
+  const navigate = useNavigate();
+  // Arriving from the OPD Queue's "Bill" button for one specific patient —
+  // open straight to their invoice builder instead of landing on the
+  // generic billing page and making front desk hunt for the right row
+  // themselves in "Today's patients".
+  const [billModal, setBillModal] = useState(() => location.state?.appointment || null);
   const [payModal, setPayModal] = useState(null);
+
+  useEffect(() => {
+    if (location.state) navigate(location.pathname, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const { data: apptData, isLoading: apptLoading, refetch: refetchAppts } =
     useApi(API_ENDPOINTS.OPD.APPOINTMENTS, { params: { date: TODAY, page_size: 100 } });

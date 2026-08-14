@@ -32,19 +32,37 @@ function mix(hexA, hexB, t) {
 }
 
 const lighten = (hex, t) => mix(hex, "#FFFFFF", t);
+const darken = (hex, t) => mix(hex, "#000000", t);
+
+/**
+ * Perceived brightness (YIQ) of a hex color, 0-255. Used to decide whether
+ * hero text should be light or dark when the hero background is the theme's
+ * primary color itself (which ranges from near-black to near-white across
+ * the palette, unlike the old hand-picked-always-dark sidebar color).
+ */
+function yiq(hex) {
+  const [r, g, b] = hexToRgb(hex);
+  return (r * 299 + g * 587 + b * 114) / 1000;
+}
 
 /** The full CSS-variable name -> value map for a theme, ready to apply. */
 export function deriveThemeVars(t) {
+  // Hero (sidebar/topbar/hero-card) now uses the primary color directly,
+  // not a separately hand-picked darker shade — so light chips (Aqua,
+  // Teal Mist, Spring, ...) need dark text, and dark chips need light text.
+  const heroIsLight = yiq(t.primary) >= 145;
+  const heroText = heroIsLight ? t.text : t.sidebarText;
+
   return {
     "--color-primary": t.primary,
     "--color-primary-light": lighten(t.primary, 0.88),
     "--color-primary-dark": t.sidebar,
     "--color-accent": t.accent,
     "--color-accent-light": lighten(t.accent, 0.85),
-    "--color-hero": t.sidebar,
-    "--color-hero-2": mix(t.sidebar, t.primary, 0.35),
-    "--color-hero-text": t.sidebarText,
-    "--color-hero-muted": mix(t.sidebarText, t.sidebar, 0.5),
+    "--color-hero": t.primary,
+    "--color-hero-2": darken(t.primary, 0.15),
+    "--color-hero-text": heroText,
+    "--color-hero-muted": mix(heroText, t.primary, 0.5),
     "--color-bg": t.bg,
     "--color-surface": "#FFFFFF",
     "--color-border": t.border,

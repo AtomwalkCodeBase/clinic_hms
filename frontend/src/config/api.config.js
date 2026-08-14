@@ -159,6 +159,8 @@ export const API_ENDPOINTS = {
     DRUGS:            `${API_V1}/prescriptions/drugs/`,
     DRUG_ITEM:  (id) => `${API_V1}/prescriptions/drugs/${id}/`,
     DRUG_SEARCH:      `${API_V1}/prescriptions/drugs/search/`,
+    DRUG_FORMS:       `${API_V1}/prescriptions/drug-forms/`,
+    DRUG_FORM_ITEM: (id) => `${API_V1}/prescriptions/drug-forms/${id}/`,
   },
 
   LAB: {

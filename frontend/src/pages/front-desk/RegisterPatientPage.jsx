@@ -19,6 +19,7 @@ import { useToast }      from "../../hooks/useToast";
 import { useApi }        from "../../hooks/useApi";
 import apiClient         from "../../services/api.client";
 import API_ENDPOINTS     from "../../config/api.config";
+import PaginationControls from "../../components/common/PaginationControls";
 import { calcAge }       from "../../utils/age";
 import { sanitizeMobileInput, isValidMobile } from "../../utils/validation";
 import {
@@ -276,35 +277,44 @@ export default function RegisterPatientPage() {
   // query browses the most recently registered patients at this hospital
   // instead of showing a blank box — front desk can scan a short list
   // without needing an exact name/UHID first.
+  //
+  // The results list (and its pagination) is shared across BOTH tabs, not
+  // just Name/UHID — front desk shouldn't have to switch tabs just to
+  // browse/page through recently registered patients while on the Mobile
+  // Number tab.
   const [searchTab, setSearchTab] = useState("mobile"); // "mobile" | "name"
   const [nameQuery, setNameQuery] = useState("");
   const [nameResults, setNameResults] = useState(null); // null = not loaded yet
   const [nameIsBrowse, setNameIsBrowse] = useState(true);
   const [nameSearchLoading, setNameSearchLoading] = useState(false);
+  const [namePagination, setNamePagination] = useState(null);
+  const [namePage, setNamePage] = useState(1);
+  const [namePageSize, setNamePageSize] = useState(10);
   const nameDebounce = useRef(null);
 
-  function runNameSearch(q) {
+  function runNameSearch(q, page = namePage, pageSize = namePageSize) {
     setNameSearchLoading(true);
-    apiClient.get(API_ENDPOINTS.PATIENTS.SEARCH, { params: q ? { q } : {} })
+    apiClient.get(API_ENDPOINTS.PATIENTS.SEARCH, { params: { ...(q ? { q } : {}), page, page_size: pageSize } })
       .then(({ data: res }) => {
         setNameResults(res?.data?.results || []);
         setNameIsBrowse(!!res?.data?.is_browse);
+        setNamePagination(res?.data?.pagination || null);
       })
-      .catch(() => setNameResults([]))
+      .catch(() => { setNameResults([]); setNamePagination(null); })
       .finally(() => setNameSearchLoading(false));
   }
 
-  // Load the default "recently registered" browse list as soon as this tab
-  // is opened, then re-search (debounced) on every keystroke after that.
+  // Loads the default "recently registered" browse list on mount (empty
+  // query), then re-searches (debounced) whenever the query, page, or page
+  // size changes — regardless of which tab is currently active.
   useEffect(() => {
-    if (searchTab !== "name") return;
     clearTimeout(nameDebounce.current);
     const q = nameQuery.trim();
     if (q && q.length < 2) return; // too short to search, but not empty — wait for more input
-    nameDebounce.current = setTimeout(() => runNameSearch(q), q ? 300 : 0);
+    nameDebounce.current = setTimeout(() => runNameSearch(q, namePage, namePageSize), q ? 300 : 0);
     return () => clearTimeout(nameDebounce.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchTab, nameQuery]);
+  }, [nameQuery, namePage, namePageSize]);
 
   // Fields that must be a plain 10-digit mobile number — sanitized on every
   // keystroke (strip non-digits, cap at 10) so the field can never end up
@@ -348,9 +358,15 @@ export default function RegisterPatientPage() {
 
     setLoading(true);
     try {
-      await apiClient.post("/api/v1/patients/register/", form);
+      const { data: envelope } = await apiClient.post("/api/v1/patients/register/", form);
+      const patient = envelope?.data;
       toastSuccess("Patient registered successfully.");
-      navigate("/front-desk/queue");
+      // Straight to booking, not the queue — a freshly registered patient
+      // has no appointment yet, so the queue (which only ever shows today's
+      // appointments) would just look empty and silently "lose" them. This
+      // is also the reason a new registration used to look like it "didn't
+      // show up" in the queue: it never should have until it's booked.
+      navigate("/front-desk/appointments", { state: { patient, justRegistered: true } });
     } catch (err) {
       if (err?.errors) setErrors(err.errors);
       toastApiError(err, "Registration failed.");
@@ -434,12 +450,13 @@ export default function RegisterPatientPage() {
                     </div>
                   </div>
                   <div style={{ fontSize: 12, color: "#7f1d1d", lineHeight: 1.6, marginBottom: 10 }}>
-                    Use their existing record instead of creating a new one — find them in Appointments or
-                    Queue by UHID or name.
+                    Use their existing record instead of creating a new one — book their appointment directly.
                   </div>
                   <button type="button" className="btn-primary" style={{ fontSize: 12, padding: "6px 14px" }}
-                    onClick={() => navigate("/front-desk/queue")}>
-                    Go to Queue →
+                    onClick={() => navigate("/front-desk/appointments", {
+                      state: { prefillQuery: lookup.existing_uhid || lookup.full_name },
+                    })}>
+                    Book Appointment →
                   </button>
                 </div>
               )}
@@ -515,8 +532,10 @@ export default function RegisterPatientPage() {
                           </div>
                           {m.already_registered_here ? (
                             <button type="button" className="btn-outline" style={{ fontSize: 11, padding: "5px 12px" }}
-                              onClick={() => navigate("/front-desk/queue")}>
-                              Already here — Go to Queue
+                              onClick={() => navigate("/front-desk/appointments", {
+                                state: { prefillQuery: m.full_name },
+                              })}>
+                              Already here — Book Appointment
                             </button>
                           ) : (
                             <button type="button" className="btn-primary" style={{ fontSize: 11, padding: "5px 12px" }}
@@ -587,98 +606,107 @@ export default function RegisterPatientPage() {
               )}
             </>
           ) : (
-            <>
-              <FieldGroup label="Patient Name, UHID, AWPID, or Mobile">
-                <div style={{ display: "flex", gap: 8 }}>
-                  <div style={{ flex: 1, position: "relative" }}>
-                    <Input value={nameQuery}
-                      onChange={e => setNameQuery(e.target.value)}
-                      onKeyDown={e => e.key === "Enter" && (e.preventDefault(), runNameSearch(nameQuery.trim()))}
-                      placeholder="Start typing a name, UHID, AWPID, or mobile…" autoFocus />
-                    {nameSearchLoading && (
-                      <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--color-text-muted)" }}>
-                        Searching…
-                      </span>
-                    )}
-                  </div>
-                  <button type="button" className="btn-primary" style={{ padding: "0 20px" }}
-                    onClick={() => runNameSearch(nameQuery.trim())} disabled={nameQuery.trim().length === 1 || nameSearchLoading}>
-                    Search
-                  </button>
+            <FieldGroup label="Patient Name, UHID, AWPID, or Mobile">
+              <div style={{ display: "flex", gap: 8 }}>
+                <div style={{ flex: 1, position: "relative" }}>
+                  <Input value={nameQuery}
+                    onChange={e => { setNameQuery(e.target.value); setNamePage(1); }}
+                    onKeyDown={e => e.key === "Enter" && (e.preventDefault(), setNamePage(1), runNameSearch(nameQuery.trim(), 1, namePageSize))}
+                    placeholder="Start typing a name, UHID, AWPID, or mobile…" autoFocus />
+                  {nameSearchLoading && (
+                    <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "var(--color-text-muted)" }}>
+                      Searching…
+                    </span>
+                  )}
                 </div>
-              </FieldGroup>
+                <button type="button" className="btn-primary" style={{ padding: "0 20px" }}
+                  onClick={() => { setNamePage(1); runNameSearch(nameQuery.trim(), 1, namePageSize); }}
+                  disabled={nameQuery.trim().length === 1 || nameSearchLoading}>
+                  Search
+                </button>
+              </div>
+            </FieldGroup>
+          )}
 
-              {nameResults != null && (
-                <>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", margin: "4px 0 8px" }}>
-                    {nameIsBrowse
-                      ? `Recently registered at this hospital${nameResults.length ? ` (${nameResults.length})` : ""}`
-                      : `${nameResults.length} match${nameResults.length === 1 ? "" : "es"} for "${nameQuery}"`}
+          {/* Shared browse/search results list — visible under BOTH tabs, so
+              front desk can page through recently registered patients (or an
+              in-progress name/UHID search) without switching tabs. */}
+          {nameResults != null && (
+            <div style={{ marginTop: searchTab === "mobile" ? 16 : 0, paddingTop: searchTab === "mobile" ? 14 : 0, borderTop: searchTab === "mobile" ? "1px dashed var(--color-border)" : "none" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", margin: "4px 0 8px" }}>
+                {nameIsBrowse
+                  ? `Recently registered at this hospital${namePagination ? ` (${namePagination.total_count})` : ""}`
+                  : `${namePagination ? namePagination.total_count : nameResults.length} match${(namePagination ? namePagination.total_count : nameResults.length) === 1 ? "" : "es"} for "${nameQuery}"`}
+              </div>
+
+              {nameResults.length === 0 ? (
+                <div style={{
+                  textAlign: "center", padding: "28px 16px", color: "var(--color-text-muted)",
+                  background: "#F8FAFC", border: "1px dashed var(--color-border)", borderRadius: 10,
+                }}>
+                  <Search size={24} style={{ marginBottom: 6 }} />
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>
+                    {nameIsBrowse ? "No patients registered here yet" : `No patients matched "${nameQuery}"`}
                   </div>
-
-                  {nameResults.length === 0 ? (
-                    <div style={{
-                      textAlign: "center", padding: "28px 16px", color: "var(--color-text-muted)",
-                      background: "#F8FAFC", border: "1px dashed var(--color-border)", borderRadius: 10,
-                    }}>
-                      <Search size={24} style={{ marginBottom: 6 }} />
-                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>
-                        {nameIsBrowse ? "No patients registered here yet" : `No patients matched "${nameQuery}"`}
-                      </div>
-                      <div style={{ fontSize: 12 }}>
-                        {nameIsBrowse ? "New registrations will show up here." : "Try Mobile Number, or create a new record below."}
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ display: "grid", gap: 8, maxHeight: 420, overflowY: "auto" }}>
-                      {nameResults.map(p => {
-                        const age = calcAge(p.date_of_birth);
-                        const initials = (p.full_name || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
-                        return (
-                          <div key={p.id} style={{
-                            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-                            background: "#fff", border: "1px solid var(--color-border)", borderRadius: 10,
-                            padding: "12px 16px", transition: "box-shadow 0.15s, border-color 0.15s",
-                          }}
-                            onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--color-primary)"; e.currentTarget.style.boxShadow = "0 2px 10px rgba(0,0,0,0.06)"; }}
-                            onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--color-border)"; e.currentTarget.style.boxShadow = "none"; }}
-                          >
-                            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-                              <div style={{
-                                width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
-                                background: "#EDE9FF", color: "#5B52EE",
-                                display: "flex", alignItems: "center", justifyContent: "center",
-                                fontSize: 13, fontWeight: 700,
-                              }}>{initials}</div>
-                              <div style={{ minWidth: 0 }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                                  <span style={{ fontWeight: 700, fontSize: 13.5 }}>{p.full_name}</span>
-                                  {p.is_dependent && (
-                                    <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 10, background: "#F1E9FA", color: "#6B3FA0" }}>
-                                      Dependent{p.guardian_relation ? ` · ${p.guardian_relation}` : ""}
-                                    </span>
-                                  )}
-                                </div>
-                                <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginTop: 2, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                  <span>UHID {p.uhid}</span>
-                                  {p.mobile && <span>· {p.mobile}</span>}
-                                  {(age != null || p.gender) && <span>· {[age != null ? `${age}y` : null, p.gender].filter(Boolean).join(" ")}</span>}
-                                  {p.branch_name && <span>· {p.branch_name}</span>}
-                                </div>
+                  <div style={{ fontSize: 12 }}>
+                    {nameIsBrowse ? "New registrations will show up here." : "Try Mobile Number, or create a new record below."}
+                  </div>
+                </div>
+              ) : (
+                <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                  <div style={{ display: "grid", gap: 8, padding: 10, maxHeight: 420, overflowY: "auto" }}>
+                    {nameResults.map(p => {
+                      const age = calcAge(p.date_of_birth);
+                      const initials = (p.full_name || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
+                      return (
+                        <div key={p.id} style={{
+                          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                          background: "#fff", border: "1px solid var(--color-border)", borderRadius: 10,
+                          padding: "12px 16px", transition: "box-shadow 0.15s, border-color 0.15s",
+                        }}
+                          onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--color-primary)"; e.currentTarget.style.boxShadow = "0 2px 10px rgba(0,0,0,0.06)"; }}
+                          onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--color-border)"; e.currentTarget.style.boxShadow = "none"; }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                            <div style={{
+                              width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
+                              background: "#EDE9FF", color: "#5B52EE",
+                              display: "flex", alignItems: "center", justifyContent: "center",
+                              fontSize: 13, fontWeight: 700,
+                            }}>{initials}</div>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span style={{ fontWeight: 700, fontSize: 13.5 }}>{p.full_name}</span>
+                                {p.is_dependent && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 10, background: "#F1E9FA", color: "#6B3FA0" }}>
+                                    Dependent{p.guardian_relation ? ` · ${p.guardian_relation}` : ""}
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginTop: 2, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                <span>UHID {p.uhid}</span>
+                                {p.mobile && <span>· {p.mobile}</span>}
+                                {(age != null || p.gender) && <span>· {[age != null ? `${age}y` : null, p.gender].filter(Boolean).join(" ")}</span>}
+                                {p.branch_name && <span>· {p.branch_name}</span>}
                               </div>
                             </div>
-                            <button type="button" className="btn-outline" style={{ fontSize: 12, padding: "6px 14px", flexShrink: 0 }}
-                              onClick={() => navigate("/front-desk/appointments")}>
-                              Book Appointment →
-                            </button>
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </>
+                          <button type="button" className="btn-outline" style={{ fontSize: 12, padding: "6px 14px", flexShrink: 0 }}
+                            onClick={() => navigate("/front-desk/appointments", { state: { patient: p } })}>
+                            Book Appointment →
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <PaginationControls
+                    pagination={namePagination}
+                    page={namePage} pageSize={namePageSize}
+                    onPageChange={setNamePage} onPageSizeChange={setNamePageSize}
+                  />
+                </div>
               )}
-            </>
+            </div>
           )}
         </SectionCard>
 

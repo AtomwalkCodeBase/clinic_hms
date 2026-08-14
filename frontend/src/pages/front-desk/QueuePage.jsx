@@ -9,6 +9,7 @@ import { useNavigate } from "react-router-dom";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import DependentBadge from "../../components/common/DependentBadge";
+import PaginationControls from "../../components/common/PaginationControls";
 import { useApi }    from "../../hooks/useApi";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
@@ -32,9 +33,10 @@ export default function FrontDeskQueuePage() {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(null);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const { data: apptData, isLoading, refetch } = useApi(API_ENDPOINTS.OPD.APPOINTMENTS, {
-    params: { date: TODAY, page, page_size: 20 },
+    params: { date: TODAY, page, page_size: pageSize },
   });
   const appointments = apptData?.results || [];
   const pagination   = apptData?.pagination || null;
@@ -179,7 +181,7 @@ export default function FrontDeskQueuePage() {
                         )}
                         {a.payment_preference === "pay_at_desk" && a.status !== "cancelled" && (
                           <button className="btn-outline" style={{ fontSize: 11, padding: "5px 12px" }}
-                            onClick={() => navigate(ROUTES.FRONT_DESK.BILLING)}>
+                            onClick={() => navigate(ROUTES.FRONT_DESK.BILLING, { state: { appointment: a } })}>
                             Bill
                           </button>
                         )}
@@ -191,29 +193,11 @@ export default function FrontDeskQueuePage() {
             </table>
           )}
 
-          {pagination && pagination.total_pages > 1 && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, padding: "16px 20px", borderTop: "1px solid var(--color-border)" }}>
-              <button
-                className="btn-outline"
-                style={{ fontSize: 12, padding: "6px 14px" }}
-                disabled={!pagination.has_previous}
-                onClick={() => setPage(p => Math.max(1, p - 1))}
-              >
-                ← Previous
-              </button>
-              <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
-                Page {pagination.page} of {pagination.total_pages}
-              </span>
-              <button
-                className="btn-outline"
-                style={{ fontSize: 12, padding: "6px 14px" }}
-                disabled={!pagination.has_next}
-                onClick={() => setPage(p => Math.min(pagination.total_pages, p + 1))}
-              >
-                Next →
-              </button>
-            </div>
-          )}
+          <PaginationControls
+            pagination={pagination}
+            page={page} pageSize={pageSize}
+            onPageChange={setPage} onPageSizeChange={setPageSize}
+          />
         </div>
       </PageShell>
     </AppShell>

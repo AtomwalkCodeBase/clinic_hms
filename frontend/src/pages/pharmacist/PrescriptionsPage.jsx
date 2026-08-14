@@ -20,6 +20,7 @@ import { useApi }    from "../../hooks/useApi";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import PaginationControls from "../../components/common/PaginationControls";
 
 function DispenseModal({ item, rx, stock, onClose, onDone }) {
   const { toastSuccess, toastApiError } = useToast();
@@ -101,13 +102,20 @@ function DispenseModal({ item, rx, stock, onClose, onDone }) {
 
 export default function PrescriptionsPage() {
   const [tab, setTab] = useState("finalized");
-  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.PHARMACY.PRESCRIPTIONS, { params: { status: tab, page_size: 100 } });
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.PHARMACY.PRESCRIPTIONS, { params: { status: tab, page, page_size: pageSize } });
+  // Full (unpaginated) batch list — the dispense modal below name-matches
+  // against every batch on hand, not just whatever's on the current page of
+  // this list, so this stays a plain high-cap fetch rather than a paged one.
   const { data: stockData, refetch: refetchStock } = useApi(API_ENDPOINTS.PHARMACY.STOCK, { params: { page_size: 500 } });
   const stock = stockData?.results || [];
   const prescriptions = data?.results || [];
+  const pagination = data?.pagination || null;
 
   const [target, setTarget] = useState(null); // { item, rx }
 
+  function switchTab(val) { setTab(val); setPage(1); }
   function refreshAll() { refetch(); refetchStock(); }
 
   return (
@@ -116,7 +124,7 @@ export default function PrescriptionsPage() {
         <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
           {[["finalized", "Pending"], ["dispensed", "Dispensed"]].map(([val, label]) => (
             <button key={val} className={tab === val ? "btn-primary" : "btn-outline"}
-              style={{ fontSize: 12, padding: "6px 16px" }} onClick={() => setTab(val)}>
+              style={{ fontSize: 12, padding: "6px 16px" }} onClick={() => switchTab(val)}>
               {label}
             </button>
           ))}
@@ -124,7 +132,7 @@ export default function PrescriptionsPage() {
 
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
-            <span className="dot-label dot-label--green">{tab === "finalized" ? "Waiting to be dispensed" : "Completed"} ({prescriptions.length})</span>
+            <span className="dot-label dot-label--green">{tab === "finalized" ? "Waiting to be dispensed" : "Completed"} ({pagination ? pagination.total_count : prescriptions.length})</span>
             <button className="btn-outline" style={{ fontSize: 12, padding: "5px 14px" }} onClick={refreshAll}>Refresh</button>
           </div>
 
@@ -184,6 +192,11 @@ export default function PrescriptionsPage() {
               ))}
             </div>
           )}
+          <PaginationControls
+            pagination={pagination}
+            page={page} pageSize={pageSize}
+            onPageChange={setPage} onPageSizeChange={setPageSize}
+          />
         </div>
 
         {target && (

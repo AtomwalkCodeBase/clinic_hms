@@ -205,7 +205,7 @@ export default function DoctorQueuePage() {
                           {(appt.status === "waiting" || appt.status === "vitals_done") && (
                             <button
                               className="btn-primary"
-                              style={{ fontSize: 11, padding: "5px 12px", background: appt.status === "vitals_done" ? "#16A34A" : undefined }}
+                              style={{ fontSize: 11, padding: "5px 12px" }}
                               disabled={busy}
                               onClick={() => startEncounter(appt)}
                             >
@@ -215,7 +215,7 @@ export default function DoctorQueuePage() {
                           {appt.status === "in_progress" && (
                             <button
                               className="btn-primary"
-                              style={{ fontSize: 11, padding: "5px 12px", background: "#10B981" }}
+                              style={{ fontSize: 11, padding: "5px 12px" }}
                               disabled={busy}
                               onClick={() => navigate(`/doctor/encounter/${appt.encounter?.id || appt.id}`)}
                             >

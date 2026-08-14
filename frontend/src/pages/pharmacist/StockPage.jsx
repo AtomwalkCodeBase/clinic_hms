@@ -14,6 +14,7 @@ import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import PaginationControls from "../../components/common/PaginationControls";
 
 const EMPTY_FORM = {
   drug: null, drug_label: "", batch_number: "", expiry_date: "",
@@ -131,8 +132,18 @@ function ReceiveForm({ onSave, onCancel, saving }) {
 export default function StockPage() {
   const { user } = useAuth();
   const { toastSuccess, toastApiError } = useToast();
-  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.PHARMACY.STOCK, { params: { page_size: 200 } });
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.PHARMACY.STOCK, { params: { page, page_size: pageSize } });
   const stock = data?.results || [];
+  const pagination = data?.pagination || null;
+  // Separate lightweight call for the low-stock badge — now that the main
+  // list is paginated, counting `stock.filter(s => s.is_low)` would only
+  // reflect whatever's on the current page instead of the whole inventory.
+  const { data: lowData, refetch: refetchLow } = useApi(API_ENDPOINTS.PHARMACY.STOCK, {
+    params: { low_only: 1, page: 1, page_size: 1 },
+  });
+  const lowCount = lowData?.pagination?.total_count ?? 0;
 
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -148,14 +159,13 @@ export default function StockPage() {
       toastSuccess("Stock received.");
       setAdding(false);
       refetch();
+      refetchLow();
     } catch (err) {
       toastApiError(err, "Could not receive stock.");
     } finally {
       setSaving(false);
     }
   }
-
-  const lowCount = stock.filter(s => s.is_low).length;
 
   return (
     <AppShell>
@@ -173,7 +183,7 @@ export default function StockPage() {
 
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
-            <span className="dot-label dot-label--green">Batches ({stock.length})</span>
+            <span className="dot-label dot-label--green">Batches ({pagination ? pagination.total_count : stock.length})</span>
             {lowCount > 0 && <span className="badge badge--error">{lowCount} low on stock</span>}
           </div>
           {isLoading ? (
@@ -212,6 +222,11 @@ export default function StockPage() {
               </tbody>
             </table>
           )}
+          <PaginationControls
+            pagination={pagination}
+            page={page} pageSize={pageSize}
+            onPageChange={setPage} onPageSizeChange={setPageSize}
+          />
         </div>
       </PageShell>
     </AppShell>

@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 
 from core.response import success, created, error, not_found
+from core.pagination import paginate_queryset
 
 logger = logging.getLogger(__name__)
 from core.permissions import IsHospitalStaff, IsDoctorOrNurse, IsFrontDesk
@@ -80,6 +81,8 @@ class PatientLookupView(APIView):
 class PatientSearchView(APIView):
     """
     GET /api/v1/patients/search/?q=&branch_id=
+    GET /api/v1/patients/search/?page=&page_size=  (full paginated list — see below)
+
     Empty/missing q browses the most recently registered patients at this
     hospital instead of erroring — lets front desk scan a short list to
     pick from when they don't have an exact name/UHID/mobile to search yet.
@@ -96,10 +99,23 @@ class PatientSearchView(APIView):
             branch_id=int(branch_id) if branch_id else None,
             db_name=request.tenant_db,
         )
-        # Typeahead search — not paginated with page controls (that'd be an
-        # unusual UX for a live-search box), but we cap results and tell the
-        # caller how many total matches exist so the UI can prompt the user
-        # to refine their search instead of silently truncating.
+
+        # Two callers share this endpoint:
+        #   1. Typeahead search boxes (register/appointments patient picker)
+        #      — no ?page=, capped at 50 with a truncated/total_matches hint
+        #      instead of page controls, which would be an odd UX for a
+        #      live-search dropdown.
+        #   2. A full "All Patients" list screen — passes ?page= explicitly
+        #      and gets real page/page_size/total_pages controls back, same
+        #      shape as AppointmentListCreateView's pagination.
+        if "page" in request.query_params:
+            page_items, meta = paginate_queryset(request, qs)
+            return success(data={
+                "results": PatientSearchSerializer(page_items, many=True).data,
+                "pagination": meta,
+                "is_browse": not query,
+            })
+
         total_matches = qs.count()
         limit = 50
         return success(data={

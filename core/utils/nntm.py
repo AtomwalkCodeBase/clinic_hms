@@ -29,7 +29,7 @@ def get_next_number(branch_id: int, entity: str, using: str = "default") -> tupl
         branch_id: The branch this number belongs to. For 'employee_id',
                    which is a hospital-wide (not per-branch) sequence, pass 0
                    — see apps.org.views._next_employee_id.
-        entity:    One of: 'uhid', 'invoice', 'lab_report', 'lab_test', 'prescription', 'queue', 'employee_id'.
+        entity:    One of: 'uhid', 'invoice', 'lab_report', 'lab_test', 'prescription', 'queue', 'employee_id', 'drug'.
         using:     The database alias to use (tenant DB name).
 
     Returns:
@@ -43,7 +43,13 @@ def get_next_number(branch_id: int, entity: str, using: str = "default") -> tupl
     # Import here to avoid circular imports
     from apps.org.models import NextNumber
 
-    VALID_ENTITIES = {"uhid", "invoice", "lab_report", "lab_test", "prescription", "queue", "employee_id"}
+    # 'drug' was missing here even though DrugCatalogView._next_drug_code()
+    # (apps/prescriptions/views.py) has called get_next_number(entity="drug")
+    # since the drug catalog was built — every manual "Add Drug" submission
+    # with a blank code was hitting this ValueError. Added alongside the
+    # drug-form-configurability work when the same bug showed up seeding
+    # demo data.
+    VALID_ENTITIES = {"uhid", "invoice", "lab_report", "lab_test", "prescription", "queue", "employee_id", "drug"}
     if entity not in VALID_ENTITIES:
         raise ValueError(f"Unknown entity '{entity}'. Must be one of: {VALID_ENTITIES}")
 
