@@ -287,6 +287,12 @@ class DoctorProfile(models.Model):
     gender          = models.CharField(max_length=1, choices=GENDER_CHOICES, blank=True)
     experience_years= models.PositiveSmallIntegerField(null=True, blank=True)
     consultation_fee= models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    # Charged instead of consultation_fee when the appointment_type is
+    # "followup" (see apps/opd/views.py::_resolve_doctor_consultation_fee).
+    # Left null by default — falls back to consultation_fee, so doctors who
+    # don't set this keep charging the same flat fee for every visit type,
+    # same as before this field existed.
+    followup_fee    = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
     digital_signature = models.TextField(blank=True)  # base64 or file path
 
     # ── Self-service fields — filled by the doctor themselves after login,
@@ -362,7 +368,14 @@ class AuditLog(models.Model):
     Deliberately append-only from the application layer — no update/delete
     API is exposed for this model.
     """
-    actor_user_id   = models.UUIDField(null=True, blank=True, db_index=True)
+    # StaffUser's PK is a plain BigAutoField (see StaffUser above), not a
+    # UUID — this was a UUIDField until 2026-08-17, which meant every
+    # log_action() call for an authenticated staff actor was silently
+    # failing at INSERT time (log_action() swallows all exceptions by
+    # design), so actor_user_id was never actually being recorded. Fixed to
+    # match the real PK type; see apps/compliance/views.py::AuditLogListView
+    # for where this table is actually read.
+    actor_user_id   = models.BigIntegerField(null=True, blank=True, db_index=True)
     actor_email     = models.CharField(max_length=255, blank=True)
     actor_role      = models.CharField(max_length=30, blank=True)
     action          = models.CharField(max_length=50, db_index=True)   # e.g. "encounter.sign", "patient.view"
@@ -444,3 +457,68 @@ class DoctorAvailabilitySlot(models.Model):
         if not self.is_available:
             return f"{day}: off"
         return f"{day}: {self.start_time}–{self.end_time}"
+
+
+class Room(models.Model):
+    """
+    A physical consultation/procedure room at a branch, on a given floor.
+    Doctors are NOT assigned here directly — a room can be shared by several
+    doctors across the week (see RoomAssignment). This table is just the
+    room's own identity (which floor, what it's called, what kind of room).
+    """
+    ROOM_TYPE_CHOICES = [
+        ("consultation", "Consultation"),
+        ("procedure",    "Procedure"),
+        ("other",        "Other"),
+    ]
+
+    branch      = models.ForeignKey(Branch, on_delete=models.CASCADE, related_name="rooms")
+    floor       = models.CharField(max_length=30, blank=True)   # e.g. "1", "Ground", "2nd Floor" — free text, no dedicated Floor table
+    name        = models.CharField(max_length=100)              # e.g. "Room 204", "OPD-3"
+    room_type   = models.CharField(max_length=20, choices=ROOM_TYPE_CHOICES, default="consultation")
+    is_active   = models.BooleanField(default=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "org"
+        db_table  = "room"
+        unique_together = [("branch", "name")]
+        ordering  = ["floor", "name"]
+
+    def __str__(self):
+        return f"{self.name} (Floor {self.floor or '—'}, {self.branch.name})"
+
+
+class RoomAssignment(models.Model):
+    """
+    A recurring weekly time slice: which doctor sits in which room, on which
+    day of the week, during which window. Several rows can share the same
+    room (different doctors, non-overlapping times) — that's the whole
+    point of this table. Overlap for the same room+day is rejected at the
+    API layer (see RoomAssignmentListCreateView.post) before a row is ever
+    written, the same way appointment double-booking is prevented.
+
+    day_of_week uses the same convention as DoctorAvailabilitySlot above
+    (Python's weekday(): 0=Monday … 6=Sunday) so both can be reasoned about
+    the same way when resolving "where is this doctor right now".
+    """
+    DAY_CHOICES = DoctorAvailabilitySlot.DAY_CHOICES
+
+    room        = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="assignments")
+    doctor      = models.ForeignKey(StaffUser, on_delete=models.CASCADE,
+                                    related_name="room_assignments",
+                                    limit_choices_to={"role": "doctor"})
+    day_of_week = models.SmallIntegerField(choices=DAY_CHOICES)
+    start_time  = models.TimeField()
+    end_time    = models.TimeField()
+    is_active   = models.BooleanField(default=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "org"
+        db_table  = "room_assignment"
+        ordering  = ["day_of_week", "start_time"]
+
+    def __str__(self):
+        day = dict(self.DAY_CHOICES).get(self.day_of_week, self.day_of_week)
+        return f"{self.room.name} — {self.doctor.get_full_name()} ({day} {self.start_time}–{self.end_time})"

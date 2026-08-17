@@ -164,11 +164,30 @@ class LabRequestListCreateView(APIView):
             except LabTest.DoesNotExist:
                 skipped.append(f"test {test_id} (not found or inactive)")
                 continue
+            # request_number: a real, sequential, quotable-at-the-counter
+            # token — NNTM entity="lab_request" (prefix "LR-"). This is a
+            # new entity (unlike "prescription", which already existed in
+            # the seed list before it was ever used), so existing tenants'
+            # branches won't have a counter row yet — self-heal the same
+            # defensive way _next_test_code() does for "lab_test" above.
+            # Never blocks ordering if it fails; the rare row left with
+            # request_number=None just isn't token-quotable, same as
+            # before this field existed.
+            request_number = None
+            try:
+                from apps.org.models import NextNumber
+                NextNumber.objects.using(db).get_or_create(
+                    branch_id=branch_id, entity="lab_request",
+                    defaults={"prefix": "LR-", "pad_length": 6, "last_number": 0},
+                )
+                request_number, _ = get_next_number(branch_id=branch_id, entity="lab_request", using=db)
+            except Exception as e:
+                logger.warning("Could not generate request_number for test_id=%s encounter=%s: %s", test_id, encounter_id, e)
             try:
                 row = LabRequest.objects.using(db).create(
                     patient=patient, encounter=enc, appointment_id=enc.appointment_id,
                     test=test, requested_by_id=request.user.id, branch_id=branch_id,
-                    urgency=urgency, clinical_notes=notes,
+                    urgency=urgency, clinical_notes=notes, request_number=request_number,
                 )
             except Exception as exc:
                 logger.exception("Failed to create LabRequest for test_id=%s encounter=%s", test_id, encounter_id)
@@ -184,6 +203,33 @@ class LabRequestListCreateView(APIView):
         if skipped:
             message += f" {len(skipped)} could not be ordered ({'; '.join(skipped)})."
         return created(data=LabRequestSerializer(created_rows, many=True, context={"db": db}).data, message=message)
+
+
+class LabRequestLookupView(APIView):
+    """
+    GET /api/v1/lab/requests/lookup/?request_number=LR-000123
+    The counter workflow: a patient walks up and quotes their request
+    number (shown to them in the portal once they choose in-house). Pulls
+    up the full request — patient details, test, status, and result if
+    already delivered — regardless of the active/completed tab or
+    pagination. Mirrors apps.pharmacy.views.PrescriptionLookupView.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalStaff, RequireFeature("feat_lab")]
+
+    def get(self, request):
+        request_number = (request.query_params.get("request_number") or "").strip()
+        if not request_number:
+            return error("request_number is required.")
+
+        db = request.tenant_db
+        try:
+            req = (LabRequest.objects.using(db)
+                   .select_related("test", "patient")
+                   .get(request_number__iexact=request_number))
+        except LabRequest.DoesNotExist:
+            return not_found("No lab request found for that number.")
+
+        return success(data=LabRequestSerializer(req, context={"db": db}).data)
 
 
 class LabRequestChoiceView(APIView):
@@ -243,6 +289,52 @@ class LabRequestStatusView(APIView):
             update_fields.append("collected_at")
         req.save(using=db, update_fields=update_fields)
         return success(data=LabRequestSerializer(req, context={"db": db}).data, message="Status updated.")
+
+
+def _bill_lab_request(req, db, user, tenant_id):
+    """
+    Create a real Invoice for this lab request, priced from LabTest.price —
+    mirrors apps.pharmacy.views.DispenseView's billing block, closing the
+    same gap on the lab side: choosing in-house never used to create an
+    actual payable Invoice, only a separate payment_status field that
+    BillingSummaryView tracked in isolation from real invoicing.
+
+    Fires at report delivery — the moment the test is confirmed actually
+    performed — not at in-house choice time, so a request that's chosen
+    in-house but then cancelled or never processed doesn't get billed for
+    a service that never happened. One Invoice per LabRequest (unlike
+    prescriptions, where multiple drug items can share one invoice, each
+    lab request is already its own billable unit). Never blocks report
+    delivery on failure — the report itself is already saved by the time
+    this runs.
+    """
+    if req.invoice_id:
+        return  # already billed (e.g. re-delivering an already-billed report)
+    try:
+        from decimal import Decimal
+        from apps.billing.models import Invoice, InvoiceItem
+        from apps.billing.views import _recompute_invoice_totals
+        from apps.opd.views import _tenant_default_tax_rate
+
+        price = req.test.price if req.test.price is not None else Decimal("0")
+        tax_rate = _tenant_default_tax_rate(tenant_id)
+        invoice_number, _ = get_next_number(branch_id=req.branch_id, entity="invoice", using=db)
+        invoice = Invoice.objects.using(db).create(
+            patient=req.patient, branch_id=req.branch_id, invoice_number=invoice_number,
+            status="draft", created_by_id=user.id,
+            notes=f"Auto-generated for lab request {req.request_number or req.id}",
+        )
+        InvoiceItem.objects.using(db).create(
+            invoice=invoice, description=req.test.name, quantity=1,
+            unit_price=price, tax_rate=tax_rate, total=price,
+        )
+        _recompute_invoice_totals(invoice, db)
+        req.invoice = invoice
+        req.save(using=db, update_fields=["invoice"])
+        logger.info("Billed lab request %s: invoice=%s test=%s price=%s",
+                    req.id, invoice.invoice_number, req.test.name, price)
+    except Exception as e:
+        logger.warning("Could not bill lab request %s: %s", req.id, e)
 
 
 class LabReportUploadView(APIView):
@@ -311,6 +403,7 @@ class LabReportUploadView(APIView):
         if deliver:
             req.status = "completed"
             req.save(using=db, update_fields=["status"])
+            _bill_lab_request(req, db, request.user, request.tenant_id)
 
         return created(data=LabReportSerializer(report).data,
                        message="Report delivered." if deliver else "Report saved as draft.")
@@ -334,5 +427,6 @@ class LabReportDeliverView(APIView):
         req = report.request
         req.status = "completed"
         req.save(using=request.tenant_db, update_fields=["status"])
+        _bill_lab_request(req, request.tenant_db, request.user, request.tenant_id)
         # Signal fires → SharedLabResult written to Registry DB
         return success(message="Report delivered.")

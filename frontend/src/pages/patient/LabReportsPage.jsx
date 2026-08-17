@@ -93,8 +93,11 @@ function InHouseBody({ order, saving, chooseAndSave }) {
           </span>
         )}
       </div>
-      <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 10 }}>
-        Visit the laboratory at {order.hospital} with your token.
+      <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 4 }}>
+        Quote this number at {order.hospital}'s lab counter:
+      </div>
+      <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 18, color: "var(--color-warning)", marginBottom: 10 }}>
+        {order.request_number || "—"}
       </div>
 
       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: "var(--color-warning)" }}>

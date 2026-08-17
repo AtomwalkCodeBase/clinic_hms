@@ -64,7 +64,7 @@ export default function DoctorMyProfilePage() {
   const { refreshUser } = useAuth();
   const [form, setForm] = useState({
     registration_no: "", specialisation: "", qualification: "", gender: "",
-    experience_years: "", consultation_fee: "", digital_signature: "",
+    experience_years: "", consultation_fee: "", followup_fee: "", digital_signature: "",
     bio: "", languages: "",
   });
   const [photo, setPhoto] = useState("");
@@ -144,9 +144,12 @@ export default function DoctorMyProfilePage() {
         digital_signature: form.digital_signature,
         bio: form.bio,
         languages: form.languages,
-        // Only send consultation_fee when the hospital delegates it to the doctor
+        // Only send fees when the hospital delegates them to the doctor
         ...(feeEditable && form.consultation_fee !== "" && {
           consultation_fee: form.consultation_fee || null,
+        }),
+        ...(feeEditable && form.followup_fee !== "" && {
+          followup_fee: form.followup_fee || null,
         }),
       };
       const [{ data: res }] = await Promise.all([
@@ -228,6 +231,23 @@ export default function DoctorMyProfilePage() {
                 {!feeEditable && (
                   <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 4 }}>
                     Set by your hospital admin.
+                  </div>
+                )}
+              </div>
+              <div>
+                <label style={labelStyle}>Follow-up Fee (₹)</label>
+                <input
+                  style={feeEditable && editing ? inputStyle : readOnlyStyle}
+                  type={feeEditable && editing ? "number" : "text"}
+                  value={feeEditable && editing
+                    ? form.followup_fee
+                    : form.followup_fee ? `₹${form.followup_fee}` : "Defaults to consultation fee"}
+                  onChange={e => feeEditable && setForm(f => ({ ...f, followup_fee: e.target.value }))}
+                  readOnly={!feeEditable || !editing}
+                />
+                {feeEditable && (
+                  <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 4 }}>
+                    Optional — leave blank to charge the same fee for follow-up visits.
                   </div>
                 )}
               </div>

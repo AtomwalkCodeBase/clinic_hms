@@ -263,6 +263,15 @@ export default function PatientDoctorProfilePage() {
                 ? " Online payment isn't available yet, so please pay at the front desk when you arrive."
                 : " Please pay at the front desk when you arrive."}
             </div>
+            {confirmation.room_name && (
+              <div style={{
+                display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700,
+                color: "var(--color-primary)", background: "#fff", border: "1.5px solid var(--color-primary)",
+                borderRadius: 10, padding: "8px 16px", marginBottom: 18,
+              }}>
+                Go to {confirmation.room_name}{confirmation.floor ? `, Floor ${confirmation.floor}` : ""}
+              </div>
+            )}
             <button className="btn-primary" onClick={() => navigate(ROUTES.PATIENT.APPOINTMENTS)}>
               View my bookings
             </button>

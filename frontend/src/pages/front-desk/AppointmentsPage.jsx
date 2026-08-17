@@ -134,7 +134,7 @@ export default function AppointmentsPage() {
     const doc = doctorList.find(d => String(d.id) === String(doctorId));
     setBooking(true);
     try {
-      await apiClient.post(API_ENDPOINTS.OPD.APPOINTMENTS, {
+      const { data: res } = await apiClient.post(API_ENDPOINTS.OPD.APPOINTMENTS, {
         patient_id:      patient.uuid,
         patient_awpid:   patient.awpid,
         doctor_user_id:  doctorId,
@@ -144,7 +144,11 @@ export default function AppointmentsPage() {
         ...(slot ? { scheduled_time: slot } : {}),
         chief_complaint: complaint,
       });
-      toastSuccess(`Appointment booked for ${patient.full_name}.`);
+      const created = res?.data || res;
+      const roomNote = created?.room_name
+        ? ` — ${created.room_name}${created.floor ? `, Floor ${created.floor}` : ""}`
+        : "";
+      toastSuccess(`Appointment booked for ${patient.full_name}.${roomNote}`);
       setPatient(null); setPatientQuery(""); setComplaint(""); setSlot("");
       refetch();
       fetchTodayPatients();
@@ -400,7 +404,14 @@ export default function AppointmentsPage() {
                       </div>
                     </td>
                     <td style={{ fontSize: 12 }}>{a.doctor_name || "—"}</td>
-                    <td style={{ fontSize: 12, fontWeight: 700 }}>{a.scheduled_time ? a.scheduled_time.slice(0, 5) : "—"}</td>
+                    <td style={{ fontSize: 12 }}>
+                      <div style={{ fontWeight: 700 }}>{a.scheduled_time ? a.scheduled_time.slice(0, 5) : "—"}</div>
+                      {a.room_name && (
+                        <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+                          {a.room_name}{a.floor && ` · Fl ${a.floor}`}
+                        </div>
+                      )}
+                    </td>
                     <td style={{ fontSize: 12 }}>{a.chief_complaint || "—"}</td>
                     <td>
                       <span className={`badge ${

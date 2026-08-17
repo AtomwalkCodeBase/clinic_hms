@@ -34,6 +34,7 @@ class LabRequestSerializer(serializers.ModelSerializer):
     test_turnaround_hours = serializers.IntegerField(source="test.turnaround_hours", read_only=True)
     patient_name     = serializers.CharField(source="patient.full_name", read_only=True)
     patient_uhid     = serializers.CharField(source="patient.uhid", read_only=True)
+    patient_phone    = serializers.CharField(source="patient.mobile", read_only=True)
     requested_by_name = serializers.SerializerMethodField()
     report           = serializers.SerializerMethodField()
     attached_document = serializers.SerializerMethodField()
@@ -41,16 +42,16 @@ class LabRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model  = LabRequest
         fields = [
-            "id", "patient", "patient_name", "patient_uhid",
+            "id", "patient", "patient_name", "patient_uhid", "patient_phone",
             "encounter", "appointment_id", "test", "test_name", "test_code",
             "test_price", "test_turnaround_hours",
             "requested_by", "requested_by_name", "branch",
-            "status", "urgency", "clinical_notes",
+            "status", "urgency", "clinical_notes", "request_number",
             "patient_choice", "payment_preference", "payment_status",
-            "choice_made_by", "choice_made_at",
+            "choice_made_by", "choice_made_at", "invoice_id",
             "ordered_at", "collected_at", "report", "attached_document",
         ]
-        read_only_fields = ["id", "ordered_at"]
+        read_only_fields = ["id", "request_number", "ordered_at", "invoice_id"]
 
     def get_requested_by_name(self, obj):
         try:

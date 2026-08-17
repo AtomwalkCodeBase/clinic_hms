@@ -181,6 +181,10 @@ export default function VitalsPage() {
                           {appt.patient_uhid}
                           {appt.chief_complaint && ` · ${appt.chief_complaint}`}
                         </div>
+                        <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+                          Dr. {appt.doctor_name || "—"}
+                          {appt.room_name && ` · ${appt.room_name}${appt.floor ? ` (Fl ${appt.floor})` : ""}`}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -207,7 +211,8 @@ export default function VitalsPage() {
                         <DependentBadge patient={selected} />
                       </div>
                       <div style={{ fontSize: 13, color: "var(--color-text-muted)", marginTop: 2 }}>
-                        {selected.patient_uhid} · Token #{selected.token_number}
+                        {selected.patient_uhid} · Token #{selected.token_number} · Dr. {selected.doctor_name || "—"}
+                        {selected.room_name && ` · Send to ${selected.room_name}${selected.floor ? ` (Floor ${selected.floor})` : ""}`}
                       </div>
                     </div>
                     <button type="button" onClick={() => setSelected(null)}

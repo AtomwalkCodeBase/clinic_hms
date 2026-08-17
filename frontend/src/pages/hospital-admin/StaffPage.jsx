@@ -13,7 +13,7 @@ import { useToast }  from "../../hooks/useToast";
 import { useAuth }   from "../../hooks/useAuth";
 import { usePermissions } from "../../hooks/usePermissions";
 import API_ENDPOINTS from "../../config/api.config";
-import { Mail, Users } from "lucide-react";
+import { Mail, Users, Plus, X, MapPin } from "lucide-react";
 import { calcAge }   from "../../utils/age";
 import { sanitizeMobileInput, isValidMobile, mobileError } from "../../utils/validation";
 
@@ -53,6 +53,168 @@ function RoleBadge({ role }) {
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+// Shared default working-hours shape — Mon-Fri 9-5, used both for a brand
+// new doctor (InviteModal) and as a fallback when an existing doctor has
+// never had a schedule saved yet (DoctorProfileModal).
+function defaultSchedule() {
+  return DAYS.map((_, i) => ({
+    day_of_week:  i,
+    is_available: i < 5,
+    start_time:   "09:00",
+    end_time:     "17:00",
+  }));
+}
+
+/**
+ * Working Hours + Room tagging, shown together so which room a doctor sits
+ * in is configured right on top of the day/time it applies to (rather than
+ * as a separate step on the Rooms page). A day can carry more than one room
+ * "block" — e.g. Room 101 9-1 and Room 204 1-5 on the same Monday — to cover
+ * a doctor who sits in different rooms at different times on the same day.
+ *
+ * `blocksByDay` — { [day_of_week]: [{ key, start_time, end_time, room_id, room_name, floor }] }
+ * `onAddBlock(day_of_week, { start_time, end_time, room_id })` → Promise<boolean>
+ * `onRemoveBlock(day_of_week, block)` → void | Promise<void>
+ */
+function WorkingHoursRoomGrid({
+  schedule, setSchedule, rooms, blocksByDay, onAddBlock, onRemoveBlock, busy,
+  inputStyle,
+}) {
+  const [openDay, setOpenDay] = useState(null);
+  const [blockForm, setBlockForm] = useState({ start_time: "", end_time: "", room_id: "" });
+
+  function openAssign(day) {
+    setOpenDay(day.day_of_week);
+    setBlockForm({ start_time: day.start_time, end_time: day.end_time, room_id: rooms[0] ? String(rooms[0].id) : "" });
+  }
+
+  async function submitBlock(day) {
+    if (!blockForm.room_id) return;
+    const ok = await onAddBlock(day.day_of_week, blockForm);
+    if (ok) setOpenDay(null);
+  }
+
+  const smallInput = { ...inputStyle, padding: "4px 6px", fontSize: 12 };
+
+  return (
+    <div>
+      <div style={{ display: "grid", gap: 8 }}>
+        {schedule.map((day, i) => {
+          const blocks = blocksByDay[day.day_of_week] || [];
+          return (
+            <div key={i} style={{
+              borderRadius: 10,
+              background: day.is_available ? "var(--color-primary-light)" : "var(--color-bg)",
+              border: "1px solid var(--color-border)",
+              opacity: day.is_available ? 1 : 0.55,
+              padding: "8px 12px",
+            }}>
+              <div style={{ display: "grid", gridTemplateColumns: "110px 36px 1fr auto auto", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text)" }}>{DAYS[i]}</span>
+                <button
+                  type="button"
+                  onClick={() => setSchedule(s => s.map((d, j) => j === i ? { ...d, is_available: !d.is_available } : d))}
+                  style={{
+                    width: 32, height: 18, borderRadius: 9, border: "none",
+                    background: day.is_available ? "var(--color-primary)" : "var(--color-border)",
+                    cursor: "pointer", position: "relative", flexShrink: 0,
+                  }}
+                >
+                  <span style={{
+                    position: "absolute", top: 2,
+                    left: day.is_available ? 16 : 2,
+                    width: 14, height: 14, borderRadius: "50%",
+                    background: "#fff", transition: "left 0.15s",
+                  }} />
+                </button>
+                <input
+                  type="time" disabled={!day.is_available}
+                  value={day.start_time}
+                  onChange={e => setSchedule(s => s.map((d, j) => j === i ? { ...d, start_time: e.target.value } : d))}
+                  style={{ ...inputStyle, padding: "5px 8px", fontSize: 13, opacity: day.is_available ? 1 : 0.4 }}
+                />
+                <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>to</span>
+                <input
+                  type="time" disabled={!day.is_available}
+                  value={day.end_time}
+                  onChange={e => setSchedule(s => s.map((d, j) => j === i ? { ...d, end_time: e.target.value } : d))}
+                  style={{ ...inputStyle, padding: "5px 8px", fontSize: 13, opacity: day.is_available ? 1 : 0.4 }}
+                />
+              </div>
+
+              {day.is_available && (
+                <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                  {blocks.map(b => (
+                    <span key={b.key} style={{
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      fontSize: 11.5, fontWeight: 600, padding: "3px 8px", borderRadius: 999,
+                      background: "var(--color-surface)", border: "1px solid var(--color-border)",
+                    }}>
+                      <MapPin size={11} />
+                      {b.room_name}{b.floor ? ` · Fl ${b.floor}` : ""} ({(b.start_time || "").slice(0, 5)}–{(b.end_time || "").slice(0, 5)})
+                      <button
+                        type="button" disabled={busy}
+                        onClick={() => onRemoveBlock(day.day_of_week, b)}
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1, color: "var(--color-text-muted)" }}
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))}
+
+                  {openDay === day.day_of_week ? (
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input type="time" value={blockForm.start_time}
+                        onChange={e => setBlockForm(f => ({ ...f, start_time: e.target.value }))}
+                        style={{ ...smallInput, width: 90 }} />
+                      <span style={{ fontSize: 11 }}>to</span>
+                      <input type="time" value={blockForm.end_time}
+                        onChange={e => setBlockForm(f => ({ ...f, end_time: e.target.value }))}
+                        style={{ ...smallInput, width: 90 }} />
+                      <select value={blockForm.room_id}
+                        onChange={e => setBlockForm(f => ({ ...f, room_id: e.target.value }))}
+                        style={{ ...smallInput, width: 150 }}>
+                        <option value="">Room…</option>
+                        {rooms.map(r => (
+                          <option key={r.id} value={r.id}>{r.name}{r.floor ? ` (Fl ${r.floor})` : ""}</option>
+                        ))}
+                      </select>
+                      <button type="button" disabled={busy || !blockForm.room_id} onClick={() => submitBlock(day)}
+                        style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, border: "none", background: "var(--color-primary)", color: "#fff", cursor: "pointer" }}>
+                        Add
+                      </button>
+                      <button type="button" onClick={() => setOpenDay(null)}
+                        style={{ fontSize: 11, padding: "4px 8px", borderRadius: 6, border: "1px solid var(--color-border)", background: "none", cursor: "pointer" }}>
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    rooms.length > 0 && (
+                      <button type="button" onClick={() => openAssign(day)}
+                        style={{
+                          fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 999,
+                          border: "1px dashed var(--color-primary)", background: "none", color: "var(--color-primary)",
+                          cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4,
+                        }}>
+                        <Plus size={11} /> Assign room
+                      </button>
+                    )
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {rooms.length === 0 && (
+        <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginTop: 8 }}>
+          No rooms set up for this branch yet — add rooms under Rooms & Floors, then come back here to assign them.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) {
   const api = apiClient;
   const { toastSuccess, toastApiError } = useToast();
@@ -61,19 +223,48 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
     phone: "", branch_id: "", department_id: "",
     registration_no: "", specialisation: "", qualification: "", experience_years: "",
     council_name: "", registration_expiry: "",
-    consultation_fee: "",
+    consultation_fee: "", followup_fee: "",
   });
 
   // Working-hours state: array of 7 day objects
-  const [schedule, setSchedule] = useState(
-    DAYS.map((_, i) => ({
-      day_of_week:  i,
-      is_available: i < 5,          // Mon–Fri on by default
-      start_time:   "09:00",
-      end_time:     "17:00",
-    }))
-  );
+  const [schedule, setSchedule] = useState(defaultSchedule());
   const [slotDuration, setSlotDuration] = useState(15);
+
+  // Rooms for whichever branch is selected, and the room "blocks" the admin
+  // has tagged onto specific days/times so far. These can't be saved to the
+  // backend until the doctor actually exists, so they're held locally and
+  // created right after the invite succeeds (see handleSubmit).
+  const [rooms, setRooms] = useState([]);
+  const [roomBlocks, setRoomBlocks] = useState([]); // [{key, day_of_week, start_time, end_time, room_id, room_name, floor}]
+
+  useEffect(() => {
+    if (!form.branch_id || form.role !== "doctor") { setRooms([]); return; }
+    api.get(`${API_ENDPOINTS.ORG.ROOMS}?branch_id=${form.branch_id}`)
+      .then(r => setRooms(r.data?.data || []))
+      .catch(() => setRooms([]));
+  }, [form.branch_id, form.role, api]);
+
+  const blocksByDay = roomBlocks.reduce((acc, b) => {
+    (acc[b.day_of_week] = acc[b.day_of_week] || []).push(b);
+    return acc;
+  }, {});
+
+  async function addRoomBlock(day_of_week, blockForm) {
+    const room = rooms.find(r => String(r.id) === String(blockForm.room_id));
+    setRoomBlocks(bs => [...bs, {
+      key: `${day_of_week}-${Date.now()}`,
+      day_of_week,
+      start_time: blockForm.start_time,
+      end_time:   blockForm.end_time,
+      room_id:    blockForm.room_id,
+      room_name:  room?.name || "",
+      floor:      room?.floor || "",
+    }]);
+    return true;
+  }
+  function removeRoomBlock(day_of_week, block) {
+    setRoomBlocks(bs => bs.filter(b => b.key !== block.key));
+  }
 
   // Per-invite fee toggle: true = admin sets fee now, false = doctor sets it themselves.
   // Defaults to whatever the tenant's global setting is, but admin can flip it per invite.
@@ -147,6 +338,13 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
         } else {
           delete payload.consultation_fee;
         }
+        // Follow-up fee — optional even when admin sets fees; leave unset
+        // and the invoice generator falls back to consultation_fee.
+        if (adminSetsFee && form.followup_fee) {
+          payload.followup_fee = parseFloat(form.followup_fee);
+        } else {
+          delete payload.followup_fee;
+        }
         // Working-hours schedule
         const activeDays = schedule.filter(d => d.is_available);
         if (activeDays.length > 0) {
@@ -162,6 +360,32 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
       const { data: res } = await api.post(API_ENDPOINTS.ORG.STAFF + "invite/", payload);
       setResult(res.data);
       toastSuccess(`${form.first_name} invited successfully.`);
+
+      // Room tagging can only be saved now that the doctor actually has an
+      // id — create whatever blocks the admin set up above. Best-effort:
+      // the staff account is already created either way, so a room-tag
+      // conflict here shouldn't look like the whole invite failed.
+      if (form.role === "doctor" && roomBlocks.length > 0 && res.data?.id) {
+        let okCount = 0;
+        const failMsgs = [];
+        for (const b of roomBlocks) {
+          try {
+            await api.post(API_ENDPOINTS.ORG.ROOM_ASSIGNMENTS, {
+              room: parseInt(b.room_id), doctor: res.data.id,
+              day_of_week: b.day_of_week, start_time: b.start_time, end_time: b.end_time,
+            });
+            okCount++;
+          } catch (err) {
+            failMsgs.push(err?.response?.data?.message || `${DAYS[b.day_of_week]} ${b.start_time}–${b.end_time}`);
+          }
+        }
+        if (failMsgs.length > 0) {
+          toastApiError(null, `${okCount}/${roomBlocks.length} room assignments saved. ${failMsgs.join(" · ")}`);
+        } else if (okCount > 0) {
+          toastSuccess(`${okCount} room assignment${okCount > 1 ? "s" : ""} saved.`);
+        }
+      }
+
       onInvited();
     } catch (err) {
       toastApiError(err, "Failed to invite staff.");
@@ -371,7 +595,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                       {/* Toggle switch */}
                       <button
                         type="button"
-                        onClick={() => { setAdminSetsFee(v => !v); setForm(f => ({ ...f, consultation_fee: "" })); }}
+                        onClick={() => { setAdminSetsFee(v => !v); setForm(f => ({ ...f, consultation_fee: "", followup_fee: "" })); }}
                         style={{
                           width: 44, height: 24, borderRadius: 12, border: "none", flexShrink: 0,
                           background: adminSetsFee ? "var(--color-primary)" : "var(--color-border)",
@@ -387,17 +611,28 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                         }} />
                       </button>
                     </div>
-                    {/* Fee input — only when admin sets it */}
+                    {/* Fee inputs — only when admin sets it */}
                     {adminSetsFee && (
-                      <div style={{ padding: "12px 14px", borderTop: "1px solid var(--color-border)", background: "var(--color-surface)" }}>
-                        <label style={{ ...labelStyle, marginBottom: 4 }}>Amount (₹)</label>
-                        <input
-                          style={inputStyle} type="number" min="0" step="0.01"
-                          value={form.consultation_fee}
-                          onChange={set("consultation_fee")}
-                          placeholder="e.g. 500"
-                          autoFocus
-                        />
+                      <div style={{ padding: "12px 14px", borderTop: "1px solid var(--color-border)", background: "var(--color-surface)", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                        <div>
+                          <label style={{ ...labelStyle, marginBottom: 4 }}>New Consultation (₹)</label>
+                          <input
+                            style={inputStyle} type="number" min="0" step="0.01"
+                            value={form.consultation_fee}
+                            onChange={set("consultation_fee")}
+                            placeholder="e.g. 500"
+                            autoFocus
+                          />
+                        </div>
+                        <div>
+                          <label style={{ ...labelStyle, marginBottom: 4 }}>Follow-up (₹, optional)</label>
+                          <input
+                            style={inputStyle} type="number" min="0" step="0.01"
+                            value={form.followup_fee}
+                            onChange={set("followup_fee")}
+                            placeholder="defaults to above"
+                          />
+                        </div>
                       </div>
                     )}
                   </div>
@@ -422,54 +657,17 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                       </select>
                     </div>
 
-                    {/* Per-day rows */}
-                    <div style={{ display: "grid", gap: 8 }}>
-                      {schedule.map((day, i) => (
-                        <div key={i} style={{
-                          display: "grid",
-                          gridTemplateColumns: "110px 36px 1fr auto auto",
-                          alignItems: "center", gap: 10,
-                          padding: "8px 12px", borderRadius: 10,
-                          background: day.is_available ? "var(--color-primary-light)" : "var(--color-bg)",
-                          border: `1px solid ${day.is_available ? "var(--color-border)" : "var(--color-border)"}`,
-                          opacity: day.is_available ? 1 : 0.55,
-                        }}>
-                          <span style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text)" }}>
-                            {DAYS[i]}
-                          </span>
-                          {/* Toggle available */}
-                          <button
-                            type="button"
-                            onClick={() => setSchedule(s => s.map((d, j) => j === i ? { ...d, is_available: !d.is_available } : d))}
-                            style={{
-                              width: 32, height: 18, borderRadius: 9, border: "none",
-                              background: day.is_available ? "var(--color-primary)" : "var(--color-border)",
-                              cursor: "pointer", position: "relative", flexShrink: 0,
-                            }}
-                          >
-                            <span style={{
-                              position: "absolute", top: 2,
-                              left: day.is_available ? 16 : 2,
-                              width: 14, height: 14, borderRadius: "50%",
-                              background: "#fff", transition: "left 0.15s",
-                            }} />
-                          </button>
-                          <input
-                            type="time" disabled={!day.is_available}
-                            value={day.start_time}
-                            onChange={e => setSchedule(s => s.map((d, j) => j === i ? { ...d, start_time: e.target.value } : d))}
-                            style={{ ...inputStyle, padding: "5px 8px", fontSize: 13, opacity: day.is_available ? 1 : 0.4 }}
-                          />
-                          <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>to</span>
-                          <input
-                            type="time" disabled={!day.is_available}
-                            value={day.end_time}
-                            onChange={e => setSchedule(s => s.map((d, j) => j === i ? { ...d, end_time: e.target.value } : d))}
-                            style={{ ...inputStyle, padding: "5px 8px", fontSize: 13, opacity: day.is_available ? 1 : 0.4 }}
-                          />
-                        </div>
-                      ))}
-                    </div>
+                    {/* Per-day rows, with room tagging right on top of each day */}
+                    <WorkingHoursRoomGrid
+                      schedule={schedule}
+                      setSchedule={setSchedule}
+                      rooms={rooms}
+                      blocksByDay={blocksByDay}
+                      onAddBlock={addRoomBlock}
+                      onRemoveBlock={removeRoomBlock}
+                      busy={saving}
+                      inputStyle={inputStyle}
+                    />
                   </div>
 
                   <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
@@ -539,17 +737,88 @@ function DoctorProfileModal({ staff, onClose, onSaved }) {
   const { toastSuccess, toastApiError } = useToast();
   const [form, setForm] = useState({
     registration_no: "", specialisation: "", qualification: "",
-    gender: "", experience_years: "", consultation_fee: "",
+    gender: "", experience_years: "", consultation_fee: "", followup_fee: "",
   });
+  const [schedule, setSchedule] = useState(defaultSchedule());
+  const [slotDuration, setSlotDuration] = useState(15);
+  const [hadSchedule, setHadSchedule] = useState(false);
+  const [rooms, setRooms] = useState([]);
+  const [assignments, setAssignments] = useState([]); // room-tagged blocks, from RoomAssignment API
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [roomBusy, setRoomBusy] = useState(false);
+
+  const branchId = staff.branch || staff.branches?.find(b => b.is_primary)?.id || staff.branches?.[0]?.id || "";
 
   useEffect(() => {
-    api.get(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}doctor-profile/`)
-      .then(r => { if (r.data?.data) setForm(r.data.data); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [api, staff.id]);
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      const [profileRes, scheduleRes, assignRes, roomsRes] = await Promise.allSettled([
+        api.get(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}doctor-profile/`),
+        api.get(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}schedule/`),
+        api.get(`${API_ENDPOINTS.ORG.ROOM_ASSIGNMENTS}?doctor_id=${staff.id}`),
+        branchId ? api.get(`${API_ENDPOINTS.ORG.ROOMS}?branch_id=${branchId}`) : Promise.resolve(null),
+      ]);
+      if (cancelled) return;
+      if (profileRes.status === "fulfilled" && profileRes.value.data?.data) {
+        setForm(profileRes.value.data.data);
+      }
+      if (scheduleRes.status === "fulfilled" && scheduleRes.value.data?.data) {
+        const sd = scheduleRes.value.data.data;
+        setSlotDuration(sd.slot_duration_minutes || 15);
+        const byDay = {};
+        (sd.days || []).forEach(d => { byDay[d.day_of_week] = d; });
+        setSchedule(defaultSchedule().map(d => (
+          byDay[d.day_of_week] ? { ...d, ...byDay[d.day_of_week] } : { ...d, is_available: false }
+        )));
+        setHadSchedule(true);
+      }
+      if (assignRes.status === "fulfilled") {
+        setAssignments(assignRes.value.data?.data || []);
+      }
+      if (roomsRes?.status === "fulfilled" && roomsRes.value) {
+        setRooms(roomsRes.value.data?.data || []);
+      }
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [api, staff.id, branchId]);
+
+  const blocksByDay = assignments.reduce((acc, a) => {
+    (acc[a.day_of_week] = acc[a.day_of_week] || []).push({
+      key: a.id, id: a.id, day_of_week: a.day_of_week,
+      start_time: a.start_time, end_time: a.end_time,
+      room_id: a.room, room_name: a.room_name, floor: a.floor,
+    });
+    return acc;
+  }, {});
+
+  async function addRoomBlock(day_of_week, blockForm) {
+    setRoomBusy(true);
+    try {
+      const { data: res } = await api.post(API_ENDPOINTS.ORG.ROOM_ASSIGNMENTS, {
+        room: parseInt(blockForm.room_id), doctor: staff.id,
+        day_of_week, start_time: blockForm.start_time, end_time: blockForm.end_time,
+      });
+      setAssignments(as => [...as, res.data]);
+      toastSuccess("Room assigned.");
+      return true;
+    } catch (err) {
+      toastApiError(err, "Could not assign room.");
+      return false;
+    } finally { setRoomBusy(false); }
+  }
+
+  async function removeRoomBlock(day_of_week, block) {
+    setRoomBusy(true);
+    try {
+      await api.delete(API_ENDPOINTS.ORG.ROOM_ASSIGNMENT(block.id));
+      setAssignments(as => as.filter(a => a.id !== block.id));
+      toastSuccess("Room assignment removed.");
+    } catch (err) { toastApiError(err, "Could not remove assignment."); }
+    finally { setRoomBusy(false); }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -558,6 +827,11 @@ function DoctorProfileModal({ staff, onClose, onSaved }) {
     try {
       await api.patch(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}doctor-profile/`, payload)
         .catch(() => api.post(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}doctor-profile/`, payload));
+      // Working hours — full replace, same shape as invite-time.
+      await api.put(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}schedule/`, {
+        slot_duration_minutes: slotDuration,
+        days: schedule,
+      });
       toastSuccess("Doctor profile saved.");
       onSaved();
       onClose();
@@ -571,7 +845,7 @@ function DoctorProfileModal({ staff, onClose, onSaved }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div style={{ background: "var(--color-surface)", borderRadius: 16, width: "100%", maxWidth: 500, padding: 32, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+      <div style={{ background: "var(--color-surface)", borderRadius: 16, width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto", padding: 32, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
           <h2 style={{ margin: 0, fontSize: 18 }}>Doctor Profile — {staff.first_name} {staff.last_name}</h2>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
@@ -593,7 +867,47 @@ function DoctorProfileModal({ staff, onClose, onSaved }) {
                 </div>
                 <div><label style={labelStyle}>Experience (years)</label><input style={inputStyle} type="number" min="0" value={form.experience_years} onChange={set("experience_years")} placeholder="10" /></div>
               </div>
-              <div><label style={labelStyle}>Consultation Fee (₹)</label><input style={inputStyle} type="number" step="0.01" value={form.consultation_fee} onChange={set("consultation_fee")} placeholder="500.00" /></div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div><label style={labelStyle}>New Consultation Fee (₹)</label><input style={inputStyle} type="number" step="0.01" value={form.consultation_fee || ""} onChange={set("consultation_fee")} placeholder="500.00" /></div>
+                <div><label style={labelStyle}>Follow-up Fee (₹, optional)</label><input style={inputStyle} type="number" step="0.01" value={form.followup_fee || ""} onChange={set("followup_fee")} placeholder="defaults to consultation fee" /></div>
+              </div>
+
+              {/* Working hours + room tagging — editable here any time, same shape as at invite time */}
+              <div style={{ borderTop: "1px solid var(--color-border)", paddingTop: 14, marginTop: 2 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 12 }}>
+                  Working Hours & Rooms
+                </div>
+
+                {!hadSchedule && (
+                  <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginBottom: 10, fontStyle: "italic" }}>
+                    No working hours saved yet — showing suggested defaults. Adjust and save.
+                  </div>
+                )}
+
+                <div style={{ marginBottom: 14 }}>
+                  <label style={labelStyle}>Appointment Slot Duration</label>
+                  <select style={inputStyle} value={slotDuration} onChange={e => setSlotDuration(parseInt(e.target.value))}>
+                    {[10, 15, 20, 30, 45, 60].map(m => <option key={m} value={m}>{m} minutes</option>)}
+                  </select>
+                </div>
+
+                <WorkingHoursRoomGrid
+                  schedule={schedule}
+                  setSchedule={setSchedule}
+                  rooms={rooms}
+                  blocksByDay={blocksByDay}
+                  onAddBlock={addRoomBlock}
+                  onRemoveBlock={removeRoomBlock}
+                  busy={roomBusy}
+                  inputStyle={inputStyle}
+                />
+
+                {!branchId && (
+                  <div style={{ fontSize: 11.5, color: "var(--color-warning)", marginTop: 8 }}>
+                    Assign this doctor a branch (Edit → Branch) to enable room tagging.
+                  </div>
+                )}
+              </div>
             </div>
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
               <button type="button" onClick={onClose} style={{ flex: 1, padding: "9px 0", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "none", cursor: "pointer", fontSize: 14, fontWeight: 600 }}>Cancel</button>

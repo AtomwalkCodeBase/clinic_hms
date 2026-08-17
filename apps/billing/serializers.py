@@ -1,5 +1,29 @@
 from rest_framework import serializers
-from .models import BillingService, Invoice, InvoiceItem, Payment
+from .models import (
+    BillingService, Invoice, InvoiceItem, Payment,
+    ServiceCategory, PaymentModeOption, InvoiceStatusOption,
+)
+
+
+class ServiceCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = ServiceCategory
+        fields = ["id", "name", "is_active", "is_system", "sort_order"]
+        read_only_fields = ["id", "is_system"]
+
+
+class PaymentModeOptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = PaymentModeOption
+        fields = ["id", "name", "is_active", "is_system", "sort_order"]
+        read_only_fields = ["id", "is_system"]
+
+
+class InvoiceStatusOptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = InvoiceStatusOption
+        fields = ["id", "value", "label", "is_active", "is_system", "sort_order"]
+        read_only_fields = ["id", "is_system"]
 
 
 class BillingServiceSerializer(serializers.ModelSerializer):
@@ -29,7 +53,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
 
     class Meta:
         model  = Invoice
-        fields = ["id", "patient", "encounter", "branch", "invoice_number", "status",
+        fields = ["id", "patient", "branch", "invoice_number", "status",
                   "subtotal", "tax_amount", "discount_amount", "total_amount", "paid_amount",
                   "notes", "issued_at", "created_at", "items", "payments"]
         read_only_fields = ["id", "invoice_number", "created_at"]

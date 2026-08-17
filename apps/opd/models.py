@@ -58,6 +58,20 @@ class Appointment(models.Model):
     scheduled_time = models.TimeField(null=True, blank=True)
     token_number = models.IntegerField(null=True, blank=True)
 
+    # Denormalized room/floor — resolved once at booking time from
+    # org.RoomAssignment (doctor + day-of-week + time) and baked in here so
+    # front desk/queue/patient screens can show "Room 204, Floor 2" without
+    # a live lookup, and so the room shown never changes retroactively if
+    # the hospital edits its room assignments later. Nullable: rooms are
+    # opt-in — a hospital that hasn't set any up just gets no room shown,
+    # nothing else breaks. Plain int/text, not a real FK — org.Room lives in
+    # the same tenant DB but in a different app; matches this codebase's
+    # existing convention of not adding cross-app FKs (see Tenant.
+    # active_vaccination_schedule_id for the same reasoning).
+    room_id = models.IntegerField(null=True, blank=True)
+    room_name = models.CharField(max_length=100, blank=True)
+    floor = models.CharField(max_length=30, blank=True)
+
     # Timing
     checked_in_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
@@ -205,6 +219,34 @@ class Prescription(models.Model):
         (STATUS_EXPIRED, "Expired"),
     ]
 
+    # Mirrors apps.lab.models.LabRequest's patient_choice/payment_preference/
+    # payment_status/choice_made_by pattern — same shape, same portal-side
+    # semantics, so a patient sees a consistent "buy in-house or take it
+    # elsewhere" flow for both labs and prescriptions.
+    CHOICE_PENDING = "pending"
+    CHOICE_IN_HOUSE = "in_house"
+    CHOICE_OUTSIDE = "outside"
+    CHOICE_CHOICES = [
+        (CHOICE_PENDING, "Pending"),
+        (CHOICE_IN_HOUSE, "In-House"),
+        (CHOICE_OUTSIDE, "Outside"),
+    ]
+    PAY_ONLINE = "pay_online"
+    PAY_AT_PHARMACY = "pay_at_pharmacy"
+    PAYMENT_PREFERENCE_CHOICES = [
+        (PAY_ONLINE, "Pay Online"),
+        (PAY_AT_PHARMACY, "Pay at Pharmacy"),
+    ]
+    PAY_UNPAID = "unpaid"
+    PAY_PENDING_ONLINE = "pending_online"
+    PAY_PAID = "paid"
+    PAYMENT_STATUS_CHOICES = [
+        (PAY_UNPAID, "Unpaid"),
+        (PAY_PENDING_ONLINE, "Pending Online Payment"),
+        (PAY_PAID, "Paid"),
+    ]
+    CHOICE_MADE_BY_CHOICES = [("patient", "Patient"), ("nurse", "Nurse")]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     encounter = models.OneToOneField(OPDEncounter, on_delete=models.CASCADE, related_name="prescription")
     patient_id = models.UUIDField(db_index=True)
@@ -212,17 +254,40 @@ class Prescription(models.Model):
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default=STATUS_ACTIVE, db_index=True)
     notes = models.TextField(blank=True)
     dispensed_at = models.DateTimeField(null=True, blank=True)
+
+    # Human-readable, sequential, quotable-over-the-counter token — NNTM
+    # entity="prescription" (prefix "RX-", already seeded per branch, see
+    # apps/org/views.py's NEXT_NUMBER_DEFAULTS). Generated once at creation
+    # in PrescriptionCreateView. Blank on the very few rows that predate
+    # this field; never reused/regenerated after that so it stays a stable
+    # reference the patient can quote at the pharmacy counter.
+    rx_number = models.CharField(max_length=30, unique=True, null=True, blank=True)
+
+    patient_choice = models.CharField(max_length=10, choices=CHOICE_CHOICES, default=CHOICE_PENDING)
+    payment_preference = models.CharField(max_length=15, choices=PAYMENT_PREFERENCE_CHOICES, blank=True)
+    payment_status = models.CharField(max_length=15, choices=PAYMENT_STATUS_CHOICES, default=PAY_UNPAID)
+    choice_made_by = models.CharField(max_length=10, choices=CHOICE_MADE_BY_CHOICES, blank=True)
+    choice_made_at = models.DateTimeField(null=True, blank=True)
+
+    # Set on first dispense against this prescription (see
+    # apps/pharmacy/views.py::DispenseView) — every subsequent dispense of
+    # another item on the same Rx adds line items to this same invoice
+    # instead of creating a duplicate. Priced from Stock.mrp (sale price),
+    # not Stock.unit_cost (purchase cost) — see InvoiceItem creation there.
+    invoice = models.ForeignKey("billing.Invoice", on_delete=models.SET_NULL,
+                                null=True, blank=True, related_name="+")
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         app_label = "opd"
         db_table = "opd_prescription"
-        indexes = [models.Index(fields=["patient_id"])]
+        indexes = [models.Index(fields=["patient_id"]), models.Index(fields=["rx_number"])]
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"Rx {self.id} — {self.status}"
+        return f"Rx {self.rx_number or self.id} — {self.status}"
 
 
 class PrescriptionItem(models.Model):

@@ -40,6 +40,10 @@ const PlatformVaccinationTemplates = lazy(() => import("./pages/platform-admin/V
 const AdminDashboard = lazy(() => import("./pages/hospital-admin/DashboardPage"));
 const AdminStaff     = lazy(() => import("./pages/hospital-admin/StaffPage"));
 const AdminBranches  = lazy(() => import("./pages/hospital-admin/BranchesPage"));
+const AdminRooms     = lazy(() => import("./pages/hospital-admin/RoomsPage"));
+const AdminBillingSetup = lazy(() => import("./pages/hospital-admin/BillingSetupPage"));
+const AdminBillingReports = lazy(() => import("./pages/hospital-admin/BillingReportsPage"));
+const AdminCompliance = lazy(() => import("./pages/hospital-admin/CompliancePage"));
 const AdminRoles     = lazy(() => import("./pages/hospital-admin/RolesPage"));
 const AdminVaccinationSchedule = lazy(() => import("./pages/hospital-admin/VaccinationSchedulePage"));
 const AdminSettings  = lazy(() => import("./pages/hospital-admin/SettingsPage"));
@@ -94,7 +98,9 @@ const PatientDoctorProfile   = lazy(() => import("./pages/patient/DoctorProfileP
 const PatientRecords       = lazy(() => import("./pages/patient/RecordsPage"));
 const PatientPrescriptions = lazy(() => import("./pages/patient/PrescriptionsPage"));
 const PatientLabReports    = lazy(() => import("./pages/patient/LabReportsPage"));
+const PatientNotifications = lazy(() => import("./pages/patient/NotificationsPage"));
 const PatientMyProfile     = lazy(() => import("./pages/patient/MyProfilePage"));
+const PatientCorrectionRequests = lazy(() => import("./pages/patient/CorrectionRequestsPage"));
 
 // ── Protected route wrapper ───────────────────────────────────────────────────
 function ProtectedRoute({ children, roles = [] }) {
@@ -194,6 +200,14 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminStaff /></ProtectedRoute>} />
           <Route path={ROUTES.ADMIN.BRANCHES}
             element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminBranches /></ProtectedRoute>} />
+          <Route path={ROUTES.ADMIN.ROOMS}
+            element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminRooms /></ProtectedRoute>} />
+          <Route path={ROUTES.ADMIN.SERVICES}
+            element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminBillingSetup /></ProtectedRoute>} />
+          <Route path={ROUTES.ADMIN.BILLING_REPORTS}
+            element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminBillingReports /></ProtectedRoute>} />
+          <Route path={ROUTES.ADMIN.COMPLIANCE}
+            element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminCompliance /></ProtectedRoute>} />
           <Route path={ROUTES.ADMIN.ROLES}
             element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminRoles /></ProtectedRoute>} />
           <Route path={ROUTES.ADMIN.VACCINATION_SCHEDULE}
@@ -291,8 +305,12 @@ export default function App() {
             element={<PatientRoute><PatientPrescriptions /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.LAB_REPORTS}
             element={<PatientRoute><PatientLabReports /></PatientRoute>} />
+          <Route path={ROUTES.PATIENT.NOTIFICATIONS}
+            element={<PatientRoute><PatientNotifications /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.MY_PROFILE}
             element={<PatientRoute><PatientMyProfile /></PatientRoute>} />
+          <Route path={ROUTES.PATIENT.CORRECTION_REQUESTS}
+            element={<PatientRoute><PatientCorrectionRequests /></PatientRoute>} />
 
           {/* Catch-all */}
           <Route path="*" element={<Navigate to="/" replace />} />

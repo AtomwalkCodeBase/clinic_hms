@@ -27,7 +27,7 @@ from core.permissions import IsPlatformAdmin
 from core.response import success, created, error, not_found
 from core.pagination import paginate_queryset, paginate_list
 from apps.tenants.models import Tenant, Subscription, TenantAuditLog
-from apps.tenants.utils import create_tenant_database, run_tenant_migrations
+from apps.tenants.utils import create_tenant_database, run_tenant_migrations, drop_tenant_database
 from apps.tenants.constants import TIER_FEATURE_DEFAULTS
 from apps.tenants.limits import get_usage_counts
 from apps.org.models import StaffUser, Branch
@@ -39,6 +39,17 @@ logger = logging.getLogger(__name__)
 def _gen_password(length=14):
     chars = string.ascii_letters + string.digits + "!@#$"
     return "".join(secrets.choice(chars) for _ in range(length))
+
+
+def _teardown_failed_tenant(tenant):
+    """
+    Roll back a partially-provisioned tenant (see TenantListCreateView.post
+    Steps 3/4). Subscription.tenant is a OneToOneField with on_delete=
+    PROTECT, so a bare tenant.delete() raises ProtectedError as long as its
+    Subscription row still exists — Subscription must go first.
+    """
+    Subscription.objects.filter(tenant=tenant).delete()
+    tenant.delete()
 
 
 def _tenant_to_dict(tenant):
@@ -226,7 +237,7 @@ class TenantListCreateView(APIView):
         try:
             create_tenant_database(db_name)
         except Exception as exc:
-            tenant.delete()
+            _teardown_failed_tenant(tenant)
             logger.error("DB creation failed for %s: %s", db_name, exc)
             return error(f"Failed to create tenant database: {exc}", status=500)
 
@@ -235,6 +246,15 @@ class TenantListCreateView(APIView):
             run_tenant_migrations(db_name)
         except Exception as exc:
             logger.error("Migrations failed for %s: %s", db_name, exc)
+            # Unlike the DB-creation failure above, this step runs against a
+            # database that DOES exist by now — leaving it and the Tenant/
+            # Subscription rows behind (as this used to) permanently reserves
+            # the subdomain/db_name and makes every retry fail with
+            # "Subdomain already taken" instead of the real underlying error,
+            # with no way to retry short of a manual DB cleanup. Tear both
+            # down so a retry (even with the same name) starts clean.
+            drop_tenant_database(db_name)
+            _teardown_failed_tenant(tenant)
             return error(f"Database setup failed: {exc}", status=500)
 
         # ── Step 5: Create hospital_admin StaffUser ────────────────────────────

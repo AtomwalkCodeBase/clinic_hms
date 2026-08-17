@@ -188,8 +188,13 @@ export default function DoctorQueuePage() {
                       <td style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
                         {appt.patient_uhid || "—"}
                       </td>
-                      <td style={{ fontSize: 12, fontWeight: 700 }}>
-                        {appt.scheduled_time ? appt.scheduled_time.slice(0, 5) : "—"}
+                      <td style={{ fontSize: 12 }}>
+                        <div style={{ fontWeight: 700 }}>{appt.scheduled_time ? appt.scheduled_time.slice(0, 5) : "—"}</div>
+                        {appt.room_name && (
+                          <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+                            {appt.room_name}{appt.floor && ` · Fl ${appt.floor}`}
+                          </div>
+                        )}
                       </td>
                       <td style={{ fontSize: 12, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {appt.chief_complaint || <span style={{ color: "var(--color-text-muted)" }}>—</span>}

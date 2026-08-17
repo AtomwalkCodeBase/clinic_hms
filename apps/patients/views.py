@@ -31,6 +31,48 @@ from .services import PatientService
 from .models import Patient, Allergy
 
 
+def _maybe_charge_registration_fee(patient, tenant_id, db, user):
+    """
+    If this hospital has registration_fee_enabled (Hospital Admin → Settings,
+    off by default), auto-create a small draft invoice for it — same
+    best-effort/non-blocking pattern as apps.opd's consultation auto-invoice:
+    registration already succeeded either way, so a billing hiccup here
+    shouldn't turn into a failed registration.
+    """
+    try:
+        from apps.tenants.models import Tenant
+        from apps.billing.models import Invoice, InvoiceItem
+        from apps.billing.views import _recompute_invoice_totals
+        from core.utils.nntm import get_next_number
+
+        tenant = Tenant.objects.using("default").get(pk=tenant_id)
+        if not tenant.registration_fee_enabled or not tenant.registration_fee_amount:
+            return
+        if not getattr(patient, "branch_id", None):
+            return  # Invoice.branch is required — nothing sensible to bill against
+
+        invoice_number, _ = get_next_number(branch_id=patient.branch_id, entity="invoice", using=db)
+        invoice = Invoice.objects.using(db).create(
+            patient=patient,
+            branch_id=patient.branch_id,
+            invoice_number=invoice_number,
+            status="draft",
+            created_by_id=getattr(user, "id", None),
+            notes="Auto-generated registration fee",
+        )
+        InvoiceItem.objects.using(db).create(
+            invoice=invoice,
+            description="Registration Fee",
+            quantity=1,
+            unit_price=tenant.registration_fee_amount,
+            tax_rate=tenant.default_tax_rate,
+            total=tenant.registration_fee_amount,
+        )
+        _recompute_invoice_totals(invoice, db)
+    except Exception as exc:
+        logger.warning("Could not auto-generate registration fee invoice: %s", exc)
+
+
 class PatientRegisterView(APIView):
     """POST /api/v1/patients/register/"""
     permission_classes = [IsAuthenticated, IsFrontDesk | IsHospitalStaff]
@@ -44,6 +86,7 @@ class PatientRegisterView(APIView):
                 data=serializer.validated_data,
                 tenant_id=request.tenant_id,
                 db_name=request.tenant_db,
+                request=request,
             )
         except ValueError as exc:
             return error(message=str(exc))
@@ -53,6 +96,12 @@ class PatientRegisterView(APIView):
                 message=f"Registration failed: {exc}",
                 status=500,
             )
+        _maybe_charge_registration_fee(patient, request.tenant_id, request.tenant_db, request.user)
+
+        from core.audit import log_action
+        log_action(request, request.tenant_db, action="patient.register",
+                    resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
+
         return created(
             data=PatientDetailSerializer(patient).data,
             message="Patient registered successfully.",
@@ -135,6 +184,11 @@ class PatientDetailView(APIView):
             patient = Patient.objects.using(request.tenant_db).get(pk=pk)
         except Patient.DoesNotExist:
             return not_found("Patient not found.")
+
+        from core.audit import log_action
+        log_action(request, request.tenant_db, action="patient.view",
+                    resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
+
         return success(data=PatientDetailSerializer(patient).data)
 
 

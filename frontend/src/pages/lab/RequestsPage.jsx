@@ -99,9 +99,94 @@ function UploadModal({ order, onClose, onDone }) {
   );
 }
 
+// The counter workflow: a patient walks up and quotes their request number
+// (shown to them in the portal once they choose in-house). This looks it
+// up directly — regardless of the queue's own filters/pagination — and
+// pops up the full request with patient details, same idea as the
+// pharmacist's Rx-number search bar.
+function RequestLookupBar({ onFound }) {
+  const { toastApiError, toastError } = useToast();
+  const [q, setQ] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function search(e) {
+    e.preventDefault();
+    if (!q.trim()) { toastError("Enter the request number the patient quoted."); return; }
+    setLoading(true);
+    try {
+      const { data: res } = await apiClient.get(API_ENDPOINTS.LAB.REQUEST_LOOKUP, {
+        params: { request_number: q.trim() },
+      });
+      onFound(res.data);
+    } catch (err) {
+      toastApiError(err, "No lab request found for that number.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <form onSubmit={search} className="card" style={{ padding: "14px 20px", marginBottom: 16, display: "flex", gap: 10, alignItems: "center" }}>
+      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>PATIENT QUOTED A NUMBER?</span>
+      <input className="form-input" value={q} onChange={e => setQ(e.target.value)}
+        placeholder="e.g. LR-000123" style={{ flex: 1, maxWidth: 220 }} />
+      <button type="submit" className="btn-primary" style={{ fontSize: 12, padding: "7px 16px" }} disabled={loading}>
+        {loading ? "Looking up…" : "Find"}
+      </button>
+    </form>
+  );
+}
+
+function RequestLookupModal({ order, onClose, onUpload }) {
+  const status = STATUS_BADGE[order.status] || STATUS_BADGE.ordered;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ background: "var(--color-surface)", borderRadius: 16, width: "100%", maxWidth: 460, padding: 28, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 18 }}>{order.request_number}</h2>
+            <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 2 }}>{order.test_name}</div>
+          </div>
+          <button type="button" onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
+        </div>
+
+        <span style={{ display: "inline-block", margin: "10px 0 16px", padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 700, background: status.bg, color: status.color }}>
+          {status.label}
+        </span>
+
+        <div style={{ background: "var(--color-bg)", borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>{order.patient_name}</div>
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+            {order.patient_uhid}{order.patient_phone ? ` · ${order.patient_phone}` : ""}
+          </div>
+        </div>
+
+        {order.patient_choice !== "in_house" ? (
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+            This patient chose to get the test done elsewhere — nothing to process here.
+          </div>
+        ) : order.status === "completed" ? (
+          <div style={{ fontSize: 12, color: "var(--color-success)" }}>
+            Report already delivered.
+          </div>
+        ) : (order.status === "processing" || order.status === "collected") ? (
+          <button className="btn-primary" style={{ fontSize: 12, padding: "7px 16px" }} onClick={() => onUpload(order)}>
+            Upload Result
+          </button>
+        ) : (
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+            Waiting on sample collection — advance it from the main queue first.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function RequestsPage() {
   const { toastSuccess, toastApiError } = useToast();
   const [uploadOrder, setUploadOrder] = useState(null);
+  const [lookedUp, setLookedUp] = useState(null);
   const [busy, setBusy] = useState(null);
 
   const { data, isLoading, refetch } = useApi(API_ENDPOINTS.LAB.REQUESTS, { params: { page_size: 100 } });
@@ -127,6 +212,8 @@ export default function RequestsPage() {
   return (
     <AppShell>
       <PageShell title="Lab Requests">
+        <RequestLookupBar onFound={setLookedUp} />
+
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
             <span className="dot-label dot-label--green">In-house test queue</span>
@@ -194,8 +281,15 @@ export default function RequestsPage() {
           )}
         </div>
 
+        {lookedUp && !uploadOrder && (
+          <RequestLookupModal order={lookedUp} onClose={() => setLookedUp(null)}
+            onUpload={setUploadOrder} />
+        )}
+
         {uploadOrder && (
-          <UploadModal order={uploadOrder} onClose={() => setUploadOrder(null)} onDone={refetch} />
+          <UploadModal order={uploadOrder}
+            onClose={() => { setUploadOrder(null); if (lookedUp) refetch(); }}
+            onDone={() => { refetch(); setLookedUp(null); }} />
         )}
       </PageShell>
     </AppShell>

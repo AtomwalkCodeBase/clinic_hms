@@ -65,6 +65,16 @@ class Tenant(models.Model):
         default=FEE_OWNERSHIP_DOCTOR,
     )
 
+    # ── Billing config — hospital admin editable via /org/settings/ ────────
+    # Off by default: a hospital that's never touched billing setup gets no
+    # surprise registration charge on their first patient.
+    registration_fee_enabled = models.BooleanField(default=False)
+    registration_fee_amount  = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # % applied to a billing line item that doesn't specify its own tax_rate
+    # (e.g. the auto-generated consultation/registration invoices) — a
+    # per-BillingService tax_rate still overrides this when one is set.
+    default_tax_rate         = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+
     created_at  = models.DateTimeField(auto_now_add=True)
     updated_at  = models.DateTimeField(auto_now=True)
 

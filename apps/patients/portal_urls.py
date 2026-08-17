@@ -2,12 +2,14 @@ from django.urls import path
 from .portal_views import (
     PortalRegisterView, PortalHospitalListView, PortalPlatformStatsView, PortalSearchView, PortalDoctorListView,
     PortalDoctorDetailView, PortalNextTokenView,
-    PortalSlotListView, PortalBookView, PortalMyBookingsView, PortalMyRecordsView,
+    PortalSlotListView, PortalBookView, PortalMyBookingsView, PortalCancelBookingView, PortalRescheduleBookingView,
+    PortalMyRecordsView,
     PortalDocumentListCreateView, PortalLabOrderListView, PortalLabOrderChoiceView,
+    PortalPrescriptionListView, PortalPrescriptionChoiceView,
     PortalLabReportFileView, PortalProfileView, PortalChangePasswordView, PortalForgotPasswordView,
     PortalFamilyListCreateView, PortalHealthSummaryView,
     PortalVaccinationListView, PortalVaccinationUploadView, PortalVaccinationFileView, PortalGrowthView,
-    PortalHealthTimelineView,
+    PortalHealthTimelineView, PortalNotificationsView, PortalNotificationMarkReadView,
 )
 
 urlpatterns = [
@@ -22,11 +24,15 @@ urlpatterns = [
     path("hospitals/<int:tenant_id>/doctors/<int:doctor_id>/next-token/", PortalNextTokenView.as_view(), name="portal-next-token"),
     path("book/",                           PortalBookView.as_view(),         name="portal-book"),
     path("my-bookings/",                    PortalMyBookingsView.as_view(),   name="portal-my-bookings"),
+    path("my-bookings/<int:pk>/cancel/",     PortalCancelBookingView.as_view(), name="portal-my-bookings-cancel"),
+    path("my-bookings/<int:pk>/reschedule/", PortalRescheduleBookingView.as_view(), name="portal-my-bookings-reschedule"),
     path("my-records/",                     PortalMyRecordsView.as_view(),    name="portal-my-records"),
     path("documents/",                      PortalDocumentListCreateView.as_view(), name="portal-documents"),
     path("lab-orders/",                     PortalLabOrderListView.as_view(), name="portal-lab-orders"),
     path("lab-orders/choice/",              PortalLabOrderChoiceView.as_view(), name="portal-lab-order-choice"),
     path("lab-orders/<str:tenant_db>/<int:request_id>/report/", PortalLabReportFileView.as_view(), name="portal-lab-report-file"),
+    path("prescriptions/",                  PortalPrescriptionListView.as_view(), name="portal-prescriptions"),
+    path("prescriptions/choice/",           PortalPrescriptionChoiceView.as_view(), name="portal-prescription-choice"),
     path("profile/",                        PortalProfileView.as_view(),      name="portal-profile"),
     path("profile/change-password/",        PortalChangePasswordView.as_view(), name="portal-change-password"),
     path("family/",                         PortalFamilyListCreateView.as_view(), name="portal-family"),
@@ -36,4 +42,6 @@ urlpatterns = [
     path("vaccinations/<int:record_id>/file/", PortalVaccinationFileView.as_view(), name="portal-vaccinations-file"),
     path("growth/",                         PortalGrowthView.as_view(), name="portal-growth"),
     path("timeline/",                       PortalHealthTimelineView.as_view(), name="portal-timeline"),
+    path("notifications/",                  PortalNotificationsView.as_view(), name="portal-notifications"),
+    path("notifications/<str:tenant_db>/<int:pk>/read/", PortalNotificationMarkReadView.as_view(), name="portal-notifications-read"),
 ]

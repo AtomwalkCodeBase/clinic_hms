@@ -37,9 +37,14 @@ class PatientService:
 
     # ── Registration ──────────────────────────────────────────────────────
     @staticmethod
-    def register(data: dict, tenant_id: int, db_name: str) -> Patient:
+    def register(data: dict, tenant_id: int, db_name: str, request=None) -> Patient:
         """
         Register a patient at a branch.
+
+        `request` is optional and only used to attach an IP/user-agent to
+        the ConsentRecord proof rows written below (see
+        apps.compliance.services.record_consent) — registration itself
+        works fine without it, same graceful-degradation as core.audit.log_action.
 
         Two identity-resolution paths:
 
@@ -173,6 +178,25 @@ class PatientService:
             "Patient registered: awpid=%s uhid=%s branch=%s (new_identity=%s, dependent=%s)",
             identity.awpid, uhid, branch.name, created, is_dependent,
         )
+
+        # ── Consent proof trail (HMS-07c / DPDP) ────────────────────────────
+        # The booleans above are the fast "is this patient consented" check
+        # used at request time; these rows are the durable, append-only
+        # proof behind them — see apps.compliance.services.record_consent.
+        from apps.compliance.services import record_consent
+        from apps.compliance.models import ConsentRecord
+        recorded_by = getattr(request, "user", None) if request is not None else None
+        if data.get("dpdp_consent"):
+            record_consent(
+                db_name, patient, ConsentRecord.CONSENT_DPDP_PROCESSING,
+                ConsentRecord.SOURCE_FRONT_DESK, request=request, recorded_by=recorded_by,
+            )
+        if data.get("hie_consent"):
+            record_consent(
+                db_name, patient, ConsentRecord.CONSENT_HIE_SHARING,
+                ConsentRecord.SOURCE_FRONT_DESK, request=request, recorded_by=recorded_by,
+            )
+
         return patient
 
     # ── Dependents / family members ─────────────────────────────────────

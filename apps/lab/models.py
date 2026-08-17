@@ -104,12 +104,28 @@ class LabRequest(models.Model):
     choice_made_by       = models.CharField(max_length=10, choices=CHOICE_MADE_BY_CHOICES, blank=True)
     choice_made_at       = models.DateTimeField(null=True, blank=True)
 
+    # Human-readable, sequential, quotable-at-the-counter token — NNTM
+    # entity="lab_request" (prefix "LR-"). Generated once at order creation
+    # in LabRequestListCreateView.post(). Distinct from LabReport.report_number
+    # (entity="lab_report"), which is generated later, only once a report
+    # actually exists — this one exists from the moment the test is ordered,
+    # so the patient has something to quote even before any result is ready.
+    # Blank on the handful of rows that predate this field.
+    request_number = models.CharField(max_length=30, unique=True, null=True, blank=True)
+
+    # Set the first time this request is billed (see lab/views.py::_bill_lab_request,
+    # called at report delivery — the moment the test is confirmed actually
+    # performed). Priced from LabTest.price. Mirrors opd.Prescription.invoice.
+    invoice = models.ForeignKey("billing.Invoice", on_delete=models.SET_NULL,
+                                null=True, blank=True, related_name="+")
+
     ordered_at      = models.DateTimeField(auto_now_add=True)
     collected_at    = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         app_label = "lab"
         db_table  = "lab_request"
+        indexes = [models.Index(fields=["request_number"])]
 
     def __str__(self):
         return f"{self.patient.uhid} — {self.test.name} ({self.status})"

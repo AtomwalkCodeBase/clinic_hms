@@ -19,6 +19,7 @@ import secrets
 import string
 import logging
 from datetime import timedelta, datetime
+from decimal import Decimal
 
 from django.conf import settings
 from django.db.models import Q
@@ -31,7 +32,7 @@ from core.response import success, created, error, not_found
 from core.pagination import paginate_queryset
 from apps.registry.models import StaffMobileIndex
 
-from .models import Branch, Department, StaffUser, DoctorProfile, StaffProfile, Role, Permission, UserRole
+from .models import Branch, Department, StaffUser, DoctorProfile, StaffProfile, Role, Permission, UserRole, Room, RoomAssignment
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ _NNTM_ENTITIES = [
     ("invoice",      "INV-",  6),
     ("lab_report",   "LAB-",  6),
     ("lab_test",     "LT-",   4),
+    ("lab_request",  "LR-",   6),
     ("prescription", "RX-",   6),
     ("queue",        "Q-",    4),
 ]
@@ -95,6 +97,8 @@ from .serializers import (
     PermissionSerializer,
     RoleSerializer,
     RoleWriteSerializer,
+    RoomSerializer,
+    RoomAssignmentSerializer,
 )
 
 # Rough cap on the base64 photo payload — keeps us comfortably under DRF's
@@ -433,17 +437,21 @@ class StaffInviteView(APIView):
         # never blank; the doctor fills in the rest themselves after login.
         if d["role"] == "doctor" and any(
             d.get(f) for f in ("registration_no", "specialisation", "qualification", "experience_years",
-                               "consultation_fee")
+                               "consultation_fee", "followup_fee")
         ):
-            # consultation_fee is only written when the hospital controls it;
-            # when fee_ownership == "doctor" the field belongs to the doctor's
-            # self-service profile and is intentionally left null here.
+            # consultation_fee / followup_fee are only written when the
+            # hospital controls fees; when fee_ownership == "doctor" both
+            # fields belong to the doctor's self-service profile and are
+            # intentionally left null here.
             from apps.tenants.models import Tenant as _Tenant
             try:
                 _tenant = _Tenant.objects.using("default").get(pk=request.tenant_id)
-                fee_value = d.get("consultation_fee") if _tenant.fee_ownership == "hospital" else None
+                hospital_owns_fee = _tenant.fee_ownership == "hospital"
+                fee_value = d.get("consultation_fee") if hospital_owns_fee else None
+                followup_fee_value = d.get("followup_fee") if hospital_owns_fee else None
             except _Tenant.DoesNotExist:
                 fee_value = None
+                followup_fee_value = None
 
             DoctorProfile.objects.using(request.tenant_db).create(
                 staff=staff,
@@ -452,6 +460,7 @@ class StaffInviteView(APIView):
                 qualification=d.get("qualification", ""),
                 experience_years=d.get("experience_years"),
                 consultation_fee=fee_value,
+                followup_fee=followup_fee_value,
             )
 
         # Working-hours schedule — optional at registration; doctor can also
@@ -1211,13 +1220,17 @@ class TenantSettingsView(APIView):
             # not exposed for editing on this endpoint; see
             # platform_admin.views.TenantDetailView for that.
             "subdomain": tenant.subdomain,
+            # ── Billing config ──────────────────────────────────────────
+            "registration_fee_enabled": tenant.registration_fee_enabled,
+            "registration_fee_amount": str(tenant.registration_fee_amount),
+            "default_tax_rate": str(tenant.default_tax_rate),
         })
 
     def patch(self, request):
         tenant = self._get_tenant(request)
         if not tenant:
             return not_found("Tenant not found.")
-        allowed = {"fee_ownership"}
+        allowed = {"fee_ownership", "registration_fee_enabled", "registration_fee_amount", "default_tax_rate"}
         for key, val in request.data.items():
             if key not in allowed:
                 return error(f"Field '{key}' is not configurable here.")
@@ -1228,8 +1241,31 @@ class TenantSettingsView(APIView):
             if fo not in valid:
                 return error(f"fee_ownership must be one of: {valid}.")
             tenant.fee_ownership = fo
+        if "registration_fee_enabled" in request.data:
+            tenant.registration_fee_enabled = bool(request.data["registration_fee_enabled"])
+        if "registration_fee_amount" in request.data:
+            try:
+                amt = Decimal(str(request.data["registration_fee_amount"]))
+            except Exception:
+                return error("registration_fee_amount must be a number.")
+            if amt < 0:
+                return error("registration_fee_amount can't be negative.")
+            tenant.registration_fee_amount = amt
+        if "default_tax_rate" in request.data:
+            try:
+                rate = Decimal(str(request.data["default_tax_rate"]))
+            except Exception:
+                return error("default_tax_rate must be a number.")
+            if rate < 0 or rate > 100:
+                return error("default_tax_rate must be between 0 and 100.")
+            tenant.default_tax_rate = rate
         tenant.save(using="default")
-        return success(data={"fee_ownership": tenant.fee_ownership}, message="Settings updated.")
+        return success(data={
+            "fee_ownership": tenant.fee_ownership,
+            "registration_fee_enabled": tenant.registration_fee_enabled,
+            "registration_fee_amount": str(tenant.registration_fee_amount),
+            "default_tax_rate": str(tenant.default_tax_rate),
+        }, message="Settings updated.")
 
 
 # ── Doctor working-hours schedule ─────────────────────────────────────────────
@@ -1300,3 +1336,212 @@ class DoctorScheduleView(APIView):
 
         sched.refresh_from_db(using=request.tenant_db)
         return success(data=_SS(sched).data, message="Schedule updated.")
+
+
+# ── Rooms & Room Assignments ──────────────────────────────────────────────────
+# Floors/rooms per branch, and which doctor sits in which room during which
+# weekly time window. Rooms are opt-in — a hospital that never sets any of
+# this up just gets no room shown on appointments, nothing breaks.
+
+class RoomListCreateView(APIView):
+    """
+    GET  /api/v1/org/rooms/?branch_id=1  — list rooms (any staff, read-only)
+    POST /api/v1/org/rooms/              — create a room (hospital admin only)
+    """
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsAuthenticated(), IsHospitalStaff()]
+        return [IsAuthenticated(), IsHospitalAdmin()]
+
+    def get(self, request):
+        qs = Room.objects.using(request.tenant_db).filter(is_active=True).select_related("branch")
+        branch_id = request.query_params.get("branch_id")
+        if branch_id:
+            qs = qs.filter(branch_id=branch_id)
+        return success(data=RoomSerializer(qs, many=True).data)
+
+    def post(self, request):
+        s = RoomSerializer(data=request.data)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        branch_id = s.validated_data["branch"].id
+        try:
+            branch = Branch.objects.using(request.tenant_db).get(pk=branch_id, is_active=True)
+        except Branch.DoesNotExist:
+            return error("Branch not found.", errors={"branch": "Invalid branch."})
+
+        if Room.objects.using(request.tenant_db).filter(
+            branch=branch, name__iexact=s.validated_data["name"], is_active=True
+        ).exists():
+            return error("A room with this name already exists at this branch.",
+                         errors={"name": "Already in use."})
+
+        room = Room(branch=branch, floor=s.validated_data.get("floor", ""),
+                    name=s.validated_data["name"], room_type=s.validated_data.get("room_type", "consultation"))
+        room.save(using=request.tenant_db)
+        return created(data=RoomSerializer(room).data, message="Room created.")
+
+
+class RoomDetailView(APIView):
+    """
+    PATCH  /api/v1/org/rooms/{id}/ — rename / move floor / change type
+    DELETE /api/v1/org/rooms/{id}/ — deactivate (soft delete)
+    """
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def _get(self, request, pk):
+        try:
+            return Room.objects.using(request.tenant_db).get(pk=pk)
+        except Room.DoesNotExist:
+            return None
+
+    def patch(self, request, pk):
+        room = self._get(request, pk)
+        if not room:
+            return not_found("Room not found.")
+        s = RoomSerializer(room, data=request.data, partial=True)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        for attr, val in s.validated_data.items():
+            setattr(room, attr, val)
+        room.save(using=request.tenant_db)
+        return success(data=RoomSerializer(room).data, message="Room updated.")
+
+    def delete(self, request, pk):
+        room = self._get(request, pk)
+        if not room:
+            return not_found("Room not found.")
+        room.is_active = False
+        room.save(using=request.tenant_db, update_fields=["is_active"])
+        # Assignments for a deactivated room are pointless to keep active —
+        # switch them off too so they stop showing up as "booked" if the
+        # room name is ever reused later.
+        RoomAssignment.objects.using(request.tenant_db).filter(room=room, is_active=True).update(is_active=False)
+        return success(message="Room deactivated.")
+
+
+class RoomAssignmentListCreateView(APIView):
+    """
+    GET  /api/v1/org/room-assignments/?room_id=&doctor_id=  — list (any staff)
+    POST /api/v1/org/room-assignments/                      — create a weekly
+         slice (hospital admin only). Rejects with 409 if it overlaps an
+         existing active assignment for the same room + day of week.
+    """
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsAuthenticated(), IsHospitalStaff()]
+        return [IsAuthenticated(), IsHospitalAdmin()]
+
+    def get(self, request):
+        qs = RoomAssignment.objects.using(request.tenant_db).filter(
+            is_active=True
+        ).select_related("room", "doctor")
+        room_id = request.query_params.get("room_id")
+        if room_id:
+            qs = qs.filter(room_id=room_id)
+        doctor_id = request.query_params.get("doctor_id")
+        if doctor_id:
+            qs = qs.filter(doctor_id=doctor_id)
+        branch_id = request.query_params.get("branch_id")
+        if branch_id:
+            qs = qs.filter(room__branch_id=branch_id)
+        return success(data=RoomAssignmentSerializer(qs, many=True).data)
+
+    def post(self, request):
+        from django.db import transaction
+        from .room_utils import find_overlapping_assignment
+
+        s = RoomAssignmentSerializer(data=request.data)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        d = s.validated_data
+
+        try:
+            room = Room.objects.using(request.tenant_db).get(pk=d["room"].id, is_active=True)
+        except Room.DoesNotExist:
+            return error("Room not found.", errors={"room": "Invalid room."})
+        try:
+            doctor = StaffUser.objects.using(request.tenant_db).get(
+                pk=d["doctor"].id, role="doctor", is_active=True
+            )
+        except StaffUser.DoesNotExist:
+            return error("Doctor not found.", errors={"doctor": "Invalid doctor."})
+
+        with transaction.atomic(using=request.tenant_db):
+            clash = find_overlapping_assignment(
+                request.tenant_db, room.id, d["day_of_week"], d["start_time"], d["end_time"],
+            )
+            if clash:
+                return error(
+                    f"{room.name} is already assigned to Dr. {clash.doctor.get_full_name()} "
+                    f"on {clash.get_day_of_week_display()} from {clash.start_time.strftime('%H:%M')} "
+                    f"to {clash.end_time.strftime('%H:%M')} — times overlap.",
+                    errors={"start_time": "Overlaps an existing assignment."},
+                    status=409,
+                )
+            assignment = RoomAssignment(
+                room=room, doctor=doctor, day_of_week=d["day_of_week"],
+                start_time=d["start_time"], end_time=d["end_time"],
+            )
+            assignment.save(using=request.tenant_db)
+
+        return created(data=RoomAssignmentSerializer(assignment).data, message="Room assignment created.")
+
+
+class RoomAssignmentDetailView(APIView):
+    """
+    PATCH  /api/v1/org/room-assignments/{id}/ — edit day/time/doctor (re-checks overlap)
+    DELETE /api/v1/org/room-assignments/{id}/ — deactivate
+    """
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def _get(self, request, pk):
+        try:
+            return RoomAssignment.objects.using(request.tenant_db).select_related("room", "doctor").get(pk=pk)
+        except RoomAssignment.DoesNotExist:
+            return None
+
+    def patch(self, request, pk):
+        from django.db import transaction
+        from .room_utils import find_overlapping_assignment
+
+        assignment = self._get(request, pk)
+        if not assignment:
+            return not_found("Room assignment not found.")
+
+        s = RoomAssignmentSerializer(assignment, data=request.data, partial=True)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        d = s.validated_data
+
+        room_id     = d["room"].id if "room" in d else assignment.room_id
+        day_of_week = d.get("day_of_week", assignment.day_of_week)
+        start_time  = d.get("start_time", assignment.start_time)
+        end_time    = d.get("end_time", assignment.end_time)
+
+        with transaction.atomic(using=request.tenant_db):
+            clash = find_overlapping_assignment(
+                request.tenant_db, room_id, day_of_week, start_time, end_time,
+                exclude_pk=assignment.pk,
+            )
+            if clash:
+                return error(
+                    f"Overlaps Dr. {clash.doctor.get_full_name()}'s existing assignment "
+                    f"({clash.get_day_of_week_display()} {clash.start_time.strftime('%H:%M')}"
+                    f"–{clash.end_time.strftime('%H:%M')}).",
+                    errors={"start_time": "Overlaps an existing assignment."},
+                    status=409,
+                )
+            for attr, val in d.items():
+                setattr(assignment, attr, val)
+            assignment.save(using=request.tenant_db)
+
+        return success(data=RoomAssignmentSerializer(assignment).data, message="Room assignment updated.")
+
+    def delete(self, request, pk):
+        assignment = self._get(request, pk)
+        if not assignment:
+            return not_found("Room assignment not found.")
+        assignment.is_active = False
+        assignment.save(using=request.tenant_db, update_fields=["is_active"])
+        return success(message="Room assignment removed.")

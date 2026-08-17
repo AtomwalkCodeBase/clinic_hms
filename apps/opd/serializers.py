@@ -34,6 +34,7 @@ class AppointmentSerializer(serializers.ModelSerializer):
             "appointment_type", "visit_type", "status",
             "scheduled_date", "scheduled_time",
             "token_number", "chief_complaint", "notes", "payment_preference",
+            "room_id", "room_name", "floor",
             "checked_in_at", "started_at", "completed_at",
             "vitals", "has_encounter", "encounter", "created_at",
         ]
@@ -123,9 +124,10 @@ class PrescriptionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Prescription
-        fields = ["id", "encounter_id", "patient_id", "doctor_user_id",
-                  "status", "notes", "items", "created_at", "updated_at"]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        fields = ["id", "rx_number", "encounter_id", "patient_id", "doctor_user_id",
+                  "status", "notes", "items", "patient_choice", "payment_preference",
+                  "payment_status", "invoice_id", "created_at", "updated_at"]
+        read_only_fields = ["id", "rx_number", "created_at", "updated_at", "invoice_id"]
 
 
 class OPDEncounterSerializer(serializers.ModelSerializer):

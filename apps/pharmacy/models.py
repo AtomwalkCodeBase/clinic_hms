@@ -3,12 +3,20 @@ apps/pharmacy/models.py
 -----------------------
 Tables: Stock, StockTransaction, Dispense, MedicationDoseLog
 feat_pharmacy gate enforced at API view level.
+
+Dispense.prescription_item points at apps.opd.PrescriptionItem — the live
+model doctors actually write to during a consultation (apps.opd.Prescription
+was previously never touched by Dispense, which pointed at the OLD/legacy
+apps.prescriptions.Prescription instead; nothing in the live OPD flow ever
+created rows there, so a prescription written by a doctor would never reach
+the pharmacist's dispensing queue at all — see PendingPrescriptionsView).
 """
 
 from django.db import models
 from apps.org.models import StaffUser, Branch
 from apps.patients.models import Patient
-from apps.prescriptions.models import Drug, Prescription, PrescriptionItem
+from apps.prescriptions.models import Drug
+from apps.opd.models import Prescription, PrescriptionItem
 
 
 class Stock(models.Model):

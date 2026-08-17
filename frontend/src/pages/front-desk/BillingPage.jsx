@@ -16,6 +16,7 @@ import { useApi }    from "../../hooks/useApi";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import { openDataUrlInNewTab } from "../../utils/fileViewer";
 
 const TODAY = new Date().toISOString().split("T")[0];
 
@@ -34,6 +35,36 @@ const inputStyle = {
   background: "var(--color-surface)", color: "var(--color-text)", outline: "none",
 };
 const labelStyle = { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 5 };
+
+function PatientBalanceSummary({ appointmentId }) {
+  const [summary, setSummary] = useState(null);
+  useEffect(() => {
+    if (!appointmentId) return;
+    apiClient.get(API_ENDPOINTS.BILLING.SUMMARY, { params: { appointment_id: appointmentId } })
+      .then(r => setSummary(r.data?.data || null))
+      .catch(() => setSummary(null));
+  }, [appointmentId]);
+
+  if (!summary) return null;
+  const outstanding = Number(summary.grand_outstanding);
+
+  return (
+    <div style={{
+      display: "flex", gap: 14, flexWrap: "wrap", fontSize: 11.5,
+      padding: "8px 12px", borderRadius: 8, background: "var(--color-bg)",
+      border: "1px solid var(--color-border)", marginBottom: 14,
+    }}>
+      <span><strong>Billing:</strong> ₹{summary.billing.total} ({summary.billing.invoice_count})</span>
+      <span><strong>Lab:</strong> ₹{summary.lab.total} ({summary.lab.request_count})</span>
+      <span><strong>Pharmacy (est.):</strong> ₹{summary.pharmacy.estimated_total}</span>
+      {outstanding > 0 && (
+        <span style={{ color: "var(--color-error)", fontWeight: 700 }}>
+          Outstanding across all: ₹{outstanding.toFixed(2)}
+        </span>
+      )}
+    </div>
+  );
+}
 
 function BillModal({ appointment, services, onClose, onCreated }) {
   const { toastSuccess, toastApiError } = useToast();
@@ -102,9 +133,11 @@ function BillModal({ appointment, services, onClose, onCreated }) {
           <h2 style={{ margin: 0, fontSize: 18 }}>Bill — {appointment.patient_name}</h2>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
         </div>
-        <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 20 }}>
+        <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 14 }}>
           Token #{appointment.token_number} · {appointment.doctor_name}
         </div>
+
+        <PatientBalanceSummary appointmentId={appointment.id} />
 
         <form onSubmit={handleSubmit}>
           <div style={{ display: "grid", gap: 12 }}>
@@ -174,9 +207,20 @@ function PaymentModal({ invoice, onClose, onRecorded }) {
   const { toastSuccess, toastApiError } = useToast();
   const outstanding = Number(invoice.total_amount) - Number(invoice.paid_amount);
   const [amount, setAmount] = useState(outstanding > 0 ? outstanding.toFixed(2) : "0");
-  const [mode, setMode] = useState("cash");
+  const [modes, setModes] = useState([]);
+  const [mode, setMode] = useState("");
   const [ref, setRef] = useState("");
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    apiClient.get(API_ENDPOINTS.BILLING.PAYMENT_MODES)
+      .then(r => {
+        const list = r.data?.data || [];
+        setModes(list);
+        if (list.length) setMode(list[0].name);
+      })
+      .catch(() => {});
+  }, []);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -215,11 +259,7 @@ function PaymentModal({ invoice, onClose, onRecorded }) {
             </div>
             <div><label style={labelStyle}>Payment Mode</label>
               <select style={inputStyle} value={mode} onChange={e => setMode(e.target.value)}>
-                <option value="cash">Cash</option>
-                <option value="card">Card</option>
-                <option value="upi">UPI</option>
-                <option value="online">Online</option>
-                <option value="credit">Credit</option>
+                {modes.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
               </select>
             </div>
             <div><label style={labelStyle}>Transaction Ref (optional)</label>
@@ -238,6 +278,205 @@ function PaymentModal({ invoice, onClose, onRecorded }) {
   );
 }
 
+function InvoiceDetailModal({ invoiceId, onClose, onChanged }) {
+  const { toastSuccess, toastApiError } = useToast();
+  const [invoice, setInvoice] = useState(null);
+  const [services, setServices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [discount, setDiscount] = useState("");
+  const [savingDiscount, setSavingDiscount] = useState(false);
+  const [newItem, setNewItem] = useState({ service: "", description: "", quantity: 1, unit_price: "", tax_rate: 0 });
+  const [addingItem, setAddingItem] = useState(false);
+  const [pdfLoading, setPdfLoading] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    Promise.all([
+      apiClient.get(API_ENDPOINTS.BILLING.INVOICE(invoiceId)),
+      apiClient.get(API_ENDPOINTS.BILLING.SERVICES),
+    ]).then(([invRes, svcRes]) => {
+      const inv = invRes.data?.data;
+      setInvoice(inv);
+      setDiscount(inv?.discount_amount ?? "0");
+      setServices(svcRes.data?.data || []);
+    }).catch(() => setInvoice(null))
+      .finally(() => setLoading(false));
+  }, [invoiceId]);
+  useEffect(() => { load(); }, [load]);
+
+  async function saveDiscount() {
+    setSavingDiscount(true);
+    try {
+      await apiClient.patch(API_ENDPOINTS.BILLING.INVOICE(invoiceId), { discount_amount: Number(discount) || 0 });
+      toastSuccess("Discount applied.");
+      load();
+      onChanged();
+    } catch (err) {
+      toastApiError(err, "Could not apply discount.");
+    } finally {
+      setSavingDiscount(false);
+    }
+  }
+
+  function pickService(serviceId) {
+    const svc = services.find(s => String(s.id) === String(serviceId));
+    setNewItem({
+      service: serviceId,
+      description: svc?.name || "",
+      quantity: 1,
+      unit_price: svc?.unit_price || "",
+      tax_rate: svc?.tax_rate || 0,
+    });
+  }
+
+  async function addItem(e) {
+    e.preventDefault();
+    if (!newItem.description || !Number(newItem.unit_price)) return;
+    setAddingItem(true);
+    try {
+      await apiClient.post(API_ENDPOINTS.BILLING.INVOICE_ITEMS(invoiceId), {
+        service: newItem.service || null,
+        description: newItem.description,
+        quantity: Number(newItem.quantity) || 1,
+        unit_price: Number(newItem.unit_price),
+        tax_rate: Number(newItem.tax_rate) || 0,
+      });
+      toastSuccess("Item added.");
+      setNewItem({ service: "", description: "", quantity: 1, unit_price: "", tax_rate: 0 });
+      load();
+      onChanged();
+    } catch (err) {
+      toastApiError(err, "Could not add item.");
+    } finally {
+      setAddingItem(false);
+    }
+  }
+
+  const canEdit = invoice && (invoice.status === "draft" || invoice.status === "issued");
+
+  async function downloadPdf() {
+    const win = window.open("", "_blank");
+    setPdfLoading(true);
+    try {
+      const res = await apiClient.get(API_ENDPOINTS.BILLING.INVOICE_PDF(invoiceId));
+      const data = res.data?.data || res.data;
+      if (data?.file_data) {
+        openDataUrlInNewTab(win, data.file_data);
+      } else if (win) {
+        win.close();
+      }
+    } catch (err) {
+      toastApiError(err, "Could not generate the invoice PDF.");
+      if (win) win.close();
+    } finally {
+      setPdfLoading(false);
+    }
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ background: "var(--color-surface)", borderRadius: 16, width: "100%", maxWidth: 640, maxHeight: "90vh", overflowY: "auto", padding: 32, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <h2 style={{ margin: 0, fontSize: 18 }}>{invoice?.invoice_number || "Invoice"}</h2>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            {invoice && (
+              <button type="button" onClick={downloadPdf} disabled={pdfLoading}
+                className="btn-outline" style={{ fontSize: 12, padding: "6px 14px" }}>
+                {pdfLoading ? "Preparing…" : "Print / PDF"}
+              </button>
+            )}
+            <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
+          </div>
+        </div>
+
+        {loading || !invoice ? (
+          <div style={{ padding: 32, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
+        ) : (
+          <>
+            <span className={`badge ${INVOICE_BADGE[invoice.status] || "badge--neutral"}`}>{invoice.status?.replace("_", " ")}</span>
+
+            <div style={{ marginTop: 18, marginBottom: 6, fontSize: 12, fontWeight: 700, color: "var(--color-text-muted)" }}>ITEMS</div>
+            <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
+              {(invoice.items || []).map(it => (
+                <div key={it.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0", borderBottom: "1px solid var(--color-border)" }}>
+                  <span>{it.description} {it.quantity > 1 && `× ${it.quantity}`}</span>
+                  <span>₹{it.total}{Number(it.tax_rate) > 0 && ` (+${it.tax_rate}% tax)`}</span>
+                </div>
+              ))}
+              {(invoice.items || []).length === 0 && <div style={{ fontSize: 12, color: "var(--color-text-muted)", fontStyle: "italic" }}>No items.</div>}
+            </div>
+
+            {canEdit && (
+              <form onSubmit={addItem} style={{ display: "grid", gridTemplateColumns: "1.4fr 0.6fr 0.8fr 0.6fr auto", gap: 8, alignItems: "end", marginBottom: 18, padding: 10, borderRadius: 8, background: "var(--color-bg)" }}>
+                <div>
+                  <select style={inputStyle} value={newItem.service} onChange={e => e.target.value ? pickService(e.target.value) : setNewItem(f => ({ ...f, service: "" }))}>
+                    <option value="">Custom item</option>
+                    {services.map(s => <option key={s.id} value={s.id}>{s.name} (₹{s.unit_price})</option>)}
+                  </select>
+                  {!newItem.service && (
+                    <input style={{ ...inputStyle, marginTop: 6 }} placeholder="Description" value={newItem.description}
+                      onChange={e => setNewItem(f => ({ ...f, description: e.target.value }))} />
+                  )}
+                </div>
+                <input style={inputStyle} type="number" min="1" value={newItem.quantity} placeholder="Qty"
+                  onChange={e => setNewItem(f => ({ ...f, quantity: e.target.value }))} />
+                <input style={inputStyle} type="number" min="0" step="0.01" value={newItem.unit_price} placeholder="Price"
+                  onChange={e => setNewItem(f => ({ ...f, unit_price: e.target.value }))} />
+                <input style={inputStyle} type="number" min="0" step="0.01" value={newItem.tax_rate} placeholder="Tax %"
+                  onChange={e => setNewItem(f => ({ ...f, tax_rate: e.target.value }))} />
+                <button type="submit" disabled={addingItem} className="btn-outline" style={{ fontSize: 12, padding: "8px 12px" }}>
+                  {addingItem ? "…" : "+ Add"}
+                </button>
+              </form>
+            )}
+
+            <div style={{ display: "grid", gap: 4, fontSize: 13, marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}><span>Subtotal</span><span>₹{invoice.subtotal}</span></div>
+              <div style={{ display: "flex", justifyContent: "space-between" }}><span>Tax</span><span>₹{invoice.tax_amount}</span></div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>Discount</span>
+                {canEdit ? (
+                  <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input style={{ ...inputStyle, width: 90, padding: "5px 8px" }} type="number" min="0" step="0.01"
+                      value={discount} onChange={e => setDiscount(e.target.value)} />
+                    <button type="button" onClick={saveDiscount} disabled={savingDiscount} className="btn-outline" style={{ fontSize: 11, padding: "5px 10px" }}>
+                      {savingDiscount ? "…" : "Apply"}
+                    </button>
+                  </span>
+                ) : <span>₹{invoice.discount_amount}</span>}
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, fontSize: 14, borderTop: "1.5px solid var(--color-border)", paddingTop: 6, marginTop: 4 }}>
+                <span>Total</span><span>₹{invoice.total_amount}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", color: "var(--color-text-muted)" }}>
+                <span>Paid</span><span>₹{invoice.paid_amount}</span>
+              </div>
+            </div>
+
+            {(invoice.payments || []).length > 0 && (
+              <>
+                <div style={{ marginBottom: 6, fontSize: 12, fontWeight: 700, color: "var(--color-text-muted)" }}>PAYMENTS</div>
+                <div style={{ display: "grid", gap: 4, marginBottom: 14 }}>
+                  {invoice.payments.map(p => (
+                    <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
+                      <span>{p.payment_mode}{p.transaction_ref && ` · ${p.transaction_ref}`}</span>
+                      <span>₹{p.amount}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button type="button" onClick={onClose} className="btn-outline" style={{ padding: "9px 18px" }}>Close</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function BillingPage() {
   const { toastApiError } = useToast();
   const location = useLocation();
@@ -248,6 +487,7 @@ export default function BillingPage() {
   // themselves in "Today's patients".
   const [billModal, setBillModal] = useState(() => location.state?.appointment || null);
   const [payModal, setPayModal] = useState(null);
+  const [detailModalId, setDetailModalId] = useState(null);
 
   useEffect(() => {
     if (location.state) navigate(location.pathname, { replace: true });
@@ -337,7 +577,10 @@ export default function BillingPage() {
                       padding: "12px 20px", borderBottom: "1px solid var(--color-border)",
                     }}>
                       <div>
-                        <div style={{ fontWeight: 600, fontSize: 13 }}>{inv.invoice_number}</div>
+                        <button onClick={() => setDetailModalId(inv.id)}
+                          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontWeight: 600, fontSize: 13, color: "var(--color-primary)", textDecoration: "underline" }}>
+                          {inv.invoice_number}
+                        </button>
                         <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
                           ₹{inv.total_amount} total
                           {outstanding > 0 && ` · ₹${outstanding.toFixed(2)} due`}
@@ -372,6 +615,13 @@ export default function BillingPage() {
             invoice={payModal}
             onClose={() => setPayModal(null)}
             onRecorded={refreshAll}
+          />
+        )}
+        {detailModalId && (
+          <InvoiceDetailModal
+            invoiceId={detailModalId}
+            onClose={() => setDetailModalId(null)}
+            onChanged={refreshAll}
           />
         )}
       </PageShell>

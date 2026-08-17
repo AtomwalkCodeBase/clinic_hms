@@ -8,18 +8,32 @@
  * than an invented "estimated wait" — we don't track per-consult timing,
  * so a minutes estimate would just be a guess dressed up as data.
  */
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Building2, Calendar, Clock, CircleCheck, ChevronRight, Stethoscope,
-  XCircle, Users2, FileText, MapPin, Sparkles,
+  XCircle, Users2, FileText, MapPin, Sparkles, CalendarClock,
 } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { useApi } from "../../hooks/useApi";
+import { useToast } from "../../hooks/useToast";
+import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import ROUTES        from "../../config/routes.config";
+
+const TODAY = new Date().toISOString().split("T")[0];
+// Mirrors the 2-month booking window enforced server-side (see
+// AppointmentRescheduleView / PortalRescheduleBookingView) — a reschedule is
+// just a move within the same booking rules as a fresh booking.
+const MAX_RESCHEDULE_DATE = (() => {
+  const d = new Date();
+  d.setDate(d.getDate() + 62);
+  return d.toISOString().split("T")[0];
+})();
+const CANCELLABLE_STATUSES = ["scheduled", "waiting", "vitals_done"];
+const RESCHEDULABLE_STATUSES = ["scheduled", "waiting"];
 
 const STATUS_META = {
   scheduled:   { label: "Confirmed",              color: "var(--color-primary)", bg: "var(--color-primary-light)", icon: CircleCheck },
@@ -103,7 +117,148 @@ function FamilyTag({ b, ownAwpid }) {
   );
 }
 
-function HeroAppointment({ b, ownAwpid }) {
+function AppointmentActions({ b, onCancel, onReschedule, size = 12 }) {
+  const canCancel = CANCELLABLE_STATUSES.includes(b.status);
+  const canReschedule = RESCHEDULABLE_STATUSES.includes(b.status);
+  if (!canCancel && !canReschedule) return null;
+  return (
+    <div style={{ display: "flex", gap: 16 }}>
+      {canReschedule && (
+        <button
+          onClick={() => onReschedule(b)}
+          style={{
+            display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", cursor: "pointer",
+            fontSize: size, fontWeight: 700, color: "var(--color-primary)", padding: 0,
+          }}
+        >
+          <CalendarClock size={size + 1} /> Reschedule
+        </button>
+      )}
+      {canCancel && (
+        <button
+          onClick={() => onCancel(b)}
+          style={{
+            display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", cursor: "pointer",
+            fontSize: size, fontWeight: 700, color: "var(--color-error)", padding: 0,
+          }}
+        >
+          <XCircle size={size + 1} /> Cancel
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Same slot grid used at booking time (PortalSlotListView), reused here so
+// rescheduling shows real live availability rather than a freeform time
+// field — a freeform field could collide with another booked slot the
+// patient can't see, or with the doctor's actual working hours.
+function RescheduleModal({ booking, onClose, onDone }) {
+  const { toastSuccess, toastApiError } = useToast();
+  const [date, setDate] = useState(booking.date >= TODAY ? booking.date : TODAY);
+  const [slots, setSlots] = useState([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [selectedSlot, setSelectedSlot] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!date || !booking.tenant_id || !booking.doctor_id) return;
+    setSlotsLoading(true);
+    setSelectedSlot(null);
+    apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(booking.tenant_id, booking.doctor_id), { params: { date } })
+      .then(res => setSlots(res.data?.results || []))
+      .catch(() => setSlots([]))
+      .finally(() => setSlotsLoading(false));
+  }, [date, booking.tenant_id, booking.doctor_id]);
+
+  async function confirm() {
+    if (!selectedSlot) return;
+    setSaving(true);
+    try {
+      await apiClient.post(API_ENDPOINTS.PORTAL.RESCHEDULE_BOOKING(booking.id), {
+        scheduled_date: date, scheduled_time: selectedSlot,
+      });
+      toastSuccess("Appointment rescheduled.");
+      onDone();
+      onClose();
+    } catch (err) {
+      toastApiError(err, "Could not reschedule this appointment.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const canPickHospitalDoctor = booking.tenant_id && booking.doctor_id;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ background: "var(--color-surface)", borderRadius: 16, width: "100%", maxWidth: 440, padding: 26, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <h2 style={{ margin: 0, fontSize: 16 }}>Reschedule appointment</h2>
+          <button type="button" onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
+        </div>
+        <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 18 }}>
+          {formatDoctorName(booking.doctor)} · {booking.hospital}
+        </div>
+
+        {!canPickHospitalDoctor ? (
+          <div style={{ fontSize: 13, color: "var(--color-error)", marginBottom: 16 }}>
+            Can't reschedule this booking online right now — please contact the hospital directly.
+          </div>
+        ) : (
+          <>
+            <label className="stat-label" style={{ display: "block", marginBottom: 6 }}>New date</label>
+            <input
+              type="date" className="form-input" value={date} min={TODAY} max={MAX_RESCHEDULE_DATE}
+              onChange={e => setDate(e.target.value)}
+              style={{ width: "100%", boxSizing: "border-box", marginBottom: 16 }}
+            />
+
+            <label className="stat-label" style={{ display: "block", marginBottom: 8 }}>Available slots</label>
+            {slotsLoading ? (
+              <div style={{ fontSize: 13, color: "var(--color-text-muted)", marginBottom: 16 }}>Checking availability…</div>
+            ) : slots.length === 0 ? (
+              <div style={{ fontSize: 13, color: "var(--color-text-muted)", marginBottom: 16 }}>No slots configured for this date.</div>
+            ) : (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+                {slots.map(s => {
+                  const isSelected = selectedSlot === s.time;
+                  return (
+                    <button
+                      key={s.time} type="button" disabled={!s.available}
+                      onClick={() => setSelectedSlot(s.time)}
+                      style={{
+                        padding: "7px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 700,
+                        cursor: s.available ? "pointer" : "not-allowed",
+                        border: `1.5px solid ${isSelected ? "var(--color-primary)" : s.available ? "var(--color-success)" : "var(--color-border)"}`,
+                        background: isSelected
+                          ? "linear-gradient(135deg, var(--color-hero) 0%, var(--color-hero-2) 100%)"
+                          : s.available ? "var(--color-success-light)" : "var(--color-surface-secondary, #f6f4ee)",
+                        color: isSelected ? "#fff" : s.available ? "var(--color-success)" : "var(--color-text-muted)",
+                        textDecoration: s.available ? "none" : "line-through",
+                      }}
+                    >
+                      {formatTime12h(s.time)}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 6 }}>
+          <button type="button" className="btn-outline" disabled={saving} onClick={onClose} style={{ padding: "9px 16px" }}>Back</button>
+          <button type="button" className="btn-primary" disabled={saving || !selectedSlot} onClick={confirm} style={{ padding: "9px 16px" }}>
+            {saving ? "Saving…" : "Confirm new time"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HeroAppointment({ b, ownAwpid, onCancel, onReschedule }) {
   const meta = STATUS_META[b.status] || STATUS_META.scheduled;
   return (
     <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 22 }}>
@@ -135,6 +290,16 @@ function HeroAppointment({ b, ownAwpid }) {
         <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, color: "var(--color-text-secondary)", marginBottom: 14 }}>
           <Building2 size={14} /> {b.hospital}
         </div>
+
+        {b.room_name && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 6, fontSize: 13.5, fontWeight: 600,
+            color: "var(--color-primary)", marginBottom: 14, padding: "8px 12px", borderRadius: 8,
+            background: "var(--color-primary-light)", width: "fit-content",
+          }}>
+            <MapPin size={14} /> {b.room_name}{b.floor ? ` · Floor ${b.floor}` : ""}
+          </div>
+        )}
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center", marginBottom: 16 }}>
           <div style={{ fontSize: 15, fontWeight: 700 }}>{formatDoctorName(b.doctor)}</div>
@@ -210,12 +375,14 @@ function HeroAppointment({ b, ownAwpid }) {
             </div>
           ))}
         </div>
+
+        <AppointmentActions b={b} onCancel={onCancel} onReschedule={onReschedule} size={13} />
       </div>
     </div>
   );
 }
 
-function AppointmentCard({ b, onOpenPrescriptions, ownAwpid }) {
+function AppointmentCard({ b, onOpenPrescriptions, ownAwpid, onCancel, onReschedule }) {
   const expired = isExpired(b);
   const displayStatus = expired ? "expired" : b.status;
   const isPast = b.status === "done" || b.status === "cancelled" || b.status === "no_show" || expired;
@@ -252,6 +419,11 @@ function AppointmentCard({ b, onOpenPrescriptions, ownAwpid }) {
               <Clock size={12} /> {formatTime12h(b.time)}
             </span>
           )}
+          {b.room_name && (
+            <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <MapPin size={12} /> {b.room_name}{b.floor ? ` · Fl ${b.floor}` : ""}
+            </span>
+          )}
         </div>
 
         {b.chief_complaint && (
@@ -272,6 +444,12 @@ function AppointmentCard({ b, onOpenPrescriptions, ownAwpid }) {
         {expired && (
           <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 6 }}>
             This appointment's day has passed and it was never marked complete by the hospital.
+          </div>
+        )}
+
+        {!isPast && (
+          <div style={{ marginTop: 8 }}>
+            <AppointmentActions b={b} onCancel={onCancel} onReschedule={onReschedule} />
           </div>
         )}
 
@@ -315,6 +493,7 @@ function AppointmentCard({ b, onOpenPrescriptions, ownAwpid }) {
 
 export default function PatientAppointmentsPage() {
   const navigate = useNavigate();
+  const { toastSuccess, toastApiError } = useToast();
   const {
     items: bookings, isLoading: bookingsLoading, pagination: bookingsPagination,
     loadMore: loadMoreBookings, isLoadingMore: bookingsLoadingMore, hasMore: hasMoreBookings,
@@ -324,6 +503,20 @@ export default function PatientAppointmentsPage() {
   const { data: stats } = useApi(API_ENDPOINTS.PORTAL.STATS);
   const { data: profile } = useApi(API_ENDPOINTS.PORTAL.PROFILE);
   const ownAwpid = profile?.awpid;
+
+  const [rescheduleTarget, setRescheduleTarget] = useState(null);
+
+  async function handleCancel(b) {
+    const when = `${relativeDate(b.date)}${b.time ? ` at ${formatTime12h(b.time)}` : ""}`;
+    if (!window.confirm(`Cancel your appointment with ${formatDoctorName(b.doctor)} on ${when}? This cannot be undone.`)) return;
+    try {
+      await apiClient.post(API_ENDPOINTS.PORTAL.CANCEL_BOOKING(b.id));
+      toastSuccess("Appointment cancelled.");
+      refetch();
+    } catch (err) {
+      toastApiError(err, "Could not cancel this appointment.");
+    }
+  }
 
   const { hero, upcoming, past } = useMemo(() => {
     const active = bookings.filter(b => ACTIVE_STATUSES.includes(b.status) && !isExpired(b));
@@ -341,7 +534,7 @@ export default function PatientAppointmentsPage() {
           <div className="card" style={{ padding: 40, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
         ) : (
           <>
-            {hero && <HeroAppointment b={hero} ownAwpid={ownAwpid} />}
+            {hero && <HeroAppointment b={hero} ownAwpid={ownAwpid} onCancel={handleCancel} onReschedule={setRescheduleTarget} />}
 
             {/* CTA into the browse flow — proper hero card gradient */}
             <div style={{
@@ -399,7 +592,7 @@ export default function PatientAppointmentsPage() {
                   <strong style={{ color: "var(--color-text)" }}>Before your visit:</strong> carry any previous
                   medical reports, bring a valid ID, and try to arrive about 10 minutes before your slot.
                   Clinic hours are typically 9:00 AM – 1:00 PM and 2:00 PM – 6:00 PM.
-                  {" "}Need to cancel or reschedule? Contact the hospital directly for now.
+                  {" "}Need to cancel or reschedule? Use the options on your appointment card below.
                 </div>
               </div>
             )}
@@ -426,7 +619,10 @@ export default function PatientAppointmentsPage() {
                       </button>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
-                      {upcoming.map(b => <AppointmentCard key={b.id} b={b} ownAwpid={ownAwpid} />)}
+                      {upcoming.map(b => (
+                        <AppointmentCard key={b.id} b={b} ownAwpid={ownAwpid}
+                          onCancel={handleCancel} onReschedule={setRescheduleTarget} />
+                      ))}
                     </div>
                   </div>
                 )}
@@ -466,6 +662,14 @@ export default function PatientAppointmentsPage() {
               </>
             )}
           </>
+        )}
+
+        {rescheduleTarget && (
+          <RescheduleModal
+            booking={rescheduleTarget}
+            onClose={() => setRescheduleTarget(null)}
+            onDone={refetch}
+          />
         )}
       </PageShell>
     </AppShell>

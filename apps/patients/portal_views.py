@@ -709,6 +709,16 @@ class PortalBookView(APIView):
                 dpdp_consent_captured=True,
                 dpdp_consent_at=timezone.now(),
             )
+            # Durable proof trail behind the two booleans above — patient
+            # granted both by submitting data_sharing_consent through the
+            # portal itself (no staff intermediary), see
+            # apps.compliance.services.record_consent.
+            from apps.compliance.services import record_consent
+            from apps.compliance.models import ConsentRecord
+            record_consent(db, patient, ConsentRecord.CONSENT_DPDP_PROCESSING,
+                            ConsentRecord.SOURCE_PORTAL, request=request)
+            record_consent(db, patient, ConsentRecord.CONSENT_HIE_SHARING,
+                            ConsentRecord.SOURCE_PORTAL, request=request)
 
         # ── If a specific time was given (front-desk flow), it must still be free ──
         if scheduled_time:
@@ -724,6 +734,21 @@ class PortalBookView(APIView):
             scheduled_date=scheduled_date, doctor_user_id=doctor.id,
         ).values_list("token_number", flat=True)
         next_token = (max(tokens) + 1) if tokens else 1
+
+        # Resolve room/floor the same way front desk's own booking flow does
+        # (apps.opd.views.AppointmentListCreateView.post) — this is a second,
+        # separate creation path for the same Appointment model, so it needs
+        # the same room-resolution logic rather than inheriting it.
+        room_fields = {}
+        if scheduled_time:
+            from apps.org.room_utils import resolve_room_for_slot
+            match = resolve_room_for_slot(db, doctor.id, requested_date.weekday(), scheduled_time)
+            if match:
+                room_fields = {
+                    "room_id": match.room_id,
+                    "room_name": match.room.name,
+                    "floor": match.room.floor,
+                }
 
         appt = Appointment.objects.using(db).create(
             patient_id=patient.uuid,
@@ -742,6 +767,7 @@ class PortalBookView(APIView):
             # were invisible to both, since branch_id was left null.
             branch_id=doctor.branch_id,
             payment_preference=payment_preference,
+            **room_fields,
         )
 
         booking = PortalBooking.objects.using("default").create(
@@ -768,6 +794,12 @@ class PortalBookView(APIView):
             "status": "scheduled",
             "payment_preference": payment_preference,
             "patient_name": target_name,
+            # Only resolved when scheduled_time was given (a specific slot) —
+            # pure token-based bookings (no fixed time yet) have no room to
+            # show until the doctor actually gets to them, same as any
+            # other slot-dependent lookup.
+            "room_name": room_fields.get("room_name") or None,
+            "floor": room_fields.get("floor") or None,
         }, status=201)
 
 
@@ -927,6 +959,8 @@ class PortalMyBookingsView(APIView):
             people_ahead = None
             now_serving = None
             doctor_id = None
+            room_name = None
+            floor = None
             try:
                 _ensure_db(b.db_name)
                 appt = Appointment.objects.using(b.db_name).get(pk=b.appointment_id)
@@ -934,6 +968,8 @@ class PortalMyBookingsView(APIView):
                 token = appt.token_number
                 slot_time = appt.scheduled_time.strftime("%H:%M") if appt.scheduled_time else None
                 doctor_id = appt.doctor_user_id
+                room_name = appt.room_name or None
+                floor = appt.floor or None
                 if status_now != b.status:
                     b.status = status_now
                     b.save(using="default", update_fields=["status"])
@@ -978,12 +1014,137 @@ class PortalMyBookingsView(APIView):
                 "token_number": token,
                 "people_ahead": people_ahead,
                 "now_serving_token": now_serving,
+                "room_name": room_name,
+                "floor": floor,
                 # Blank on bookings made before family members existed —
                 # those were always for the account owner.
                 "patient_name": b.patient_name or None,
                 "patient_awpid": b.patient_awpid or None,
             })
         return Response({"results": results, "pagination": meta})
+
+
+class PortalCancelBookingView(APIView):
+    """
+    POST /api/v1/portal/my-bookings/<id>/cancel/
+
+    Patient self-service cancellation. <id> is the registry-DB
+    PortalBooking pk (what PortalMyBookingsView hands back as "id"), not the
+    tenant-DB Appointment id — the portal only ever deals in PortalBooking
+    rows since a single account can have bookings across many hospitals.
+    Resolves through to the real tenant-DB Appointment, cancels it there,
+    then writes the same status back to the registry row so the two stay in
+    sync (mirrors what PortalMyBookingsView.get() already does opportunistically).
+    """
+    permission_classes = [IsPatient]
+
+    def post(self, request, pk):
+        from apps.registry.models import PortalBooking
+        from apps.opd.models import Appointment
+
+        try:
+            booking = PortalBooking.objects.using("default").get(pk=pk, account_id=request.user.id)
+        except PortalBooking.DoesNotExist:
+            return not_found("Booking not found.")
+
+        _ensure_db(booking.db_name)
+        try:
+            appt = Appointment.objects.using(booking.db_name).get(pk=booking.appointment_id)
+        except Appointment.DoesNotExist:
+            return not_found("Appointment record not found.")
+
+        CANCELLABLE = (Appointment.STATUS_SCHEDULED, Appointment.STATUS_WAITING, Appointment.STATUS_VITALS_DONE)
+        if appt.status not in CANCELLABLE:
+            return error(f"Can't cancel an appointment that's already {appt.get_status_display().lower()}.")
+
+        appt.status = Appointment.STATUS_CANCELLED
+        appt.save(using=booking.db_name, update_fields=["status"])
+        booking.status = Appointment.STATUS_CANCELLED
+        booking.save(using="default", update_fields=["status"])
+        return Response({"status": "cancelled"})
+
+
+class PortalRescheduleBookingView(APIView):
+    """
+    POST /api/v1/portal/my-bookings/<id>/reschedule/  {scheduled_date, scheduled_time?}
+
+    Moves an existing booking to a new date/time instead of cancel + rebook.
+    Same window/slot rules as PortalBookView, keyed by PortalBooking pk like
+    PortalCancelBookingView above, and keeps both the tenant-DB Appointment
+    and the registry-DB PortalBooking row in sync.
+    """
+    permission_classes = [IsPatient]
+
+    def post(self, request, pk):
+        from apps.registry.models import PortalBooking
+        from apps.opd.models import Appointment
+
+        try:
+            booking = PortalBooking.objects.using("default").get(pk=pk, account_id=request.user.id)
+        except PortalBooking.DoesNotExist:
+            return not_found("Booking not found.")
+
+        new_date_raw = request.data.get("scheduled_date")
+        new_time = (request.data.get("scheduled_time") or "").strip() or None
+        if not new_date_raw:
+            return error("scheduled_date is required.")
+        try:
+            new_date = date.fromisoformat(str(new_date_raw))
+        except ValueError:
+            return error("Invalid date.")
+        if new_date < date.today():
+            return error("Can't reschedule to a date in the past.")
+        if new_date > date.today() + timedelta(days=62):
+            return error("Appointments can only be booked up to 2 months in advance.")
+
+        _ensure_db(booking.db_name)
+        db = booking.db_name
+        try:
+            appt = Appointment.objects.using(db).get(pk=booking.appointment_id)
+        except Appointment.DoesNotExist:
+            return not_found("Appointment record not found.")
+
+        RESCHEDULABLE = (Appointment.STATUS_SCHEDULED, Appointment.STATUS_WAITING)
+        if appt.status not in RESCHEDULABLE:
+            return error(f"Can't reschedule an appointment that's already {appt.get_status_display().lower()}.")
+
+        if new_time:
+            taken = Appointment.objects.using(db).filter(
+                scheduled_date=new_date, doctor_user_id=appt.doctor_user_id, scheduled_time=new_time,
+            ).exclude(status="cancelled").exclude(pk=appt.pk).exists()
+            if taken:
+                return error("That slot was just taken. Please pick another.", status=409)
+
+        last_token = Appointment.objects.using(db).filter(
+            scheduled_date=new_date, doctor_user_id=appt.doctor_user_id,
+        ).exclude(pk=appt.pk).values_list("token_number", flat=True)
+        next_token = (max(last_token) + 1) if last_token else 1
+
+        room_fields = {"room_id": None, "room_name": "", "floor": ""}
+        if new_time:
+            from apps.org.room_utils import resolve_room_for_slot
+            match = resolve_room_for_slot(db, appt.doctor_user_id, new_date.weekday(), new_time)
+            if match:
+                room_fields = {"room_id": match.room_id, "room_name": match.room.name, "floor": match.room.floor}
+
+        appt.scheduled_date = new_date
+        appt.scheduled_time = new_time
+        appt.token_number = next_token
+        appt.status = Appointment.STATUS_SCHEDULED
+        for k, v in room_fields.items():
+            setattr(appt, k, v)
+        appt.save(using=db)
+
+        booking.scheduled_date = new_date
+        booking.status = Appointment.STATUS_SCHEDULED
+        booking.save(using="default", update_fields=["scheduled_date", "status"])
+
+        return Response({
+            "status": "scheduled", "date": str(new_date), "time": new_time,
+            "token_number": next_token,
+            "room_name": room_fields.get("room_name") or None,
+            "floor": room_fields.get("floor") or None,
+        })
 
 
 # ── My documents ─────────────────────────────────────────────────────────────
@@ -1147,6 +1308,12 @@ class PortalLabOrderListView(APIView):
                         "price": str(r.test.price) if r.test.price is not None else None,
                         "turnaround_hours": r.test.turnaround_hours,
                         "status": r.status,
+                        # request_number: the real token to quote at the
+                        # lab counter — see LabRequest.request_number.
+                        # Previously nothing was ever shown here, despite
+                        # the frontend copy already promising one ("visit
+                        # the lab with your token").
+                        "request_number": r.request_number,
                         "patient_choice": r.patient_choice,
                         "payment_preference": r.payment_preference,
                         "payment_status": r.payment_status,
@@ -1199,8 +1366,19 @@ class PortalLabOrderChoiceView(APIView):
             return error("Lab order not found.")
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-        if lab_req.patient.awpid != acct.awpid:
-            return error("This order does not belong to you.")
+        order_awpid = lab_req.patient.awpid
+        if order_awpid != acct.awpid:
+            # Not the account owner's own order — still valid if it belongs
+            # to a linked family member (same check _resolve_target_awpid_
+            # and_dob / PortalMyRecordsView use elsewhere). This was missing
+            # here, so choosing in-house/outside on a family member's lab
+            # order always failed with "This order does not belong to you."
+            from apps.registry.models import PatientRelationship
+            is_family = PatientRelationship.objects.using("default").filter(
+                guardian_awpid=acct.awpid, dependent_awpid=order_awpid,
+            ).exists()
+            if not is_family:
+                return error("This order does not belong to you.")
 
         from django.utils import timezone
         lab_req.patient_choice = choice
@@ -1210,6 +1388,140 @@ class PortalLabOrderChoiceView(APIView):
         if choice == "in_house" and payment_preference == "pay_online":
             lab_req.payment_status = "pending_online"
         lab_req.save(using=tenant_db, update_fields=[
+            "patient_choice", "payment_preference", "choice_made_by",
+            "choice_made_at", "payment_status",
+        ])
+        return success(message="Choice saved.")
+
+
+class PortalPrescriptionListView(APIView):
+    """
+    GET /api/v1/portal/prescriptions/
+    Every prescription any doctor (at any hospital) has written for this
+    patient, with rx_number, items, and current choice/payment state — the
+    same shape as PortalLabOrderListView, so the patient gets one
+    consistent "buy in-house or take it elsewhere" pattern for both labs
+    and prescriptions.
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request):
+        from apps.opd.models import Prescription
+        from apps.org.models import StaffUser
+        from apps.patients.models import Patient
+        import uuid as _uuid
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        results = []
+
+        for tenant in Tenant.objects.using("default").filter(is_active=True):
+            db = tenant.db_name
+            try:
+                _ensure_db(db)
+                patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
+                if not patient:
+                    continue
+                rxs = (Prescription.objects.using(db)
+                       .prefetch_related("items")
+                       .filter(patient_id=patient.uuid)
+                       .order_by("-created_at")[:50])
+                for rx in rxs:
+                    doctor_name = None
+                    try:
+                        raw = rx.doctor_user_id.int if isinstance(rx.doctor_user_id, _uuid.UUID) else rx.doctor_user_id
+                        doc = StaffUser.objects.using(db).get(pk=raw)
+                        doctor_name = doc.get_full_name()
+                    except Exception:
+                        logger.debug("PortalPrescriptionListView: doctor lookup failed for rx=%s", rx.id, exc_info=True)
+
+                    results.append({
+                        "id": str(rx.id),
+                        "tenant_db": db,
+                        "hospital": tenant.name,
+                        "rx_number": rx.rx_number,
+                        "doctor_name": doctor_name,
+                        "status": rx.status,
+                        "patient_choice": rx.patient_choice,
+                        "payment_preference": rx.payment_preference,
+                        "payment_status": rx.payment_status,
+                        "created_at": rx.created_at,
+                        "items": [{
+                            "drug_name": it.drug_name,
+                            "dosage": it.dosage,
+                            "frequency": it.frequency,
+                            "quantity": it.quantity,
+                        } for it in rx.items.all()],
+                    })
+            except Exception as e:
+                logger.warning("prescriptions: skipped %s (%s)", db, e)
+
+        results.sort(key=lambda r: r["created_at"], reverse=True)
+        page_items, meta = paginate_list(request, results)
+        return Response({"results": page_items, "pagination": meta})
+
+
+class PortalPrescriptionChoiceView(APIView):
+    """
+    POST /api/v1/portal/prescriptions/choice/
+    Body: { tenant_db, prescription_id, patient_choice, payment_preference? }
+    Patient picks in-house vs outside (and, if in-house, how they'll pay) —
+    identical shape and ownership logic to PortalLabOrderChoiceView,
+    including family-member support from the start (the lab endpoint this
+    was modelled on originally shipped without it and had to be patched in
+    later — not repeating that here).
+    """
+    permission_classes = [IsPatient]
+
+    def post(self, request):
+        from apps.opd.models import Prescription
+        from apps.patients.models import Patient
+
+        d = request.data
+        tenant_db        = d.get("tenant_db")
+        prescription_id  = d.get("prescription_id")
+        choice           = d.get("patient_choice")
+        payment_preference = d.get("payment_preference", "")
+
+        if not tenant_db or not prescription_id:
+            return error("tenant_db and prescription_id are required.")
+        if choice not in (Prescription.CHOICE_IN_HOUSE, Prescription.CHOICE_OUTSIDE):
+            return error("patient_choice must be in_house or outside.", errors={"patient_choice": "Invalid."})
+        if payment_preference and payment_preference not in (Prescription.PAY_ONLINE, Prescription.PAY_AT_PHARMACY):
+            return error("Invalid payment_preference.", errors={"payment_preference": "Invalid."})
+
+        if not Tenant.objects.using("default").filter(db_name=tenant_db, is_active=True).exists():
+            return error("Unknown hospital.")
+        _ensure_db(tenant_db)
+
+        try:
+            rx = Prescription.objects.using(tenant_db).get(pk=prescription_id)
+        except Prescription.DoesNotExist:
+            return error("Prescription not found.")
+
+        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        try:
+            rx_patient = Patient.objects.using(tenant_db).get(uuid=rx.patient_id)
+        except Patient.DoesNotExist:
+            return error("Prescription not found.")
+        rx_awpid = rx_patient.awpid
+        if rx_awpid != acct.awpid:
+            from apps.registry.models import PatientRelationship
+            is_family = PatientRelationship.objects.using("default").filter(
+                guardian_awpid=acct.awpid, dependent_awpid=rx_awpid,
+            ).exists()
+            if not is_family:
+                return error("This prescription does not belong to you.")
+
+        from django.utils import timezone
+        rx.patient_choice = choice
+        rx.payment_preference = payment_preference
+        rx.choice_made_by = "patient"
+        rx.choice_made_at = timezone.now()
+        if choice == Prescription.CHOICE_IN_HOUSE and payment_preference == Prescription.PAY_ONLINE:
+            rx.payment_status = Prescription.PAY_PENDING_ONLINE
+        rx.save(using=tenant_db, update_fields=[
             "patient_choice", "payment_preference", "choice_made_by",
             "choice_made_at", "payment_status",
         ])
@@ -1244,8 +1556,14 @@ class PortalLabReportFileView(APIView):
             return not_found("Lab order not found.")
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-        if lab_req.patient.awpid != acct.awpid:
-            return error("This order does not belong to you.")
+        order_awpid = lab_req.patient.awpid
+        if order_awpid != acct.awpid:
+            from apps.registry.models import PatientRelationship
+            is_family = PatientRelationship.objects.using("default").filter(
+                guardian_awpid=acct.awpid, dependent_awpid=order_awpid,
+            ).exists()
+            if not is_family:
+                return error("This order does not belong to you.")
 
         try:
             report = lab_req.report
@@ -1947,6 +2265,130 @@ class PortalHealthTimelineView(APIView):
         entries = entries[:limit]
 
         return success(data={"results": entries, "count": len(entries)})
+
+
+# ── Notifications / reminders (HMS-10g) ────────────────────────────────────
+
+class PortalNotificationsView(APIView):
+    """
+    GET /api/v1/portal/notifications/?patient_awpid=
+
+    Merges two different kinds of reminder into one in-app list (HMS-10g):
+      - Appointment / follow-up reminders — pre-generated rows in each
+        tenant DB's NotificationLog (see apps.notifications.services, run by
+        `python manage.py generate_reminders` on a schedule). Fanned out
+        across every active tenant the same way PortalMyRecordsView does,
+        since a patient's hospitals aren't known in advance.
+      - Vaccination-due reminders — NOT stored anywhere. Computed live from
+        apps.registry.vaccine_schedule.build_roadmap() every time this is
+        called, because due-ness is just today's date vs. the patient's age
+        against the schedule — persisting it would just be a second copy
+        that could silently go stale (e.g. after a dose gets logged).
+
+    No real SMS/email/push is sent for any of these — see the module
+    docstring on apps/notifications/services.py for why that's out of scope
+    without a provider account. This is the in-app fallback.
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request):
+        from apps.patients.models import Patient
+        from apps.notifications.models import NotificationLog
+        from apps.registry.vaccine_schedule import build_roadmap
+
+        target_awpid, dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+
+        results = []
+
+        # ── Appointment / follow-up reminders — fan out across tenants ──
+        for tenant in Tenant.objects.using("default").filter(is_active=True):
+            db = tenant.db_name
+            try:
+                _ensure_db(db)
+                patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
+                if not patient:
+                    continue
+                logs = (NotificationLog.objects.using(db)
+                        .filter(patient=patient, channel="in_app")
+                        .order_by("-created_at")[:50])
+                for log in logs:
+                    results.append({
+                        "id":         f"{db}:{log.id}",
+                        "type":       "appointment_reminder" if log.reference.startswith("appt_reminder:") else "followup_reminder",
+                        "hospital":   tenant.name,
+                        "body":       log.body,
+                        "date":       str(log.created_at.date()),
+                        "created_at": log.created_at,
+                        "read":       log.read_at is not None,
+                    })
+            except Exception as e:
+                logger.warning("notifications: skipped %s (%s)", db, e)
+
+        # ── Vaccination-due reminders — computed live, not stored ───────
+        # Only "due_now" (the window is actually open right now — see
+        # build_roadmap()'s _DUE_LEAD_DAYS) surfaces here, not "upcoming":
+        # the roadmap doesn't expose a concrete "window opens on" date for
+        # upcoming slots (it's derived inline from age-in-days, not stored
+        # as a date), so there's nothing honest to compare against a
+        # "due soon" cutoff without re-deriving that math here too.
+        try:
+            roadmap = build_roadmap(target_awpid, dob, _portal_schedule_rules())
+            for item in roadmap:
+                if item.get("status") == "unknown" and item.get("timing") == "due_now":
+                    results.append({
+                        "id":         f"vaccine:{item.get('scheduled_label') or item['vaccine_name']}",
+                        "type":       "vaccination_due",
+                        "hospital":   None,
+                        "body":       f"{item['vaccine_name']} is due now.",
+                        "date":       timezone.localdate().isoformat(),
+                        "created_at": None,
+                        "read":       False,
+                    })
+        except Exception as e:
+            logger.warning("notifications: skipped vaccination-due (%s)", e)
+
+        results.sort(key=lambda r: r["date"], reverse=True)
+        return success(data={
+            "results": results,
+            "unread_count": sum(1 for r in results if not r["read"]),
+        })
+
+
+class PortalNotificationMarkReadView(APIView):
+    """
+    POST /api/v1/portal/notifications/<tenant_db>/<id>/read/
+    Only applies to real NotificationLog rows (appointment/follow-up) — the
+    "id" composite from the list above is "<tenant_db>:<log_id>", split back
+    apart by the frontend before calling this. Vaccination-due entries have
+    no backing row (computed live) so there's nothing to mark read.
+    """
+    permission_classes = [IsPatient]
+
+    def post(self, request, tenant_db, pk):
+        from apps.patients.models import Patient
+        from apps.notifications.models import NotificationLog
+
+        if not Tenant.objects.using("default").filter(db_name=tenant_db, is_active=True).exists():
+            return error("Unknown hospital.")
+        _ensure_db(tenant_db)
+
+        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        try:
+            log = NotificationLog.objects.using(tenant_db).select_related("patient").get(pk=pk)
+        except NotificationLog.DoesNotExist:
+            return not_found("Notification not found.")
+        if not log.patient or log.patient.awpid != acct.awpid:
+            # Family-member notifications aren't surfaced by this endpoint
+            # today (the list view resolves one target_awpid at a time), so
+            # ownership here is intentionally strict to the account itself.
+            return error("This notification does not belong to you.", status=403)
+
+        if not log.read_at:
+            log.read_at = timezone.now()
+            log.save(using=tenant_db, update_fields=["read_at"])
+        return success(data={"read": True})
 
 
 class PortalForgotPasswordView(APIView):

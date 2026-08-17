@@ -64,6 +64,10 @@ export const API_ENDPOINTS = {
     VACCINATION_SCHEDULES:        `${API_V1}/org/vaccination-schedules/`,
     VACCINATION_SCHEDULE:  (id) => `${API_V1}/org/vaccination-schedules/${id}/`,
     VACCINATION_SCHEDULE_ACTIVATE: (id) => `${API_V1}/org/vaccination-schedules/${id}/activate/`,
+    ROOMS:             `${API_V1}/org/rooms/`,
+    ROOM:       (id) => `${API_V1}/org/rooms/${id}/`,
+    ROOM_ASSIGNMENTS:  `${API_V1}/org/room-assignments/`,
+    ROOM_ASSIGNMENT: (id) => `${API_V1}/org/room-assignments/${id}/`,
   },
 
   PATIENTS: {
@@ -101,6 +105,7 @@ export const API_ENDPOINTS = {
     APPOINTMENTS:     `${API_V1}/opd/appointments/`,
     APPOINTMENT:(id) => `${API_V1}/opd/appointments/${id}/`,
     APPT_STATUS:(id) => `${API_V1}/opd/appointments/${id}/status/`,
+    APPT_RESCHEDULE:(id) => `${API_V1}/opd/appointments/${id}/reschedule/`,
     APPT_VITALS:(id) => `${API_V1}/opd/appointments/${id}/vitals/`,
     ENCOUNTERS:       `${API_V1}/opd/encounters/`,
     ENCOUNTER:  (id) => `${API_V1}/opd/encounters/${id}/`,
@@ -125,11 +130,15 @@ export const API_ENDPOINTS = {
     NEXT_TOKEN: (tenantId, doctorId) => `${API_V1}/portal/hospitals/${tenantId}/doctors/${doctorId}/next-token/`,
     BOOK:                  `${API_V1}/portal/book/`,
     MY_BOOKINGS:           `${API_V1}/portal/my-bookings/`,
+    CANCEL_BOOKING:  (id) => `${API_V1}/portal/my-bookings/${id}/cancel/`,
+    RESCHEDULE_BOOKING:(id) => `${API_V1}/portal/my-bookings/${id}/reschedule/`,
     MY_RECORDS:            `${API_V1}/portal/my-records/`,
     DOCUMENTS:             `${API_V1}/portal/documents/`,
     LAB_ORDERS:            `${API_V1}/portal/lab-orders/`,
     LAB_ORDER_CHOICE:      `${API_V1}/portal/lab-orders/choice/`,
     LAB_REPORT_FILE: (tenantDb, requestId) => `${API_V1}/portal/lab-orders/${tenantDb}/${requestId}/report/`,
+    PRESCRIPTIONS:         `${API_V1}/portal/prescriptions/`,
+    PRESCRIPTION_CHOICE:   `${API_V1}/portal/prescriptions/choice/`,
     PROFILE:                `${API_V1}/portal/profile/`,
     CHANGE_PASSWORD:        `${API_V1}/portal/profile/change-password/`,
     FORGOT_PASSWORD:        `${API_V1}/portal/forgot-password/`,
@@ -140,22 +149,17 @@ export const API_ENDPOINTS = {
     VACCINATION_FILE: (recordId) => `${API_V1}/portal/vaccinations/${recordId}/file/`,
     GROWTH:                 `${API_V1}/portal/growth/`,
     TIMELINE:               `${API_V1}/portal/timeline/`,
+    NOTIFICATIONS:          `${API_V1}/portal/notifications/`,
+    NOTIFICATION_READ: (tenantDb, id) => `${API_V1}/portal/notifications/${tenantDb}/${id}/read/`,
   },
 
-  CLINICAL: {
-    ENCOUNTERS:       `${API_V1}/clinical/encounters/`,
-    ENCOUNTER:  (id) => `${API_V1}/clinical/encounters/${id}/`,
-    CLOSE:      (id) => `${API_V1}/clinical/encounters/${id}/close/`,
-    VITALS:           `${API_V1}/clinical/vitals/`,
-    DIAGNOSES:        `${API_V1}/clinical/diagnoses/`,
-    FOLLOWUPS:        `${API_V1}/clinical/followups/`,
-    DOCUMENTS:        `${API_V1}/clinical/documents/`,
-  },
+  // apps.clinical was retired (HMS-07c-1) — live consultation flow is
+  // apps.opd (see OPD.ENCOUNTER* / OPD.PRESCRIPTIONS above).
 
   PRESCRIPTIONS: {
-    LIST:             `${API_V1}/prescriptions/`,
-    DETAIL:     (id) => `${API_V1}/prescriptions/${id}/`,
-    FINALIZE:   (id) => `${API_V1}/prescriptions/${id}/finalize/`,
+    // LIST/DETAIL/FINALIZE (apps.prescriptions.Prescription) were retired
+    // (HMS-07c-1) — live prescriptions are OPD.PRESCRIPTIONS above. Only the
+    // drug catalog endpoints below are still live.
     DRUGS:            `${API_V1}/prescriptions/drugs/`,
     DRUG_ITEM:  (id) => `${API_V1}/prescriptions/drugs/${id}/`,
     DRUG_SEARCH:      `${API_V1}/prescriptions/drugs/search/`,
@@ -167,6 +171,7 @@ export const API_ENDPOINTS = {
     CATALOG:              `${API_V1}/lab/catalog/`,
     CATALOG_ITEM:  (id) => `${API_V1}/lab/catalog/${id}/`,
     REQUESTS:             `${API_V1}/lab/requests/`,
+    REQUEST_LOOKUP:       `${API_V1}/lab/requests/lookup/`,
     REQUEST_CHOICE: (id) => `${API_V1}/lab/requests/${id}/choice/`,
     REQUEST_STATUS: (id) => `${API_V1}/lab/requests/${id}/status/`,
     REQUEST_REPORT: (id) => `${API_V1}/lab/requests/${id}/report/`,
@@ -175,10 +180,20 @@ export const API_ENDPOINTS = {
 
   BILLING: {
     SERVICES:         `${API_V1}/billing/services/`,
+    SERVICE:    (id) => `${API_V1}/billing/services/${id}/`,
+    SERVICE_CATEGORIES:      `${API_V1}/billing/service-categories/`,
+    SERVICE_CATEGORY: (id) => `${API_V1}/billing/service-categories/${id}/`,
+    PAYMENT_MODES:      `${API_V1}/billing/payment-modes/`,
+    PAYMENT_MODE: (id) => `${API_V1}/billing/payment-modes/${id}/`,
+    INVOICE_STATUSES:      `${API_V1}/billing/invoice-statuses/`,
+    INVOICE_STATUS: (id) => `${API_V1}/billing/invoice-statuses/${id}/`,
     INVOICES:         `${API_V1}/billing/invoices/`,
     INVOICE:    (id) => `${API_V1}/billing/invoices/${id}/`,
     INVOICE_ITEMS: (id) => `${API_V1}/billing/invoices/${id}/items/`,
+    INVOICE_PDF: (id) => `${API_V1}/billing/invoices/${id}/pdf/`,
     PAYMENTS:         `${API_V1}/billing/payments/`,
+    SUMMARY:          `${API_V1}/billing/summary/`,
+    REVENUE_REPORT:   `${API_V1}/billing/reports/revenue/`,
   },
 
   PHARMACY: {
@@ -186,18 +201,26 @@ export const API_ENDPOINTS = {
     TRANSACTIONS:     `${API_V1}/pharmacy/transactions/`,
     DISPENSE:         `${API_V1}/pharmacy/dispense/`,
     PRESCRIPTIONS:    `${API_V1}/pharmacy/prescriptions/`,
+    PRESCRIPTION_LOOKUP: `${API_V1}/pharmacy/prescriptions/lookup/`,
   },
 
-  AI: {
-    JOBS:             `${API_V1}/ai/jobs/`,
-    JOB:        (id) => `${API_V1}/ai/jobs/${id}/`,
-  },
+  // apps.ai_pipeline was retired (HMS-07c-1) — its urls.py was never
+  // mounted even before that, so this AI.JOBS/JOB block was already dead
+  // (confirmed unreferenced anywhere in frontend/src).
 
   TASKS: {
     LIST:             `${API_V1}/tasks/`,
     DETAIL:     (id) => `${API_V1}/tasks/${id}/`,
     ASSIGN:     (id) => `${API_V1}/tasks/${id}/assign/`,
     COMPLETE:   (id) => `${API_V1}/tasks/${id}/complete/`,
+  },
+
+  COMPLIANCE: {
+    AUDIT_LOG:            `${API_V1}/compliance/audit-log/`,
+    AMENDMENTS:           `${API_V1}/compliance/amendments/`,
+    AMENDMENT_RESOLVE: (id) => `${API_V1}/compliance/amendments/${id}/resolve/`,
+    CONSENTS:             `${API_V1}/compliance/consents/`,
+    PORTAL_AMENDMENTS:    `${API_V1}/compliance/portal/amendments/`,
   },
 };
 

@@ -29,7 +29,7 @@ def get_next_number(branch_id: int, entity: str, using: str = "default") -> tupl
         branch_id: The branch this number belongs to. For 'employee_id',
                    which is a hospital-wide (not per-branch) sequence, pass 0
                    — see apps.org.views._next_employee_id.
-        entity:    One of: 'uhid', 'invoice', 'lab_report', 'lab_test', 'prescription', 'queue', 'employee_id', 'drug'.
+        entity:    One of: 'uhid', 'invoice', 'lab_report', 'lab_test', 'lab_request', 'prescription', 'queue', 'employee_id', 'drug'.
         using:     The database alias to use (tenant DB name).
 
     Returns:
@@ -49,7 +49,7 @@ def get_next_number(branch_id: int, entity: str, using: str = "default") -> tupl
     # with a blank code was hitting this ValueError. Added alongside the
     # drug-form-configurability work when the same bug showed up seeding
     # demo data.
-    VALID_ENTITIES = {"uhid", "invoice", "lab_report", "lab_test", "prescription", "queue", "employee_id", "drug"}
+    VALID_ENTITIES = {"uhid", "invoice", "lab_report", "lab_test", "lab_request", "prescription", "queue", "employee_id", "drug"}
     if entity not in VALID_ENTITIES:
         raise ValueError(f"Unknown entity '{entity}'. Must be one of: {VALID_ENTITIES}")
 

@@ -8,6 +8,8 @@ from .views import (
     StaffBranchesView, MyBranchesView,
     PermissionListView, RoleListCreateView, RoleDetailView, StaffRolesView,
     TenantSettingsView, DoctorScheduleView,
+    RoomListCreateView, RoomDetailView,
+    RoomAssignmentListCreateView, RoomAssignmentDetailView,
 )
 from .vaccination_schedule_views import (
     VaccinationScheduleListCreateView, VaccinationScheduleDetailView, VaccinationScheduleActivateView,
@@ -68,4 +70,10 @@ urlpatterns = [
 
     # Doctor working-hours schedule
     path("staff/<int:pk>/schedule/",           DoctorScheduleView.as_view(),   name="doctor-schedule"),
+
+    # Rooms & room assignments (floors, which doctor sits where and when)
+    path("rooms/",                             RoomListCreateView.as_view(),       name="room-list-create"),
+    path("rooms/<int:pk>/",                    RoomDetailView.as_view(),           name="room-detail"),
+    path("room-assignments/",                  RoomAssignmentListCreateView.as_view(), name="room-assignment-list-create"),
+    path("room-assignments/<int:pk>/",         RoomAssignmentDetailView.as_view(),     name="room-assignment-detail"),
 ]

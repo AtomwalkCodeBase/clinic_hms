@@ -4,6 +4,7 @@ from rest_framework import serializers
 from .models import (
     Branch, Department, StaffUser, DoctorProfile, StaffProfile, StaffBranchMapping,
     Permission, Role, UserRole, DoctorSchedule, DoctorAvailabilitySlot,
+    Room, RoomAssignment,
 )
 
 
@@ -35,11 +36,43 @@ class DepartmentSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "branch_name"]
 
 
+class RoomSerializer(serializers.ModelSerializer):
+    branch_name = serializers.CharField(source="branch.name", read_only=True)
+
+    class Meta:
+        model  = Room
+        fields = ["id", "branch", "branch_name", "floor", "name", "room_type", "is_active"]
+        read_only_fields = ["id", "branch_name"]
+
+
+class RoomAssignmentSerializer(serializers.ModelSerializer):
+    day_label   = serializers.CharField(source="get_day_of_week_display", read_only=True)
+    room_name   = serializers.CharField(source="room.name", read_only=True)
+    floor       = serializers.CharField(source="room.floor", read_only=True)
+    doctor_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = RoomAssignment
+        fields = ["id", "room", "room_name", "floor", "doctor", "doctor_name",
+                  "day_of_week", "day_label", "start_time", "end_time", "is_active"]
+        read_only_fields = ["id", "day_label", "room_name", "floor", "doctor_name"]
+
+    def get_doctor_name(self, obj):
+        return obj.doctor.get_full_name()
+
+    def validate(self, data):
+        start = data.get("start_time", getattr(self.instance, "start_time", None))
+        end   = data.get("end_time",   getattr(self.instance, "end_time",   None))
+        if start is not None and end is not None and start >= end:
+            raise serializers.ValidationError({"end_time": "End time must be after start time."})
+        return data
+
+
 class DoctorProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model  = DoctorProfile
         fields = ["registration_no", "specialisation", "qualification",
-                  "gender", "experience_years", "consultation_fee",
+                  "gender", "experience_years", "consultation_fee", "followup_fee",
                   "bio", "photo_url", "languages", "known_for"]
 
 
@@ -51,22 +84,25 @@ class DoctorSelfProfileSerializer(serializers.ModelSerializer):
     experience_years) are always read-only here — set by the hospital admin
     at onboarding, changeable only via DoctorProfileView.
 
-    consultation_fee is conditionally read-only: when the hospital's
-    fee_ownership == "hospital" the field is locked for doctors; when
-    fee_ownership == "doctor" they can edit it freely.  The view
-    (MyDoctorProfileView) passes fee_editable=True/False as context so this
-    serializer doesn't need to query the Tenant itself.
+    consultation_fee and followup_fee are conditionally read-only together:
+    when the hospital's fee_ownership == "hospital" both fields are locked
+    for doctors; when fee_ownership == "doctor" they can edit both freely.
+    The view (MyDoctorProfileView) passes fee_editable=True/False as
+    context so this serializer doesn't need to query the Tenant itself.
+    followup_fee may be left blank — the invoice generator falls back to
+    consultation_fee for follow-up visits when it's unset.
     """
     def get_fields(self):
         fields = super().get_fields()
         if not self.context.get("fee_editable", False):
             fields["consultation_fee"].read_only = True
+            fields["followup_fee"].read_only = True
         return fields
 
     class Meta:
         model  = DoctorProfile
         fields = ["registration_no", "specialisation", "qualification",
-                  "gender", "experience_years", "consultation_fee",
+                  "gender", "experience_years", "consultation_fee", "followup_fee",
                   "digital_signature", "bio", "languages", "known_for"]
         read_only_fields = ["registration_no", "specialisation",
                              "qualification", "experience_years"]
@@ -233,10 +269,15 @@ class StaffInviteSerializer(serializers.Serializer):
     experience_years     = serializers.IntegerField(required=False, allow_null=True, min_value=0)
 
     # ── Doctor-only fields — ignored for non-doctor roles ────────────────────
-    # consultation_fee: accepted here when the hospital's fee_ownership is
-    # "hospital" — the view checks the tenant setting and writes it to
-    # DoctorProfile.consultation_fee; ignored silently for non-doctor roles.
+    # consultation_fee / followup_fee: accepted here when the hospital's
+    # fee_ownership is "hospital" — the view checks the tenant setting and
+    # writes them to DoctorProfile; ignored silently for non-doctor roles.
+    # followup_fee is optional even then — left null, the invoice generator
+    # falls back to consultation_fee for follow-up visits.
     consultation_fee = serializers.DecimalField(
+        max_digits=8, decimal_places=2, required=False, allow_null=True
+    )
+    followup_fee = serializers.DecimalField(
         max_digits=8, decimal_places=2, required=False, allow_null=True
     )
     # Working-hours schedule: list of up to 7 day objects.  Optional at

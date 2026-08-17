@@ -30,6 +30,9 @@ export const ROUTES = {
     BRANCHES:           "/admin/branches",
     DEPARTMENTS:        "/admin/departments",
     SERVICES:           "/admin/services",
+    BILLING_REPORTS:    "/admin/billing-reports",
+    COMPLIANCE:         "/admin/compliance",
+    ROOMS:              "/admin/rooms",
     ROLES:              "/admin/roles",
     VACCINATION_SCHEDULE: "/admin/vaccination-schedule",
     SETTINGS:           "/admin/settings",
@@ -101,7 +104,9 @@ export const ROUTES = {
     PRESCRIPTIONS:      "/patient/prescriptions",
     LAB_REPORTS:        "/patient/lab-reports",
     HEALTH_SUMMARY:     "/patient/health-summary",
+    NOTIFICATIONS:      "/patient/notifications",
     MY_PROFILE:         "/patient/my-profile",
+    CORRECTION_REQUESTS: "/patient/correction-requests",
   },
 };
 

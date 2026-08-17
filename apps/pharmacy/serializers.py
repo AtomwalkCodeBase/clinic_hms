@@ -16,40 +16,6 @@ class StockSerializer(serializers.ModelSerializer):
         return obj.quantity <= obj.reorder_level
 
 
-# ── Pharmacist's dispensing queue ────────────────────────────────────────────
-# Read-only views onto apps.prescriptions models (Prescription/PrescriptionItem
-# live in that app, not this one) — kept here rather than added to
-# prescriptions/serializers.py since they're shaped specifically for what the
-# pharmacist screen needs (patient/doctor names resolved, per-item dispensed
-# quantity) and PrescriptionListCreateView is doctor-only, so this is the only
-# consumer of this particular shape.
-class PharmacyPrescriptionItemSerializer(serializers.Serializer):
-    id              = serializers.IntegerField()
-    drug            = serializers.IntegerField(source="drug_id", allow_null=True)
-    drug_name       = serializers.CharField()
-    dose            = serializers.CharField()
-    unit            = serializers.CharField()
-    frequency       = serializers.CharField()
-    route           = serializers.CharField()
-    duration_days   = serializers.IntegerField(allow_null=True)
-    instructions    = serializers.CharField()
-    dispensed_qty   = serializers.IntegerField()
-
-
-class PharmacyPrescriptionSerializer(serializers.Serializer):
-    id            = serializers.IntegerField()
-    rx_number     = serializers.CharField()
-    status        = serializers.CharField()
-    notes         = serializers.CharField()
-    finalized_at  = serializers.DateTimeField(allow_null=True)
-    created_at    = serializers.DateTimeField()
-    patient       = serializers.IntegerField(source="patient_id")
-    patient_name  = serializers.CharField()
-    patient_uhid  = serializers.CharField()
-    doctor_name   = serializers.CharField()
-    items         = PharmacyPrescriptionItemSerializer(many=True)
-
-
 class StockTransactionSerializer(serializers.ModelSerializer):
     class Meta:
         model  = StockTransaction

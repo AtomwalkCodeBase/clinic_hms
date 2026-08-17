@@ -178,12 +178,32 @@ class AppointmentListCreateView(APIView):
             or getattr(request.user, "branch_id", None)
         )
 
+        # Resolve room/floor from org.RoomAssignment, if the hospital has set
+        # any up — a doctor sharing a room with others at different times of
+        # day (see apps.org.models.RoomAssignment) is looked up by day-of-week
+        # + the booked time and baked into the appointment now, rather than
+        # looked up live later, so it doesn't retroactively change if room
+        # assignments are edited after the fact. No assignment configured for
+        # this doctor/slot just leaves the appointment roomless — opt-in.
+        room_fields = {}
+        if scheduled_time:
+            from apps.org.room_utils import resolve_room_for_slot
+            day_of_week = appt_date.weekday()
+            match = resolve_room_for_slot(db, data["doctor_user_id"], day_of_week, scheduled_time)
+            if match:
+                room_fields = {
+                    "room_id": match.room_id,
+                    "room_name": match.room.name,
+                    "floor": match.room.floor,
+                }
+
         appointment = Appointment.objects.using(db).create(
             **data,
             token_number=next_token,
             status=Appointment.STATUS_WAITING,
             booked_by_user_id=request.user.id,
             branch_id=branch_id,
+            **room_fields,
         )
         return Response(AppointmentSerializer(appointment, context={"db": db}).data, status=status.HTTP_201_CREATED)
 
@@ -494,6 +514,74 @@ class AppointmentStatusView(APIView):
         return Response(AppointmentSerializer(appt, context={"db": db}).data)
 
 
+class AppointmentRescheduleView(APIView):
+    """
+    POST /api/v1/opd/appointments/<id>/reschedule/  {scheduled_date, scheduled_time?}
+
+    Moves an appointment to a new date/time in place instead of front desk
+    having to cancel and rebook. Only allowed while still SCHEDULED/WAITING
+    (once vitals are taken or the doctor's started, rescheduling doesn't make
+    sense — cancel and book a fresh visit instead). Re-runs the same
+    slot-conflict check, token-number assignment, and room resolution used at
+    booking time (see AppointmentListCreateView.post).
+    """
+    permission_classes = [IsTenantStaff]
+
+    def post(self, request, pk):
+        db = request.tenant_db
+        try:
+            appt = Appointment.objects.using(db).get(pk=pk)
+        except Appointment.DoesNotExist:
+            return api_not_found("Not found.")
+
+        if appt.status not in (Appointment.STATUS_SCHEDULED, Appointment.STATUS_WAITING):
+            return api_error(f"Cannot reschedule an appointment that's already '{appt.status}'.")
+
+        new_date_raw = request.data.get("scheduled_date")
+        new_time = (request.data.get("scheduled_time") or "").strip() or None
+        if not new_date_raw:
+            return api_error("scheduled_date is required.")
+        try:
+            new_date = date.fromisoformat(str(new_date_raw))
+        except ValueError:
+            return api_error("Invalid date.")
+
+        if new_time:
+            taken = Appointment.objects.using(db).filter(
+                scheduled_date=new_date,
+                doctor_user_id=appt.doctor_user_id,
+                scheduled_time=new_time,
+            ).exclude(status="cancelled").exclude(pk=appt.pk).exists()
+            if taken:
+                return api_error("That slot was just taken. Please pick another.", status=409)
+
+        last_token = Appointment.objects.using(db).filter(
+            scheduled_date=new_date,
+            doctor_user_id=appt.doctor_user_id,
+        ).exclude(pk=appt.pk).values_list("token_number", flat=True)
+        next_token = (max(last_token) + 1) if last_token else 1
+
+        room_fields = {"room_id": None, "room_name": "", "floor": ""}
+        if new_time:
+            from apps.org.room_utils import resolve_room_for_slot
+            match = resolve_room_for_slot(db, appt.doctor_user_id, new_date.weekday(), new_time)
+            if match:
+                room_fields = {
+                    "room_id": match.room_id,
+                    "room_name": match.room.name,
+                    "floor": match.room.floor,
+                }
+
+        appt.scheduled_date = new_date
+        appt.scheduled_time = new_time
+        appt.token_number = next_token
+        appt.status = Appointment.STATUS_SCHEDULED
+        for k, v in room_fields.items():
+            setattr(appt, k, v)
+        appt.save(using=db)
+        return Response(AppointmentSerializer(appt, context={"db": db}).data)
+
+
 class VitalsView(APIView):
     """POST /api/v1/opd/appointments/<id>/vitals/"""
     permission_classes = [IsTenantStaff]
@@ -636,7 +724,7 @@ class EncounterSignView(APIView):
             patient = None
 
         # Auto-generate invoice for this encounter
-        _auto_generate_invoice(enc, db, request.user, patient)
+        _auto_generate_invoice(enc, db, request.user, patient, tenant_id=request.tenant_id)
 
         # Write-through to the cross-hospital HIE shared tables (registry DB).
         # This is the platform's single write-through path for shared history —
@@ -740,34 +828,101 @@ def _sync_to_hie(encounter, db, patient):
             logger.error("HIE SharedPrescription write failed for encounter=%s: %s", encounter.id, exc)
 
 
-def _auto_generate_invoice(encounter, db, user, patient=None):
-    """Create a draft invoice after encounter sign-off. Never blocks sign-off."""
-    import secrets
+def _resolve_doctor_consultation_fee(db, doctor_user_id, appointment_type=None):
+    """
+    encounter.doctor_user_id is a UUIDField, but the value actually stored
+    in it is the StaffUser's plain integer pk — Django's UUIDField silently
+    wraps a plain int via uuid.UUID(int=value) (see e.g. auth_app.views'
+    "user_id": staff.id, saved straight into these UUID columns). Unwrap
+    either form back to the integer pk so DoctorProfile can be looked up.
+
+    For a "followup" visit, prefers DoctorProfile.followup_fee — but only
+    if the doctor actually set one; otherwise falls back to their regular
+    consultation_fee, so doctors who never configured a separate follow-up
+    rate keep charging the same flat fee for every visit type (unchanged
+    behaviour for them). Returns None if there's no doctor profile or no
+    fee resolvable at all.
+    """
+    import uuid as _uuid
+    from apps.org.models import StaffUser
+    from apps.opd.models import Appointment
+
+    raw = doctor_user_id.int if isinstance(doctor_user_id, _uuid.UUID) else doctor_user_id
+    try:
+        staff = StaffUser.objects.using(db).select_related("doctor_profile").get(pk=raw)
+        profile = staff.doctor_profile
+        if appointment_type == Appointment.TYPE_FOLLOWUP and profile.followup_fee is not None:
+            return profile.followup_fee
+        return profile.consultation_fee
+    except Exception:
+        return None
+
+
+def _tenant_default_tax_rate(tenant_id):
+    from decimal import Decimal
+    from apps.tenants.models import Tenant
+    if not tenant_id:
+        return Decimal("0")
+    try:
+        return Tenant.objects.using("default").get(pk=tenant_id).default_tax_rate
+    except Tenant.DoesNotExist:
+        return Decimal("0")
+
+
+def _auto_generate_invoice(encounter, db, user, patient=None, tenant_id=None):
+    """
+    Create a draft invoice after encounter sign-off. Never blocks sign-off.
+
+    Uses the doctor's actual DoctorProfile fee (falls back to ₹0 — not a
+    guessed flat amount — if the doctor never set one) and the tenant's
+    configured default_tax_rate, instead of the old hardcoded ₹500.
+
+    Picks consultation_fee vs followup_fee based on the appointment's
+    appointment_type (see _resolve_doctor_consultation_fee), and labels the
+    invoice line accordingly — so a follow-up visit is no longer charged
+    and described identically to a first consultation.
+    """
+    from decimal import Decimal
     from apps.billing.models import Invoice, InvoiceItem
+    from apps.billing.views import _recompute_invoice_totals
     from apps.patients.models import Patient
+    from apps.opd.models import Appointment
+    from core.utils.nntm import get_next_number
 
     try:
         if patient is None:
             patient = Patient.objects.using(db).get(uuid=encounter.patient_id)
-        invoice_number = f"INV-{timezone.now().strftime('%Y%m%d')}-{secrets.token_hex(3).upper()}"
+
+        appointment_type = getattr(encounter.appointment, "appointment_type", None)
+        fee = _resolve_doctor_consultation_fee(db, encounter.doctor_user_id, appointment_type)
+        if fee is None:
+            fee = Decimal("0")
+        tax_rate = _tenant_default_tax_rate(tenant_id)
+        description = (
+            "Follow-up Consultation" if appointment_type == Appointment.TYPE_FOLLOWUP
+            else "OPD Consultation"
+        )
+
+        invoice_number, _ = get_next_number(branch_id=patient.branch_id or 1, entity="invoice", using=db)
         invoice = Invoice.objects.using(db).create(
             patient=patient,
             branch=patient.branch,
             invoice_number=invoice_number,
             status="draft",
-            subtotal=500,       # Default consultation fee; configurable in Phase 2
-            total_amount=500,
             created_by_id=user.id,
             notes=f"Auto-generated for OPD encounter {encounter.id}",
         )
         InvoiceItem.objects.using(db).create(
             invoice=invoice,
-            description="OPD Consultation",
+            description=description,
             quantity=1,
-            unit_price=500,
-            total=500,
+            unit_price=fee,
+            tax_rate=tax_rate,
+            total=fee,
         )
-        logger.info("Auto-generated invoice %s for encounter %s", invoice.invoice_number, encounter.id)
+        _recompute_invoice_totals(invoice, db)
+        logger.info("Auto-generated invoice %s for encounter %s (type=%s, fee=%s, tax_rate=%s%%)",
+                    invoice.invoice_number, encounter.id, appointment_type, fee, tax_rate)
     except Exception as e:
         logger.warning("Could not auto-generate invoice: %s", e)
 
@@ -802,11 +957,28 @@ class PrescriptionCreateView(APIView):
                 "prescription_id": str(enc.prescription.id),
             }, status=409)
 
+        # rx_number: a real, sequential, quotable-at-the-counter token —
+        # NNTM entity="prescription" (prefix "RX-", seeded per branch, same
+        # infrastructure invoice_number/lab report_number already use).
+        # Never blocks prescription creation if it fails — the doctor's
+        # note-taking must not be held hostage by a numbering hiccup; the
+        # rare row left with rx_number=None just isn't quotable/searchable
+        # by token, same as it wasn't before this field existed.
+        from core.utils.nntm import get_next_number
+        from apps.patients.models import Patient
+        rx_number = None
+        try:
+            patient = Patient.objects.using(db).get(uuid=enc.patient_id)
+            rx_number, _ = get_next_number(branch_id=patient.branch_id or 1, entity="prescription", using=db)
+        except Exception as e:
+            logger.warning("Could not generate rx_number for encounter %s: %s", enc.id, e)
+
         rx = Prescription.objects.using(db).create(
             encounter=enc,
             patient_id=enc.patient_id,
             doctor_user_id=enc.doctor_user_id,
             notes=request.data.get("notes", ""),
+            rx_number=rx_number,
         )
         return Response(PrescriptionSerializer(rx).data, status=201)
 

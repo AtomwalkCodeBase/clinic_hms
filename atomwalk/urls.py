@@ -38,17 +38,19 @@ urlpatterns = [
     path("api/v1/opd/",          include("apps.opd.urls")),
     path("api/v1/patients/",     include("apps.patients.urls")),
     path("api/v1/portal/",       include("apps.patients.portal_urls")),
-    # apps.clinical / apps.prescriptions stay routed — apps.billing/lab/pharmacy
-    # hold live foreign keys into their models, even though the OPD flow itself
-    # writes through apps.opd. See apps/opd/views.py::_sync_to_hie for the
-    # actual HIE write path.
-    path("api/v1/clinical/",     include("apps.clinical.urls")),
+    # apps.clinical's Encounter/Vital/Diagnosis/FollowUp/ClinicalDocument were
+    # retired (HMS-07c-1, confirmed dead — the live flow writes through
+    # apps.opd, see apps/opd/views.py::_sync_to_hie for the actual HIE write
+    # path), so its URL route is gone too. apps.prescriptions stays routed
+    # for its still-live Drug/DrugFormType catalog endpoints
+    # (Prescription/PrescriptionItem were retired the same way).
     path("api/v1/prescriptions/",include("apps.prescriptions.urls")),
     path("api/v1/lab/",          include("apps.lab.urls")),
     path("api/v1/billing/",      include("apps.billing.urls")),
     path("api/v1/pharmacy/",     include("apps.pharmacy.urls")),
     path("api/v1/org/",          include("apps.org.urls")),
     path("api/v1/tasks/",        include("apps.tasks.urls")),
+    path("api/v1/compliance/",   include("apps.compliance.urls")),
 ]
 
 # ── API docs (drf-spectacular) ──────────────────────────────────────────────

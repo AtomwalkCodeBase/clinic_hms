@@ -33,6 +33,7 @@ const ICONS = {
   dashboard:  "M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z",
   staff:      "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
   branch:     "M3 9h18M3 15h18M9 3v18M15 3v18M3 3h18v18H3z",
+  room:       "M4 21V7a2 2 0 012-2h8a2 2 0 012 2v14M4 21h16M9 21V11h4v10M14 7h4a2 2 0 012 2v12",
   opd:        "M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z",
   queue:      "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
   patient:    "M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z",
@@ -61,6 +62,8 @@ const ICONS = {
   ai:         "M12 2a2 2 0 012 2v2a2 2 0 01-2 2 2 2 0 01-2-2V4a2 2 0 012-2zM12 16a2 2 0 012 2v2a2 2 0 01-2 2 2 2 0 01-2-2v-2a2 2 0 012-2zM4 12a2 2 0 012-2h2a2 2 0 010 4H6a2 2 0 01-2-2zM16 12a2 2 0 012-2h2a2 2 0 010 4h-2a2 2 0 01-2-2z",
   users:      "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
   vaccination: "M12 2L4 5v6c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V5l-8-3zm-1 14l-3-3 1.41-1.41L11 13.17l4.59-4.58L17 10l-6 6z",
+  bell:       "M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0",
+  compliance: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
 };
 
 // ── Hospital monogram (fallback logo) ────────────────────────────────────────
@@ -112,9 +115,13 @@ const NAV_BY_ROLE = {
     { type: "group",   label: "Staff",        iconKey: "staff", children: [
       { label: "Staff List", iconKey: "staff",  to: ROUTES.ADMIN.STAFF },
       { label: "Branches",   iconKey: "branch", to: ROUTES.ADMIN.BRANCHES },
+      { label: "Rooms & Floors", iconKey: "room", to: ROUTES.ADMIN.ROOMS },
       { label: "Roles & Permissions", iconKey: "settings", to: ROUTES.ADMIN.ROLES },
       { label: "Vaccination Schedule", iconKey: "settings", to: ROUTES.ADMIN.VACCINATION_SCHEDULE },
     ]},
+    { type: "link",    label: "Billing Setup", iconKey: "billing", to: ROUTES.ADMIN.SERVICES },
+    { type: "link",    label: "Billing Reports", iconKey: "reports", to: ROUTES.ADMIN.BILLING_REPORTS },
+    { type: "link",    label: "Compliance",   iconKey: "compliance", to: ROUTES.ADMIN.COMPLIANCE },
     { type: "section", label: "System" },
     { type: "link",    label: "Settings",     iconKey: "settings", to: ROUTES.ADMIN.SETTINGS },
     { type: "link",    label: "My Profile",   iconKey: "settings", to: ROUTES.ADMIN.MY_PROFILE },
@@ -197,10 +204,12 @@ const NAV_BY_ROLE = {
     { type: "link",  label: "My Health Journey", iconKey: "records",  to: ROUTES.PATIENT.RECORDS },
     { type: "link",  label: "Prescriptions", iconKey: "prescription", to: ROUTES.PATIENT.PRESCRIPTIONS },
     { type: "link",  label: "Lab Reports",   iconKey: "lab",          to: ROUTES.PATIENT.LAB_REPORTS },
+    { type: "link",  label: "Notifications", iconKey: "bell",         to: ROUTES.PATIENT.NOTIFICATIONS },
     { type: "section", label: "Family Members" },
     { type: "family-list" },
     { type: "section", label: "Account" },
     { type: "link",  label: "My Profile",    iconKey: "settings",     to: ROUTES.PATIENT.MY_PROFILE },
+    { type: "link",  label: "Request a Correction", iconKey: "compliance", to: ROUTES.PATIENT.CORRECTION_REQUESTS },
   ],
 };
 

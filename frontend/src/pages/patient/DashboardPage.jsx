@@ -366,6 +366,7 @@ export default function PatientDashboardPage() {
                             </div>
                             <div style={{ fontSize: 12, color: "var(--color-hero-muted)", marginTop: 3 }}>
                               {b.doctor}{b.date ? ` · ${b.date}` : ""}{b.time ? ` · ${b.time}` : ""}
+                              {b.room_name && ` · ${b.room_name}${b.floor ? ` (Fl ${b.floor})` : ""}`}
                             </div>
                           </div>
                           <span className={`badge ${BADGE[b.status] || "badge--neutral"}`} style={{ flexShrink: 0 }}>
