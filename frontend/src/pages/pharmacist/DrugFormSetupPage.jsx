@@ -114,50 +114,40 @@ export default function DrugFormSetupPage() {
               No drug forms set up yet — add the first one above.
             </div>
           ) : (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Status</th>
-                  <th style={{ width: 160 }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {forms.map(f => (
-                  editingId === f.id ? (
-                    <tr key={f.id}>
-                      <td colSpan={3}>
-                        <DrugFormEntryForm
-                          initial={f}
-                          onSave={payload => updateForm(f.id, payload)}
-                          onCancel={() => setEditingId(null)}
-                          saving={saving}
-                        />
-                      </td>
-                    </tr>
-                  ) : (
-                    <tr key={f.id} style={{ opacity: f.is_active ? 1 : 0.5 }}>
-                      <td style={{ fontWeight: 600, fontSize: 13 }}>{f.name}</td>
-                      <td>
-                        <span className={`badge ${f.is_active ? "badge--success" : "badge--neutral"}`}>
-                          {f.is_active ? "Active" : "Inactive"}
-                        </span>
-                      </td>
-                      <td>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button className="btn-outline" style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => setEditingId(f.id)}>
-                            Edit
-                          </button>
-                          <button className="btn-outline" style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => toggleActive(f)}>
-                            {f.is_active ? "Deactivate" : "Reactivate"}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                ))}
-              </tbody>
-            </table>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, padding: 18 }}>
+              {forms.map(f => (
+                editingId === f.id ? (
+                  <div key={f.id} style={{ flex: "1 1 100%" }}>
+                    <DrugFormEntryForm
+                      initial={f}
+                      onSave={payload => updateForm(f.id, payload)}
+                      onCancel={() => setEditingId(null)}
+                      saving={saving}
+                    />
+                  </div>
+                ) : (
+                  <div key={f.id} style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    border: "1px solid var(--color-border)", borderRadius: 12,
+                    padding: "10px 14px", opacity: f.is_active ? 1 : 0.5,
+                    background: "var(--color-surface)",
+                  }}>
+                    <span style={{ fontWeight: 700, fontSize: 13.5 }}>{f.name}</span>
+                    <span className={`badge ${f.is_active ? "badge--success" : "badge--neutral"}`} style={{ fontSize: 10 }}>
+                      {f.is_active ? "Active" : "Inactive"}
+                    </span>
+                    <div style={{ display: "flex", gap: 4, marginLeft: 4 }}>
+                      <button className="btn-outline" style={{ fontSize: 10.5, padding: "3px 9px" }} onClick={() => setEditingId(f.id)}>
+                        Edit
+                      </button>
+                      <button className="btn-outline" style={{ fontSize: 10.5, padding: "3px 9px" }} onClick={() => toggleActive(f)}>
+                        {f.is_active ? "Deactivate" : "Reactivate"}
+                      </button>
+                    </div>
+                  </div>
+                )
+              ))}
+            </div>
           )}
         </div>
       </PageShell>

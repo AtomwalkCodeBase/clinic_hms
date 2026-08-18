@@ -5,7 +5,7 @@ from .models import Drug, DrugFormType
 class DrugSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Drug
-        fields = ["id", "name", "generic_name", "drug_code", "form", "strength", "unit", "is_active"]
+        fields = ["id", "name", "generic_name", "drug_code", "form", "strength", "unit", "default_mrp", "is_active"]
         read_only_fields = ["id"]
 
 

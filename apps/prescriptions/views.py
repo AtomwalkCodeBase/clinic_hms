@@ -1,3 +1,4 @@
+from django.db.models import Q
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from core.response import success, created, error, not_found
@@ -49,6 +50,12 @@ class DrugCatalogView(APIView):
         drugs = Drug.objects.using(request.tenant_db)
         if request.query_params.get("include_inactive") != "1":
             drugs = drugs.filter(is_active=True)
+
+        q = request.query_params.get("q", "").strip()
+        if q:
+            drugs = drugs.filter(
+                Q(name__icontains=q) | Q(generic_name__icontains=q) | Q(drug_code__icontains=q)
+            )
 
         if "page" in request.query_params:
             page_items, meta = paginate_queryset(request, drugs)

@@ -58,6 +58,14 @@ class Drug(models.Model):
     form        = models.CharField(max_length=50, default="Tablet")
     strength    = models.CharField(max_length=50, blank=True)   # e.g. "500mg"
     unit        = models.CharField(max_length=20, default="mg")
+    # Reference selling price — pharmacy.Stock.mrp (set per received batch)
+    # is what actually drives dispense billing, since real procurement price
+    # can shift batch to batch. This is just the catalog-level default so
+    # (a) the pharmacist can see "what does this drug cost" without digging
+    # into Stock, and (b) the Receive Stock form can prefill from it instead
+    # of relying on whoever's receiving stock to remember to type a price —
+    # still overridable per batch.
+    default_mrp = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     is_active   = models.BooleanField(default=True)
     created_at  = models.DateTimeField(auto_now_add=True)
 

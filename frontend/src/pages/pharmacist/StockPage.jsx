@@ -7,6 +7,7 @@
  * lab/CatalogPage.jsx's inline add-form pattern.
  */
 import { useState, useEffect, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useApi }    from "../../hooks/useApi";
@@ -55,10 +56,12 @@ function DrugPicker({ value, onChange }) {
       {open && results.length > 0 && (
         <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: 8, marginTop: 4, maxHeight: 220, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.12)" }}>
           {results.map(d => (
-            <div key={d.id} onMouseDown={() => { onChange(d.id, `${d.name}${d.strength ? " " + d.strength : ""}`); setOpen(false); }}
+            <div key={d.id} onMouseDown={() => { onChange(d.id, `${d.name}${d.strength ? " " + d.strength : ""}`, d.default_mrp); setOpen(false); }}
               style={{ padding: "8px 12px", fontSize: 13, cursor: "pointer", borderBottom: "1px solid var(--color-border)" }}>
               <div style={{ fontWeight: 600 }}>{d.name} {d.strength}</div>
-              <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{d.form}{d.generic_name ? ` · ${d.generic_name}` : ""}</div>
+              <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+                {d.form}{d.generic_name ? ` · ${d.generic_name}` : ""}{d.default_mrp != null ? ` · ₹${d.default_mrp}` : ""}
+              </div>
             </div>
           ))}
         </div>
@@ -90,7 +93,13 @@ function ReceiveForm({ onSave, onCancel, saving }) {
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
         <div>
           <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>DRUG *</label>
-          <DrugPicker value={form.drug_label} onChange={(id, label) => setForm(f => ({ ...f, drug: id, drug_label: label }))} />
+          <DrugPicker value={form.drug_label} onChange={(id, label, defaultMrp) => setForm(f => ({
+            ...f, drug: id, drug_label: label,
+            // Prefill from the catalog's reference price so it's never
+            // silently blank at billing time — still freely editable per
+            // batch (a fresh delivery can legitimately cost more or less).
+            mrp: (id != null && f.mrp === "" && defaultMrp != null) ? String(defaultMrp) : f.mrp,
+          }))} />
         </div>
         <div>
           <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>BATCH NUMBER</label>
@@ -131,10 +140,14 @@ function ReceiveForm({ onSave, onCancel, saving }) {
 
 export default function StockPage() {
   const { user } = useAuth();
+  const location = useLocation();
   const { toastSuccess, toastApiError } = useToast();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.PHARMACY.STOCK, { params: { page, page_size: pageSize } });
+  const [lowOnly, setLowOnly] = useState(() => !!location.state?.lowOnly);
+  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.PHARMACY.STOCK, {
+    params: { page, page_size: pageSize, ...(lowOnly ? { low_only: 1 } : {}) },
+  });
   const stock = data?.results || [];
   const pagination = data?.pagination || null;
   // Separate lightweight call for the low-stock badge — now that the main
@@ -184,13 +197,22 @@ export default function StockPage() {
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
             <span className="dot-label dot-label--green">Batches ({pagination ? pagination.total_count : stock.length})</span>
-            {lowCount > 0 && <span className="badge badge--error">{lowCount} low on stock</span>}
+            <div style={{ display: "flex", gap: 6 }}>
+              {[[false, "All"], [true, `Low stock${lowCount > 0 ? ` (${lowCount})` : ""}`]].map(([val, label]) => (
+                <button key={String(val)} type="button"
+                  className={lowOnly === val ? "btn-primary" : "btn-outline"}
+                  style={{ fontSize: 11.5, padding: "5px 12px" }}
+                  onClick={() => { setLowOnly(val); setPage(1); }}>
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
           {isLoading ? (
             <div style={{ padding: 40, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
           ) : stock.length === 0 ? (
             <div style={{ padding: 48, textAlign: "center", color: "var(--color-text-muted)" }}>
-              No stock on hand yet — receive the first batch above.
+              {lowOnly ? "Nothing running low right now." : "No stock on hand yet — receive the first batch above."}
             </div>
           ) : (
             <table className="data-table">

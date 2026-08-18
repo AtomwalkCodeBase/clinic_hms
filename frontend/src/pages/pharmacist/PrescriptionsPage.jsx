@@ -67,18 +67,36 @@ function DispenseModal({ item, rx, stock, onClose, onDone }) {
           {item.instructions ? ` — ${item.instructions}` : ""}
         </div>
 
-        <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>STOCK BATCH *</label>
+        <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 6 }}>STOCK BATCH *</label>
         {candidates.length === 0 ? (
           <div style={{ fontSize: 13, color: "#991B1B", marginBottom: 14 }}>No stock with quantity on hand. Receive stock first.</div>
         ) : (
-          <select className="form-input" value={stockId} onChange={e => setStockId(e.target.value)}
-            style={{ width: "100%", boxSizing: "border-box", marginBottom: 14 }}>
-            {candidates.map(s => (
-              <option key={s.id} value={s.id}>
-                {s.drug_name}{s.batch_number ? ` — Batch ${s.batch_number}` : ""} ({s.quantity} available)
-              </option>
-            ))}
-          </select>
+          <div style={{ display: "grid", gap: 6, marginBottom: 14, maxHeight: 180, overflowY: "auto" }}>
+            {candidates.map(s => {
+              const picked = String(stockId) === String(s.id);
+              return (
+                <button key={s.id} type="button" onClick={() => setStockId(s.id)}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                    textAlign: "left", padding: "8px 12px", borderRadius: 9, cursor: "pointer",
+                    border: picked ? "2px solid var(--color-primary)" : "1px solid var(--color-border)",
+                    background: picked ? "var(--color-primary-light)" : "var(--color-surface)",
+                  }}>
+                  <span style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {s.drug_name}
+                    </div>
+                    {s.batch_number && (
+                      <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>Batch {s.batch_number}</div>
+                    )}
+                  </span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--color-primary)", flexShrink: 0 }}>
+                    {s.quantity} available
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         )}
 
         <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>QUANTITY TO DISPENSE *</label>

@@ -149,7 +149,16 @@ class DispenseView(APIView):
             from core.utils.nntm import get_next_number
 
             rx = Prescription.objects.using(db).get(pk=prescription_id)
-            unit_price = stock.mrp if stock.mrp is not None else (stock.unit_cost or Decimal("0"))
+            # Batch MRP wins (real price this batch was received at); fall
+            # back to unit_cost, then to the drug's catalog reference price
+            # (Drug.default_mrp) rather than silently billing ₹0 just
+            # because whoever received this particular batch left the price
+            # fields blank.
+            unit_price = (
+                stock.mrp if stock.mrp is not None
+                else stock.unit_cost if stock.unit_cost is not None
+                else getattr(stock.drug, "default_mrp", None) or Decimal("0")
+            )
             tax_rate = _tenant_default_tax_rate(request.tenant_id)
 
             if rx.invoice_id:
@@ -187,6 +196,14 @@ class PendingPrescriptionsView(APIView):
     items and how much of each has already been dispensed.
     ?status=dispensed shows completed ones instead of the default "active".
 
+    Only shows prescriptions the patient has actually chosen to fill
+    in-house (patient_choice="in_house") — a doctor finalizing a
+    prescription does NOT put it in front of the pharmacist by itself;
+    the patient has to opt in via the portal (or have front desk record
+    that choice for them) first. Without this filter every prescription
+    ever written would show up here the moment it's saved, regardless of
+    whether the patient even intends to fill it at this pharmacy.
+
     Deliberately not reusing opd.PrescriptionDetailView — that's shaped for
     the doctor/clinical view (IsTenantStaff, bare ids), not the pharmacist
     screen, which needs patient/doctor names resolved and per-item
@@ -203,7 +220,7 @@ class PendingPrescriptionsView(APIView):
         db = request.tenant_db
         status_filter = request.query_params.get("status", Prescription.STATUS_ACTIVE)
         qs = (Prescription.objects.using(db)
-              .filter(status=status_filter)
+              .filter(status=status_filter, patient_choice=Prescription.CHOICE_IN_HOUSE)
               .prefetch_related("items")
               .order_by("-created_at"))
         page_items, meta = paginate_queryset(request, qs)

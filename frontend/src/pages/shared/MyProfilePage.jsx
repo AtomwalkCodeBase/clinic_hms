@@ -173,12 +173,16 @@ export default function MyProfilePage() {
               <form onSubmit={handleSubmit}>
                 <div style={{ display: "grid", gap: 14 }}>
                   <div><label style={labelStyle}>Gender</label>
-                    <select style={inputStyle} value={form.gender} onChange={set("gender")}>
-                      <option value="">—</option>
-                      <option value="M">Male</option>
-                      <option value="F">Female</option>
-                      <option value="O">Other</option>
-                    </select>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      {[["M", "Male"], ["F", "Female"], ["O", "Other"]].map(([val, label]) => (
+                        <button key={val} type="button"
+                          className={form.gender === val ? "btn-primary" : "btn-outline"}
+                          style={{ flex: 1, fontSize: 12.5, padding: "8px 0" }}
+                          onClick={() => setForm(f => ({ ...f, gender: f.gender === val ? "" : val }))}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   <div><label style={labelStyle}>Date of Birth</label>
                     <input type="date" style={inputStyle} value={dob} onChange={e => setDob(e.target.value)} />

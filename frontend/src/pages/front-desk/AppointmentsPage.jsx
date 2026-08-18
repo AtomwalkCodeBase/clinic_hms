@@ -220,7 +220,7 @@ export default function AppointmentsPage() {
         {/* ── Booking card ──────────────────────────────────────────── */}
         <div className="card" style={{ marginBottom: 22, padding: 24 }}>
           <div className="dot-label dot-label--green" style={{ marginBottom: 16 }}>Book an appointment</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr 1.4fr auto", gap: 12, alignItems: "end" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 1.4fr auto", gap: 12, alignItems: "end" }}>
 
             {/* Patient search */}
             <div ref={searchRef} style={{ position: "relative" }}>
@@ -302,20 +302,6 @@ export default function AppointmentsPage() {
               )}
             </div>
 
-            {/* Doctor */}
-            <div>
-              <label className="stat-label" style={{ display: "block", marginBottom: 6 }}>Doctor</label>
-              <select className="form-input" style={{ appearance: "auto" }}
-                value={doctorId} onChange={e => setDoctorId(e.target.value)}>
-                <option value="">Select doctor…</option>
-                {doctorList.map(d => (
-                  <option key={d.id} value={d.id}>
-                    {`${d.first_name || ""} ${d.last_name || ""}`.trim() || d.full_name || d.email}
-                  </option>
-                ))}
-              </select>
-            </div>
-
             {/* Date */}
             <div>
               <label className="stat-label" style={{ display: "block", marginBottom: 6 }}>Date</label>
@@ -335,6 +321,63 @@ export default function AppointmentsPage() {
               onClick={book}>
               {booking ? "Booking…" : "Book"}
             </button>
+          </div>
+
+          {/* Doctor — card grid, click to select (replaces the old dropdown so
+              front desk can see who's who at a glance instead of scanning a
+              flat list of names) */}
+          <div style={{ marginTop: 16 }}>
+            <label className="stat-label" style={{ display: "block", marginBottom: 8 }}>Doctor</label>
+            {doctorList.length === 0 ? (
+              <div style={{
+                padding: "14px 16px", fontSize: 12.5, color: "var(--color-text-muted)",
+                border: "1px dashed var(--color-border)", borderRadius: 10,
+              }}>
+                No doctors are set up for this branch yet — invite one from Staff.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
+                {doctorList.map(d => {
+                  const name = `${d.first_name || ""} ${d.last_name || ""}`.trim() || d.full_name || d.email;
+                  const prof = d.doctor_profile || {};
+                  const photo = d.photo || prof.photo_url;
+                  const selected = String(doctorId) === String(d.id);
+                  return (
+                    <button key={d.id} type="button" onClick={() => setDoctorId(d.id)}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 10, textAlign: "left",
+                        padding: "10px 12px", borderRadius: 10, cursor: "pointer",
+                        border: selected ? "2px solid var(--color-primary)" : "1px solid var(--color-border)",
+                        background: selected ? "var(--color-primary-light)" : "var(--color-surface)",
+                      }}>
+                      <span style={{
+                        width: 36, height: 36, borderRadius: "50%", flexShrink: 0, overflow: "hidden",
+                        background: "var(--color-primary-light)", color: "var(--color-primary)",
+                        display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 14,
+                      }}>
+                        {photo
+                          ? <img src={photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                          : (name.replace("Dr. ", "").charAt(0) || "D")}
+                      </span>
+                      <span style={{ minWidth: 0 }}>
+                        <div style={{
+                          fontSize: 13, fontWeight: 700, whiteSpace: "nowrap",
+                          overflow: "hidden", textOverflow: "ellipsis",
+                        }}>
+                          {name}
+                        </div>
+                        <div style={{
+                          fontSize: 11, color: "var(--color-text-muted)", whiteSpace: "nowrap",
+                          overflow: "hidden", textOverflow: "ellipsis",
+                        }}>
+                          {prof.specialisation || "General"}{prof.consultation_fee ? ` · ₹${prof.consultation_fee}` : ""}
+                        </div>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Slot picker */}

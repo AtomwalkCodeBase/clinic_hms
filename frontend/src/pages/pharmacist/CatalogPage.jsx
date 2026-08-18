@@ -6,7 +6,8 @@
  * DrugForm) and what pharmacy's "Receive Stock" picker searches against.
  * Modeled directly after lab/CatalogPage.jsx's inline add/edit pattern.
  */
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { Search } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useApi }    from "../../hooks/useApi";
@@ -15,16 +16,18 @@ import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import PaginationControls from "../../components/common/PaginationControls";
 
-const EMPTY_FORM = { name: "", generic_name: "", drug_code: "", form: "", strength: "" };
+const EMPTY_FORM = { name: "", generic_name: "", drug_code: "", form: "", strength: "", default_mrp: "" };
 
 function DrugForm({ initial, drugForms, onSave, onCancel, saving }) {
-  const [form, setForm] = useState(() => initial || { ...EMPTY_FORM, form: drugForms[0]?.name || "" });
+  const [form, setForm] = useState(() => initial
+    ? { ...EMPTY_FORM, ...initial, default_mrp: initial.default_mrp ?? "" }
+    : { ...EMPTY_FORM, form: drugForms[0]?.name || "" });
   function upd(k, v) { setForm(f => ({ ...f, [k]: v })); }
 
   function submit(e) {
     e.preventDefault();
     if (!form.name.trim()) return;
-    onSave({ ...form });
+    onSave({ ...form, default_mrp: form.default_mrp === "" ? null : parseFloat(form.default_mrp) });
   }
 
   return (
@@ -57,6 +60,16 @@ function DrugForm({ initial, drugForms, onSave, onCancel, saving }) {
           <input className="form-input" value={form.strength} onChange={e => upd("strength", e.target.value)} placeholder="e.g. 500mg" />
         </div>
       </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 10, marginBottom: 14 }}>
+        <div>
+          <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>PRICE / MRP (₹)</label>
+          <input className="form-input" type="number" min="0" step="0.01" value={form.default_mrp}
+            onChange={e => upd("default_mrp", e.target.value)} placeholder="e.g. 45.00" />
+        </div>
+        <div style={{ fontSize: 11, color: "var(--color-text-muted)", alignSelf: "end", paddingBottom: 9 }}>
+          Reference price used to bill dispenses and to prefill "Receive Stock" — each batch can still be priced differently at receiving time.
+        </div>
+      </div>
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
         <button type="button" className="btn-outline" style={{ fontSize: 12, padding: "6px 14px" }} onClick={onCancel}>Cancel</button>
         <button type="submit" className="btn-primary" style={{ fontSize: 12, padding: "6px 16px" }} disabled={saving || !form.name.trim()}>
@@ -71,8 +84,14 @@ export default function CatalogPage() {
   const { toastSuccess, toastApiError } = useToast();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [q, setQ] = useState("");
+  const [qDebounced, setQDebounced] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => { setQDebounced(q.trim()); setPage(1); }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
   const { data, isLoading, refetch } = useApi(API_ENDPOINTS.PRESCRIPTIONS.DRUGS, {
-    params: { include_inactive: 1, page, page_size: pageSize },
+    params: { include_inactive: 1, page, page_size: pageSize, ...(qDebounced ? { q: qDebounced } : {}) },
   });
   const drugs = data?.results || [];
   const pagination = data?.pagination || null;
@@ -126,12 +145,20 @@ export default function CatalogPage() {
   return (
     <AppShell>
       <PageShell title="Drug Catalog Setup">
-        {!adding && editingId === null && (
-          <button className="btn-primary" style={{ fontSize: 13, padding: "8px 18px", marginBottom: 16 }}
-            onClick={() => setAdding(true)}>
-            + Add Drug
-          </button>
-        )}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+          {!adding && editingId === null && (
+            <button className="btn-primary" style={{ fontSize: 13, padding: "8px 18px" }}
+              onClick={() => setAdding(true)}>
+              + Add Drug
+            </button>
+          )}
+          <div style={{ position: "relative", minWidth: 240 }}>
+            <Search size={14} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--color-text-muted)" }} />
+            <input className="form-input" style={{ paddingLeft: 30 }}
+              placeholder="Search name, generic name, or code…"
+              value={q} onChange={e => setQ(e.target.value)} />
+          </div>
+        </div>
 
         {adding && (
           <DrugForm drugForms={drugForms} onSave={createDrug} onCancel={() => setAdding(false)} saving={saving} />
@@ -145,7 +172,7 @@ export default function CatalogPage() {
             <div style={{ padding: 40, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
           ) : drugs.length === 0 ? (
             <div style={{ padding: 48, textAlign: "center", color: "var(--color-text-muted)" }}>
-              No drugs in the catalog yet — add the first one above.
+              {qDebounced ? `No drugs matched "${qDebounced}".` : "No drugs in the catalog yet — add the first one above."}
             </div>
           ) : (
             <table className="data-table">
@@ -155,6 +182,7 @@ export default function CatalogPage() {
                   <th>Generic</th>
                   <th>Form</th>
                   <th>Dosage</th>
+                  <th>Price (MRP)</th>
                   <th>Status</th>
                   <th style={{ width: 160 }}>Action</th>
                 </tr>
@@ -163,7 +191,7 @@ export default function CatalogPage() {
                 {drugs.map(d => (
                   editingId === d.id ? (
                     <tr key={d.id}>
-                      <td colSpan={6}>
+                      <td colSpan={7}>
                         <DrugForm
                           initial={{ ...d }}
                           drugForms={drugForms}
@@ -179,6 +207,11 @@ export default function CatalogPage() {
                       <td style={{ fontSize: 12 }}>{d.generic_name || "—"}</td>
                       <td style={{ fontSize: 12 }}>{d.form}</td>
                       <td style={{ fontSize: 13 }}>{d.strength || "—"}</td>
+                      <td style={{ fontSize: 13, fontWeight: 600 }}>
+                        {d.default_mrp != null
+                          ? `₹${d.default_mrp}`
+                          : <span style={{ color: "var(--color-warning)", fontWeight: 400 }}>Not set</span>}
+                      </td>
                       <td>
                         <span className={`badge ${d.is_active ? "badge--success" : "badge--neutral"}`}>
                           {d.is_active ? "Active" : "Inactive"}

@@ -1406,7 +1406,7 @@ class PortalPrescriptionListView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.opd.models import Prescription
+        from apps.opd.models import Appointment, OPDEncounter, Prescription
         from apps.org.models import StaffUser
         from apps.patients.models import Patient
         import uuid as _uuid
@@ -1423,9 +1423,20 @@ class PortalPrescriptionListView(APIView):
                 patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
                 if not patient:
                     continue
+                # Resolved via Appointment -> OPDEncounter -> Prescription
+                # (same relational chain PortalMyRecordsView already uses
+                # successfully) rather than trusting Prescription.patient_id
+                # directly — that field is set independently at encounter-
+                # creation time from whatever the doctor's client sent, so
+                # it isn't guaranteed to match the Appointment's patient_id
+                # the way this chain is. Going through the same proven path
+                # both endpoints use guarantees they agree on which
+                # prescriptions belong to this patient.
+                appt_ids = Appointment.objects.using(db).filter(patient_id=patient.uuid).values_list("id", flat=True)
+                enc_ids = OPDEncounter.objects.using(db).filter(appointment_id__in=list(appt_ids)).values_list("id", flat=True)
                 rxs = (Prescription.objects.using(db)
                        .prefetch_related("items")
-                       .filter(patient_id=patient.uuid)
+                       .filter(encounter_id__in=list(enc_ids))
                        .order_by("-created_at")[:50])
                 for rx in rxs:
                     doctor_name = None
@@ -1496,14 +1507,20 @@ class PortalPrescriptionChoiceView(APIView):
         _ensure_db(tenant_db)
 
         try:
-            rx = Prescription.objects.using(tenant_db).get(pk=prescription_id)
+            rx = Prescription.objects.using(tenant_db).select_related("encounter").get(pk=prescription_id)
         except Prescription.DoesNotExist:
             return error("Prescription not found.")
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        # Ownership resolved via the encounter's appointment, same chain
+        # PortalPrescriptionListView uses — not rx.patient_id directly,
+        # which is set independently at encounter-creation time and isn't
+        # guaranteed to agree with the appointment's patient_id.
+        from apps.opd.models import Appointment
         try:
-            rx_patient = Patient.objects.using(tenant_db).get(uuid=rx.patient_id)
-        except Patient.DoesNotExist:
+            appt = Appointment.objects.using(tenant_db).get(pk=rx.encounter.appointment_id)
+            rx_patient = Patient.objects.using(tenant_db).get(uuid=appt.patient_id)
+        except (Appointment.DoesNotExist, Patient.DoesNotExist, AttributeError):
             return error("Prescription not found.")
         rx_awpid = rx_patient.awpid
         if rx_awpid != acct.awpid:
