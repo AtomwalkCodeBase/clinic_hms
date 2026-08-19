@@ -80,12 +80,48 @@ SYSTEM_ROLE_LABELS = {
     "pharmacist":     "Pharmacist",
 }
 
+# Keys a Role.acts_as list may legally contain — the same 6 system roles a
+# StaffUser.role can be, minus "custom" itself (a custom role can't act as
+# "custom", that's not a real identity).
+ACTS_AS_CHOICES = [k for k in SYSTEM_ROLE_LABELS.keys()]
+
+
+def resolve_acts_as(staff):
+    """
+    Which system-role identities this staff member should be treated as,
+    for every "is this person a doctor/nurse/..." check throughout the app
+    (core.permissions Is* classes, DoctorListView, tenants.limits doctor
+    counting, patient-facing doctor search, etc.) — not just permission
+    codes, but actual identity/discoverability.
+
+    - System-role staff (role in the fixed 6): always exactly {staff.role}.
+      A doctor is a doctor; this never depends on custom_role even if one
+      happens to be set (it shouldn't be, but this keeps the fast path
+      correct regardless).
+    - Custom-role staff (role="custom"): whatever their custom_role.acts_as
+      says — e.g. ["doctor", "nurse", "front_desk"] for a solo-clinic role.
+      Empty list (not an error) if custom_role is somehow unset — degrades
+      to "acts as nothing", not "acts as everything".
+
+    Always returns a set; never raises.
+    """
+    if staff.role != "custom":
+        return {staff.role} if staff.role else set()
+    custom_role = getattr(staff, "custom_role", None)
+    if not custom_role:
+        return set()
+    return set(custom_role.acts_as or [])
+
 
 def get_effective_permissions(staff, db_name):
     """
     Union of:
       - the default permission set for staff.role (the system role — always
-        applies, this is the fast-path everyone already gets)
+        applies, this is the fast-path everyone already gets), OR for
+        role="custom", the permission codes granted directly by
+        staff.custom_role (its own Role.permissions — not inferred from
+        acts_as, so a custom role can grant a permission without claiming
+        the matching identity, or vice versa)
       - permissions granted by any extra Role rows assigned via UserRole
         (only meaningful for tenants using custom RBAC)
 
@@ -94,7 +130,21 @@ def get_effective_permissions(staff, db_name):
     hardcoded role, so nothing breaks for the 95%+ of tenants that never
     touch custom roles.
     """
-    codes = set(SYSTEM_ROLE_PERMISSIONS.get(staff.role, ()))
+    if staff.role == "custom":
+        custom_role = getattr(staff, "custom_role", None)
+        if custom_role:
+            try:
+                codes = set(custom_role.permissions.using(db_name).values_list("code", flat=True))
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "get_effective_permissions: custom_role permission lookup failed "
+                    "for staff_id=%s db=%s", getattr(staff, "id", None), db_name, exc_info=True,
+                )
+                codes = set()
+        else:
+            codes = set()
+    else:
+        codes = set(SYSTEM_ROLE_PERMISSIONS.get(staff.role, ()))
     try:
         from .models import UserRole
         extra_roles = (

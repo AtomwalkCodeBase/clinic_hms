@@ -8,6 +8,7 @@ import { PageShell } from "../../components/common/PageShell";
 import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
+import HospitalLogoUpload from "../../components/common/HospitalLogoUpload";
 
 const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 };
 
@@ -47,7 +48,7 @@ function Toggle({ checked, onChange, disabled }) {
 }
 
 export default function SettingsPage() {
-  const { user, logout }           = useAuth();
+  const { user, logout, refreshUser } = useAuth();
   const { toastSuccess, toastApiError } = useToast();
 
   const [settings, setSettings]   = useState(null);   // { fee_ownership }
@@ -89,6 +90,23 @@ export default function SettingsPage() {
             <InfoRow label="Database"  value={user?.db_name} mono />
             <InfoRow label="Plan"      value={user?.license_tier} />
           </div>
+
+          {/* ── Hospital branding ──────────────────────────────────── */}
+          {settings && (
+            <div className="card" style={{ padding: 28, marginBottom: 20 }}>
+              <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Hospital Logo</h2>
+              <p style={{ fontSize: 13, color: "var(--color-text-muted)", marginBottom: 20 }}>
+                Upload once — it replaces the default monogram everywhere your hospital's identity shows up: every staff login's sidebar, and the patient portal when someone browses or books with you.
+              </p>
+              <HospitalLogoUpload
+                logo={settings.logo}
+                onUploaded={(logo) => {
+                  setSettings(s => ({ ...s, logo }));
+                  refreshUser();
+                }}
+              />
+            </div>
+          )}
 
           {/* ── Clinical configuration ────────────────────────────── */}
           {settings && (

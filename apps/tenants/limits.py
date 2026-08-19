@@ -43,6 +43,25 @@ def get_usage_counts(db_name):
     staff = StaffUser.objects.using(db_name).filter(
         role__in=_NON_DOCTOR_ROLES, is_active=True
     ).count()
+
+    # Custom-role staff (a hospital-defined Role — see apps.org.rbac) count
+    # against whichever bucket their acts_as implies. "doctor" wins if
+    # present: one login = one hire, so a solo-clinic role that acts as
+    # doctor+nurse+front_desk only consumes 1 doctor slot, not a doctor slot
+    # AND a staff slot for the same person — matching how a literal doctor
+    # already counts as exactly 1 regardless of how many things they do.
+    # Small in-Python pass rather than a JSONField query since this list is
+    # normally empty/tiny (custom roles are an enterprise add-on).
+    custom_staff = StaffUser.objects.using(db_name).filter(
+        role="custom", is_active=True
+    ).select_related("custom_role")
+    for cs in custom_staff:
+        acts_as = set((cs.custom_role.acts_as if cs.custom_role else []) or [])
+        if "doctor" in acts_as:
+            doctors += 1
+        elif acts_as & set(_NON_DOCTOR_ROLES):
+            staff += 1
+
     return {"doctors": doctors, "branches": branches, "staff": staff}
 
 

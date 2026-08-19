@@ -112,9 +112,32 @@ function TenantBillingSettings() {
   );
 }
 
+// Small pill toggle, reused for per-item "accepted" switches below —
+// same visual language as the bigger toggles in TenantBillingSettings above.
+function MiniToggle({ checked, onChange, disabled }) {
+  return (
+    <button
+      type="button" onClick={onChange} disabled={disabled}
+      title={checked ? "Accepted — click to turn off" : "Not accepted — click to turn on"}
+      style={{
+        width: 30, height: 17, borderRadius: 9, border: "none", flexShrink: 0,
+        background: checked ? "var(--color-primary)" : "var(--color-border)",
+        cursor: disabled ? "default" : "pointer", position: "relative", transition: "background 0.15s",
+      }}>
+      <span style={{
+        position: "absolute", top: 2, left: checked ? 15 : 2,
+        width: 13, height: 13, borderRadius: "50%", background: "#fff", transition: "left 0.15s",
+      }} />
+    </button>
+  );
+}
+
 // ── Generic configurable dropdown list (service categories / payment modes
-//    / invoice statuses) — one small CRUD block, reused three times below. ──
-function DropdownListEditor({ title, listEndpoint, itemEndpoint, identityField, extraFields }) {
+//    / invoice statuses) — one small CRUD block, reused three times below.
+//    toggleable=true (Payment Modes) additionally fetches inactive entries
+//    and shows an is_active switch per item — this is what the hospital
+//    actually accepts, reflected to patients at booking time. ──
+function DropdownListEditor({ title, listEndpoint, itemEndpoint, identityField, extraFields, toggleable, helpText }) {
   const { toastSuccess, toastApiError } = useToast();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -124,15 +147,28 @@ function DropdownListEditor({ title, listEndpoint, itemEndpoint, identityField, 
     return f;
   });
   const [saving, setSaving] = useState(false);
+  const [togglingId, setTogglingId] = useState(null);
 
   const load = useCallback(() => {
     setLoading(true);
-    apiClient.get(listEndpoint)
+    apiClient.get(toggleable ? `${listEndpoint}?all=1` : listEndpoint)
       .then(r => setItems(r.data?.data || []))
       .catch(() => setItems([]))
       .finally(() => setLoading(false));
-  }, [listEndpoint]);
+  }, [listEndpoint, toggleable]);
   useEffect(() => { load(); }, [load]);
+
+  async function toggleActive(item) {
+    setTogglingId(item.id);
+    try {
+      await apiClient.patch(itemEndpoint(item.id), { is_active: !item.is_active });
+      setItems(its => its.map(i => i.id === item.id ? { ...i, is_active: !i.is_active } : i));
+    } catch (err) {
+      toastApiError(err, "Could not update.");
+    } finally {
+      setTogglingId(null);
+    }
+  }
 
   async function addItem(e) {
     e.preventDefault();
@@ -164,19 +200,25 @@ function DropdownListEditor({ title, listEndpoint, itemEndpoint, identityField, 
 
   return (
     <div>
-      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{title}</div>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{title}</div>
+      {helpText && <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginBottom: 10 }}>{helpText}</div>}
       {loading ? (
         <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>Loading…</div>
       ) : (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
           {items.map(item => (
             <span key={item.id} style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 999,
+              display: "inline-flex", alignItems: "center", gap: 7,
+              fontSize: 12, fontWeight: 600, padding: "4px 8px 4px 10px", borderRadius: 999,
               background: "var(--color-bg)", border: "1px solid var(--color-border)",
+              opacity: toggleable && !item.is_active ? 0.55 : 1,
             }}>
               {item.is_system && <Lock size={10} style={{ color: "var(--color-text-muted)" }} />}
               {item.label || item[identityField]}
+              {toggleable && (
+                <MiniToggle checked={item.is_active} disabled={togglingId === item.id}
+                  onChange={() => toggleActive(item)} />
+              )}
               {!item.is_system && (
                 <button type="button" onClick={() => removeItem(item)}
                   style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1, color: "var(--color-text-muted)" }}>
@@ -377,6 +419,8 @@ export default function BillingSetupPage() {
               listEndpoint={API_ENDPOINTS.BILLING.PAYMENT_MODES}
               itemEndpoint={API_ENDPOINTS.BILLING.PAYMENT_MODE}
               identityField="name"
+              toggleable
+              helpText="Switch off what you don't accept — patients see the remaining ones when booking. 'Online' needs a payment gateway connected before it actually works; leave it off until then."
             />
             <DropdownListEditor
               title="Invoice Statuses"

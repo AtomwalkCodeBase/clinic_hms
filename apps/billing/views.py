@@ -111,7 +111,18 @@ class _DropdownListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        qs = self.model.objects.using(request.tenant_db).filter(is_active=True)
+        qs = self.model.objects.using(request.tenant_db)
+        # ?all=1 — used by the hospital-admin Billing Setup screen so it can
+        # render a toggle for entries that are currently switched off (the
+        # normal is_active=True filter below is what every other caller,
+        # e.g. the front-desk "record a payment" dropdown, should keep
+        # seeing — an admin-only escape hatch, not a behavior change).
+        if request.query_params.get("all") == "1":
+            from core.permissions import IsHospitalAdmin as _IsHospitalAdmin
+            if not _IsHospitalAdmin().has_permission(request, self):
+                return error("Only hospital admins can view inactive entries.", status=403)
+        else:
+            qs = qs.filter(is_active=True)
         return success(data=self.serializer_class(qs, many=True).data)
 
     def post(self, request):
@@ -131,6 +142,13 @@ class _DropdownDetailView(APIView):
     model = None
     serializer_class = None
     identity_field = "name"
+    # InvoiceStatusOption's system rows have real backend logic tied to
+    # their stored value (see PaymentCreateView / InvoiceItemCreateView) —
+    # deactivating "paid", say, would break invoice state transitions, so
+    # those stay locked. PaymentModeOption has no such coupling (a payment
+    # mode is just a label a staff member picks), so it opts back in below —
+    # a hospital genuinely may not want to offer "Credit" or "Online".
+    system_can_deactivate = False
 
     def _get(self, request, pk):
         try:
@@ -145,7 +163,7 @@ class _DropdownDetailView(APIView):
         if obj.is_system and self.identity_field in request.data \
                 and request.data[self.identity_field] != getattr(obj, self.identity_field):
             return error(f"This is a system value — its {self.identity_field} can't be changed, only its label/active state.")
-        if obj.is_system and request.data.get("is_active") is False:
+        if obj.is_system and request.data.get("is_active") is False and not self.system_can_deactivate:
             return error("System values can't be deactivated — the backend relies on them.")
         s = self.serializer_class(obj, data=request.data, partial=True)
         if not s.is_valid():
@@ -191,6 +209,10 @@ class PaymentModeDetailView(_DropdownDetailView):
     model = PaymentModeOption
     serializer_class = PaymentModeOptionSerializer
     identity_field = "name"
+    # A hospital can genuinely not want to offer e.g. "Credit" or "Online" —
+    # unlike InvoiceStatusOption, no backend logic depends on any specific
+    # PaymentModeOption row staying active. See _DropdownDetailView docstring.
+    system_can_deactivate = True
 
 
 class InvoiceStatusListCreateView(_DropdownListCreateView):

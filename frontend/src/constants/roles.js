@@ -42,4 +42,21 @@ export const STAFF_ROLES = [
   ROLES.PHARMACIST,
 ];
 
+/**
+ * Priority order used to derive a single "primary" identity for a
+ * role="custom" staff member (their acts_as claim can hold several roles at
+ * once — e.g. a solo-clinic login that is doctor+nurse+front_desk). Used to
+ * pick their default landing route (App.jsx) and to order their merged
+ * sidebar nav (AppShell.jsx) so both agree on which hat comes first.
+ * Matches apps.org.rbac.ACTS_AS_CHOICES on the backend.
+ */
+export const ACTS_AS_PRIORITY = [
+  ROLES.HOSPITAL_ADMIN,
+  ROLES.DOCTOR,
+  ROLES.NURSE,
+  ROLES.FRONT_DESK,
+  ROLES.LAB_TECH,
+  ROLES.PHARMACIST,
+];
+
 export default ROLES;

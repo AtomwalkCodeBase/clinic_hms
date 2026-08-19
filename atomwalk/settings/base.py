@@ -231,6 +231,12 @@ REST_FRAMEWORK = {
         "anon": "100/min",
         "user": "300/min",
         "login": "10/min",
+        # OTP request/verify endpoints — tighter than login since these are
+        # what a brute-force/SMS-bombing attempt would target. The per-
+        # identifier resend cooldown (core.otp.RESEND_COOLDOWN_SECONDS) and
+        # per-code attempt cap (core.otp.MAX_VERIFY_ATTEMPTS) are the real
+        # defenses; this is a per-IP backstop on top of them.
+        "otp": "6/min",
     },
 }
 
@@ -272,6 +278,45 @@ SPECTACULAR_SETTINGS = {
 FIELD_ENCRYPTION_KEY = config("FIELD_ENCRYPTION_KEY", default="") or None
 _fek_fallbacks = config("FIELD_ENCRYPTION_KEY_FALLBACKS", default="")
 FIELD_ENCRYPTION_KEY_FALLBACKS = _fek_fallbacks.split(",") if _fek_fallbacks else []
+
+# ── Email (core/email.py) ────────────────────────────────────────────────────
+# No email transport existed before OTP-based auth needed one. DEBUG defaults
+# to Django's console backend (prints to the server log, zero setup, fully
+# usable for local dev/demo). Production requires real SMTP credentials —
+# same "customer supplies their own account" pattern as the payment gateway
+# (see task history) — Atomwalk cannot provision a mail relay on their behalf.
+if DEBUG:
+    EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
+else:
+    EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST          = config("EMAIL_HOST", default="")
+EMAIL_PORT          = config("EMAIL_PORT", default=587, cast=int)
+EMAIL_HOST_USER     = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS       = config("EMAIL_USE_TLS", default=True, cast=bool)
+DEFAULT_FROM_EMAIL  = config("DEFAULT_FROM_EMAIL", default="Atomwalk HMS <no-reply@atomwalk.local>")
+
+# ── SMS (core/sms.py) ────────────────────────────────────────────────────────
+# "log" (default) writes the message to the app log instead of sending it —
+# there is no SMS gateway account configured for this deployment. Set to
+# "msg91" (and MSG91_AUTH_KEY/MSG91_TEMPLATE_ID below) once the hospital has
+# its own MSG91 account with a DLT-approved template; see core/sms.py.
+SMS_BACKEND = config("SMS_BACKEND", default="log")
+MSG91_AUTH_KEY     = config("MSG91_AUTH_KEY", default="")
+MSG91_TEMPLATE_ID  = config("MSG91_TEMPLATE_ID", default="")
+# Must match the variable name used in the DLT-approved template on the
+# MSG91 dashboard (commonly "VAR1" for a single-variable template, e.g.
+# "Your Atomwalk verification code is ##VAR1##.").
+MSG91_OTP_VAR_NAME = config("MSG91_OTP_VAR_NAME", default="VAR1")
+
+# ── OTP (core/otp.py) ────────────────────────────────────────────────────────
+# Separate from JWT_SIGNING_KEY so it can be rotated independently — falls
+# back to JWT_SIGNING_KEY only in DEBUG, same pattern as JWT_SIGNING_KEY's
+# own fallback to SECRET_KEY above.
+if DEBUG:
+    OTP_HASH_PEPPER = config("OTP_HASH_PEPPER", default=JWT_SIGNING_KEY)
+else:
+    OTP_HASH_PEPPER = config("OTP_HASH_PEPPER")
 
 # ── Platform Admin ───────────────────────────────────────────────────────────
 PLATFORM_ADMIN_SECRET = config("PLATFORM_ADMIN_SECRET", default="change-this")

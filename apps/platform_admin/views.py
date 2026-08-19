@@ -200,7 +200,15 @@ class TenantListCreateView(APIView):
                 errors={"admin_mobile": "Already in use."},
             )
 
-        admin_email = (d.get("admin_email") or "").strip() or None
+        admin_email = (d.get("admin_email") or "").strip()
+        if not admin_email:
+            return error("Admin email is required.", errors={"admin_email": "Required."})
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", admin_email):
+            return error("Enter a valid email address.", errors={"admin_email": "Invalid format."})
+        from core.realworld_validation import validate_email_domain
+        email_ok, email_reason = validate_email_domain(admin_email)
+        if not email_ok:
+            return error(email_reason, errors={"admin_email": email_reason})
 
         tier = (d.get("tier") or "starter").strip()
         if tier not in TIER_FEATURE_DEFAULTS:
@@ -260,6 +268,7 @@ class TenantListCreateView(APIView):
         # ── Step 5: Create hospital_admin StaffUser ────────────────────────────
         temp_password = _gen_password()
         admin_employee_id = None
+        email_sent = False
         try:
             from apps.org.views import _next_employee_id
             admin_staff = StaffUser(
@@ -281,6 +290,19 @@ class TenantListCreateView(APIView):
                 defaults={"tenant_id": tenant.id, "db_name": db_name},
             )
             logger.info("hospital_admin created and indexed for tenant %s", subdomain)
+
+            # Email is the only place the raw temp password goes — the
+            # provisioning UI deliberately doesn't display it on screen (see
+            # DashboardPage.jsx ProvisionModal). A delivery failure must not
+            # fail provisioning itself; the API response still carries the
+            # password as a fallback so the platform admin can hand it over
+            # another way if the email bounces.
+            from core.email import send_hospital_provisioned_email
+            email_sent = send_hospital_provisioned_email(
+                to=admin_email, hospital_name=name, hospital_code=subdomain,
+                employee_id=admin_employee_id, admin_mobile=admin_mobile,
+                temp_password=temp_password,
+            )
         except Exception as exc:
             logger.error("StaffUser creation failed: %s", exc)
             temp_password = None
@@ -291,15 +313,20 @@ class TenantListCreateView(APIView):
             **_tenant_to_dict(tenant),
             "credentials": {
                 "subdomain":     subdomain,
+                "admin_email":   admin_email,
                 "admin_mobile":  admin_mobile,
                 "employee_id":   admin_employee_id,
                 "temp_password": temp_password,
+                "email_sent":    email_sent,
                 "note": (
-                    "Share these credentials with the hospital admin. "
-                    "They should change the password on first login. Mobile + "
-                    "password is enough to log in — the Employee ID is only "
-                    "needed if they'd rather log in with subdomain + "
-                    "Employee ID instead of their mobile number."
+                    (f"A login email with the temporary password was sent to {admin_email}. "
+                     if email_sent else
+                     "We couldn't send the login email automatically — share the "
+                     "temporary password below with the hospital admin directly. ")
+                    + "They should change the password on first login. Mobile + "
+                    "password is enough to log in — the Employee ID + Hospital "
+                    "Code is an alternative if they'd rather not use their "
+                    "mobile number."
                 ),
             } if temp_password else {
                 "note": "Admin account creation failed — create via /api/v1/org/staff/."

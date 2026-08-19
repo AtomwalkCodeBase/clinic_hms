@@ -95,6 +95,12 @@ class StaffUser(models.Model):
         ("front_desk",     "Front Desk"),
         ("lab_tech",       "Lab Technician"),
         ("pharmacist",     "Pharmacist"),
+        # Primary role is a hospital-defined bundle (org.Role, custom_role
+        # below) rather than one of the 6 fixed system roles above — e.g. a
+        # solo-doctor clinic where one login does registration + vitals +
+        # consultation + billing + dispensing. See apps/org/rbac.py's
+        # resolve_acts_as() for how this resolves to real permissions/identity.
+        ("custom",         "Custom Role"),
     ]
 
     # Optional now — phone is the login identifier. null=True (not just
@@ -105,6 +111,16 @@ class StaffUser(models.Model):
     last_name   = models.CharField(max_length=150, blank=True)
     password    = models.CharField(max_length=128, default="!")  # "!" = unusable
     role        = models.CharField(max_length=30, choices=ROLE_CHOICES)
+    # Only set when role="custom" — which hospital-defined Role this staff
+    # member's primary role actually is. NULL for all 6 system roles (they
+    # never need this; SYSTEM_ROLE_PERMISSIONS in apps.org.rbac already
+    # knows their permission set). on_delete=PROTECT: deleting a Role that
+    # staff are still assigned to as their PRIMARY role would silently
+    # strand them with no permissions at all, unlike UserRole (extra roles),
+    # where CASCADE is fine because the staff member still has their system
+    # role to fall back on.
+    custom_role = models.ForeignKey("Role", on_delete=models.PROTECT,
+                                    null=True, blank=True, related_name="primary_staff")
     branch      = models.ForeignKey(Branch, on_delete=models.SET_NULL,
                                     null=True, blank=True, related_name="staff")
     department  = models.ForeignKey(Department, on_delete=models.SET_NULL,
@@ -234,6 +250,22 @@ class Role(models.Model):
     # role" to its default permission set without a join through UserRole.
     system_role_key = models.CharField(max_length=30, blank=True)
     permissions   = models.ManyToManyField(Permission, through="RolePermission", related_name="roles")
+    # Which of the 6 system roles this custom role should be treated AS
+    # throughout the rest of the app — e.g. ["doctor", "nurse", "front_desk"]
+    # for a solo-clinic role that does everything. This is deliberately
+    # separate from `permissions` above: permission codes gate individual
+    # actions (encounter.create, lab.order, ...), but "should this person
+    # show up in the front-desk doctor picker / doctor working-hours setup /
+    # patient booking search" needs an explicit identity signal, not an
+    # inference from which permission codes happen to be checked. Every
+    # hardcoded Is* check in core/permissions.py and every "list all
+    # doctors"-style query (apps.org.views.DoctorListView, apps.tenants.
+    # limits, apps.patients.portal_views) treats role="custom" staff whose
+    # custom_role.acts_as contains a key the same as staff whose literal
+    # `role` field equals that key. Empty for a blank/never-set list (never
+    # None — see apps.org.rbac.resolve_acts_as, which always wants an
+    # iterable).
+    acts_as       = models.JSONField(default=list, blank=True)
     created_at    = models.DateTimeField(auto_now_add=True)
 
     class Meta:

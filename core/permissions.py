@@ -10,6 +10,16 @@ Two types of permission:
 Usage in views:
     permission_classes = [IsAuthenticated, IsDoctor]
     permission_classes = [IsAuthenticated, IsFrontDesk, RequireTier('growth')]
+
+Role-based checks pass for either of two things: the user's literal `role`
+claim equals the role in question (the fast path — true for the 6 system
+roles StaffUser.role can be), OR the user's `role` is "custom" and that role
+key appears in their `acts_as` claim (a hospital-defined Role — see
+apps.org.rbac.resolve_acts_as — that was explicitly built to act as that
+identity, e.g. a solo-clinic "does everything" role). See _acts_as() below.
+Platform admin and patient are never reachable via a custom Role (they're
+not staff-side system roles), so IsPlatformAdmin/IsPatient stay pure literal
+checks.
 """
 
 from rest_framework.permissions import BasePermission
@@ -28,6 +38,18 @@ ROLE_PHARMACIST     = "pharmacist"
 ROLE_PATIENT        = "patient"
 
 
+def _acts_as(user, *role_keys):
+    """True if `user` is literally one of `role_keys`, or is role="custom"
+    with any of `role_keys` in their acts_as claim (see module docstring)."""
+    role = getattr(user, "role", None)
+    if role in role_keys:
+        return True
+    if role != "custom":
+        return False
+    acts_as = getattr(user, "acts_as", None) or ()
+    return any(k in acts_as for k in role_keys)
+
+
 class IsPlatformAdmin(BasePermission):
     message = "Access restricted to Atomwalk platform administrators."
     def has_permission(self, request, view):
@@ -37,37 +59,37 @@ class IsPlatformAdmin(BasePermission):
 class IsHospitalAdmin(BasePermission):
     message = "Access restricted to hospital administrators."
     def has_permission(self, request, view):
-        return request.user.is_authenticated and getattr(request.user, "role", None) == ROLE_HOSPITAL_ADMIN
+        return request.user.is_authenticated and _acts_as(request.user, ROLE_HOSPITAL_ADMIN)
 
 
 class IsDoctor(BasePermission):
     message = "Access restricted to doctors."
     def has_permission(self, request, view):
-        return request.user.is_authenticated and getattr(request.user, "role", None) == ROLE_DOCTOR
+        return request.user.is_authenticated and _acts_as(request.user, ROLE_DOCTOR)
 
 
 class IsNurse(BasePermission):
     message = "Access restricted to nurses."
     def has_permission(self, request, view):
-        return request.user.is_authenticated and getattr(request.user, "role", None) == ROLE_NURSE
+        return request.user.is_authenticated and _acts_as(request.user, ROLE_NURSE)
 
 
 class IsFrontDesk(BasePermission):
     message = "Access restricted to front desk staff."
     def has_permission(self, request, view):
-        return request.user.is_authenticated and getattr(request.user, "role", None) == ROLE_FRONT_DESK
+        return request.user.is_authenticated and _acts_as(request.user, ROLE_FRONT_DESK)
 
 
 class IsLabTech(BasePermission):
     message = "Access restricted to lab technicians."
     def has_permission(self, request, view):
-        return request.user.is_authenticated and getattr(request.user, "role", None) == ROLE_LAB_TECH
+        return request.user.is_authenticated and _acts_as(request.user, ROLE_LAB_TECH)
 
 
 class IsPharmacist(BasePermission):
     message = "Access restricted to pharmacists."
     def has_permission(self, request, view):
-        return request.user.is_authenticated and getattr(request.user, "role", None) == ROLE_PHARMACIST
+        return request.user.is_authenticated and _acts_as(request.user, ROLE_PHARMACIST)
 
 
 class IsPatient(BasePermission):
@@ -82,14 +104,22 @@ class IsHospitalStaff(BasePermission):
     STAFF_ROLES = {ROLE_HOSPITAL_ADMIN, ROLE_DOCTOR, ROLE_NURSE, ROLE_FRONT_DESK, ROLE_LAB_TECH, ROLE_PHARMACIST}
 
     def has_permission(self, request, view):
-        return request.user.is_authenticated and getattr(request.user, "role", None) in self.STAFF_ROLES
+        if not request.user.is_authenticated:
+            return False
+        role = getattr(request.user, "role", None)
+        # role="custom" is always hospital staff by definition — a custom
+        # Role only ever exists inside a tenant DB and only ever gets
+        # assigned to a StaffUser there, so there's no acts_as-emptiness
+        # case where this should be False the way there is for the more
+        # specific Is* checks above.
+        return role in self.STAFF_ROLES or role == "custom"
 
 
 class IsDoctorOrNurse(BasePermission):
     """Doctors and nurses share access to clinical input endpoints."""
     message = "Access restricted to doctors and nurses."
     def has_permission(self, request, view):
-        return request.user.is_authenticated and getattr(request.user, "role", None) in {ROLE_DOCTOR, ROLE_NURSE}
+        return request.user.is_authenticated and _acts_as(request.user, ROLE_DOCTOR, ROLE_NURSE)
 
 
 def RequireTier(minimum_tier: str):

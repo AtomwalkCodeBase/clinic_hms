@@ -142,9 +142,11 @@ class StaffLoginView(APIView):
         # ── Step 4: Fetch StaffUser from tenant DB ────────────────────────────
         try:
             if login_by_employee_id:
-                staff = StaffUser.objects.using(db_name).get(employee_id=d["employee_id"], is_active=True)
+                staff = StaffUser.objects.using(db_name).select_related("custom_role").get(
+                    employee_id=d["employee_id"], is_active=True
+                )
             else:
-                staff = StaffUser.objects.using(db_name).get(
+                staff = StaffUser.objects.using(db_name).select_related("custom_role").get(
                     Q(phone=d["mobile"]) | Q(email__iexact=d["mobile"]), is_active=True
                 )
         except StaffUser.DoesNotExist:
@@ -166,11 +168,22 @@ class StaffLoginView(APIView):
         except Subscription.DoesNotExist:
             return error("Subscription not found.")
 
+        from apps.org.rbac import resolve_acts_as
         payload = {
             "user_id":      staff.id,
             "email":        staff.email,
             "full_name":    staff.get_full_name(),
             "role":         staff.role,
+            # [] for the 6 system roles — see resolve_acts_as() and
+            # core.authentication.MockUser. Only non-empty for role="custom"
+            # staff, and only takes effect on their next login if their
+            # custom role's acts_as changes meanwhile (same staleness
+            # tradeoff as everything else baked into the JWT).
+            "acts_as":      sorted(resolve_acts_as(staff)),
+            # Display-only — lets the sidebar/topbar show "Doctor Clinic"
+            # instead of the generic literal "custom". None for the 6
+            # system roles (their own label is already known client-side).
+            "custom_role_name": staff.custom_role.name if staff.role == "custom" and staff.custom_role else None,
             "db_name":      db_name,
             "tenant_id":    tenant_id,
             "hospital_name": tenant.name,
@@ -386,66 +399,14 @@ class ChangePasswordView(APIView):
 
 
 # ── Forgot Password (staff) ───────────────────────────────────────────────────
-
-class StaffForgotPasswordView(APIView):
-    """
-    POST /api/v1/auth/forgot-password/staff/
-    Body: {mobile, date_of_birth (YYYY-MM-DD), new_password, confirm_password}
-
-    There's no email/SMS gateway wired into this stack, so this can't do an
-    OTP or reset-link flow — it verifies identity the only other way real
-    data on file allows: mobile number (the login identifier) plus date of
-    birth (something the account holder set on their own profile, not
-    guessable from the login screen). If a staff member's DOB was never
-    set, this can't verify them and they're told to contact their admin —
-    who can always reset a password directly (see TenantStaffResetPasswordView
-    / StaffResetPasswordView), no guessing required.
-    """
-    permission_classes = [AllowAny]
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "login"
-
-    def post(self, request):
-        mobile = (request.data.get("mobile") or "").strip()
-        dob    = (request.data.get("date_of_birth") or "").strip()
-        new_password     = request.data.get("new_password") or ""
-        confirm_password = request.data.get("confirm_password") or ""
-
-        if not mobile or not dob:
-            return error("Mobile number and date of birth are required.")
-        if new_password != confirm_password:
-            return error("Passwords do not match.", errors={"confirm_password": "Passwords do not match."})
-        if len(new_password) < 8:
-            return error("New password must be at least 8 characters.", errors={"new_password": "Too short."})
-
-        try:
-            index = StaffMobileIndex.objects.using("default").get(mobile=mobile)
-        except StaffMobileIndex.DoesNotExist:
-            return error("We couldn't verify those details.")
-
-        db_name = index.db_name
-        if db_name not in settings.DATABASES:
-            from apps.tenants.utils import _make_db_config
-            settings.DATABASES[db_name] = _make_db_config(db_name)
-
-        try:
-            staff = StaffUser.objects.using(db_name).get(phone=mobile, is_active=True)
-        except StaffUser.DoesNotExist:
-            return error("We couldn't verify those details.")
-
-        if not staff.date_of_birth:
-            return error(
-                "We can't verify your identity without a date of birth on file. "
-                "Ask your hospital admin to reset your password instead."
-            )
-        if str(staff.date_of_birth) != dob:
-            return error("We couldn't verify those details.")
-
-        staff.set_password(new_password)
-        staff.must_change_password = False
-        staff.save(using=db_name, update_fields=["password", "must_change_password"])
-
-        return success(message="Password reset successfully. You can now log in.")
+# The old DOB-based verification (mobile + date of birth) has been replaced
+# by OTP verification — see apps/auth_app/otp_views.py
+# (OTPRequestView/OTPVerifyView with purpose="password_reset_staff", then
+# StaffForgotPasswordResetView to consume the resulting action_token). DOB
+# was a weak factor (often known to family/colleagues, and many staff never
+# had one on file at all, which locked them out of self-service entirely);
+# every staff member has a phone number (required, unique, the login
+# identifier itself), so OTP is both stronger and universally available.
 
 
 # ── Me / Permissions ──────────────────────────────────────────────────────────
@@ -487,6 +448,19 @@ class MeView(APIView):
             # log it so it's not completely invisible if something's actually
             # broken (e.g. a schema change on photo).
             logger.debug("MeView: could not resolve photo for user_id=%s role=%s", p.get("user_id"), p.get("role"), exc_info=True)
+
+        # Hospital's own logo (Tenant.logo, uploaded via /org/settings/) —
+        # same reasoning as photo above: too big for the JWT, fetched fresh
+        # here so the AppShell topbar picks up a newly-uploaded logo without
+        # requiring every logged-in staff member to log out and back in.
+        # Only meaningful for hospital staff, not platform admin or patient.
+        data["logo"] = ""
+        if not p.get("is_platform") and p.get("role") != "patient" and p.get("tenant_id"):
+            try:
+                tenant = Tenant.objects.using("default").get(pk=p["tenant_id"])
+                data["logo"] = tenant.logo or ""
+            except Exception:
+                logger.debug("MeView: could not resolve hospital logo for tenant_id=%s", p.get("tenant_id"), exc_info=True)
 
         return success(data=data)
 

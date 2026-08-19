@@ -34,6 +34,10 @@ export function AuthProvider({ children }) {
           ...decoded,
           full_name: decoded.full_name || extra.full_name || "",
           photo: extra.photo || "",
+          // Hospital's own logo (Tenant.logo) — same reasoning as photo:
+          // too big for the JWT, fetched fresh so AppShell's topbar picks
+          // up a newly-uploaded logo without needing a fresh login.
+          logo: extra.logo || "",
         });
       })
       .catch(() => setUser(decoded));
@@ -127,6 +131,21 @@ export function AuthProvider({ children }) {
     return { success: true };
   }, [hydrateFromMe]);
 
+  /**
+   * Day-to-day passwordless sign-in — consumes an action_token already
+   * obtained from POST /auth/otp/verify/ (purpose="login_patient"). See
+   * components/auth/PatientOTPLoginPanel.jsx for the request/verify UI.
+   */
+  const loginPatientWithOTP = useCallback(async (actionToken) => {
+    const { data } = await publicClient.post(API_ENDPOINTS.AUTH.PATIENT_LOGIN_OTP, {
+      action_token: actionToken,
+    });
+    tokenStore.setAccess(data.data.access);
+    tokenStore.setRefresh(data.data.refresh);
+    await hydrateFromMe(jwtDecode(data.data.access));
+    return { success: true };
+  }, [hydrateFromMe]);
+
   // ── Logout ────────────────────────────────────────────────────────────────
   const logout = useCallback(() => {
     tokenStore.clear();
@@ -141,7 +160,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, loginStaff, loginPatient, loginPlatform, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, isLoading, loginStaff, loginPatient, loginPatientWithOTP, loginPlatform, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

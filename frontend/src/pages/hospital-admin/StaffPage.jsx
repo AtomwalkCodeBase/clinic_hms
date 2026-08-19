@@ -16,6 +16,7 @@ import API_ENDPOINTS from "../../config/api.config";
 import { Mail, Users, Plus, X, MapPin } from "lucide-react";
 import { calcAge }   from "../../utils/age";
 import { sanitizeMobileInput, isValidMobile, mobileError } from "../../utils/validation";
+import AutofillDecoy from "../../components/auth/AutofillDecoy";
 
 const ROLE_LABELS = {
   hospital_admin: { label: "Hospital Admin", color: "#7c3aed" },
@@ -40,8 +41,21 @@ const ROLE_BASICS = {
   hospital_admin: { license: false },
 };
 
-function RoleBadge({ role }) {
-  const r = ROLE_LABELS[role] || { label: role, color: "#64748b" };
+// role="custom" has no fixed label/color of its own (it's a hospital-defined
+// Role — see apps/org/rbac.py) — falls back to the actual role's name, and a
+// neutral color unless it happens to act as exactly one system role (in
+// which case that role's color is a reasonable visual hint).
+function roleDisplay(staff) {
+  if (staff.role !== "custom") {
+    return ROLE_LABELS[staff.role] || { label: staff.role, color: "#64748b" };
+  }
+  const actsAs = staff.custom_role_acts_as || [];
+  const color = actsAs.length === 1 ? ROLE_LABELS[actsAs[0]]?.color : "#64748b";
+  return { label: staff.custom_role_name || "Custom Role", color: color || "#64748b" };
+}
+
+function RoleBadge({ staff }) {
+  const r = roleDisplay(staff);
   return (
     <span style={{
       display: "inline-block", padding: "2px 10px", borderRadius: 20,
@@ -220,11 +234,42 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
   const { toastSuccess, toastApiError } = useToast();
   const [form, setForm] = useState({
     email: "", first_name: "", last_name: "", role: "doctor",
+    custom_role_id: "",
     phone: "", branch_id: "", department_id: "",
     registration_no: "", specialisation: "", qualification: "", experience_years: "",
     council_name: "", registration_expiry: "",
     consultation_fee: "", followup_fee: "",
   });
+
+  // Custom roles (enterprise add-on) — offered in the Role dropdown below
+  // ROLES alongside the 6 system ones. See apps/org/rbac.py; a hospital
+  // defines these on the Roles & Permissions page.
+  const [customRoles, setCustomRoles] = useState([]);
+  useEffect(() => {
+    if (!permissions?.feat_custom_roles) return;
+    api.get(API_ENDPOINTS.ORG.ROLES)
+      .then(r => setCustomRoles((r.data?.data || []).filter(role => !role.is_system_role)))
+      .catch(() => setCustomRoles([]));
+  }, [api, permissions?.feat_custom_roles]);
+
+  const selectedCustomRole = form.role === "custom"
+    ? customRoles.find(r => String(r.id) === String(form.custom_role_id))
+    : null;
+  // Whether the currently-selected role (system "doctor" or a custom role
+  // that acts_as doctor) should count against the doctors cap, get the full
+  // doctor invite UI (specialisation, working hours, consultation fee, room
+  // tagging), and be treated as a doctor by the backend (see
+  // StaffInviteView's is_doctor_equivalent).
+  const roleActsAsDoctor = form.role === "doctor"
+    || (form.role === "custom" && !!selectedCustomRole?.acts_as?.includes("doctor"));
+
+  // For a custom role that ISN'T doctor-equivalent, which non-doctor
+  // "professional basics" block (license field) to show, if any — the first
+  // acts_as entry that has a ROLE_BASICS definition. A literal system role
+  // just uses itself.
+  const basicsRole = form.role === "custom"
+    ? (selectedCustomRole?.acts_as || []).find(r => r !== "doctor" && ROLE_BASICS[r])
+    : (form.role !== "doctor" ? form.role : null);
 
   // Working-hours state: array of 7 day objects
   const [schedule, setSchedule] = useState(defaultSchedule());
@@ -238,11 +283,11 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
   const [roomBlocks, setRoomBlocks] = useState([]); // [{key, day_of_week, start_time, end_time, room_id, room_name, floor}]
 
   useEffect(() => {
-    if (!form.branch_id || form.role !== "doctor") { setRooms([]); return; }
+    if (!form.branch_id || !roleActsAsDoctor) { setRooms([]); return; }
     api.get(`${API_ENDPOINTS.ORG.ROOMS}?branch_id=${form.branch_id}`)
       .then(r => setRooms(r.data?.data || []))
       .catch(() => setRooms([]));
-  }, [form.branch_id, form.role, api]);
+  }, [form.branch_id, roleActsAsDoctor, api]);
 
   const blocksByDay = roomBlocks.reduce((acc, b) => {
     (acc[b.day_of_week] = acc[b.day_of_week] || []).push(b);
@@ -294,7 +339,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
 
   const doctorsCapped = atCapacity?.("doctors");
   const staffCapped = atCapacity?.("staff");
-  const selectedRoleCapped = form.role === "doctor" ? doctorsCapped : staffCapped;
+  const selectedRoleCapped = roleActsAsDoctor ? doctorsCapped : staffCapped;
 
   // Load departments when branch changes
   useEffect(() => {
@@ -319,18 +364,27 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
         experience_years:    form.experience_years ? parseInt(form.experience_years) : null,
         registration_expiry: form.registration_expiry || null,
       };
+      // custom_role_id only means anything (and is only required) when
+      // role="custom" — omit it entirely otherwise so the backend doesn't
+      // see a stray empty string.
+      if (form.role === "custom") {
+        payload.custom_role_id = form.custom_role_id ? parseInt(form.custom_role_id) : null;
+      } else {
+        delete payload.custom_role_id;
+      }
       // Doctor's extra branches, if any were checked — the primary branch
       // dropdown's value is folded in automatically as the primary on the
       // backend (see StaffInviteSerializer.branch_ids / branch_utils).
-      if (form.role === "doctor" && extraBranchIds.length > 0) {
+      if (roleActsAsDoctor && extraBranchIds.length > 0) {
         payload.branch_ids = [
           ...(payload.branch_id ? [payload.branch_id] : []),
           ...extraBranchIds.filter(id => id !== payload.branch_id),
         ];
       }
-      // specialisation only applies to doctors; council_name/registration_expiry
-      // only apply to non-doctor roles with a professional license.
-      if (form.role === "doctor") {
+      // specialisation only applies to doctors (literal or acts_as doctor);
+      // council_name/registration_expiry only apply to non-doctor roles with
+      // a professional license.
+      if (roleActsAsDoctor) {
         delete payload.council_name; delete payload.registration_expiry;
         // Consultation fee — only include when admin chose to set it now
         if (adminSetsFee && form.consultation_fee) {
@@ -365,7 +419,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
       // id — create whatever blocks the admin set up above. Best-effort:
       // the staff account is already created either way, so a room-tag
       // conflict here shouldn't look like the whole invite failed.
-      if (form.role === "doctor" && roomBlocks.length > 0 && res.data?.id) {
+      if (roleActsAsDoctor && roomBlocks.length > 0 && res.data?.id) {
         let okCount = 0;
         const failMsgs = [];
         for (const b of roomBlocks) {
@@ -456,6 +510,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
           </div>
         ) : (
           <form onSubmit={handleSubmit}>
+            <AutofillDecoy />
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
               <h2 style={{ margin: 0, fontSize: 18 }}>Invite Staff Member</h2>
               <button type="button" onClick={onClose}
@@ -488,7 +543,15 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
 
               <div>
                 <label style={labelStyle}>Role *</label>
-                <select style={inputStyle} value={form.role} onChange={set("role")} required>
+                <select style={inputStyle} value={form.role === "custom" ? `custom:${form.custom_role_id}` : form.role}
+                  onChange={e => {
+                    const v = e.target.value;
+                    if (v.startsWith("custom:")) {
+                      setForm(f => ({ ...f, role: "custom", custom_role_id: v.slice("custom:".length) }));
+                    } else {
+                      setForm(f => ({ ...f, role: v, custom_role_id: "" }));
+                    }
+                  }} required>
                   {ROLES.map(r => {
                     const capped = r === "doctor" ? doctorsCapped : staffCapped;
                     return (
@@ -497,7 +560,22 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                       </option>
                     );
                   })}
+                  {customRoles.length > 0 && (
+                    <optgroup label="Custom Roles">
+                      {customRoles.map(r => {
+                        const capped = r.acts_as?.includes("doctor") ? doctorsCapped : staffCapped;
+                        return (
+                          <option key={`custom:${r.id}`} value={`custom:${r.id}`} disabled={capped}>
+                            {r.name}{capped ? " — limit reached" : ""}
+                          </option>
+                        );
+                      })}
+                    </optgroup>
+                  )}
                 </select>
+                {form.role === "custom" && !form.custom_role_id && customRoles.length > 0 && (
+                  <div style={{ fontSize: 12, color: "var(--color-error)", marginTop: 4 }}>Select a custom role.</div>
+                )}
               </div>
 
               {selectedRoleCapped && (
@@ -505,21 +583,21 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                   fontSize: 12.5, color: "var(--color-warning)", background: "var(--color-warning-light)",
                   padding: "8px 12px", borderRadius: 8,
                 }}>
-                  {form.role === "doctor"
+                  {roleActsAsDoctor
                     ? `Doctor limit reached (${permissions?.max_doctors} on your current plan).`
                     : `Staff limit reached (${permissions?.max_staff} on your current plan).`} Upgrade your plan to add more, or choose a different role.
                 </div>
               )}
 
               <div>
-                <label style={labelStyle}>{form.role === "doctor" ? "Primary Branch" : "Branch"}</label>
+                <label style={labelStyle}>{roleActsAsDoctor ? "Primary Branch" : "Branch"}</label>
                 <select style={inputStyle} value={form.branch_id} onChange={set("branch_id")}>
                   <option value="">— No branch assigned —</option>
                   {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                 </select>
               </div>
 
-              {form.role === "doctor" && branches.length > 1 && (
+              {roleActsAsDoctor && branches.length > 1 && (
                 <div>
                   <label style={labelStyle}>Also works at (optional)</label>
                   <div style={{
@@ -551,7 +629,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                 </div>
               )}
 
-              {form.role === "doctor" && (
+              {roleActsAsDoctor && (
                 <div style={{
                   borderTop: "1px solid var(--color-border)", paddingTop: 14, marginTop: 2,
                   display: "grid", gap: 14,
@@ -676,7 +754,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                 </div>
               )}
 
-              {form.role !== "doctor" && ROLE_BASICS[form.role] && (
+              {!roleActsAsDoctor && basicsRole && ROLE_BASICS[basicsRole] && (
                 <div style={{
                   borderTop: "1px solid var(--color-border)", paddingTop: 14, marginTop: 2,
                   display: "grid", gap: 14,
@@ -693,9 +771,9 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                     </div>
                   </div>
 
-                  {ROLE_BASICS[form.role].license && (
+                  {ROLE_BASICS[basicsRole].license && (
                     <>
-                      <div><label style={labelStyle}>{ROLE_BASICS[form.role].licenseLabel}</label>
+                      <div><label style={labelStyle}>{ROLE_BASICS[basicsRole].licenseLabel}</label>
                         <input style={inputStyle} value={form.registration_no} onChange={set("registration_no")} placeholder="e.g. KSNC-45678" />
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -710,7 +788,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                   )}
 
                   <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
-                    Gender, bio, languages, and photo are filled in by {ROLE_LABELS[form.role]?.label.toLowerCase() || "the staff member"} themselves after their first login.
+                    Gender, bio, languages, and photo are filled in by {form.role === "custom" ? "the staff member" : (ROLE_LABELS[form.role]?.label.toLowerCase() || "the staff member")} themselves after their first login.
                   </div>
                 </div>
               )}
@@ -1332,8 +1410,8 @@ export default function StaffPage() {
                 {/* Avatar */}
                 <div style={{
                   width: 44, height: 44, borderRadius: "50%", flexShrink: 0,
-                  background: ROLE_LABELS[s.role]?.color + "22",
-                  color: ROLE_LABELS[s.role]?.color,
+                  background: roleDisplay(s).color + "22",
+                  color: roleDisplay(s).color,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontWeight: 700, fontSize: 16,
                 }}>
@@ -1342,7 +1420,7 @@ export default function StaffPage() {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <span style={{ fontWeight: 700 }}>{s.first_name} {s.last_name}</span>
-                    <RoleBadge role={s.role} />
+                    <RoleBadge staff={s} />
                     {s.must_change_password && (
                       <span style={{ padding: "2px 8px", borderRadius: 20, fontSize: 11, background: "#F9F0DC", color: "#92400e", fontWeight: 600 }}>
                         Temp Password

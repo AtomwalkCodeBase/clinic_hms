@@ -18,13 +18,19 @@ export const API_ENDPOINTS = {
     STAFF_LOGIN:      `${API_V1}/auth/login/staff/`,
     PLATFORM_LOGIN:   `${API_V1}/auth/login/platform/`,
     PATIENT_LOGIN:    `${API_V1}/auth/login/patient/`,
+    PATIENT_LOGIN_OTP: `${API_V1}/auth/login/patient/otp/`,
     REFRESH:          `${API_V1}/auth/token/refresh/`,
     ME:               `${API_V1}/auth/me/`,
     PERMISSIONS:      `${API_V1}/auth/me/permissions/`,
     CHANGE_PASSWORD:  `${API_V1}/auth/change-password/`,
     SETUP_PASSWORD:   `${API_V1}/auth/setup-password/`,
     STAFF_INVITE:     `${API_V1}/auth/staff/invite/`,
-    STAFF_FORGOT_PASSWORD: `${API_V1}/auth/forgot-password/staff/`,
+    // OTP — shared by staff/patient forgot-password, patient registration,
+    // and day-to-day patient OTP login (see apps/auth_app/otp_views.py).
+    OTP_REQUEST:      `${API_V1}/auth/otp/request/`,
+    OTP_VERIFY:       `${API_V1}/auth/otp/verify/`,
+    STAFF_FORGOT_PASSWORD_RESET:   `${API_V1}/auth/forgot-password/staff/reset/`,
+    PATIENT_FORGOT_PASSWORD_RESET: `${API_V1}/auth/forgot-password/patient/reset/`,
   },
 
   PLATFORM: {
@@ -141,7 +147,9 @@ export const API_ENDPOINTS = {
     PRESCRIPTION_CHOICE:   `${API_V1}/portal/prescriptions/choice/`,
     PROFILE:                `${API_V1}/portal/profile/`,
     CHANGE_PASSWORD:        `${API_V1}/portal/profile/change-password/`,
-    FORGOT_PASSWORD:        `${API_V1}/portal/forgot-password/`,
+    // Forgot-password is now OTP-based — see AUTH.OTP_REQUEST / AUTH.OTP_VERIFY
+    // / AUTH.PATIENT_FORGOT_PASSWORD_RESET (apps/auth_app/otp_views.py).
+    MOBILE_CHANGE_REQUEST_OTP: `${API_V1}/portal/profile/mobile-change/request-otp/`,
     FAMILY:                 `${API_V1}/portal/family/`,
     HEALTH_SUMMARY:         `${API_V1}/portal/health-summary/`,
     VACCINATIONS:           `${API_V1}/portal/vaccinations/`,

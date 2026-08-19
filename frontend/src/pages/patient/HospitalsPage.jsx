@@ -64,12 +64,14 @@ export default function PatientHospitalsPage() {
                 }}>
                   <div style={{
                     width: 44, height: 44, borderRadius: 12, flexShrink: 0,
-                    background: "rgba(255,255,255,0.14)",
+                    background: h.logo ? "#fff" : "rgba(255,255,255,0.14)",
                     display: "flex", alignItems: "center", justifyContent: "center", color: "#fff",
                     border: "1px solid rgba(255,255,255,0.18)",
-                    position: "relative",
+                    position: "relative", overflow: "hidden",
                   }}>
-                    <Building2 size={22} />
+                    {h.logo
+                      ? <img src={h.logo} alt={h.name} style={{ width: "84%", height: "84%", objectFit: "contain" }} />
+                      : <Building2 size={22} />}
                   </div>
                   <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
                     <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16, color: "#fff", lineHeight: 1.25 }}>

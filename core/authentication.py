@@ -38,6 +38,16 @@ class MockUser:
         self.pk          = self.id  # DRF's throttle classes read .pk, not .id
         self.email       = payload.get("email", "")
         self.role        = payload.get("role", "")
+        # Which system-role identities this user should be treated as for
+        # every Is*/doctor-listing check — [] for the 6 system roles (they
+        # don't need it, .role already says everything) and non-empty only
+        # for role="custom" staff, e.g. ["doctor", "nurse", "front_desk"].
+        # Set once at login time (see apps.org.rbac.resolve_acts_as +
+        # StaffLoginView) and baked into the JWT rather than looked up per
+        # request — same tradeoff as .role itself: a custom role's acts_as
+        # changing takes effect on next login, not instantly, which matches
+        # how a role change for anyone else already works today.
+        self.acts_as     = payload.get("acts_as", [])
         self.is_platform = payload.get("is_platform", False)
         self.tenant_id   = payload.get("tenant_id")
         self.db_name     = payload.get("db_name", "default")

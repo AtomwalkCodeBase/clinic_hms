@@ -113,6 +113,53 @@ def _gen_temp_password(length=12) -> str:
     return "".join(secrets.choice(chars) for _ in range(length))
 
 
+def _email_collision(email, tenant_db, exclude_staff_id=None):
+    """
+    Returns an error message if `email` is already in use somewhere it
+    would collide at the database level, or "" if it's free to use.
+
+    Two separate unique constraints can be hit here — StaffUser.email is
+    unique WITHIN a tenant DB, and StaffMobileIndex.email is unique ACROSS
+    every tenant on the platform (it's the registry-wide login-routing
+    index). Neither was checked before writing, so inviting/reactivating a
+    staff member with an email already used by anyone else — even a
+    deactivated account at the SAME hospital, or any account at a
+    DIFFERENT one — hit an unhandled IntegrityError and surfaced as a raw
+    500 instead of a clean validation error.
+    """
+    if not email:
+        return ""
+    from apps.registry.models import StaffMobileIndex
+    qs = StaffUser.objects.using(tenant_db).filter(email__iexact=email)
+    if exclude_staff_id:
+        qs = qs.exclude(pk=exclude_staff_id)
+    if qs.exists():
+        return f"Email {email} is already used by another staff member at this hospital."
+
+    idx_qs = StaffMobileIndex.objects.using("default").filter(email__iexact=email)
+    if exclude_staff_id:
+        # The reactivation path's own index row (same mobile) is allowed to
+        # keep this same email — only a DIFFERENT mobile's index row using
+        # it is a real collision.
+        existing_mobile = StaffUser.objects.using(tenant_db).filter(pk=exclude_staff_id).values_list("phone", flat=True).first()
+        if existing_mobile:
+            idx_qs = idx_qs.exclude(mobile=existing_mobile)
+    if idx_qs.exists():
+        return f"Email {email} is already registered to a staff account at another hospital."
+    return ""
+
+
+def _send_new_account_email(staff, temp_password):
+    """Best-effort — a delivery failure must not fail the invite/reset itself."""
+    if not staff.email:
+        return
+    from core.email import send_temp_password_email
+    send_temp_password_email(
+        to=staff.email, full_name=staff.get_full_name() or staff.phone,
+        temp_password=temp_password, login_hint=staff.phone,
+    )
+
+
 def _make_invite_token(staff_id: int, tenant_db: str) -> str:
     """
     Generate a signed invite token for the setup-password flow.
@@ -323,6 +370,28 @@ class StaffInviteView(APIView):
             return error("Validation error.", errors=s.errors)
         d = s.validated_data
 
+        # ── Resolve custom role (role="custom" only) ────────────────────────
+        # Everything below that used to branch on the literal string
+        # d["role"] == "doctor" now branches on is_doctor_equivalent instead,
+        # so a custom role that acts_as doctor gets exactly the same
+        # DoctorProfile / schedule / resource-limit treatment a real doctor
+        # invite gets — see apps.org.rbac.resolve_acts_as for why this is
+        # the right identity signal, not the permission codes.
+        custom_role_obj = None
+        acts_as = set()
+        if d["role"] == "custom":
+            if not d.get("custom_role_id"):
+                return error("Select a custom role.", errors={"custom_role_id": "Required."})
+            from .models import Role
+            try:
+                custom_role_obj = Role.objects.using(request.tenant_db).get(
+                    pk=d["custom_role_id"], is_system_role=False,
+                )
+            except Role.DoesNotExist:
+                return error("Custom role not found.", errors={"custom_role_id": "Invalid."})
+            acts_as = set(custom_role_obj.acts_as or [])
+        is_doctor_equivalent = d["role"] == "doctor" or "doctor" in acts_as
+
         # ── Subscription limit check (fails CLOSED — see apps.tenants.limits) ──
         # Applies whether this ends up creating a brand-new StaffUser or
         # reactivating a previously-deactivated one below — either way the
@@ -331,7 +400,7 @@ class StaffInviteView(APIView):
         # default increment=1) is correct for both paths.
         from apps.tenants.models import Tenant
         from apps.tenants.limits import check_limit, LimitCheckFailed
-        resource = "doctors" if d["role"] == "doctor" else "staff"
+        resource = "doctors" if is_doctor_equivalent else "staff"
         try:
             tenant = Tenant.objects.using("default").get(pk=request.tenant_id)
             check_limit(tenant, request.tenant_db, resource)
@@ -356,11 +425,15 @@ class StaffInviteView(APIView):
             if existing.is_active:
                 return error(f"Staff with mobile number {d['phone']} already exists.")
             # Reactivate a previously deactivated staff member
+            email_error = _email_collision(d.get("email"), request.tenant_db, exclude_staff_id=existing.id)
+            if email_error:
+                return error(email_error, errors={"email": "Already in use."})
             temp_password = _gen_temp_password()
             existing.is_active            = True
             existing.first_name           = d["first_name"]
             existing.last_name            = d.get("last_name", existing.last_name)
             existing.role                 = d["role"]
+            existing.custom_role          = custom_role_obj
             existing.email                = d.get("email") or existing.email
             # Employee ID is auto-generated via NNTM, never typed in — see
             # _next_employee_id. Someone predating this feature (or created
@@ -383,10 +456,12 @@ class StaffInviteView(APIView):
                 from .branch_utils import set_staff_branches
                 set_staff_branches(existing, d.get("branch_ids") or [], d.get("branch_id"), request.tenant_db)
                 existing.save(using=request.tenant_db, update_fields=["branch"])
+            _send_new_account_email(existing, temp_password)
             return created(data={
                 **StaffSerializer(existing).data,
                 "temp_password": temp_password,
-                "note": "Account reactivated. Share these credentials with the staff member.",
+                "note": "Account reactivated. Share these credentials with the staff member."
+                        + (" A copy was also emailed to them." if existing.email else ""),
             }, message=f"{existing.get_full_name()} reactivated.")
 
         # Resolve branch
@@ -409,6 +484,10 @@ class StaffInviteView(APIView):
             except Department.DoesNotExist:
                 return error("Department not found.", errors={"department_id": "Invalid."})
 
+        email_error = _email_collision(d.get("email"), request.tenant_db)
+        if email_error:
+            return error(email_error, errors={"email": "Already in use."})
+
         temp_password = _gen_temp_password()
         staff = StaffUser(
             phone=d["phone"],
@@ -417,6 +496,7 @@ class StaffInviteView(APIView):
             first_name=d["first_name"],
             last_name=d.get("last_name", ""),
             role=d["role"],
+            custom_role=custom_role_obj,
             branch=branch,
             department=department,
             must_change_password=True,
@@ -435,7 +515,7 @@ class StaffInviteView(APIView):
 
         # Doctor basics — admin enters these now so patient-facing cards are
         # never blank; the doctor fills in the rest themselves after login.
-        if d["role"] == "doctor" and any(
+        if is_doctor_equivalent and any(
             d.get(f) for f in ("registration_no", "specialisation", "qualification", "experience_years",
                                "consultation_fee", "followup_fee")
         ):
@@ -465,7 +545,7 @@ class StaffInviteView(APIView):
 
         # Working-hours schedule — optional at registration; doctor can also
         # configure it later via PATCH /org/staff/<pk>/schedule/.
-        if d["role"] == "doctor" and d.get("schedule"):
+        if is_doctor_equivalent and d.get("schedule"):
             from .models import DoctorSchedule, DoctorAvailabilitySlot
             from .serializers import DoctorScheduleSerializer as _SchedSer
             sched_ser = _SchedSer(data=d["schedule"])
@@ -483,7 +563,7 @@ class StaffInviteView(APIView):
         # Same basics for every other role — nursing/pharmacy council
         # registration is legally required before those accounts should be
         # treated as active, and nobody should end up with a blank profile.
-        elif d["role"] != "doctor" and any(
+        elif not is_doctor_equivalent and any(
             d.get(f) for f in ("registration_no", "council_name", "registration_expiry",
                                "qualification", "experience_years")
         ):
@@ -506,10 +586,12 @@ class StaffInviteView(APIView):
             },
         )
 
+        _send_new_account_email(staff, temp_password)
         return created(data={
             **StaffSerializer(staff).data,
             "temp_password": temp_password,
-            "note": "Share these credentials with the staff member. They will be prompted to change the password on first login.",
+            "note": "Share these credentials with the staff member. They will be prompted to change the password on first login."
+                    + (" A copy was also emailed to them." if staff.email else ""),
         }, message=f"{staff.get_full_name()} invited.")
 
 
@@ -571,6 +653,22 @@ class StaffDetailView(APIView):
                     "another staff member to hospital_admin first.",
                 )
 
+        # Resolve the custom role being moved TO, if any — needed both for
+        # the resource-bucket check right below and for actually setting
+        # staff.custom_role further down. See StaffInviteView for the same
+        # pattern (is_doctor_equivalent from acts_as, not literal role=="doctor").
+        new_custom_role_obj = None
+        if d.get("role") == "custom":
+            if not d.get("custom_role_id"):
+                return error("Select a custom role.", errors={"custom_role_id": "Required."})
+            from .models import Role
+            try:
+                new_custom_role_obj = Role.objects.using(request.tenant_db).get(
+                    pk=d["custom_role_id"], is_system_role=False,
+                )
+            except Role.DoesNotExist:
+                return error("Custom role not found.", errors={"custom_role_id": "Invalid."})
+
         # A role change that crosses the doctor / non-doctor line moves this
         # person into a different capacity bucket (max_doctors vs max_staff)
         # without freeing up a slot anywhere — check the bucket they'd be
@@ -578,8 +676,12 @@ class StaffDetailView(APIView):
         # within the same bucket (e.g. nurse → front_desk) since the total
         # headcount in that bucket doesn't change.
         if "role" in d and staff.is_active and d["role"] != staff.role:
-            old_resource = "doctors" if staff.role == "doctor" else "staff"
-            new_resource = "doctors" if d["role"] == "doctor" else "staff"
+            old_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
+            old_is_doctor = staff.role == "doctor" or "doctor" in old_acts_as
+            new_acts_as = set((new_custom_role_obj.acts_as if new_custom_role_obj else []) or [])
+            new_is_doctor = d["role"] == "doctor" or "doctor" in new_acts_as
+            old_resource = "doctors" if old_is_doctor else "staff"
+            new_resource = "doctors" if new_is_doctor else "staff"
             if new_resource != old_resource:
                 from apps.tenants.models import Tenant
                 from apps.tenants.limits import check_limit, LimitCheckFailed
@@ -619,6 +721,13 @@ class StaffDetailView(APIView):
                         except ValueError:
                             return error("Date of birth must be YYYY-MM-DD.", errors={"date_of_birth": "Invalid format."})
                     staff.date_of_birth = dob
+                elif field == "role":
+                    staff.role = d["role"]
+                    # Only ever set for role="custom" — cleared otherwise so
+                    # a staff member moved back to a system role doesn't keep
+                    # a stale custom_role pointing at a bundle they're no
+                    # longer actually assigned.
+                    staff.custom_role = new_custom_role_obj
                 else:
                     setattr(staff, field, d[field])
 
@@ -755,9 +864,11 @@ class StaffResendInviteView(APIView):
         staff.must_change_password = True
         staff.save(using=request.tenant_db, update_fields=["password", "must_change_password"])
 
+        _send_new_account_email(staff, temp_password)
         return success(data={
             "temp_password": temp_password,
-            "note": "New temporary password generated. Share with the staff member.",
+            "note": "New temporary password generated. Share with the staff member."
+                    + (" A copy was also emailed to them." if staff.email else ""),
         }, message="New temporary password generated.")
 
 
@@ -812,6 +923,7 @@ class RoleListCreateView(APIView):
 
         role = Role.objects.using(request.tenant_db).create(
             name=d["name"], description=d.get("description", ""), is_system_role=False,
+            acts_as=d.get("acts_as") or [],
         )
         if requested_codes:
             perms = Permission.objects.using(request.tenant_db).filter(code__in=requested_codes)
@@ -856,6 +968,8 @@ class RoleDetailView(APIView):
             role.name = d["name"]
         if "description" in d:
             role.description = d["description"]
+        if "acts_as" in d:
+            role.acts_as = d["acts_as"] or []
         role.save(using=request.tenant_db)
 
         if "permission_codes" in d:
@@ -878,6 +992,21 @@ class RoleDetailView(APIView):
             return not_found("Role not found.")
         if role.is_system_role:
             return error("System roles can't be deleted.")
+        # Unlike UserRole (extra roles — CASCADE is fine, losing an extra
+        # grant isn't destructive), StaffUser.custom_role is PROTECTed: a
+        # staff member whose PRIMARY role this is would be left with role=
+        # "custom" and no way to resolve permissions/identity at all if the
+        # role vanished under them. Check explicitly for a clear, actionable
+        # error instead of surfacing Django's raw ProtectedError as a 500.
+        holders = StaffUser.objects.using(request.tenant_db).filter(
+            custom_role=role, is_active=True
+        ).count()
+        if holders:
+            plural = "" if holders == 1 else "s"
+            return error(
+                f"{holders} active staff member{plural} currently use this as their primary "
+                "role. Reassign them to a different role first, then delete this one.",
+            )
         role.delete()
         return success(message="Role deleted.")
 
@@ -1073,7 +1202,8 @@ class StaffProfileView(APIView):
         staff = self._get_staff(request, pk)
         if not staff:
             return not_found("Staff member not found.")
-        if staff.role == "doctor":
+        from .rbac import resolve_acts_as
+        if "doctor" in resolve_acts_as(staff):
             return error("Doctors use /doctor-profile/, not /profile/.")
         if StaffProfile.objects.using(request.tenant_db).filter(staff=staff).exists():
             return error("Profile already exists. Use PATCH to update.")
@@ -1116,7 +1246,7 @@ class MyStaffProfileDetailsView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
-        if request.user.role == "doctor":
+        if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
             return error("Doctors use /me/doctor-profile/, not /me/staff-profile/.")
         profile, _ = StaffProfile.objects.using(request.tenant_db).get_or_create(
             staff_id=request.user.id
@@ -1124,7 +1254,7 @@ class MyStaffProfileDetailsView(APIView):
         return success(data=StaffProfileSelfSerializer(profile).data)
 
     def patch(self, request):
-        if request.user.role == "doctor":
+        if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
             return error("Doctors use /me/doctor-profile/, not /me/staff-profile/.")
         profile, _ = StaffProfile.objects.using(request.tenant_db).get_or_create(
             staff_id=request.user.id
@@ -1180,12 +1310,20 @@ class MyStaffProfileView(APIView):
 # ── Doctors list (for scheduling dropdown etc.) ───────────────────────────────
 
 class DoctorListView(APIView):
-    """GET /api/v1/org/doctors/ — list doctors with profiles (any staff)."""
+    """
+    GET /api/v1/org/doctors/ — list doctors with profiles (any staff).
+    Includes custom-role staff whose Role.acts_as includes "doctor" (e.g. a
+    solo-clinic role bundling doctor+nurse+front_desk) — see
+    apps.org.rbac.resolve_acts_as. They get a DoctorProfile at invite time
+    the same as a literal doctor (see StaffInviteView), so they show up here
+    with real specialisation/fee/schedule data, not a blank card.
+    """
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
         qs = StaffUser.objects.using(request.tenant_db).filter(
-            role="doctor", is_active=True
+            Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"]),
+            is_active=True,
         ).prefetch_related("doctor_profile")
         return success(data=StaffSerializer(qs, many=True).data)
 
@@ -1224,13 +1362,15 @@ class TenantSettingsView(APIView):
             "registration_fee_enabled": tenant.registration_fee_enabled,
             "registration_fee_amount": str(tenant.registration_fee_amount),
             "default_tax_rate": str(tenant.default_tax_rate),
+            # ── Branding ───────────────────────────────────────────────
+            "logo": tenant.logo,
         })
 
     def patch(self, request):
         tenant = self._get_tenant(request)
         if not tenant:
             return not_found("Tenant not found.")
-        allowed = {"fee_ownership", "registration_fee_enabled", "registration_fee_amount", "default_tax_rate"}
+        allowed = {"fee_ownership", "registration_fee_enabled", "registration_fee_amount", "default_tax_rate", "logo"}
         for key, val in request.data.items():
             if key not in allowed:
                 return error(f"Field '{key}' is not configurable here.")
@@ -1259,12 +1399,21 @@ class TenantSettingsView(APIView):
             if rate < 0 or rate > 100:
                 return error("default_tax_rate must be between 0 and 100.")
             tenant.default_tax_rate = rate
+        if "logo" in request.data:
+            logo = request.data["logo"] or ""
+            # Client resizes before upload (see HospitalLogoUpload.jsx), but
+            # don't trust that — cap the stored string so a bypassed client
+            # can't wedge an enormous base64 blob into this TextField.
+            if len(logo) > 1_500_000:
+                return error("Logo image is too large. Please upload a smaller file.")
+            tenant.logo = logo
         tenant.save(using="default")
         return success(data={
             "fee_ownership": tenant.fee_ownership,
             "registration_fee_enabled": tenant.registration_fee_enabled,
             "registration_fee_amount": str(tenant.registration_fee_amount),
             "default_tax_rate": str(tenant.default_tax_rate),
+            "logo": tenant.logo,
         }, message="Settings updated.")
 
 
@@ -1291,9 +1440,10 @@ class DoctorScheduleView(APIView):
 
     def _can_edit(self, request, staff):
         """Admin always can; the doctor can edit their own schedule."""
-        if request.user.role == "hospital_admin":
+        acts_as = getattr(request.user, "acts_as", [])
+        if request.user.role == "hospital_admin" or "hospital_admin" in acts_as:
             return True
-        if request.user.role == "doctor" and request.user.id == staff.id:
+        if (request.user.role == "doctor" or "doctor" in acts_as) and request.user.id == staff.id:
             return True
         return False
 
@@ -1462,7 +1612,8 @@ class RoomAssignmentListCreateView(APIView):
             return error("Room not found.", errors={"room": "Invalid room."})
         try:
             doctor = StaffUser.objects.using(request.tenant_db).get(
-                pk=d["doctor"].id, role="doctor", is_active=True
+                Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"]),
+                pk=d["doctor"].id, is_active=True,
             )
         except StaffUser.DoesNotExist:
             return error("Doctor not found.", errors={"doctor": "Invalid doctor."})

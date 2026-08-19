@@ -30,7 +30,7 @@ function ProvisionModal({ onClose, onProvisioned }) {
   const [errors,  setErrors]  = useState({});
   const [form, setForm] = useState({
     name: "", city: "", state: "", gstin: "",
-    admin_mobile: "", tier: "starter",
+    admin_mobile: "", admin_email: "", tier: "starter",
   });
   const [result, setResult] = useState(null);
 
@@ -89,7 +89,9 @@ function ProvisionModal({ onClose, onProvisioned }) {
               }}>✓</div>
               <h2 style={{ margin: 0 }}>Hospital Provisioned!</h2>
               <p style={{ color: "var(--color-text-muted)", fontSize: 14, marginTop: 6 }}>
-                Share these credentials with the hospital admin.
+                {result.credentials?.email_sent
+                  ? "Login details have been emailed to the hospital admin."
+                  : "Share these credentials with the hospital admin."}
               </p>
             </div>
             <div style={{
@@ -105,17 +107,26 @@ function ProvisionModal({ onClose, onProvisioned }) {
                     <strong>Hospital Code:</strong> {result.credentials.subdomain}
                   </div>
                   <div><strong>Admin Mobile:</strong> {result.credentials.admin_mobile}</div>
+                  {result.credentials.admin_email && (
+                    <div><strong>Admin Email:</strong> {result.credentials.admin_email}</div>
+                  )}
                   {result.credentials.employee_id && (
                     <div><strong>Employee ID:</strong> {result.credentials.employee_id}</div>
                   )}
-                  <div><strong>Temp Password:</strong> {result.credentials.temp_password}</div>
+                  {result.credentials.email_sent ? (
+                    <div style={{ marginTop: 10, fontFamily: "inherit" }}>
+                      ✓ Sent to {result.credentials.admin_email}
+                    </div>
+                  ) : (
+                    <div><strong>Temp Password:</strong> {result.credentials.temp_password}</div>
+                  )}
                   <div style={{ marginTop: 8, fontSize: 12, color: "var(--color-text-muted)" }}>
                     {result.credentials.note}
                   </div>
                 </>
               )}
             </div>
-            {result.credentials?.temp_password && (
+            {result.credentials?.temp_password && !result.credentials?.email_sent && (
               <button type="button" onClick={() => {
                 navigator.clipboard?.writeText(result.credentials.temp_password).catch(() => {});
                 toastSuccess("Password copied!");
@@ -176,6 +187,17 @@ function ProvisionModal({ onClose, onProvisioned }) {
                   type="tel" value={form.admin_mobile} onChange={e => set("admin_mobile", e.target.value)}
                   placeholder="98xxxxxxxx" required />
                 {errors.admin_mobile && <div style={{ color: "var(--color-error)", fontSize: 12, marginTop: 4 }}>{errors.admin_mobile}</div>}
+              </div>
+
+              <div>
+                <label style={labelStyle}>Admin Email *</label>
+                <input style={inputStyle(!!errors.admin_email)}
+                  type="email" value={form.admin_email} onChange={e => set("admin_email", e.target.value)}
+                  placeholder="admin@hospital.com" required />
+                <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 4 }}>
+                  The temporary password and login instructions are sent here.
+                </div>
+                {errors.admin_email && <div style={{ color: "var(--color-error)", fontSize: 12, marginTop: 4 }}>{errors.admin_email}</div>}
               </div>
 
               <div>

@@ -6,7 +6,8 @@ from .portal_views import (
     PortalMyRecordsView,
     PortalDocumentListCreateView, PortalLabOrderListView, PortalLabOrderChoiceView,
     PortalPrescriptionListView, PortalPrescriptionChoiceView,
-    PortalLabReportFileView, PortalProfileView, PortalChangePasswordView, PortalForgotPasswordView,
+    PortalLabReportFileView, PortalProfileView, PortalChangePasswordView,
+    PortalMobileChangeRequestOTPView,
     PortalFamilyListCreateView, PortalHealthSummaryView,
     PortalVaccinationListView, PortalVaccinationUploadView, PortalVaccinationFileView, PortalGrowthView,
     PortalHealthTimelineView, PortalNotificationsView, PortalNotificationMarkReadView,
@@ -14,7 +15,6 @@ from .portal_views import (
 
 urlpatterns = [
     path("register/",                       PortalRegisterView.as_view(),     name="portal-register"),
-    path("forgot-password/",                PortalForgotPasswordView.as_view(), name="portal-forgot-password"),
     path("hospitals/",                      PortalHospitalListView.as_view(), name="portal-hospitals"),
     path("stats/",                          PortalPlatformStatsView.as_view(), name="portal-stats"),
     path("search/",                         PortalSearchView.as_view(),       name="portal-search"),
@@ -35,6 +35,7 @@ urlpatterns = [
     path("prescriptions/choice/",           PortalPrescriptionChoiceView.as_view(), name="portal-prescription-choice"),
     path("profile/",                        PortalProfileView.as_view(),      name="portal-profile"),
     path("profile/change-password/",        PortalChangePasswordView.as_view(), name="portal-change-password"),
+    path("profile/mobile-change/request-otp/", PortalMobileChangeRequestOTPView.as_view(), name="portal-mobile-change-request-otp"),
     path("family/",                         PortalFamilyListCreateView.as_view(), name="portal-family"),
     path("health-summary/",                 PortalHealthSummaryView.as_view(), name="portal-health-summary"),
     path("vaccinations/",                   PortalVaccinationListView.as_view(), name="portal-vaccinations"),

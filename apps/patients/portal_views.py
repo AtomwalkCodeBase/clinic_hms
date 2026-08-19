@@ -39,6 +39,14 @@ def _ensure_db(db_name):
         settings.DATABASES[db_name] = _make_db_config(db_name)
 
 
+# Matches literal doctors AND custom-role staff whose Role.acts_as includes
+# "doctor" (e.g. a solo-clinic role bundling doctor+nurse+front_desk) — see
+# apps.org.rbac.resolve_acts_as. Reused everywhere this module looks up
+# "doctors" for patient-facing search/booking, so a patient can find and
+# book this person the same as any literal doctor.
+DOCTOR_Q = Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"])
+
+
 # What actually gets pulled from the Registry DB into a new hospital's view —
 # shown to the patient verbatim in the consent prompt, and kept in sync with
 # PatientService.get_shared_history()'s five categories (plus documents).
@@ -68,28 +76,56 @@ def _patient_app_enabled(tenant):
 # ── Register ─────────────────────────────────────────────────────────────────
 
 class PortalRegisterView(APIView):
+    """
+    POST /api/v1/portal/register/
+    body: {action_token, full_name, mobile, password, gender?, date_of_birth?}
+
+    Requires a verified `action_token` from
+    POST /api/v1/auth/otp/verify/ (purpose="registration_patient") proving
+    the caller actually received an OTP at the EMAIL address they're
+    registering — see apps/auth_app/otp_views.py. Email-based for now since
+    verifying via mobile requires a paid SMS gateway that isn't wired up yet
+    (see core/sms.py). The email used to create the account is taken from
+    the TOKEN (what was actually verified), not from the request body, so a
+    verified-but-different address can't be swapped in at the last step.
+    The mobile number is still required (PatientAccount.mobile is the
+    primary login identifier) but is NOT OTP-verified in this flow.
+    """
     permission_classes = [AllowAny]
 
     def post(self, request):
-        from apps.registry.models import PatientIdentity
+        from apps.registry.models import PatientIdentity, OTPCode
         from core.utils.hashing import hash_mobile, normalize_mobile
         from core.utils.awpid import generate_unique_awpid
+        from core.otp import decode_action_token, OTPError
 
         d = request.data
-        required = ["full_name", "mobile", "password"]
+        token = d.get("action_token") or ""
+        try:
+            payload = decode_action_token(token, OTPCode.PURPOSE_REGISTRATION_PATIENT)
+        except OTPError as exc:
+            return error(str(exc))
+        email = (payload.get("identifier") or "").strip().lower()
+
+        required = ["full_name", "password", "mobile"]
         missing = [f for f in required if not str(d.get(f, "")).strip()]
         if missing:
             return error(f"Missing fields: {', '.join(missing)}")
 
-        mobile = d["mobile"].strip()
+        if "@" not in email:
+            return error("Invalid verification token.")
+        if PatientAccount.objects.using("default").filter(email__iexact=email).exists():
+            return error("An account with this email already exists. Please log in.")
+
+        mobile = (d.get("mobile") or "").strip()
         if not re.match(r"^\d{10}$", mobile):
             return error("Enter a valid 10-digit mobile number.", errors={"mobile": "Invalid format."})
         if PatientAccount.objects.using("default").filter(mobile=mobile).exists():
             return error("An account with this mobile number already exists. Please log in.")
-
-        email = (d.get("email") or "").strip().lower() or None
-        if email and PatientAccount.objects.using("default").filter(email__iexact=email).exists():
-            return error("An account with this email already exists.")
+        from core.realworld_validation import validate_mobile_real
+        is_valid, reason = validate_mobile_real(mobile)
+        if not is_valid:
+            return error(reason, errors={"mobile": reason})
 
         # ── Reuse (or create) this person's global PatientIdentity ─────────
         # Self-registering here used to only create a PatientAccount (the
@@ -130,6 +166,7 @@ class PortalRegisterView(APIView):
             acct.set_password(d["password"])
             acct.save(using="default")
 
+        logger.info("Patient account registered via OTP: account_id=%s awpid=%s email_verified=True", acct.id, acct.awpid)
         return success(
             data={"awpid": acct.awpid, "mobile": acct.mobile},
             message="Account created. You can now log in.",
@@ -156,6 +193,7 @@ class PortalHospitalListView(APIView):
                 "state": t.state or "",
                 "accreditations": [a.strip() for a in (t.accreditations or "").split(",") if a.strip()],
                 "about": t.about or "",
+                "logo": t.logo or "",
             }
             for t in Tenant.objects.using("default").filter(is_active=True, id__in=enabled_tenant_ids).order_by("name")
         ]
@@ -298,7 +336,7 @@ class PortalSearchView(APIView):
                 for t in terms:
                     name_q |= Q(first_name__icontains=t) | Q(last_name__icontains=t)
                 name_matches = set(
-                    StaffUser.objects.using(db).filter(role="doctor", is_active=True)
+                    StaffUser.objects.using(db).filter(DOCTOR_Q, is_active=True)
                     .filter(name_q).values_list("id", flat=True)
                 ) if terms else set()
 
@@ -323,7 +361,7 @@ class PortalSearchView(APIView):
                 elif not terms:
                     # No text query — city-only browse: every active doctor at this hospital.
                     matched_ids = set(
-                        StaffUser.objects.using(db).filter(role="doctor", is_active=True)
+                        StaffUser.objects.using(db).filter(DOCTOR_Q, is_active=True)
                         .values_list("id", flat=True)
                     )
 
@@ -332,7 +370,7 @@ class PortalSearchView(APIView):
 
                 staff_by_id = {
                     s.id: s for s in
-                    StaffUser.objects.using(db).filter(id__in=matched_ids, role="doctor", is_active=True)
+                    StaffUser.objects.using(db).filter(DOCTOR_Q, id__in=matched_ids, is_active=True)
                 }
                 profiles_by_staff = {
                     p.staff_id: p for p in
@@ -404,7 +442,7 @@ class PortalDoctorListView(APIView):
 
         staff_list = list(
             StaffUser.objects.using(tenant.db_name)
-            .filter(role="doctor", is_active=True).order_by("first_name")
+            .filter(DOCTOR_Q, is_active=True).order_by("first_name")
         )
         profiles = {
             p.staff_id: p
@@ -412,7 +450,10 @@ class PortalDoctorListView(APIView):
                 .filter(staff_id__in=[s.id for s in staff_list])
         }
         doctors = [_doctor_card(s, profiles.get(s.id)) for s in staff_list]
-        return Response({"results": doctors})
+        return Response({
+            "results": doctors,
+            "hospital": {"tenant_id": tenant.id, "name": tenant.name, "logo": tenant.logo or ""},
+        })
 
 
 class PortalDoctorDetailView(APIView):
@@ -432,7 +473,7 @@ class PortalDoctorDetailView(APIView):
 
         try:
             staff = StaffUser.objects.using(tenant.db_name).get(
-                pk=doctor_id, role="doctor", is_active=True
+                DOCTOR_Q, pk=doctor_id, is_active=True
             )
         except StaffUser.DoesNotExist:
             return Response({"error": "Doctor not found at this hospital."}, status=404)
@@ -442,7 +483,19 @@ class PortalDoctorDetailView(APIView):
         data["hospital"] = {
             "tenant_id": tenant.id, "name": tenant.name, "city": tenant.city or "",
             "accreditations": [a.strip() for a in (tenant.accreditations or "").split(",") if a.strip()],
+            "logo": tenant.logo or "",
         }
+
+        # Which payment modes this hospital currently accepts (hospital admin
+        # toggles these in Billing Setup — see apps.billing.PaymentModeOption)
+        # so the booking screen's "How will you pay?" step reflects the real
+        # choice instead of a hardcoded pair of buttons.
+        from apps.billing.models import PaymentModeOption
+        data["payment_methods"] = list(
+            PaymentModeOption.objects.using(tenant.db_name)
+            .filter(is_active=True).order_by("sort_order", "name")
+            .values_list("name", flat=True)
+        )
 
         # Real count, not a marketing number — signed (finalized) consultations
         # this doctor has completed at THIS hospital. No cross-tenant total
@@ -634,7 +687,7 @@ class PortalBookView(APIView):
         _ensure_db(db)
 
         try:
-            doctor = StaffUser.objects.using(db).get(pk=doctor_id, role="doctor", is_active=True)
+            doctor = StaffUser.objects.using(db).get(DOCTOR_Q, pk=doctor_id, is_active=True)
         except StaffUser.DoesNotExist:
             return Response({"error": "Doctor not found at this hospital."}, status=404)
         # Appointment.doctor_name is a plain snapshot string (not a live FK
@@ -1599,6 +1652,53 @@ class PortalLabReportFileView(APIView):
 
 # ── My Profile ──────────────────────────────────────────────────────────────
 
+class PortalMobileChangeRequestOTPView(APIView):
+    """
+    POST /api/v1/portal/profile/mobile-change/request-otp/
+    Authenticated — no body needed. Sends an OTP to the EMAIL address
+    currently on file (not a caller-supplied one), so changing a mobile
+    number requires proving control of the account first. Email-based for
+    now — verifying via the old mobile requires a paid SMS gateway that
+    isn't wired up yet (see core/sms.py); email is free to send and just as
+    good a proof of account ownership. The follow-up
+    PATCH /api/v1/portal/profile/ (mobile field) requires the resulting
+    action_token, obtained via POST /api/v1/auth/otp/verify/
+    (purpose="contact_change_patient", identifier=<account email>).
+    """
+    permission_classes = [IsPatient]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "otp"
+
+    def post(self, request):
+        from core.otp import create_otp, mask_identifier, OTPError
+        from core.email import send_otp_email
+        from apps.registry.models import OTPCode
+
+        try:
+            acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        except PatientAccount.DoesNotExist:
+            return not_found("Account not found.")
+
+        if not acct.email:
+            return error("Add an email address to your profile first — we use it to verify mobile number changes.")
+
+        email = acct.email.strip().lower()
+        try:
+            otp, code, channel = create_otp(
+                OTPCode.PURPOSE_CONTACT_CHANGE_PATIENT, email,
+                target_type="patient", target_id=acct.id,
+            )
+        except OTPError as exc:
+            return error(str(exc))
+
+        sent = send_otp_email(email, code, "mobile number change")
+        if not sent:
+            return error("Couldn't send the verification code right now. Please try again shortly.")
+
+        data = {"masked_identifier": mask_identifier(email)}
+        return success(data=data, message=f"Verification code sent to {mask_identifier(email)}.")
+
+
 class PortalProfileView(APIView):
     """
     GET  /api/v1/portal/profile/  — the logged-in patient's own account details.
@@ -1607,6 +1707,12 @@ class PortalProfileView(APIView):
     every hospital this patient has consented at, so they're read-only here —
     changing them would break the cross-hospital identity match that HIE
     sharing relies on.
+
+    Changing `mobile` to a NEW number requires `action_token` (from
+    POST /api/v1/auth/otp/verify/, purpose="contact_change_patient") proving
+    the caller verified a code sent to the email on file first — see
+    PortalMobileChangeRequestOTPView above. Sending the same mobile back
+    unchanged (or omitting it) needs no token.
     """
     permission_classes = [IsPatient]
 
@@ -1654,6 +1760,23 @@ class PortalProfileView(APIView):
             mobile = (d.get("mobile") or "").strip()
             if mobile and not re.match(r"^\d{10}$", mobile):
                 return error("Enter a valid 10-digit mobile number.", errors={"mobile": "Invalid format."})
+
+            # Only an actual CHANGE needs re-verification — re-sending the
+            # same number the frontend already has loaded shouldn't force
+            # the patient through an OTP for a no-op.
+            mobile_changed = bool(mobile) and mobile != acct.mobile
+            old_mobile = acct.mobile
+            if mobile_changed:
+                from core.otp import decode_action_token, OTPError
+                from apps.registry.models import OTPCode
+                token = d.get("action_token") or ""
+                try:
+                    payload = decode_action_token(token, OTPCode.PURPOSE_CONTACT_CHANGE_PATIENT)
+                except OTPError as exc:
+                    return error(str(exc), errors={"mobile": "Verification required."})
+                if payload.get("target_id") != acct.id or payload.get("identifier") != (acct.email or "").lower():
+                    return error("Verification does not match this account.", errors={"mobile": "Verification required."})
+
             if mobile and PatientAccount.objects.using("default").filter(mobile=mobile).exclude(pk=acct.id).exists():
                 return error("Another account already uses this mobile number.", errors={"mobile": "Already in use."})
 
@@ -1676,6 +1799,9 @@ class PortalProfileView(APIView):
 
             acct.mobile = mobile
             fields.append("mobile")
+            if mobile_changed:
+                logger.info("Patient mobile number changed via OTP re-verification: "
+                            "account_id=%s awpid=%s", acct.id, acct.awpid)
         if "gender" in d:
             gender = (d.get("gender") or "").strip().upper()
             if gender and gender not in ("M", "F", "O"):
@@ -2408,54 +2534,14 @@ class PortalNotificationMarkReadView(APIView):
         return success(data={"read": True})
 
 
-class PortalForgotPasswordView(APIView):
-    """
-    POST /api/v1/portal/forgot-password/
-    Body: {mobile_or_awpid, date_of_birth (YYYY-MM-DD), new_password, confirm_password}
-
-    Same reasoning as StaffForgotPasswordView (auth_app) — no email/SMS
-    gateway exists in this stack, so this verifies identity with mobile
-    number (or AWPID) plus date of birth on file, instead of pretending to
-    send a reset link that would never arrive. If date_of_birth was never
-    set on the account, this can't verify them.
-    """
-    permission_classes = [AllowAny]
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "login"
-
-    def post(self, request):
-        login_id = (request.data.get("mobile_or_awpid") or request.data.get("mobile") or "").strip()
-        dob      = (request.data.get("date_of_birth") or "").strip()
-        new_password     = request.data.get("new_password") or ""
-        confirm_password = request.data.get("confirm_password") or ""
-
-        if not login_id or not dob:
-            return error("Mobile number (or Patient ID) and date of birth are required.")
-        if new_password != confirm_password:
-            return error("Passwords do not match.", errors={"confirm_password": "Passwords do not match."})
-        if len(new_password) < 8:
-            return error("New password must be at least 8 characters.", errors={"new_password": "Too short."})
-
-        try:
-            if login_id.upper().startswith("AWPID-"):
-                acct = PatientAccount.objects.using("default").get(awpid=login_id, is_active=True)
-            else:
-                acct = PatientAccount.objects.using("default").get(mobile=login_id, is_active=True)
-        except PatientAccount.DoesNotExist:
-            return error("We couldn't verify those details.")
-
-        if not acct.date_of_birth:
-            return error(
-                "We can't verify your identity without a date of birth on file. "
-                "Add it from My Profile after signing in with your current password, "
-                "or contact support for help."
-            )
-        if str(acct.date_of_birth) != dob:
-            return error("We couldn't verify those details.")
-
-        acct.set_password(new_password)
-        acct.save(using="default", update_fields=["password"])
-        return success(message="Password reset successfully. You can now log in.")
+# PortalForgotPasswordView (the old mobile/AWPID + date-of-birth
+# verification) has been replaced by OTP verification — see
+# apps/auth_app/otp_views.py (OTPRequestView/OTPVerifyView with
+# purpose="password_reset_patient", then PatientForgotPasswordResetView to
+# consume the resulting action_token). This endpoint was also never
+# actually reachable from the frontend (API_ENDPOINTS.PORTAL.FORGOT_PASSWORD
+# was referenced by ForgotPasswordPage.jsx but was never defined in
+# api.config.js) — the OTP flow replaces it end to end, frontend included.
 
 
 class PortalChangePasswordView(APIView):

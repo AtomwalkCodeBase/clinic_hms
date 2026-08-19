@@ -15,13 +15,13 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth }    from "../../hooks/useAuth";
 import { useToast }   from "../../hooks/useToast";
-import { ROLES }      from "../../constants/roles";
 import APP_CONFIG     from "../../config/app.config";
 import API_ENDPOINTS  from "../../config/api.config";
 import { ROUTES }     from "../../config/routes.config";
-import { sanitizeMobileInput, isValidMobile } from "../../utils/validation";
 import { getThemeById } from "../../config/themes.config";
 import { deriveThemeVars } from "../../utils/theme";
+import AutofillDecoy from "../../components/auth/AutofillDecoy";
+import PatientRegisterFlow from "../../components/auth/PatientRegisterFlow";
 
 // The login screen is shared brand identity, shown before any user is
 // signed in — it must always render in "Emerald Glass", never whatever
@@ -38,28 +38,7 @@ const TABS = [
   { key: "patient",  label: "Patient" },
 ];
 
-function getDefaultRoute(role) {
-  const map = {
-    [ROLES.PLATFORM_ADMIN]: "/platform/dashboard",
-    [ROLES.HOSPITAL_ADMIN]: "/admin/dashboard",
-    [ROLES.DOCTOR]:         "/doctor/dashboard",
-    [ROLES.NURSE]:          "/nurse/dashboard",
-    [ROLES.FRONT_DESK]:     "/front-desk/dashboard",
-    [ROLES.LAB_TECH]:       "/lab/dashboard",
-    [ROLES.PHARMACIST]:     "/pharmacist/dashboard",
-    [ROLES.PATIENT]:        "/patient/dashboard",
-  };
-  return map[role] || "/";
-}
-
 // Small inline icons (no extra dependency) ----------------------------------
-const IconMail = (props) => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-    <rect x="2" y="4" width="20" height="16" rx="2" />
-    <path d="m2 7 10 6 10-6" />
-  </svg>
-);
 const IconLock = (props) => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
     strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
@@ -99,13 +78,6 @@ const IconPhone = (props) => (
     strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
     <rect x="6" y="2" width="12" height="20" rx="2" />
     <path d="M11 18h2" />
-  </svg>
-);
-const IconCalendar = (props) => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-    <rect x="3" y="4" width="18" height="18" rx="2" />
-    <path d="M16 2v4M8 2v4M3 10h18" />
   </svg>
 );
 
@@ -190,10 +162,10 @@ function PasswordField({ value, onChange, error, placeholder = "•••••�
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { loginStaff, loginPatient, loginPlatform } = useAuth();
+  const { loginStaff, loginPatient, loginPatientWithOTP, loginPlatform } = useAuth();
   const { toastSuccess, toastApiError } = useToast();
 
-  const [tab,         setTab]         = useState("staff");
+  const [tab,         setTab]         = useState(() => new URLSearchParams(window.location.search).get("register") === "1" ? "patient" : "staff");
   const [loading,     setLoading]     = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
 
@@ -214,10 +186,17 @@ export default function LoginPage() {
   // Patient
   const [awpid,       setAwpid]       = useState("");
   const [patientPass, setPatientPass] = useState("");
-  const [showRegister, setShowRegister] = useState(false);
-  const [regForm, setRegForm] = useState({
-    full_name: "", mobile: "", email: "", date_of_birth: "", password: "",
-  });
+  // ?register=1 (linked from the "Don't have an account?" prompt on the
+  // patient forgot-password page) opens straight to the patient tab's
+  // registration flow instead of dropping them on the sign-in form.
+  const [showRegister, setShowRegister] = useState(() => new URLSearchParams(window.location.search).get("register") === "1");
+  // Day-to-day passwordless sign-in — an alternative to password login, not
+  // a replacement for it. otpStep: "identify" -> "code".
+  const [useOtpLogin, setUseOtpLogin] = useState(false);
+  const [otpStep,     setOtpStep]     = useState("identify");
+  const [otpIdentifier, setOtpIdentifier] = useState("");
+  const [otpCode,        setOtpCode]      = useState("");
+  const [otpResendIn,    setOtpResendIn]  = useState(0);
 
   function switchTab(key) {
     setTab(key);
@@ -261,26 +240,6 @@ export default function LoginPage() {
     }
   }
 
-  async function handlePatientRegister(e) {
-    e.preventDefault();
-    if (!isValidMobile(regForm.mobile)) {
-      setFieldErrors({ mobile: "Enter a valid 10-digit mobile number." });
-      return;
-    }
-    setLoading(true);
-    try {
-      const { publicClient } = await import("../../services/api.client");
-      await publicClient.post(API_ENDPOINTS.PORTAL.REGISTER, regForm);
-      toastSuccess("Account created! Sign in with your mobile number and password.");
-      setAwpid(regForm.mobile);
-      setShowRegister(false);
-    } catch (err) {
-      toastApiError(err, "Could not create account.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   async function handlePatientLogin(e) {
     e.preventDefault();
     setFieldErrors({});
@@ -292,6 +251,51 @@ export default function LoginPage() {
     } catch (err) {
       if (err?.errors) setFieldErrors(err.errors);
       toastApiError(err, "Invalid credentials.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function startOtpResendTimer() {
+    setOtpResendIn(60);
+    const t = setInterval(() => setOtpResendIn(s => (s <= 1 ? (clearInterval(t), 0) : s - 1)), 1000);
+  }
+
+  async function handleOtpRequestCode(e) {
+    e.preventDefault();
+    if (!otpIdentifier.trim()) return;
+    setLoading(true);
+    setFieldErrors({});
+    try {
+      const { publicClient } = await import("../../services/api.client");
+      const { data } = await publicClient.post(API_ENDPOINTS.AUTH.OTP_REQUEST, {
+        purpose: "login_patient", identifier: otpIdentifier.trim(),
+      });
+      setOtpStep("code");
+      startOtpResendTimer();
+      toastSuccess(data.message || "Verification code sent.");
+    } catch (err) {
+      if (err?.errors) setFieldErrors(err.errors);
+      toastApiError(err, "Couldn't send a verification code.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleOtpVerifyAndLogin(e) {
+    e.preventDefault();
+    if (otpCode.length < 6) return;
+    setLoading(true);
+    try {
+      const { publicClient } = await import("../../services/api.client");
+      const { data } = await publicClient.post(API_ENDPOINTS.AUTH.OTP_VERIFY, {
+        purpose: "login_patient", identifier: otpIdentifier.trim(), code: otpCode,
+      });
+      await loginPatientWithOTP(data.data.action_token);
+      toastSuccess("Signed in successfully.");
+      navigate("/");
+    } catch (err) {
+      toastApiError(err, "That code didn't work.");
     } finally {
       setLoading(false);
     }
@@ -361,14 +365,16 @@ export default function LoginPage() {
         }} />
 
         <div style={{ position: "relative" }}>
-          <img src="/branding/atomwalk-full.png" alt="Atomwalk Technologies"
-            style={{ height: 40, width: "auto", objectFit: "contain", display: "block" }} />
+          <div style={{
+            display: "inline-block", background: "#fff", borderRadius: 12,
+            padding: "14px 20px", boxShadow: "0 2px 10px rgba(0,0,0,0.18)",
+          }}>
+            <img src="/branding/atomwalk-full.png" alt="Atomwalk Technologies"
+              style={{ height: 46, width: "auto", objectFit: "contain", display: "block" }} />
+          </div>
           <div style={{ marginTop: 14 }}>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 19, fontWeight: 600 }}>
               {APP_CONFIG.APP_NAME}
-            </div>
-            <div style={{ fontSize: 10.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--color-hero-muted)", marginTop: 2 }}>
-              Hospital Management System
             </div>
           </div>
         </div>
@@ -468,6 +474,7 @@ export default function LoginPage() {
             {/* Staff Login */}
             {tab === "staff" && (
               <form onSubmit={handleStaffLogin}>
+                <AutofillDecoy />
                 {useEmployeeId ? (
                   <>
                     <label style={labelStyle}>Hospital Code</label>
@@ -508,7 +515,7 @@ export default function LoginPage() {
                 </p>
 
                 <p style={{ textAlign: "right", marginTop: -8, marginBottom: 16 }}>
-                  <Link to={ROUTES.FORGOT_PASSWORD} className="aw-link-btn"
+                  <Link to={ROUTES.FORGOT_PASSWORD_STAFF} className="aw-link-btn"
                     style={{ fontSize: 12.5, color: "var(--color-text-muted)", fontWeight: 600 }}>
                     Forgot password?
                   </Link>
@@ -524,6 +531,7 @@ export default function LoginPage() {
             {/* Platform Admin Login */}
             {tab === "platform" && (
               <form onSubmit={handlePlatformLogin}>
+                <AutofillDecoy />
                 <div style={{
                   background: "var(--color-accent-light)", borderRadius: 10, padding: "11px 14px",
                   marginBottom: 20, fontSize: 12.5, color: "var(--color-text-secondary)",
@@ -551,9 +559,10 @@ export default function LoginPage() {
               </form>
             )}
 
-            {/* Patient Login */}
-            {tab === "patient" && !showRegister && (
+            {/* Patient Login — password */}
+            {tab === "patient" && !showRegister && !useOtpLogin && (
               <form onSubmit={handlePatientLogin}>
+                <AutofillDecoy />
                 <label style={labelStyle}>Mobile Number or Patient ID (AWPID)</label>
                 <Field icon={IconBadge}>
                   <input style={bareInput} value={awpid}
@@ -566,7 +575,7 @@ export default function LoginPage() {
                   onChange={e => setPatientPass(e.target.value)} required />
 
                 <p style={{ textAlign: "right", marginTop: -8, marginBottom: 16 }}>
-                  <Link to={ROUTES.FORGOT_PASSWORD} className="aw-link-btn"
+                  <Link to={ROUTES.FORGOT_PASSWORD_PATIENT} className="aw-link-btn"
                     style={{ fontSize: 12.5, color: "var(--color-text-muted)", fontWeight: 600 }}>
                     Forgot password?
                   </Link>
@@ -577,7 +586,15 @@ export default function LoginPage() {
                   {loading ? "Signing in…" : "Sign In"}
                 </button>
 
-                <p style={{ marginTop: 18, textAlign: "center", fontSize: 13, color: "var(--color-text-muted)" }}>
+                <p style={{ marginTop: 16, textAlign: "center", fontSize: 12.5 }}>
+                  <button type="button" className="aw-link-btn"
+                    onClick={() => { setUseOtpLogin(true); setOtpStep("identify"); setFieldErrors({}); }}
+                    style={{ background: "none", border: "none", color: "var(--color-text-muted)", fontWeight: 600, cursor: "pointer", fontSize: "inherit" }}>
+                    Sign in with OTP instead
+                  </button>
+                </p>
+
+                <p style={{ marginTop: 10, textAlign: "center", fontSize: 13, color: "var(--color-text-muted)" }}>
                   New patient?{" "}
                   <button type="button" className="aw-link-btn" onClick={() => setShowRegister(true)}
                     style={{ background: "none", border: "none", color: "var(--color-primary)", fontWeight: 700, cursor: "pointer", fontSize: "inherit" }}>
@@ -587,59 +604,76 @@ export default function LoginPage() {
               </form>
             )}
 
-            {/* Patient Register */}
-            {tab === "patient" && showRegister && (
-              <form onSubmit={handlePatientRegister}>
-                <label style={labelStyle}>Full name</label>
-                <Field icon={IconUser}>
-                  <input style={bareInput} value={regForm.full_name}
-                    onChange={e => setRegForm(f => ({ ...f, full_name: e.target.value }))}
-                    placeholder="e.g. Rohan Sharma" required />
+            {/* Patient Login — day-to-day OTP (passwordless) */}
+            {tab === "patient" && !showRegister && useOtpLogin && otpStep === "identify" && (
+              <form onSubmit={handleOtpRequestCode}>
+                <label style={labelStyle}>Mobile Number, Email, or Patient ID (AWPID)</label>
+                <Field icon={IconBadge}>
+                  <input style={bareInput} value={otpIdentifier}
+                    onChange={e => setOtpIdentifier(e.target.value)}
+                    placeholder="98xxxxxxxx, you@example.com, or AWPID-…" required autoFocus />
                 </Field>
-
-                <label style={labelStyle}>Mobile Number</label>
-                <Field icon={IconPhone} error={fieldErrors.mobile}>
-                  <input style={bareInput} type="tel" inputMode="numeric" maxLength={10} value={regForm.mobile}
-                    onChange={e => { setRegForm(f => ({ ...f, mobile: sanitizeMobileInput(e.target.value) })); if (fieldErrors.mobile) setFieldErrors(er => ({ ...er, mobile: undefined })); }}
-                    placeholder="98xxxxxxxx" required />
-                </Field>
-
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                  <div>
-                    <label style={labelStyle}>Email (optional)</label>
-                    <Field icon={IconMail}>
-                      <input style={bareInput} type="email" value={regForm.email}
-                        onChange={e => setRegForm(f => ({ ...f, email: e.target.value }))}
-                        placeholder="you@example.com" />
-                    </Field>
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Date of birth</label>
-                    <Field icon={IconCalendar}>
-                      <input style={bareInput} type="date" value={regForm.date_of_birth}
-                        onChange={e => setRegForm(f => ({ ...f, date_of_birth: e.target.value }))} />
-                    </Field>
-                  </div>
-                </div>
-
-                <label style={labelStyle}>Password</label>
-                <PasswordField value={regForm.password}
-                  onChange={e => setRegForm(f => ({ ...f, password: e.target.value }))}
-                  placeholder="Choose a password" required minLength={6} />
 
                 <button className="btn-primary aw-submit-btn" type="submit" disabled={loading}
                   style={{ width: "100%", marginTop: 6, padding: "12px 0", fontSize: 14, fontWeight: 700 }}>
-                  {loading ? "Creating account…" : "Create Account"}
+                  {loading ? "Sending code…" : "Send verification code"}
                 </button>
 
-                <p style={{ marginTop: 18, textAlign: "center", fontSize: 13, color: "var(--color-text-muted)" }}>
-                  Already registered?{" "}
-                  <button type="button" className="aw-link-btn" onClick={() => setShowRegister(false)}
+                <p style={{ marginTop: 16, textAlign: "center", fontSize: 12.5 }}>
+                  <button type="button" className="aw-link-btn" onClick={() => setUseOtpLogin(false)}
+                    style={{ background: "none", border: "none", color: "var(--color-text-muted)", fontWeight: 600, cursor: "pointer", fontSize: "inherit" }}>
+                    Sign in with password instead
+                  </button>
+                </p>
+
+                <p style={{ marginTop: 10, textAlign: "center", fontSize: 13, color: "var(--color-text-muted)" }}>
+                  New patient?{" "}
+                  <button type="button" className="aw-link-btn"
+                    onClick={() => { setUseOtpLogin(false); setShowRegister(true); }}
                     style={{ background: "none", border: "none", color: "var(--color-primary)", fontWeight: 700, cursor: "pointer", fontSize: "inherit" }}>
-                    Sign in
+                    Create an account
                   </button>
                 </p>
               </form>
+            )}
+
+            {tab === "patient" && !showRegister && useOtpLogin && otpStep === "code" && (
+              <form onSubmit={handleOtpVerifyAndLogin}>
+                <p style={{ fontSize: 13.5, color: "var(--color-text)", marginBottom: 18 }}>
+                  Enter the 6-digit code we sent you.
+                </p>
+                <label style={labelStyle}>Verification Code</label>
+                <Field icon={IconLock}>
+                  <input style={{ ...bareInput, letterSpacing: "0.3em", fontSize: 20, textAlign: "center" }}
+                    value={otpCode} onChange={e => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    inputMode="numeric" maxLength={6} placeholder="••••••" required autoFocus />
+                </Field>
+
+                <button className="btn-primary aw-submit-btn" type="submit" disabled={loading || otpCode.length < 6}
+                  style={{ width: "100%", marginTop: 6, padding: "12px 0", fontSize: 14, fontWeight: 700 }}>
+                  {loading ? "Verifying…" : "Verify & Sign In"}
+                </button>
+
+                <p style={{ marginTop: 16, textAlign: "center", fontSize: 12.5 }}>
+                  {otpResendIn > 0 ? (
+                    <span style={{ color: "var(--color-text-muted)" }}>Resend code in {otpResendIn}s</span>
+                  ) : (
+                    <button type="button" onClick={handleOtpRequestCode} disabled={loading}
+                      style={{ background: "none", border: "none", color: "var(--color-primary)", fontWeight: 700, cursor: "pointer", fontSize: "inherit" }}>
+                      Resend code
+                    </button>
+                  )}
+                </p>
+              </form>
+            )}
+
+            {/* Patient Register — Details -> Code -> Password */}
+            {tab === "patient" && showRegister && (
+              <PatientRegisterFlow
+                toastSuccess={toastSuccess} toastApiError={toastApiError}
+                onCancel={() => setShowRegister(false)}
+                onDone={(mobile) => { setAwpid(mobile); setShowRegister(false); }}
+              />
             )}
 
           </div>

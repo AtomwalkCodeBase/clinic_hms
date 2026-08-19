@@ -192,6 +192,15 @@ class StaffSerializer(serializers.ModelSerializer):
     staff_profile  = StaffProfileSerializer(read_only=True)
     branch_name    = serializers.CharField(source="branch.name", read_only=True)
     department_name = serializers.CharField(source="department.name", read_only=True)
+    # Only meaningful when role="custom" — the hospital-defined Role's own
+    # name/acts_as, so the frontend can show "Doctor Clinic" instead of the
+    # literal string "custom" and know which system-role treatment (colors,
+    # icons, etc.) applies. Null for the 6 system roles.
+    custom_role_name = serializers.CharField(source="custom_role.name", read_only=True, default=None)
+    custom_role_acts_as = serializers.SerializerMethodField()
+
+    def get_custom_role_acts_as(self, obj):
+        return obj.custom_role.acts_as if obj.custom_role_id else []
     # Full branch assignment (usually just the one primary branch, mirrored
     # from `branch`/`branch_name` above for backward compat — more than one
     # entry means this person, almost always a doctor, works multiple
@@ -218,10 +227,12 @@ class StaffSerializer(serializers.ModelSerializer):
     class Meta:
         model  = StaffUser
         fields = ["id", "email", "first_name", "last_name", "role",
+                  "custom_role", "custom_role_name", "custom_role_acts_as",
                   "branch", "branch_name", "branches", "department", "department_name",
                   "phone", "employee_id", "date_of_birth", "is_active", "must_change_password", "photo",
                   "date_joined", "last_login", "doctor_profile", "staff_profile"]
         read_only_fields = ["id", "date_joined", "last_login",
+                            "custom_role_name", "custom_role_acts_as",
                             "branch_name", "branches", "department_name", "doctor_profile",
                             "staff_profile", "must_change_password"]
 
@@ -243,8 +254,12 @@ class StaffInviteSerializer(serializers.Serializer):
     first_name    = serializers.CharField(max_length=150)
     last_name     = serializers.CharField(max_length=150, required=False, allow_blank=True)
     role          = serializers.ChoiceField(choices=[
-        "hospital_admin", "doctor", "nurse", "front_desk", "lab_tech", "pharmacist"
+        "hospital_admin", "doctor", "nurse", "front_desk", "lab_tech", "pharmacist", "custom"
     ])
+    # Required (and validated further in the view, which needs request.tenant_db
+    # to confirm it's a real, non-system Role belonging to this tenant) only
+    # when role="custom" — which hospital-defined Role this invite is for.
+    custom_role_id = serializers.IntegerField(required=False, allow_null=True)
     branch_id     = serializers.IntegerField(required=False, allow_null=True)
     department_id = serializers.IntegerField(required=False, allow_null=True)
     # Extra branches beyond branch_id (the primary) — meaningful for doctor
@@ -302,7 +317,7 @@ class RoleSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Role
         fields = ["id", "name", "description", "is_system_role", "system_role_key",
-                  "permission_codes", "created_at"]
+                  "permission_codes", "acts_as", "created_at"]
         read_only_fields = ["id", "is_system_role", "system_role_key", "created_at"]
 
 
@@ -311,3 +326,14 @@ class RoleWriteSerializer(serializers.Serializer):
     name              = serializers.CharField(max_length=100)
     description       = serializers.CharField(max_length=255, required=False, allow_blank=True)
     permission_codes  = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
+    # Which system-role identities this custom role should be treated as
+    # throughout the app — e.g. ["doctor", "nurse", "front_desk"] for a
+    # solo-clinic role. See apps.org.rbac.resolve_acts_as / ACTS_AS_CHOICES.
+    acts_as           = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
+
+    def validate_acts_as(self, value):
+        from .rbac import ACTS_AS_CHOICES
+        invalid = set(value) - set(ACTS_AS_CHOICES)
+        if invalid:
+            raise serializers.ValidationError(f"Invalid acts_as value(s): {', '.join(sorted(invalid))}.")
+        return value

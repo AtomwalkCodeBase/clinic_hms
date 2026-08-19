@@ -7,7 +7,7 @@
 
 export const APP_CONFIG = {
   /** Application display name */
-  APP_NAME: "AW360™ HMS",
+  APP_NAME: "AW360™ Clinical HMS",
 
   /** Shown in browser tab and meta tags */
   SITE_TITLE: "AW360™ HMS — Hospital Management System",

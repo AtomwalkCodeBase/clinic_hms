@@ -41,15 +41,37 @@ function Modal({ title, children, onClose }) {
   );
 }
 
+// Which system-role identities a custom role can claim — see
+// apps.org.rbac.ACTS_AS_CHOICES on the backend (kept in sync manually;
+// these are deploy-time constants, not something either side needs to
+// fetch from the other).
+const ACTS_AS_OPTIONS = [
+  { key: "doctor",         label: "Doctor" },
+  { key: "nurse",          label: "Nurse" },
+  { key: "front_desk",     label: "Front Desk" },
+  { key: "lab_tech",       label: "Lab Technician" },
+  { key: "pharmacist",     label: "Pharmacist" },
+  { key: "hospital_admin", label: "Hospital Admin" },
+];
+
 function RoleForm({ initial, permissions, onSave, onCancel, saving }) {
   const [name, setName] = useState(initial?.name || "");
   const [description, setDescription] = useState(initial?.description || "");
   const [codes, setCodes] = useState(new Set(initial?.permission_codes || []));
+  const [actsAs, setActsAs] = useState(new Set(initial?.acts_as || []));
 
   function toggle(code) {
     setCodes(prev => {
       const next = new Set(prev);
       next.has(code) ? next.delete(code) : next.add(code);
+      return next;
+    });
+  }
+
+  function toggleActsAs(key) {
+    setActsAs(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
       return next;
     });
   }
@@ -63,7 +85,7 @@ function RoleForm({ initial, permissions, onSave, onCancel, saving }) {
   const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 5 };
 
   return (
-    <form onSubmit={e => { e.preventDefault(); onSave({ name, description, permission_codes: Array.from(codes) }); }}>
+    <form onSubmit={e => { e.preventDefault(); onSave({ name, description, permission_codes: Array.from(codes), acts_as: Array.from(actsAs) }); }}>
       <div style={{ display: "grid", gap: 14, marginBottom: 16 }}>
         <div>
           <label style={labelStyle}>Role Name *</label>
@@ -75,6 +97,30 @@ function RoleForm({ initial, permissions, onSave, onCancel, saving }) {
           <input style={inputStyle} value={description} onChange={e => setDescription(e.target.value)}
             placeholder="What this role is for" />
         </div>
+      </div>
+
+      <label style={labelStyle}>Acts as</label>
+      <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 8 }}>
+        Staff invited under this role also show up wherever the app looks for these
+        roles specifically — e.g. checking "Doctor" gets them booking-dropdown/working-hours
+        treatment like a real doctor, on top of whatever permissions you grant below.
+      </div>
+      <div style={{
+        display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20,
+      }}>
+        {ACTS_AS_OPTIONS.map(opt => (
+          <label key={opt.key} style={{
+            display: "flex", alignItems: "center", gap: 6, cursor: "pointer",
+            padding: "6px 12px", borderRadius: 20, fontSize: 13,
+            border: `1.5px solid ${actsAs.has(opt.key) ? "var(--color-primary)" : "var(--color-border)"}`,
+            background: actsAs.has(opt.key) ? "var(--color-primary-light, var(--color-bg))" : "transparent",
+            fontWeight: actsAs.has(opt.key) ? 700 : 500,
+          }}>
+            <input type="checkbox" checked={actsAs.has(opt.key)} onChange={() => toggleActsAs(opt.key)}
+              style={{ margin: 0 }} />
+            {opt.label}
+          </label>
+        ))}
       </div>
 
       <label style={labelStyle}>Permissions</label>
@@ -236,6 +282,11 @@ export default function RolesPage() {
                       <div>
                         <div style={{ fontWeight: 700, fontSize: 15 }}>{role.name}</div>
                         {role.description && <div style={{ fontSize: 12.5, color: "var(--color-text-muted)" }}>{role.description}</div>}
+                        {role.acts_as?.length > 0 && (
+                          <div style={{ fontSize: 12, color: "var(--color-primary)", fontWeight: 600, marginTop: 4 }}>
+                            Acts as: {role.acts_as.map(k => ACTS_AS_OPTIONS.find(o => o.key === k)?.label || k).join(", ")}
+                          </div>
+                        )}
                       </div>
                       <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
                         <button onClick={() => { setEditing(role); setModal("edit"); }}

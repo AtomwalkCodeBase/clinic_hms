@@ -13,7 +13,7 @@ import { useState, useEffect, useContext } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
-import { ROLES, ROLE_LABELS } from "../../constants/roles";
+import { ROLES, ROLE_LABELS, ACTS_AS_PRIORITY } from "../../constants/roles";
 import { ROUTES }    from "../../config/routes.config";
 import APP_CONFIG    from "../../config/app.config";
 import { PatientContext } from "../../context/PatientContext";
@@ -95,6 +95,23 @@ function HospitalMonogram({ name, tenantId }) {
       }}>
         {hospitalInitials(name)}
       </div>
+    </div>
+  );
+}
+
+// Real uploaded hospital logo (Tenant.logo, set via hospital-admin Settings)
+// takes over from the monogram the moment one exists — same 38px badge
+// footprint so the topbar layout doesn't shift either way.
+function HospitalBadge({ logo, name, tenantId }) {
+  if (!logo) return <HospitalMonogram name={name} tenantId={tenantId} />;
+  return (
+    <div style={{
+      width: 38, height: 38, borderRadius: "50%",
+      background: "#fff", overflow: "hidden", flexShrink: 0,
+      display: "flex", alignItems: "center", justifyContent: "center",
+    }}>
+      <img src={logo} alt={name || "Hospital logo"}
+        style={{ width: "84%", height: "84%", objectFit: "contain" }} />
     </div>
   );
 }
@@ -217,6 +234,56 @@ const NAV_BY_ROLE = {
 /** Given a group's children, return true if any child path matches current location */
 function isGroupActive(children, pathname) {
   return children.some(c => pathname.startsWith(c.to));
+}
+
+// Priority order for picking which single role's Dashboard link leads a
+// custom-role user's sidebar — hospital_admin's is the fullest overview, so
+// it wins if present; otherwise whichever operational role comes first.
+// Shared with App.jsx (default-route selection) so both agree on the same
+// "primary" hat — see constants/roles.js.
+const ACTS_AS_NAV_PRIORITY = ACTS_AS_PRIORITY;
+
+/**
+ * Builds the sidebar for a role="custom" staff member (e.g. a solo-clinic
+ * role acting as doctor+nurse+front_desk) by unioning each acts_as role's
+ * own nav — reusing every page already built for that role rather than
+ * needing dedicated custom-role pages. De-dupes by route so a link/child
+ * shared across roles (rare, but "My Profile" style routes can collide)
+ * only appears once; only the first role keeps its own "Dashboard" link
+ * and un-namespaced section headers, later roles get a labeled section so
+ * it's clear which hat each group of links belongs to.
+ */
+function buildCustomNav(actsAs) {
+  const roles = ACTS_AS_NAV_PRIORITY.filter(r => (actsAs || []).includes(r));
+  if (roles.length === 0) return [];
+
+  const seenRoutes = new Set();
+  const items = [];
+
+  roles.forEach((role, idx) => {
+    const roleNav = NAV_BY_ROLE[role] || [];
+    if (idx > 0) items.push({ type: "section", label: ROLE_LABELS[role] });
+
+    roleNav.forEach(item => {
+      if (item.type === "link") {
+        if (idx > 0 && item.label === "Dashboard") return; // one Dashboard link total
+        if (seenRoutes.has(item.to)) return;
+        seenRoutes.add(item.to);
+        items.push(item);
+      } else if (item.type === "group") {
+        const children = item.children.filter(c => {
+          if (seenRoutes.has(c.to)) return false;
+          seenRoutes.add(c.to);
+          return true;
+        });
+        if (children.length) items.push({ ...item, children });
+      } else if (item.type === "section" && idx === 0) {
+        items.push(item); // only the lead role's own section headers
+      }
+    });
+  });
+
+  return items;
 }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
@@ -397,7 +464,13 @@ export function AppShell({ children }) {
   const { toastSuccess } = useToast();
   const [collapsed, setCollapsed] = useState(false);
 
-  const navItems = NAV_BY_ROLE[user?.role] || [];
+  // role="custom" staff (a hospital-defined Role — see apps/org/rbac.py)
+  // get the union of every role their acts_as claim includes, e.g. a
+  // solo-clinic role acting as doctor+nurse+front_desk sees all three
+  // roles' nav merged into one sidebar. See buildCustomNav() above.
+  const navItems = user?.role === "custom"
+    ? buildCustomNav(user?.acts_as)
+    : (NAV_BY_ROLE[user?.role] || []);
 
   function handleLogout() {
     logout();
@@ -408,6 +481,12 @@ export function AppShell({ children }) {
   const sidebarW = collapsed ? 60 : 240;
   const initials = (user?.full_name || user?.email || "U")[0].toUpperCase();
   const displayName = user?.full_name || user?.email?.split("@")[0] || "User";
+  // role="custom" has no fixed label of its own — the JWT carries the
+  // actual Role name (custom_role_name) precisely so this doesn't have to
+  // fall back to a generic placeholder. See StaffLoginView.
+  const roleLabel = user?.role === "custom"
+    ? (user?.custom_role_name || "Custom Role")
+    : (ROLE_LABELS[user?.role] || "Staff");
 
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "var(--color-bg)" }}>
@@ -423,26 +502,29 @@ export function AppShell({ children }) {
         position: "relative",
       }}>
 
-        {/* Brand — same "highlighted card" treatment as the user chip at the
-            bottom of the sidebar (tinted fill + thin border + rounded
-            corners) instead of a hard divider line, so the two bookend
-            each other. */}
+        {/* Brand — plain, no tinted/bordered chip around it (that just
+            boxed in and shrank the logo) — the white logo card is enough
+            visual weight of its own sitting straight on the sidebar
+            gradient. Taller row than before so the logo actually reads. */}
         <div style={{
-          height: 60, display: "flex", alignItems: "center",
-          padding: collapsed ? "0 14px" : "0 16px",
-          margin: collapsed ? "8px 8px 4px" : "10px 10px 4px",
-          borderRadius: 12,
-          background: "color-mix(in srgb, var(--color-hero-text) 8%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--color-hero-text) 12%, transparent)",
+          height: 76, display: "flex", alignItems: "center",
+          padding: collapsed ? "0 11px" : "0 16px",
+          margin: collapsed ? "8px 0 4px" : "10px 0 4px",
           gap: 10, flexShrink: 0,
           position: "relative", zIndex: 1,
         }}>
           <div style={{
             display: "flex", alignItems: "center", justifyContent: collapsed ? "center" : "flex-start",
-            flex: collapsed ? undefined : 1, minWidth: collapsed ? 34 : undefined, height: 44, overflow: "hidden",
+            flex: collapsed ? undefined : 1, minWidth: collapsed ? 34 : undefined, overflow: "hidden",
           }}>
-            <img src="/branding/atomwalk-full.png" alt="Atomwalk Technologies"
-              style={{ height: 30, maxWidth: "100%", width: "auto", objectFit: "contain", display: "block" }} />
+            <div style={{
+              display: "inline-flex", alignItems: "center", background: "#fff",
+              borderRadius: 9, padding: collapsed ? "6px 8px" : "9px 14px", maxWidth: "100%",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+            }}>
+              <img src="/branding/atomwalk-full.png" alt="Atomwalk Technologies"
+                style={{ height: collapsed ? 20 : 34, maxWidth: "100%", width: "auto", objectFit: "contain", display: "block" }} />
+            </div>
           </div>
           {!collapsed && (
             <span style={{
@@ -508,7 +590,7 @@ export function AppShell({ children }) {
                   {displayName}
                 </div>
                 <div style={{ fontSize: 10, color: "var(--color-accent)", fontWeight: 600, letterSpacing: "0.02em" }}>
-                  {ROLE_LABELS[user?.role] || "Staff"}
+                  {roleLabel}
                 </div>
               </div>
             </div>
@@ -531,9 +613,11 @@ export function AppShell({ children }) {
       {/* ── Main area ────────────────────────────────────────────────────── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
 
-        {/* Topbar */}
+        {/* Topbar — same height as the sidebar's brand row above, so the
+            two sit flush as one continuous band instead of a jagged
+            skyline where the sidebar logo block used to be taller. */}
         <header style={{
-          height: 60, flexShrink: 0,
+          height: 76, flexShrink: 0,
           background: "linear-gradient(90deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
           display: "flex", alignItems: "center",
           justifyContent: "space-between",
@@ -541,15 +625,16 @@ export function AppShell({ children }) {
           position: "relative", zIndex: 2,
         }}>
           {/* Left: tenant logo + clinic name — driven by the logged-in staff
-              member's own hospital (from the JWT), not a fixed hospital.
-              Every hospital gets a monogram derived from its own name/id
-              until it uploads a real logo, rather than all hospitals
-              sharing one hardcoded GreenLeaf icon. */}
+              member's own hospital (from user.hospital_name/.logo, fetched
+              via /me/), not a fixed hospital. Falls back to a monogram
+              derived from the hospital's own name/id until it uploads a
+              real logo via Settings (see HospitalLogoUpload.jsx), rather
+              than all hospitals sharing one hardcoded icon. */}
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {user?.db_name ? (
               <>
                 <div style={{ boxShadow: "0 0 0 2px color-mix(in srgb, var(--color-accent) 30%, transparent)", borderRadius: "50%" }}>
-                  <HospitalMonogram name={user.hospital_name} tenantId={user.tenant_id} />
+                  <HospitalBadge logo={user.logo} name={user.hospital_name} tenantId={user.tenant_id} />
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.25 }}>
                   <span style={{
@@ -562,7 +647,7 @@ export function AppShell({ children }) {
                     fontSize: 10, fontWeight: 600, color: "var(--color-accent)",
                     letterSpacing: "0.08em", textTransform: "uppercase",
                   }}>
-                    {ROLE_LABELS[user?.role] || "Staff"}
+                    {roleLabel}
                   </span>
                 </div>
               </>
@@ -579,27 +664,18 @@ export function AppShell({ children }) {
             )}
           </div>
 
-          {/* Right: theme switcher + avatar */}
+          {/* Right: email + theme switcher — the user's own avatar/name/role
+              already lives in one place, the sidebar's bottom chip (which
+              also carries Sign Out/Collapse right next to it), so it isn't
+              repeated here too. */}
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{
               fontSize: 12, color: "var(--color-hero-muted)",
-              maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
             }}>
               {user?.email}
             </div>
             <ThemeSwitcher />
-            <div style={{
-              width: 34, height: 34,
-              background: user?.photo ? "transparent" : "linear-gradient(135deg, var(--color-accent) 0%, var(--color-warning) 100%)",
-              borderRadius: "50%", overflow: "hidden",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              color: "var(--color-text)", fontWeight: 700, fontSize: 13,
-              boxShadow: "0 0 0 2px color-mix(in srgb, var(--color-hero-text) 18%, transparent), 0 2px 8px rgba(0, 0, 0, 0.25)",
-            }}>
-              {user?.photo
-                ? <img src={user.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                : initials}
-            </div>
           </div>
         </header>
 

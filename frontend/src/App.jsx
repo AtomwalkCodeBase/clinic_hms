@@ -15,7 +15,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "./hooks/useAuth";
 import { ROUTES }  from "./config/routes.config";
-import { ROLES }   from "./constants/roles";
+import { ROLES, ACTS_AS_PRIORITY } from "./constants/roles";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import { PatientProvider } from "./context/PatientContext";
 
@@ -26,7 +26,8 @@ import { lazy, Suspense } from "react";
 const LoginPage         = lazy(() => import("./pages/auth/LoginPage"));
 const SetupPasswordPage = lazy(() => import("./pages/auth/SetupPasswordPage"));
 const ChangePasswordPage = lazy(() => import("./pages/auth/ChangePasswordPage"));
-const ForgotPasswordPage = lazy(() => import("./pages/auth/ForgotPasswordPage"));
+const StaffForgotPasswordPage   = lazy(() => import("./pages/auth/StaffForgotPasswordPage"));
+const PatientForgotPasswordPage = lazy(() => import("./pages/auth/PatientForgotPasswordPage"));
 
 // Platform Admin
 const PlatformDashboard  = lazy(() => import("./pages/platform-admin/DashboardPage"));
@@ -109,8 +110,8 @@ function ProtectedRoute({ children, roles = [] }) {
 
   if (isLoading) return <PageLoader />;
   if (!user) return <Navigate to={ROUTES.LOGIN} replace />;
-  if (roles.length > 0 && !roles.includes(user.role)) {
-    return <Navigate to={getDefaultRoute(user.role)} replace />;
+  if (roles.length > 0 && !roleAllowed(user, roles)) {
+    return <Navigate to={getDefaultRoute(user)} replace />;
   }
   // key=pathname resets the boundary's error state on navigation — without
   // it, clicking to a different page after a crash would keep showing the
@@ -118,8 +119,24 @@ function ProtectedRoute({ children, roles = [] }) {
   return <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>;
 }
 
-/** Redirect authenticated user to their role's default page. */
-function getDefaultRoute(role) {
+/**
+ * True if `user` is allowed onto a route guarded by `roles`. Handles
+ * role="custom" staff (see docs/onboarding_auth_rbac_architecture.md and
+ * apps.org.rbac.resolve_acts_as) by also passing if any role in their JWT
+ * `acts_as` claim is in the allow-list — e.g. a solo-clinic custom role
+ * acting as doctor can reach every doctor-only route.
+ */
+function roleAllowed(user, roles) {
+  if (roles.includes(user.role)) return true;
+  if (user.role !== "custom") return false;
+  return (user.acts_as || []).some(r => roles.includes(r));
+}
+
+/** Redirect authenticated user to their role's default page. For a
+ *  role="custom" user (acts_as one or more system roles), picks the
+ *  highest-priority role present in their acts_as claim — same priority
+ *  order used to build their merged sidebar nav in AppShell.jsx. */
+function getDefaultRoute(user) {
   const map = {
     [ROLES.PLATFORM_ADMIN]:  ROUTES.PLATFORM.DASHBOARD,
     [ROLES.HOSPITAL_ADMIN]:  ROUTES.ADMIN.DASHBOARD,
@@ -130,7 +147,11 @@ function getDefaultRoute(role) {
     [ROLES.PHARMACIST]:      ROUTES.PHARMACIST.DASHBOARD,
     [ROLES.PATIENT]:         ROUTES.PATIENT.DASHBOARD,
   };
-  return map[role] || ROUTES.LOGIN;
+  if (user.role === "custom") {
+    const primary = ACTS_AS_PRIORITY.find(r => (user.acts_as || []).includes(r));
+    return primary ? map[primary] : ROUTES.LOGIN;
+  }
+  return map[user.role] || ROUTES.LOGIN;
 }
 
 /** Wraps only the patient-portal page tree in PatientProvider — the shared
@@ -160,7 +181,7 @@ function RootRedirect() {
   const { user, isLoading } = useAuth();
   if (isLoading) return <PageLoader />;
   if (!user) return <Navigate to={ROUTES.LOGIN} replace />;
-  return <Navigate to={getDefaultRoute(user.role)} replace />;
+  return <Navigate to={getDefaultRoute(user)} replace />;
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -176,7 +197,8 @@ export default function App() {
           {/* Public */}
           <Route path={ROUTES.LOGIN}          element={<LoginPage />} />
           <Route path={ROUTES.SETUP_PASSWORD} element={<SetupPasswordPage />} />
-          <Route path={ROUTES.FORGOT_PASSWORD} element={<ForgotPasswordPage />} />
+          <Route path={ROUTES.FORGOT_PASSWORD_STAFF}   element={<StaffForgotPasswordPage />} />
+          <Route path={ROUTES.FORGOT_PASSWORD_PATIENT} element={<PatientForgotPasswordPage />} />
           <Route path="/change-password"      element={<ProtectedRoute><ChangePasswordPage /></ProtectedRoute>} />
 
           {/* Platform Admin */}

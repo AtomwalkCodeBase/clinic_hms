@@ -129,6 +129,13 @@ export default function MyProfilePage() {
   const [pwSaving, setPwSaving] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
 
+  // Changing the mobile number requires OTP re-verification, sent to the
+  // EMAIL on file (email-based for now — see PortalMobileChangeRequestOTPView
+  // / PortalProfileView.patch in apps/patients/portal_views.py). Every other
+  // field saves immediately; only a real mobile-number change routes
+  // through this extra step.
+  const [mobileOtp, setMobileOtp] = useState({ awaitingCode: false, code: "", actionToken: "", sending: false });
+
   const [family, setFamily] = useState(null); // null = loading
   const [familyOpen, setFamilyOpen] = useState(false);
   const [memberForm, setMemberForm] = useState(EMPTY_MEMBER);
@@ -208,20 +215,64 @@ export default function MyProfilePage() {
   function cancelEditing() {
     if (snapshotRef.current) setForm(snapshotRef.current);
     setEditing(false);
+    setMobileOtp({ awaitingCode: false, code: "", actionToken: "", sending: false });
+  }
+
+  const mobileChanged = profile && form.mobile && form.mobile !== profile.mobile;
+
+  async function requestMobileChangeCode() {
+    setMobileOtp(m => ({ ...m, sending: true }));
+    try {
+      const { data } = await apiClient.post(API_ENDPOINTS.PORTAL.MOBILE_CHANGE_REQUEST_OTP);
+      setMobileOtp(m => ({ ...m, awaitingCode: true, sending: false }));
+      toastSuccess(data.message || `Verification code sent to your email on file.`);
+    } catch (err) {
+      setMobileOtp(m => ({ ...m, sending: false }));
+      toastApiError(err, "Couldn't send a verification code.");
+    }
+  }
+
+  async function verifyMobileChangeCode() {
+    setMobileOtp(m => ({ ...m, sending: true }));
+    try {
+      const { data } = await apiClient.post(API_ENDPOINTS.AUTH.OTP_VERIFY, {
+        purpose: "contact_change_patient", identifier: (profile.email || "").toLowerCase(), code: mobileOtp.code,
+      });
+      setMobileOtp(m => ({ ...m, actionToken: data.data.action_token, sending: false }));
+      toastSuccess("Mobile number verified — click Save Changes to finish.");
+    } catch (err) {
+      setMobileOtp(m => ({ ...m, sending: false }));
+      toastApiError(err, "That code didn't work.");
+    }
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
+
+    // A real mobile-number change needs a verified action_token before the
+    // PATCH is even attempted — start (or continue) the OTP step instead of
+    // saving.
+    if (mobileChanged && !mobileOtp.actionToken) {
+      if (!mobileOtp.awaitingCode) await requestMobileChangeCode();
+      return;
+    }
+
     setSaving(true);
     try {
-      const { data: res } = await apiClient.patch(API_ENDPOINTS.PORTAL.PROFILE, form);
+      const body = mobileChanged ? { ...form, action_token: mobileOtp.actionToken } : form;
+      const { data: res } = await apiClient.patch(API_ENDPOINTS.PORTAL.PROFILE, body);
       if (res?.data) {
         setProfile(p => ({ ...p, ...res.data }));
         setForm(f => ({ ...f, ...res.data }));
       }
       setEditing(false);
+      setMobileOtp({ awaitingCode: false, code: "", actionToken: "", sending: false });
       toastSuccess("Profile updated.");
     } catch (err) {
+      // The token can go stale (expired / wrong number) between verify and
+      // save — reset back to "need a fresh code" rather than leaving a
+      // dead token the user can't do anything with.
+      if (mobileChanged) setMobileOtp({ awaitingCode: false, code: "", actionToken: "", sending: false });
       toastApiError(err, "Failed to update profile.");
     } finally {
       setSaving(false);
@@ -381,12 +432,42 @@ export default function MyProfilePage() {
                     <input type="date" className="profile-edit-input" style={inputStyle} value={form.date_of_birth || ""} onChange={set("date_of_birth")} />
                   </div>
                 </div>
+                {mobileChanged && !mobileOtp.actionToken && mobileOtp.awaitingCode && (
+                  <div style={{
+                    marginTop: 14, padding: 14, borderRadius: 10, maxWidth: 360,
+                    background: "var(--color-accent-light)", border: "1px solid var(--color-border)",
+                  }}>
+                    <div style={{ fontSize: 12.5, color: "var(--color-text)", marginBottom: 8 }}>
+                      Enter the code we sent to your email on file to confirm the change.
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <input
+                        style={{ ...inputStyle, flex: 1, letterSpacing: "0.2em", textAlign: "center" }}
+                        value={mobileOtp.code}
+                        onChange={e => setMobileOtp(m => ({ ...m, code: e.target.value.replace(/\D/g, "").slice(0, 6) }))}
+                        inputMode="numeric" maxLength={6} placeholder="••••••"
+                      />
+                      <button type="button" className="btn-primary" disabled={mobileOtp.sending || mobileOtp.code.length < 6}
+                        onClick={verifyMobileChangeCode} style={{ padding: "0 16px", fontSize: 13, fontWeight: 700 }}>
+                        {mobileOtp.sending ? "Verifying…" : "Verify"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {mobileChanged && mobileOtp.actionToken && (
+                  <div style={{ marginTop: 14, fontSize: 12.5, color: "var(--color-success, #2e7d32)", maxWidth: 360 }}>
+                    Mobile number verified — click Save Profile to finish.
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: 10, marginTop: 20, maxWidth: 360 }}>
                   <button type="button" className="btn-outline" style={{ flex: 1, padding: "10px 0" }} onClick={cancelEditing} disabled={saving}>
                     Cancel
                   </button>
-                  <button type="submit" className="btn-primary" disabled={saving} style={{ flex: 2, padding: "10px 0", fontSize: 13, fontWeight: 700 }}>
-                    {saving ? "Saving…" : "Save Profile"}
+                  <button type="submit" className="btn-primary" disabled={saving || mobileOtp.sending} style={{ flex: 2, padding: "10px 0", fontSize: 13, fontWeight: 700 }}>
+                    {saving ? "Saving…"
+                      : mobileChanged && !mobileOtp.actionToken
+                        ? (mobileOtp.awaitingCode ? "Enter code above, then Save" : "Send code to verify new number")
+                        : "Save Profile"}
                   </button>
                 </div>
               </form>

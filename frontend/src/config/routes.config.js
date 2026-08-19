@@ -10,7 +10,10 @@ export const ROUTES = {
   // Public
   LOGIN:                "/login",
   SETUP_PASSWORD:       "/setup-password",
-  FORGOT_PASSWORD:      "/forgot-password",
+  // Separate flow/page per audience (not a shared tab-switcher) — see
+  // components/auth/ForgotPasswordFlow.jsx.
+  FORGOT_PASSWORD_STAFF:   "/forgot-password/staff",
+  FORGOT_PASSWORD_PATIENT: "/forgot-password/patient",
 
   // Platform Admin
   PLATFORM: {

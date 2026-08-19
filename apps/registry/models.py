@@ -556,6 +556,88 @@ class PatientAccount(models.Model):
         return f"{self.email} ({self.awpid})"
 
 
+class OTPCode(models.Model):
+    """
+    One-time-password codes for every OTP flow in the system — staff and
+    patient password reset, patient self-registration verification,
+    day-to-day passwordless patient login, and re-verification before a
+    patient changes their registered mobile number.
+
+    Lives in the registry ('default') DB rather than a tenant DB — the same
+    reason BlacklistedToken and StaffMobileIndex live here: OTP requests
+    happen before a tenant is resolved (or, for patients, there is never a
+    tenant at all), so a per-tenant table can't be the source of truth here.
+
+    A single generic model (rather than one table per flow) because every
+    flow needs the exact same shape — identifier, channel, hashed code,
+    expiry, attempt counter — and the only thing that differs is *what
+    happens once verified*, which is encoded in `purpose` and resolved by
+    the calling view, not by this model.
+
+    Security notes:
+      - code_hash stores SHA-256(code + OTP_HASH_PEPPER), never the raw
+        code — see core/otp.py. A leaked DB row can't be used to log in.
+      - attempts is capped (core.otp.MAX_VERIFY_ATTEMPTS) so a code can't be
+        brute-forced within its validity window.
+      - is_used is set the moment a code is successfully verified, so the
+        same code can never be replayed even before it expires.
+      - Verifying a code does NOT by itself complete the action (reset a
+        password, create an account, log in) — verify_otp() hands back a
+        short-lived signed JWT ("action token", see core.otp.make_action_token)
+        that the next-step endpoint must present. This mirrors the
+        _make_invite_token pattern already used for staff invites
+        (apps.auth_app.views) rather than inventing a second convention.
+    """
+    PURPOSE_PASSWORD_RESET_STAFF   = "password_reset_staff"
+    PURPOSE_PASSWORD_RESET_PATIENT = "password_reset_patient"
+    PURPOSE_REGISTRATION_PATIENT   = "registration_patient"
+    PURPOSE_LOGIN_PATIENT          = "login_patient"
+    PURPOSE_CONTACT_CHANGE_PATIENT = "contact_change_patient"
+    PURPOSE_CHOICES = [
+        (PURPOSE_PASSWORD_RESET_STAFF,   "Staff password reset"),
+        (PURPOSE_PASSWORD_RESET_PATIENT, "Patient password reset"),
+        (PURPOSE_REGISTRATION_PATIENT,   "Patient registration"),
+        (PURPOSE_LOGIN_PATIENT,          "Patient OTP login"),
+        (PURPOSE_CONTACT_CHANGE_PATIENT, "Patient mobile-number change"),
+    ]
+
+    CHANNEL_SMS   = "sms"
+    CHANNEL_EMAIL = "email"
+    CHANNEL_CHOICES = [(CHANNEL_SMS, "SMS"), (CHANNEL_EMAIL, "Email")]
+
+    purpose     = models.CharField(max_length=30, choices=PURPOSE_CHOICES, db_index=True)
+    # The mobile number or email address the code was actually sent to —
+    # for password_reset_staff this is the staff member's phone (their
+    # login identifier, always present); for the rest it's whatever the
+    # caller supplied (mobile or email, auto-detected by "@").
+    identifier  = models.CharField(max_length=254, db_index=True)
+    channel     = models.CharField(max_length=10, choices=CHANNEL_CHOICES)
+    code_hash   = models.CharField(max_length=64)
+
+    # Who this code resolves to, once verified — resolved at request-otp
+    # time so verify-otp doesn't need to re-run the (purpose-specific)
+    # lookup logic. Blank/null for registration_patient, where there is no
+    # existing user yet.
+    target_type = models.CharField(max_length=10, blank=True)   # "staff" / "patient" / ""
+    target_id   = models.IntegerField(null=True, blank=True)
+    # Tenant db_name — only meaningful for target_type="staff" (a StaffUser
+    # id alone is ambiguous across tenant databases).
+    target_db   = models.CharField(max_length=100, blank=True)
+
+    attempts    = models.PositiveSmallIntegerField(default=0)
+    is_used     = models.BooleanField(default=False)
+    expires_at  = models.DateTimeField(db_index=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "otp_code"
+        indexes = [models.Index(fields=["identifier", "purpose", "-created_at"])]
+
+    def __str__(self):
+        return f"{self.purpose} → {self.identifier} ({'used' if self.is_used else 'active'})"
+
+
 class PortalBooking(models.Model):
     """
     Registry-side record of a booking made via the patient portal.

@@ -200,6 +200,12 @@ export default function PatientDoctorProfilePage() {
   const availableToday = date === TODAY && availableCount > 0;
   const languages  = (doctor?.languages || "").split(",").map(s => s.trim()).filter(Boolean);
   const knownFor   = (doctor?.known_for || "").split(",").map(s => s.trim()).filter(Boolean);
+  // Which payment modes this hospital actually accepts (set in their
+  // Billing Setup) — drives the "How will you pay?" step below instead of
+  // a hardcoded pair of buttons, so patients only see options that are real.
+  const paymentMethods = doctor?.payment_methods || [];
+  const deskMethods    = paymentMethods.filter(m => m !== "Online");
+  const onlineAccepted = paymentMethods.includes("Online");
 
   const currentStep = selectedSlot ? (reason.trim() ? 3 : 2) : (date ? 1 : 0);
 
@@ -389,9 +395,20 @@ export default function PatientDoctorProfilePage() {
                 {doctor?.hospital && (
                   <div style={{ borderTop: "1px solid var(--color-border)", paddingTop: 16 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                      <div className="icon-chip icon-chip--green" style={{ width: 32, height: 32 }}>
-                        <Building2 size={16} />
-                      </div>
+                      {doctor.hospital.logo ? (
+                        <div style={{
+                          width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+                          background: "#fff", border: "1px solid var(--color-border)",
+                          display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
+                        }}>
+                          <img src={doctor.hospital.logo} alt={doctor.hospital.name}
+                            style={{ width: "84%", height: "84%", objectFit: "contain" }} />
+                        </div>
+                      ) : (
+                        <div className="icon-chip icon-chip--green" style={{ width: 32, height: 32 }}>
+                          <Building2 size={16} />
+                        </div>
+                      )}
                       <div>
                         <div style={{ fontWeight: 700, fontSize: 13 }}>{doctor.hospital.name}</div>
                         {doctor.hospital.city && (
@@ -551,7 +568,7 @@ export default function PatientDoctorProfilePage() {
               <label className="stat-label" style={{ display: "block", marginBottom: 8 }}>
                 How will you pay{doctor?.consultation_fee ? ` (₹${doctor.consultation_fee})` : ""}?
               </label>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: onlineAccepted ? "1fr 1fr" : "1fr", gap: 10, marginBottom: 16 }}>
                 <button
                   type="button"
                   onClick={() => setPaymentPreference("pay_at_desk")}
@@ -562,20 +579,24 @@ export default function PatientDoctorProfilePage() {
                   }}
                 >
                   <div style={{ fontSize: 13, fontWeight: 700 }}>Pay at front desk</div>
-                  <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 2 }}>Cash, card, or UPI on arrival</div>
+                  <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 2 }}>
+                    {deskMethods.length > 0 ? `${deskMethods.join(", ")} on arrival` : "On arrival"}
+                  </div>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentPreference("pay_online")}
-                  style={{
-                    padding: "10px 12px", borderRadius: 10, textAlign: "left", cursor: "pointer",
-                    border: `1.5px solid ${paymentPreference === "pay_online" ? "var(--color-primary)" : "var(--color-border)"}`,
-                    background: paymentPreference === "pay_online" ? "var(--color-primary-light)" : "var(--color-surface)",
-                  }}
-                >
-                  <div style={{ fontSize: 13, fontWeight: 700 }}>Pay online</div>
-                  <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 2 }}>Coming soon — you'll pay at the desk for now</div>
-                </button>
+                {onlineAccepted && (
+                  <button
+                    type="button"
+                    onClick={() => setPaymentPreference("pay_online")}
+                    style={{
+                      padding: "10px 12px", borderRadius: 10, textAlign: "left", cursor: "pointer",
+                      border: `1.5px solid ${paymentPreference === "pay_online" ? "var(--color-primary)" : "var(--color-border)"}`,
+                      background: paymentPreference === "pay_online" ? "var(--color-primary-light)" : "var(--color-surface)",
+                    }}
+                  >
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>Pay online</div>
+                    <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 2 }}>Coming soon — you'll pay at the desk for now</div>
+                  </button>
+                )}
               </div>
 
               {/* Reassurance — only claims we can actually back up */}

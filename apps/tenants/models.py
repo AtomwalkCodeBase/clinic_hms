@@ -75,6 +75,14 @@ class Tenant(models.Model):
     # per-BillingService tax_rate still overrides this when one is set.
     default_tax_rate         = models.DecimalField(max_digits=5, decimal_places=2, default=0)
 
+    # Hospital's own logo, uploaded by their hospital admin (Settings page) —
+    # base64 data URI, same no-object-storage-yet convention as
+    # StaffUser.photo / PatientAccount.photo. Shown in the staff AppShell
+    # topbar (replacing the deterministic monogram fallback) across every
+    # role at this hospital, and on the patient portal's hospital/doctor
+    # cards. Blank until the hospital uploads one.
+    logo = models.TextField(blank=True)
+
     created_at  = models.DateTimeField(auto_now_add=True)
     updated_at  = models.DateTimeField(auto_now=True)
 
