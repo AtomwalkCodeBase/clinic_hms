@@ -1,6 +1,7 @@
 from django.urls import path
 from .portal_views import (
-    PortalRegisterView, PortalHospitalListView, PortalPlatformStatsView, PortalSearchView, PortalDoctorListView,
+    PortalRegisterView, PortalHospitalListView, PortalPlatformStatsView, PortalSearchView, PortalSpecialtyListView,
+    PortalDoctorListView,
     PortalDoctorDetailView, PortalNextTokenView,
     PortalSlotListView, PortalBookView, PortalMyBookingsView, PortalCancelBookingView, PortalRescheduleBookingView,
     PortalMyRecordsView,
@@ -8,6 +9,7 @@ from .portal_views import (
     PortalPrescriptionListView, PortalPrescriptionChoiceView,
     PortalLabReportFileView, PortalProfileView, PortalChangePasswordView,
     PortalMobileChangeRequestOTPView,
+    PortalInvoiceListView, PortalInvoiceReceiptPDFView,
     PortalFamilyListCreateView, PortalHealthSummaryView,
     PortalVaccinationListView, PortalVaccinationUploadView, PortalVaccinationFileView, PortalGrowthView,
     PortalHealthTimelineView, PortalNotificationsView, PortalNotificationMarkReadView,
@@ -18,6 +20,7 @@ urlpatterns = [
     path("hospitals/",                      PortalHospitalListView.as_view(), name="portal-hospitals"),
     path("stats/",                          PortalPlatformStatsView.as_view(), name="portal-stats"),
     path("search/",                         PortalSearchView.as_view(),       name="portal-search"),
+    path("specialties/",                    PortalSpecialtyListView.as_view(), name="portal-specialties"),
     path("hospitals/<int:tenant_id>/doctors/", PortalDoctorListView.as_view(), name="portal-doctors"),
     path("hospitals/<int:tenant_id>/doctors/<int:doctor_id>/", PortalDoctorDetailView.as_view(), name="portal-doctor-detail"),
     path("hospitals/<int:tenant_id>/doctors/<int:doctor_id>/slots/", PortalSlotListView.as_view(), name="portal-slots"),
@@ -27,6 +30,8 @@ urlpatterns = [
     path("my-bookings/<int:pk>/cancel/",     PortalCancelBookingView.as_view(), name="portal-my-bookings-cancel"),
     path("my-bookings/<int:pk>/reschedule/", PortalRescheduleBookingView.as_view(), name="portal-my-bookings-reschedule"),
     path("my-records/",                     PortalMyRecordsView.as_view(),    name="portal-my-records"),
+    path("invoices/",                       PortalInvoiceListView.as_view(),  name="portal-invoices"),
+    path("invoices/<str:tenant_db>/<int:pk>/receipt/", PortalInvoiceReceiptPDFView.as_view(), name="portal-invoice-receipt"),
     path("documents/",                      PortalDocumentListCreateView.as_view(), name="portal-documents"),
     path("lab-orders/",                     PortalLabOrderListView.as_view(), name="portal-lab-orders"),
     path("lab-orders/choice/",              PortalLabOrderChoiceView.as_view(), name="portal-lab-order-choice"),

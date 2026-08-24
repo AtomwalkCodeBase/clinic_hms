@@ -121,6 +121,8 @@ export default function PatientDashboardPage() {
   );
 
   const { data: stats } = useApi(API_ENDPOINTS.PORTAL.STATS);
+  const { data: specData } = useApi(API_ENDPOINTS.PORTAL.SPECIALTIES);
+  const specialties = specData?.results || [];
 
   const [query, setQuery] = useState("");
   const [specialty, setSpecialty] = useState("");
@@ -202,13 +204,17 @@ export default function PatientDashboardPage() {
             </button>
             {showFilters && (
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-                <input
+                <select
                   className="form-input"
                   value={specialty}
                   onChange={e => setSpecialty(e.target.value)}
-                  placeholder="Specialty (e.g. cardiologist)"
                   style={{ flex: "1 1 200px", padding: "10px 12px", fontSize: 13, borderRadius: 8, border: "none" }}
-                />
+                >
+                  <option value="">All specialties</option>
+                  {specialties.map(s => (
+                    <option key={s.name} value={s.name}>{s.name} ({s.doctor_count})</option>
+                  ))}
+                </select>
                 <input
                   className="form-input"
                   value={city}

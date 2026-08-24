@@ -12,7 +12,7 @@ import { useMemo, useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   Building2, Calendar, Clock, CircleCheck, ChevronRight, Stethoscope,
-  XCircle, Users2, FileText, MapPin, Sparkles, CalendarClock,
+  XCircle, Users2, FileText, MapPin, Sparkles, CalendarClock, Receipt, Download,
 } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -22,6 +22,7 @@ import { useToast } from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import ROUTES        from "../../config/routes.config";
+import { openDataUrlInNewTab } from "../../utils/fileViewer";
 
 const TODAY = new Date().toISOString().split("T")[0];
 // Mirrors the 2-month booking window enforced server-side (see
@@ -46,6 +47,13 @@ const STATUS_META = {
   expired:     { label: "Not Completed",            color: "var(--color-text-muted)", bg: "var(--color-border)",     icon: XCircle },
 };
 const ACTIVE_STATUSES = ["scheduled", "waiting", "vitals_done", "in_progress"];
+
+const INVOICE_STATUS_META = {
+  issued:         { label: "Issued",         color: "var(--color-info)",    bg: "var(--color-info-light)" },
+  paid:           { label: "Paid",           color: "var(--color-success)", bg: "var(--color-success-light)" },
+  partially_paid: { label: "Partially Paid", color: "var(--color-accent)",  bg: "var(--color-accent-light)" },
+  cancelled:      { label: "Cancelled",      color: "var(--color-error)",   bg: "var(--color-error-light)" },
+};
 
 // An appointment that never got closed out (still scheduled/waiting/in_progress
 // etc.) by the end of its own calendar day is stale, not upcoming — the hospital
@@ -491,6 +499,102 @@ function AppointmentCard({ b, onOpenPrescriptions, ownAwpid, onCancel, onResched
   );
 }
 
+function BillRow({ inv }) {
+  const { toastApiError } = useToast();
+  const [downloading, setDownloading] = useState(false);
+  const meta = INVOICE_STATUS_META[inv.status] || { label: inv.status, color: "var(--color-text-muted)", bg: "var(--color-border)" };
+
+  async function downloadReceipt() {
+    const win = window.open("", "_blank");
+    setDownloading(true);
+    try {
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.INVOICE_RECEIPT(inv.tenant_db, inv.id));
+      const data = res.data?.data || res.data;
+      if (data?.file_data) {
+        openDataUrlInNewTab(win, data.file_data);
+      } else if (win) {
+        win.close();
+      }
+    } catch (err) {
+      toastApiError(err, "Could not generate the receipt.");
+      if (win) win.close();
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{
+      padding: "14px 16px", display: "flex", alignItems: "center", justifyContent: "space-between",
+      gap: 12, flexWrap: "wrap",
+    }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 700, fontSize: 13.5 }}>{inv.invoice_number}</span>
+          <span style={{
+            fontSize: 10.5, fontWeight: 700, padding: "3px 9px", borderRadius: 20,
+            background: meta.bg, color: meta.color,
+          }}>
+            {meta.label}
+          </span>
+        </div>
+        <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+          <Building2 size={11} /> {inv.hospital}
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontWeight: 700, fontSize: 14, fontFamily: "var(--font-display)" }}>₹{inv.total_amount}</div>
+          {inv.status === "partially_paid" && (
+            <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>₹{inv.paid_amount} paid</div>
+          )}
+        </div>
+        <button
+          onClick={downloadReceipt}
+          disabled={downloading}
+          style={{
+            display: "flex", alignItems: "center", gap: 5, background: "none", border: "none", cursor: "pointer",
+            fontSize: 12, fontWeight: 700, color: "var(--color-primary)", padding: 0,
+          }}
+        >
+          <Download size={13} /> {downloading ? "Preparing…" : "Receipt"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BillsSection() {
+  const {
+    items: invoices, isLoading, pagination, loadMore, isLoadingMore, hasMore,
+  } = usePaginatedList(API_ENDPOINTS.PORTAL.INVOICES, { pageSize: 10 });
+
+  if (isLoading || invoices.length === 0) return null;
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <span className="dot-label dot-label--gold" style={{ marginBottom: 10, display: "inline-block", fontSize: 11, letterSpacing: "0.08em" }}>
+        <Receipt size={12} style={{ verticalAlign: -2, marginRight: 4 }} />
+        My Bills ({invoices.length})
+      </span>
+      <div style={{ display: "grid", gap: 10 }}>
+        {invoices.map(inv => <BillRow key={`${inv.tenant_db}-${inv.id}`} inv={inv} />)}
+      </div>
+      {hasMore && (
+        <div style={{ padding: 16, textAlign: "center" }}>
+          <button
+            onClick={loadMore}
+            disabled={isLoadingMore}
+            className="btn-outline"
+            style={{ padding: "8px 20px", fontSize: 12 }}>
+            {isLoadingMore ? "Loading…" : `Load more (${pagination?.total_count - invoices.length} more)`}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PatientAppointmentsPage() {
   const navigate = useNavigate();
   const { toastSuccess, toastApiError } = useToast();
@@ -661,6 +765,8 @@ export default function PatientAppointmentsPage() {
                 )}
               </>
             )}
+
+            <BillsSection />
           </>
         )}
 

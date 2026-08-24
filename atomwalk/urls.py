@@ -32,7 +32,7 @@ def health(request):
 
 urlpatterns = [
     path("health/",              health),
-    path("admin/",               admin.site.urls),
+    path("django-admin/",        admin.site.urls),
     path("api/v1/auth/",         include("apps.auth_app.urls")),
     path("api/v1/platform/",     include("apps.platform_admin.urls")),
     path("api/v1/opd/",          include("apps.opd.urls")),

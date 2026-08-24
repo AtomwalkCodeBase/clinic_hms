@@ -11,6 +11,7 @@ Patient portal endpoints (patient JWT, no tenant context).
 """
 
 import re
+import uuid
 import logging
 from datetime import date, datetime, time as dtime, timedelta
 
@@ -424,6 +425,49 @@ def _doctor_card(staff, profile):
         "languages":        profile.languages if profile else "",
         "known_for":        profile.known_for if profile else "",
     }
+
+
+class PortalSpecialtyListView(APIView):
+    """
+    GET /api/v1/portal/specialties/
+    Powers "Find Doctors"' specialty filter. specialisation is a free-typed
+    field on DoctorProfile (hospital admins type it in, no fixed choices —
+    see _SPECIALITY_SYNONYMS above), so this aggregates the real distinct
+    values in use across every active hospital instead of shipping a
+    hardcoded list that would drift from what's actually on doctor profiles.
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request):
+        from collections import Counter
+        from apps.org.models import StaffUser, DoctorProfile
+
+        counts = Counter()
+        for tenant in Tenant.objects.using("default").filter(is_active=True):
+            db = tenant.db_name
+            try:
+                _ensure_db(db)
+                doctor_ids = set(
+                    StaffUser.objects.using(db).filter(DOCTOR_Q, is_active=True).values_list("id", flat=True)
+                )
+                if not doctor_ids:
+                    continue
+                specs = (
+                    DoctorProfile.objects.using(db)
+                    .filter(staff_id__in=doctor_ids)
+                    .exclude(specialisation="")
+                    .values_list("specialisation", flat=True)
+                )
+                for s in specs:
+                    name = s.strip()
+                    if name:
+                        counts[name] += 1
+            except Exception:
+                logger.debug("PortalSpecialtyListView: skipping tenant %s.", tenant.id, exc_info=True)
+                continue
+
+        results = [{"name": name, "doctor_count": count} for name, count in sorted(counts.items())]
+        return Response({"results": results})
 
 
 class PortalDoctorListView(APIView):
@@ -953,6 +997,131 @@ class PortalMyRecordsView(APIView):
         return Response({"results": page_items, "pagination": meta})
 
 
+# ── My bills ─────────────────────────────────────────────────────────────────
+
+class PortalInvoiceListView(APIView):
+    """
+    GET /api/v1/portal/invoices/?patient_awpid=
+    Every invoice raised for this patient (or a linked family member — see
+    _resolve_target_awpid_and_dob), across all hospitals. Invoice has no
+    link back to a specific Appointment/booking in this schema — a hospital
+    can bill a patient for a consultation, a walk-in registration fee, or
+    anything else, all as the same kind of Invoice row keyed only to the
+    patient — so this is a patient-wide bill list, not a per-booking one.
+    Draft invoices (not yet issued to the patient by staff) are excluded.
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request):
+        from apps.patients.models import Patient
+        from apps.billing.models import Invoice
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+
+        results = []
+        for tenant in Tenant.objects.using("default").filter(is_active=True):
+            db = tenant.db_name
+            try:
+                _ensure_db(db)
+                patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
+                if not patient:
+                    continue
+                invoices = (
+                    Invoice.objects.using(db)
+                    .filter(patient=patient)
+                    .exclude(status=Invoice.STATUS_DRAFT)
+                    .order_by("-created_at")[:50]
+                )
+                for inv in invoices:
+                    results.append({
+                        "id": inv.id,
+                        "tenant_db": db,
+                        "hospital": tenant.name,
+                        "invoice_number": inv.invoice_number,
+                        "status": inv.status,
+                        "total_amount": str(inv.total_amount),
+                        "paid_amount": str(inv.paid_amount),
+                        "issued_at": inv.issued_at,
+                        "created_at": inv.created_at,
+                    })
+            except Exception:
+                logger.debug("PortalInvoiceListView: skipped %s.", db, exc_info=True)
+                continue
+
+        results.sort(key=lambda r: r["created_at"], reverse=True)
+        page_items, meta = paginate_list(request, results)
+        return Response({"results": page_items, "pagination": meta})
+
+
+class PortalInvoiceReceiptPDFView(APIView):
+    """
+    GET /api/v1/portal/invoices/<tenant_db>/<id>/receipt/
+    PDF download of one of the patient's own bills — the same PDF staff get
+    from apps.billing.views.InvoicePDFView (reuses generate_invoice_pdf()
+    directly so the two never drift apart), just patient-scoped: ownership
+    is verified via the invoice's own patient.awpid against the requesting
+    account (or a linked family member), the same pattern
+    PortalLabReportFileView uses. Returned as a base64 data URI in the
+    standard envelope, not a raw application/pdf response — patient auth is
+    a JWT bearer header, so a plain <a href> to the API wouldn't carry it
+    (see frontend/src/utils/fileViewer.js, the convention every other file
+    viewer in this app follows).
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request, tenant_db, pk):
+        import base64
+        from apps.patients.models import Patient
+        from apps.org.models import Branch
+        from apps.billing.models import Invoice
+        from apps.billing.pdf import generate_invoice_pdf
+
+        if not Tenant.objects.using("default").filter(db_name=tenant_db, is_active=True).exists():
+            return error("Unknown hospital.")
+        _ensure_db(tenant_db)
+
+        try:
+            inv = Invoice.objects.using(tenant_db).prefetch_related("items", "payments").get(pk=pk)
+        except Invoice.DoesNotExist:
+            return not_found("Bill not found.")
+        if inv.status == Invoice.STATUS_DRAFT:
+            return not_found("Bill not found.")
+
+        patient = Patient.objects.using(tenant_db).filter(pk=inv.patient_id).first()
+        if not patient:
+            return not_found("Bill not found.")
+
+        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        if patient.awpid != acct.awpid:
+            from apps.registry.models import PatientRelationship
+            is_family = PatientRelationship.objects.using("default").filter(
+                guardian_awpid=acct.awpid, dependent_awpid=patient.awpid,
+            ).exists()
+            if not is_family:
+                return error("This bill does not belong to you.")
+
+        branch = Branch.objects.using(tenant_db).filter(pk=inv.branch_id).first()
+        tenant = Tenant.objects.using("default").filter(db_name=tenant_db).first()
+        hospital_name = tenant.name if tenant else "Hospital"
+
+        pdf_bytes = generate_invoice_pdf(
+            invoice=inv,
+            items=list(inv.items.all()),
+            payments=list(inv.payments.all().order_by("paid_at")),
+            patient=patient,
+            branch=branch,
+            hospital_name=hospital_name,
+        )
+        data_uri = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
+        return success(data={
+            "file_data": data_uri,
+            "file_name": f"{inv.invoice_number}.pdf",
+            "mime_type": "application/pdf",
+        })
+
+
 # ── My bookings ──────────────────────────────────────────────────────────────
 
 # How long past the scheduled time an appointment is given before it's
@@ -1020,7 +1189,14 @@ class PortalMyBookingsView(APIView):
                 status_now = _auto_expire_if_stale(appt, b.db_name)
                 token = appt.token_number
                 slot_time = appt.scheduled_time.strftime("%H:%M") if appt.scheduled_time else None
-                doctor_id = appt.doctor_user_id
+                # appt.doctor_user_id is a UUIDField, but the value actually
+                # stored in it is StaffUser's plain integer pk — Django's
+                # UUIDField silently wraps a plain int via uuid.UUID(int=value)
+                # (see apps.opd.views._resolve_doctor_consultation_fee for the
+                # same unwrap). Returning it unwrapped sent the frontend a
+                # garbage UUID as doctor_id, so "Book follow-up" 404'd the
+                # doctor-detail lookup the moment a patient tapped to rebook.
+                doctor_id = appt.doctor_user_id.int if isinstance(appt.doctor_user_id, uuid.UUID) else appt.doctor_user_id
                 room_name = appt.room_name or None
                 floor = appt.floor or None
                 if status_now != b.status:
