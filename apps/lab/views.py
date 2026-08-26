@@ -9,6 +9,7 @@ from core.permissions import RequireFeature
 from core.utils.nntm import get_next_number
 from core.pagination import paginate_queryset
 from core.file_validation import validate_data_uri, FileValidationError
+from core import storage as blob_storage
 from .serializers import (
     LabTestSerializer, LabRequestSerializer, LabReportSerializer,
     LabRequestChoiceSerializer,
@@ -267,6 +268,103 @@ class LabRequestChoiceView(APIView):
         return success(data=LabRequestSerializer(req, context={"db": db}).data, message="Choice updated.")
 
 
+# Same ceiling as the patient portal's own upload — see
+# apps.patients.portal_views.PortalDocumentListCreateView._MAX_DOC_BASE64_CHARS.
+_MAX_DOC_BASE64_CHARS = 7_000_000  # ≈5MB raw file
+
+
+class LabRequestAttachDocumentView(APIView):
+    """
+    POST /api/v1/lab/requests/{id}/attach-document/
+
+    Staff-side counterpart to the patient portal's own outside-report upload
+    (apps.patients.portal_views.PortalDocumentListCreateView). That endpoint
+    is IsPatient-only, so a nurse had no way to attach a report for a patient
+    who walks in with a physical copy, or who has no portal account at all —
+    LabRequestChoiceView already lets a nurse mark a request "outside" on the
+    patient's behalf, but nothing let them finish the job. Writes to the same
+    registry SharedDocument table, tagged with the same
+    "labreq:<db>:<request_id>" source_ref the patient's own upload would use,
+    so LabRequestSerializer.attached_document and the patient's own
+    PortalLabOrderListView pick it up identically regardless of who
+    uploaded it — same document, same visibility, from either side.
+
+    Body: {file_data (data URI, required), title?, doc_type?}
+    """
+    permission_classes = [IsAuthenticated, IsHospitalStaff, RequireFeature("feat_lab")]
+
+    def post(self, request, pk):
+        db = request.tenant_db
+        try:
+            req = LabRequest.objects.using(db).select_related("test", "patient").get(pk=pk)
+        except LabRequest.DoesNotExist:
+            return not_found("Lab request not found.")
+
+        file_data = request.data.get("file_data") or ""
+        if not file_data:
+            return error("No file provided.", errors={"file_data": "Required."})
+        if len(file_data) > _MAX_DOC_BASE64_CHARS:
+            return error("File is too large. Please upload a smaller file (under ~5MB).")
+
+        try:
+            mime_type = validate_data_uri(file_data)
+        except FileValidationError as exc:
+            return error(str(exc), errors={"file_data": str(exc)})
+
+        from apps.registry.models import SharedDocument
+
+        doc_type = request.data.get("doc_type") or "lab_report"
+        if doc_type not in dict(SharedDocument.DOC_TYPE_CHOICES):
+            doc_type = "lab_report"
+        title = (request.data.get("title") or "").strip() or f"{req.test.name} — outside report"
+
+        patient = req.patient
+        if not patient or not getattr(patient, "awpid", None):
+            return error("This request has no patient/AWPID on file — cannot attach a document.")
+
+        identity = blob_storage.identity_slug(name=patient.full_name, identifier=patient.awpid)
+        try:
+            file_key = blob_storage.upload_data_uri(
+                file_data, prefix="patient-documents", mime_type=mime_type,
+                category="patient-document", identity=identity,
+            )
+        except blob_storage.StorageError as exc:
+            return error(str(exc), errors={"file_data": str(exc)})
+
+        file_name = blob_storage.display_file_name(
+            "patient-document", mime_type,
+            detail=title, name=patient.full_name, identifier=patient.awpid,
+        )
+
+        from core.db_router import _thread_local
+        source_tenant_id = getattr(_thread_local, "tenant_id", 0) or 0
+
+        doc = SharedDocument.objects.using("default").create(
+            awpid=patient.awpid, title=title, doc_type=doc_type,
+            file_name=file_name, mime_type=mime_type, file_data=file_key,
+            uploaded_by="staff", source_tenant_id=source_tenant_id,
+            source_ref=f"labreq:{db}:{req.id}",
+        )
+
+        # Attaching an outside report only makes sense once the request is
+        # actually marked "outside" — self-heal that here instead of forcing
+        # the nurse to do LabRequestChoiceView as a separate first step.
+        update_fields = []
+        if req.patient_choice != "outside":
+            req.patient_choice = "outside"
+            req.choice_made_by = "nurse"
+            req.choice_made_at = timezone.now()
+            update_fields += ["patient_choice", "choice_made_by", "choice_made_at"]
+        if update_fields:
+            req.save(using=db, update_fields=update_fields)
+
+        return created(data={
+            "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,
+            "file_name": doc.file_name, "mime_type": doc.mime_type,
+            "source_ref": doc.source_ref, "created_at": doc.created_at,
+        }, message="Report attached.")
+
+
 class LabRequestStatusView(APIView):
     """PATCH /api/v1/lab/requests/{id}/status/ — lab tech moves a sample through the pipeline."""
     permission_classes = [IsAuthenticated, IsLabTech, RequireFeature("feat_lab")]
@@ -372,9 +470,28 @@ class LabReportUploadView(APIView):
                 verified_mime = validate_data_uri(file_data)
             except FileValidationError as exc:
                 return error(str(exc), errors={"file_data": str(exc)})
-            report.file_url = file_data
+            from apps.tenants.models import Tenant as _Tenant
+            _tenant = _Tenant.objects.using("default").filter(pk=request.tenant_id).first()
+            folder = blob_storage.tenant_folder(_tenant) if _tenant else db
+            identity = blob_storage.identity_slug(name=req.patient.full_name, identifier=req.patient.awpid)
+            old_file_key = report.file_url
+            try:
+                report.file_url = blob_storage.upload_data_uri(
+                    file_data, prefix=f"lab-reports/{folder}", mime_type=verified_mime,
+                    category="lab-report", identity=identity,
+                )
+            except blob_storage.StorageError as exc:
+                return error(str(exc), errors={"file_data": str(exc)})
+            if old_file_key:
+                blob_storage.delete(old_file_key)
             report.mime_type = verified_mime
-        report.file_name = request.data.get("file_name", report.file_name)
+            # Named after the specific test plus who it belongs to, not
+            # whatever the lab tech's scanner/phone happened to call the
+            # file — see core.storage.UPLOAD_CATEGORIES / display_file_name().
+            report.file_name = blob_storage.display_file_name(
+                "lab-report", verified_mime,
+                detail=req.test.name, name=req.patient.full_name, identifier=req.patient.awpid,
+            )
         report.performed_by_id = request.user.id
 
         deliver = bool(request.data.get("deliver"))

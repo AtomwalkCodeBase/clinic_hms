@@ -76,11 +76,35 @@ class PatientService:
 
         if is_dependent:
             guardian_awpid = (data.get("guardian_awpid") or "").strip()
-            if not guardian_awpid:
+            guardian_mobile_raw = data.get("guardian_mobile", "")
+
+            if guardian_awpid:
+                guardian_identity = PatientIdentity.objects.using("default").filter(awpid=guardian_awpid).first()
+                if not guardian_identity:
+                    raise ValueError("Guardian not found — the guardian must be registered first.")
+            elif guardian_mobile_raw:
+                # Emergency quick-register path: front desk doesn't have an
+                # existing guardian AWPID to pick from (e.g. "the patient is
+                # my mom" from a cold call) — resolve/create the caller's
+                # network identity from their mobile number alone, same
+                # dedup-by-mobile_hash rule used for any adult patient. This
+                # only touches the shared registry identity table, not any
+                # hospital's tenant Patient table, so the caller isn't
+                # registered as a patient here just by being a guardian.
+                guardian_mobile_norm = normalize_mobile(guardian_mobile_raw)
+                guardian_mobile_hash = hash_mobile(guardian_mobile_norm)
+                with transaction.atomic(using="default"):
+                    guardian_identity, _ = PatientIdentity.objects.using("default").get_or_create(
+                        mobile_hash=guardian_mobile_hash,
+                        defaults={
+                            "awpid": generate_unique_awpid(),
+                            "full_name": data.get("guardian_name", "") or "Guardian",
+                            "preferred_language": data.get("preferred_language", "en"),
+                        },
+                    )
+                guardian_awpid = guardian_identity.awpid
+            else:
                 raise ValueError("A guardian must be selected to register a dependent patient.")
-            guardian_identity = PatientIdentity.objects.using("default").filter(awpid=guardian_awpid).first()
-            if not guardian_identity:
-                raise ValueError("Guardian not found — the guardian must be registered first.")
 
             identity, created = PatientService.resolve_dependent_identity(
                 guardian_awpid=guardian_awpid,
@@ -165,7 +189,7 @@ class PatientService:
             guardian_name=data.get("guardian_name", "") if is_dependent else "",
             guardian_mobile=data.get("guardian_mobile", "") if is_dependent else "",
             guardian_relation=data.get("relationship", "") if is_dependent else "",
-            guardian_awpid=data.get("guardian_awpid", "") if is_dependent else "",
+            guardian_awpid=guardian_awpid if is_dependent else "",
             # Consent
             dpdp_consent_captured=bool(data.get("dpdp_consent", False)),
             dpdp_consent_at=timezone.now() if data.get("dpdp_consent") else None,
@@ -324,6 +348,77 @@ class PatientService:
             "created": created,
         }
 
+    # ── Family tree ──────────────────────────────────────────────────────
+    @staticmethod
+    def get_family_tree(awpid: str, db_name: str) -> dict:
+        """
+        Given any one person's AWPID (guardian or dependent), resolve the
+        whole household so front desk can search for one family member and
+        book an appointment for any of them without a second search.
+
+        A person can be found either as:
+          - a guardian (has PatientRelationship rows where they're
+            guardian_awpid) — their household is themself + every dependent
+            registered under them; or
+          - a dependent (has a PatientRelationship row where they're
+            dependent_awpid) — their household is their guardian plus every
+            other dependent under that same guardian (i.e. siblings).
+
+        Returns {"guardian_awpid": str|None, "members": [...]}. Each member
+        dict has full_name/date_of_birth/gender/relationship/awpid plus
+        (when db_name is given) already_registered_here/existing_uhid,
+        same shape as list_family_members(). The member matching the
+        requested awpid is flagged is_self=True. Returns
+        {"guardian_awpid": None, "members": []} if this person has no
+        family relationships on file at all (an only-adult patient with no
+        dependents) — not an error, just nothing to show.
+        """
+        from .models import Patient as _Patient
+
+        # Is this person a guardian? (has dependents registered under them)
+        is_guardian = PatientRelationship.objects.using("default").filter(
+            guardian_awpid=awpid
+        ).exists()
+
+        if is_guardian:
+            guardian_awpid = awpid
+        else:
+            # Is this person a dependent? Find who their guardian is.
+            rel = PatientRelationship.objects.using("default").filter(
+                dependent_awpid=awpid
+            ).first()
+            guardian_awpid = rel.guardian_awpid if rel else None
+
+        if not guardian_awpid:
+            return {"guardian_awpid": None, "members": []}
+
+        members = PatientService.list_family_members(guardian_awpid, db_name=db_name)
+
+        # The guardian themself isn't a "dependent" so list_family_members()
+        # (which only walks PatientRelationship rows) doesn't include them —
+        # add them in explicitly as the household head.
+        guardian_identity = PatientIdentity.objects.using("default").filter(
+            awpid=guardian_awpid
+        ).first()
+        if guardian_identity:
+            entry = {
+                "awpid": guardian_identity.awpid,
+                "full_name": guardian_identity.full_name,
+                "date_of_birth": guardian_identity.date_of_birth,
+                "gender": guardian_identity.gender,
+                "relationship": "self" if guardian_awpid == awpid else "guardian",
+            }
+            if db_name:
+                local = _Patient.objects.using(db_name).filter(awpid=guardian_awpid).first()
+                entry["already_registered_here"] = bool(local)
+                entry["existing_uhid"] = local.uhid if local else None
+            members.insert(0, entry)
+
+        for m in members:
+            m["is_self"] = (m["awpid"] == awpid)
+
+        return {"guardian_awpid": guardian_awpid, "members": members}
+
     # ── Duplicate check ──────────────────────────────────────────────────
     @staticmethod
     def lookup_by_mobile(mobile_raw: str, db_name: str) -> dict:
@@ -402,6 +497,10 @@ class PatientService:
                 | Q(uhid__icontains=word)
                 | Q(awpid__icontains=word)
                 | Q(mobile__startswith=word)
+                # Dependents (children etc.) often get searched for by the
+                # parent/guardian's name instead of their own — front desk
+                # remembers "Ramesh's daughter", not the child's UHID.
+                | Q(guardian_name__icontains=word)
             )
         return qs.filter(combined).distinct().order_by("full_name")
 

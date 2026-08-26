@@ -189,7 +189,7 @@ export default function RequestsPage() {
   const [lookedUp, setLookedUp] = useState(null);
   const [busy, setBusy] = useState(null);
 
-  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.LAB.REQUESTS, { params: { page_size: 100 } });
+  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.LAB.REQUESTS, { params: { page_size: 100 }, pollMs: 20000 });
   const orders = (data?.results || []).filter(o =>
     o.patient_choice === "in_house" && o.status !== "cancelled"
   );

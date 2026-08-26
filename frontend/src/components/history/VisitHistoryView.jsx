@@ -18,7 +18,7 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, Filter, Search, X } from "lucide-react";
 import apiClient      from "../../services/api.client";
 import API_ENDPOINTS  from "../../config/api.config";
 import { ROUTES }     from "../../config/routes.config";
@@ -39,6 +39,8 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
   const [patient,   setPatient]   = useState(initialPatient);
   const [dateFrom,  setDateFrom]  = useState("");
   const [dateTo,    setDateTo]    = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [showFilters,  setShowFilters]  = useState(!!(initialPatient));
   const [page,      setPage]      = useState(1);
   const [rows,       setRows]       = useState([]);
   const [pagination, setPagination] = useState(null);
@@ -51,6 +53,7 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
       if (patient)  params.patient   = patient;
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo)   params.date_to   = dateTo;
+      if (statusFilter) params.status = statusFilter;
       const { data } = await apiClient.get(API_ENDPOINTS.OPD.HISTORY, { params });
       setRows(data?.results || []);
       setPagination(data?.pagination || null);
@@ -60,14 +63,13 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [patient, dateFrom, dateTo]);
+  }, [patient, dateFrom, dateTo, statusFilter]);
 
   // Reset to page 1 whenever a filter changes (debounced for the text search).
   useEffect(() => {
     const t = setTimeout(() => { setPage(1); fetchHistory(1); }, 350);
     return () => clearTimeout(t);
-  }, [patient, dateFrom, dateTo, fetchHistory]);
+  }, [patient, dateFrom, dateTo, statusFilter, fetchHistory]);
 
   useEffect(() => {
     if (page !== 1) fetchHistory(page);
@@ -75,35 +77,72 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
   }, [page]);
 
   function clearFilters() {
-    setPatient(""); setDateFrom(""); setDateTo("");
+    setPatient(""); setDateFrom(""); setDateTo(""); setStatusFilter("");
   }
 
-  const hasFilters = !!(patient || dateFrom || dateTo);
+  const hasFilters = !!(patient || dateFrom || dateTo || statusFilter);
 
   return (
     <div>
-      {/* Filters */}
-      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
-        <input
-          value={patient}
-          onChange={e => setPatient(e.target.value)}
-          placeholder="Search by patient name, UHID, or AWPID…"
-          style={{ flex: 1, minWidth: 240, padding: "9px 14px", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "var(--color-surface)", fontSize: 14, outline: "none" }}
-        />
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--color-text-muted)" }}>
-          From
-          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-            style={{ padding: "8px 10px", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "var(--color-surface)", fontSize: 13 }} />
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--color-text-muted)" }}>
-          To
-          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-            style={{ padding: "8px 10px", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "var(--color-surface)", fontSize: 13 }} />
-        </label>
-        {hasFilters && (
-          <button className="btn-outline" style={{ fontSize: 12, padding: "8px 14px" }} onClick={clearFilters}>
-            Clear
+      {/* Search + filters */}
+      <div className="card" style={{ padding: 14, marginBottom: 20 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ position: "relative", flex: "1 1 260px" }}>
+            <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--color-text-muted)" }} />
+            <input
+              value={patient}
+              onChange={e => setPatient(e.target.value)}
+              placeholder="Search by patient name, UHID, or AWPID…"
+              style={{
+                width: "100%", boxSizing: "border-box", padding: "10px 14px 10px 34px", borderRadius: 8,
+                border: "1.5px solid var(--color-border)", background: "var(--color-surface)", fontSize: 14, outline: "none",
+              }}
+            />
+          </div>
+          <button
+            type="button"
+            className={hasFilters ? "btn-primary" : "btn-outline"}
+            style={{ padding: "9px 18px", display: "flex", alignItems: "center", gap: 7, fontWeight: 700 }}
+            onClick={() => setShowFilters(v => !v)}
+          >
+            <Filter size={14} /> Filters{hasFilters ? " •" : ""}
           </button>
+        </div>
+
+        {showFilters && (
+          <div style={{
+            marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--color-border)",
+            display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10,
+          }}>
+            <div>
+              <label className="stat-label" style={{ display: "block", marginBottom: 5 }}>From date</label>
+              <input type="date" className="form-input" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+            </div>
+            <div>
+              <label className="stat-label" style={{ display: "block", marginBottom: 5 }}>To date</label>
+              <input type="date" className="form-input" value={dateTo} min={dateFrom} onChange={e => setDateTo(e.target.value)} />
+            </div>
+            <div>
+              <label className="stat-label" style={{ display: "block", marginBottom: 5 }}>Status</label>
+              <select className="form-input" style={{ appearance: "auto" }} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+                <option value="">Any status</option>
+                <option value="scheduled">Scheduled</option>
+                <option value="waiting">Waiting</option>
+                <option value="vitals_done">Vitals Done</option>
+                <option value="in_progress">In Progress</option>
+                <option value="done">Done</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="no_show">No Show</option>
+              </select>
+            </div>
+            {hasFilters && (
+              <div style={{ display: "flex", alignItems: "flex-end" }}>
+                <button className="btn-outline" style={{ fontSize: 12, padding: "8px 14px", display: "flex", alignItems: "center", gap: 5 }} onClick={clearFilters}>
+                  <X size={13} /> Clear
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </div>
 

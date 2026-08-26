@@ -424,6 +424,18 @@ function EmptyNote({ children }) {
   return <p style={{ fontSize: 12, color: "var(--color-text-muted)", margin: 0 }}>{children}</p>;
 }
 
+// Same helper duplicated in RecordsPage.jsx / LabReportsPage.jsx / lab's
+// RequestsPage.jsx — no shared utils module for it yet, matches this
+// codebase's existing per-file convention rather than introducing one here.
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onToggle, onOpenDocument }) {
   // Real visit timeline for this patient at this hospital — reuses the same
   // searchable visit-history endpoint the "History" nav page already uses,
@@ -456,12 +468,27 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
   const [ordering, setOrdering] = useState(false);
   const [decliningId, setDecliningId] = useState(null);
   const [administeringId, setAdministeringId] = useState(null);
+  // Optional certificate to attach when administering a roadmap row —
+  // keyed by the same itemKey (record_id or vaccine_name) the row's
+  // Administer button uses, so each row can carry its own selected file
+  // without a full modal per row.
+  const [administerFileByKey, setAdministerFileByKey] = useState({});
+
+  // "Log Vaccination" manual-entry form — a doctor/nurse recording a past
+  // or outside vaccination (with an optional scanned certificate) the same
+  // way a parent can from the portal's "Add Records" flow, rather than only
+  // being able to act on today's due roadmap slots via Administer/Order.
+  const [logFormOpen, setLogFormOpen] = useState(false);
+  const [logForm, setLogForm] = useState({ vaccine_name: "", administered_date: "" });
+  const [logFile, setLogFile] = useState(null);
+  const [logging, setLogging] = useState(false);
 
   const knownVaccineNames = Array.from(
     new Set((vaxData?.roadmap || []).map(v => v.vaccine_name).filter(Boolean))
   );
 
   function updOrderForm(k, v) { setOrderForm(p => ({ ...p, [k]: v })); }
+  function updLogForm(k, v) { setLogForm(p => ({ ...p, [k]: v })); }
 
   async function submitOrder(e) {
     e.preventDefault();
@@ -522,21 +549,65 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
 
   // Nurse/doctor "give it now" shortcut — administers an ordered/due
   // vaccine right from this sidebar instead of routing through TasksPage.
+  // Attaches whatever file (if any) was picked for this row's key via the
+  // paperclip input next to the Administer button — e.g. a photo of the
+  // vial/batch label or a printed certificate handed to the clinic.
   async function administerVaccination(v) {
     if (!patientPk) return;
-    setAdministeringId(v.record_id ?? v.vaccine_name);
+    const key = v.record_id ?? v.vaccine_name;
+    setAdministeringId(key);
     try {
-      await apiClient.post(API_ENDPOINTS.PATIENTS.VACCINATION_ADMINISTER(patientPk), {
+      const body = {
         record_id: v.record_id || undefined,
         vaccine_name: v.vaccine_name,
         scheduled_label: v.scheduled_label,
-      });
+      };
+      const file = administerFileByKey[key];
+      if (file) {
+        body.file_data = await fileToDataUrl(file);
+        body.file_name = file.name;
+        body.mime_type = file.type;
+      }
+      await apiClient.post(API_ENDPOINTS.PATIENTS.VACCINATION_ADMINISTER(patientPk), body);
       toastSuccess("Vaccination recorded as administered.");
+      setAdministerFileByKey(p => { const n = { ...p }; delete n[key]; return n; });
       refetchVax?.();
     } catch (err) {
       toastApiError(err, "Could not record the vaccination.");
     } finally {
       setAdministeringId(null);
+    }
+  }
+
+  // "Log Vaccination" — manual historical/outside entry with an optional
+  // certificate, the doctor/nurse-side equivalent of the patient portal's
+  // "Add Records" upload. Uses the plain create endpoint (previously had no
+  // frontend caller) rather than Administer/Order, since this isn't tied to
+  // a specific roadmap slot — any vaccine name and any past date is valid.
+  async function submitLogVaccination(e) {
+    e.preventDefault();
+    if (!logForm.vaccine_name.trim() || !logForm.administered_date || !patientPk) return;
+    setLogging(true);
+    try {
+      const body = {
+        vaccine_name: logForm.vaccine_name.trim(),
+        administered_date: logForm.administered_date,
+      };
+      if (logFile) {
+        body.file_data = await fileToDataUrl(logFile);
+        body.file_name = logFile.name;
+        body.mime_type = logFile.type;
+      }
+      await apiClient.post(API_ENDPOINTS.PATIENTS.VACCINATIONS(patientPk), body);
+      toastSuccess("Vaccination logged.");
+      setLogForm({ vaccine_name: "", administered_date: "" });
+      setLogFile(null);
+      setLogFormOpen(false);
+      refetchVax?.();
+    } catch (err) {
+      toastApiError(err, "Could not log that vaccination.");
+    } finally {
+      setLogging(false);
     }
   }
 
@@ -876,6 +947,70 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
               )}
             </div>
 
+            <div style={{ marginBottom: 10 }}>
+              <button
+                type="button"
+                onClick={() => setLogFormOpen(o => !o)}
+                disabled={!patientPk}
+                style={{
+                  width: "100%", fontSize: 11, fontWeight: 700, padding: "6px 10px", borderRadius: 6,
+                  border: "1px dashed var(--color-primary)", background: logFormOpen ? "var(--color-primary-light)" : "var(--color-bg)",
+                  color: "var(--color-primary)", cursor: patientPk ? "pointer" : "not-allowed",
+                }}
+              >
+                {logFormOpen ? "− Cancel" : "+ Log Vaccination"}
+              </button>
+              {logFormOpen && (
+                <form onSubmit={submitLogVaccination} style={{
+                  marginTop: 8, background: "#FBF9F5", borderRadius: 10, padding: 10,
+                  border: "1px dashed var(--color-primary)", display: "grid", gap: 8,
+                }}>
+                  <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+                    Record a past or outside vaccination for this patient — not tied to a schedule
+                    slot. The certificate is optional.
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>VACCINE *</label>
+                    <input
+                      className="form-input" list="known-vaccine-names"
+                      value={logForm.vaccine_name}
+                      onChange={e => updLogForm("vaccine_name", e.target.value)}
+                      placeholder="e.g. Hepatitis B - 2"
+                      required
+                      style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>DATE GIVEN *</label>
+                    <input
+                      type="date" className="form-input"
+                      value={logForm.administered_date}
+                      max={new Date().toISOString().slice(0, 10)}
+                      onChange={e => updLogForm("administered_date", e.target.value)}
+                      required
+                      style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>
+                      CERTIFICATE (OPTIONAL)
+                    </label>
+                    <input
+                      type="file" accept="image/*,application/pdf"
+                      onChange={e => setLogFile(e.target.files?.[0] || null)}
+                      style={{ fontSize: 11, width: "100%" }}
+                    />
+                  </div>
+                  <button
+                    type="submit" className="btn-primary" style={{ fontSize: 12, padding: "6px 10px" }}
+                    disabled={logging || !logForm.vaccine_name.trim() || !logForm.administered_date}
+                  >
+                    {logging ? "Logging…" : "Log Vaccination"}
+                  </button>
+                </form>
+              )}
+            </div>
+
             {vaxLoading ? <EmptyNote>Loading vaccination roadmap…</EmptyNote> : !vaxData?.roadmap?.length ? (
               <EmptyNote>No vaccination schedule available.</EmptyNote>
             ) : (
@@ -932,21 +1067,44 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
                         </div>
                       )}
                       {(canDecline || canAdminister) && (
-                        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                        <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "flex-start" }}>
                           {canAdminister && (
-                            <button
-                              onClick={() => administerVaccination(v)}
-                              disabled={administeringId === itemKey}
-                              style={{
-                                flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-                                fontSize: 11, fontWeight: 700, padding: "5px 8px", borderRadius: 6,
-                                border: "1px solid #10B981", background: "#ECFDF5", color: "#047857",
-                                cursor: administeringId === itemKey ? "not-allowed" : "pointer",
-                                opacity: administeringId === itemKey ? 0.6 : 1,
-                              }}
-                            >
-                              <Syringe size={12} /> {administeringId === itemKey ? "Recording…" : "Administer"}
-                            </button>
+                            <div style={{ flex: 1, display: "grid", gap: 4 }}>
+                              <button
+                                onClick={() => administerVaccination(v)}
+                                disabled={administeringId === itemKey}
+                                style={{
+                                  width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                                  fontSize: 11, fontWeight: 700, padding: "5px 8px", borderRadius: 6,
+                                  border: "1px solid #10B981", background: "#ECFDF5", color: "#047857",
+                                  cursor: administeringId === itemKey ? "not-allowed" : "pointer",
+                                  opacity: administeringId === itemKey ? 0.6 : 1,
+                                }}
+                              >
+                                <Syringe size={12} /> {administeringId === itemKey ? "Recording…" : "Administer"}
+                              </button>
+                              <label
+                                title="Attach a certificate/photo before administering (optional)"
+                                style={{
+                                  display: "flex", alignItems: "center", gap: 4, fontSize: 9.5,
+                                  color: administerFileByKey[itemKey] ? "var(--color-primary)" : "var(--color-text-muted)",
+                                  cursor: "pointer", overflow: "hidden",
+                                }}
+                              >
+                                <Paperclip size={10} style={{ flexShrink: 0 }} />
+                                <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                  {administerFileByKey[itemKey]?.name || "Attach report"}
+                                </span>
+                                <input
+                                  type="file" accept="image/*,application/pdf"
+                                  style={{ display: "none" }}
+                                  onChange={e => {
+                                    const f = e.target.files?.[0] || null;
+                                    setAdministerFileByKey(p => ({ ...p, [itemKey]: f }));
+                                  }}
+                                />
+                              </label>
+                            </div>
                           )}
                           {canDecline && (
                             <button

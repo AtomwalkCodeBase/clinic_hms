@@ -19,6 +19,7 @@ import logging
 from datetime import date
 
 from django.conf import settings
+from django.db.models import Q
 from django.utils.text import slugify
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
@@ -640,15 +641,21 @@ class TenantStaffDetailView(APIView):
         # Refuse to deactivate or role-change away the last active
         # hospital_admin at this tenant — that would lock the hospital out
         # of its own admin panel with no one able to invite a replacement.
+        # Checks acts_as too — a custom role bundling "hospital_admin" counts
+        # as an effective admin here just like a literal one (see the
+        # matching fix in apps/org/views.py).
+        staff_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
+        staff_is_admin = staff.role == "hospital_admin" or "hospital_admin" in staff_acts_as
         would_lose_admin_status = (
-            staff.role == "hospital_admin" and staff.is_active and (
+            staff_is_admin and staff.is_active and (
                 ("is_active" in d and not bool(d["is_active"])) or
                 ("role" in d and d["role"] != "hospital_admin")
             )
         )
         if would_lose_admin_status:
+            ADMIN_Q = Q(role="hospital_admin") | Q(role="custom", custom_role__acts_as__contains=["hospital_admin"])
             other_admins = StaffUser.objects.using(tenant.db_name).filter(
-                role="hospital_admin", is_active=True
+                ADMIN_Q, is_active=True
             ).exclude(pk=staff.id).exists()
             if not other_admins:
                 return error(
@@ -671,7 +678,14 @@ class TenantStaffDetailView(APIView):
             if new_role not in valid_roles:
                 return error(f"Invalid role. Choose: {', '.join(valid_roles)}")
         final_role = new_role or staff.role
-        old_resource = "doctors" if staff.role == "doctor" else "staff"
+        # Checks acts_as too — a custom role bundling "doctor" must count
+        # against max_doctors, not max_staff, same as a literal doctor (see
+        # the matching is_doctor_equivalent pattern in apps/org/views.py).
+        # This endpoint doesn't assign custom roles itself (new_role is
+        # always one of the 6 system roles), so only the OLD side can be
+        # role="custom" here.
+        old_is_doctor = staff.role == "doctor" or "doctor" in staff_acts_as
+        old_resource = "doctors" if old_is_doctor else "staff"
         new_resource = "doctors" if final_role == "doctor" else "staff"
         needs_limit_check = (
             (not was_active and final_active) or

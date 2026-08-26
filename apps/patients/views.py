@@ -12,6 +12,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from core.response import success, created, error, not_found
 from core.pagination import paginate_queryset
+from core import storage as blob_storage
 
 logger = logging.getLogger(__name__)
 from core.permissions import IsHospitalStaff, IsDoctorOrNurse, IsFrontDesk
@@ -167,12 +168,51 @@ class PatientSearchView(APIView):
 
         total_matches = qs.count()
         limit = 50
+
+        # If nothing matched locally and the query looks like a mobile
+        # number, check whether this person already exists elsewhere on the
+        # Atomwalk network (same PatientIdentity registry PatientLookupView
+        # uses during registration) — a patient search shouldn't come back
+        # empty just because this is the first time *this* hospital has
+        # looked them up; staff can then send them to registration instead
+        # of assuming they're a brand-new patient.
+        network_match = None
+        digits = "".join(ch for ch in query if ch.isdigit())
+        if total_matches == 0 and len(digits) >= 6:
+            result = PatientService.lookup_by_mobile(mobile_raw=query, db_name=request.tenant_db)
+            if result.get("exists_in_network") and not result.get("already_registered_here"):
+                network_match = {
+                    "full_name": result.get("full_name"),
+                    "date_of_birth": result.get("date_of_birth"),
+                    "gender": result.get("gender"),
+                }
+
         return success(data={
             "results": PatientSearchSerializer(qs[:limit], many=True).data,
             "total_matches": total_matches,
             "truncated": total_matches > limit,
             "is_browse": not query,
+            "network_match": network_match,
         })
+
+
+class PatientFamilyTreeView(APIView):
+    """
+    GET /api/v1/patients/family-tree/?awpid=
+    Whole-household lookup for the front-desk search screen: given one
+    family member's AWPID (a search result or a lookup_by_mobile match),
+    returns every linked family member (guardian + all dependents/siblings)
+    so front desk can pick and book for any of them without a second
+    search. See PatientService.get_family_tree for the resolution logic.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalStaff]
+
+    def get(self, request):
+        awpid = (request.query_params.get("awpid") or "").strip()
+        if not awpid:
+            return error(message="awpid is required.")
+        result = PatientService.get_family_tree(awpid=awpid, db_name=request.tenant_db)
+        return success(data=result)
 
 
 class PatientDetailView(APIView):
@@ -251,6 +291,17 @@ class PatientDocumentDetailView(APIView):
         except SharedDocument.DoesNotExist:
             return not_found("Document not found.")
 
+        # Same HIE-consent gate PatientHistoryView applies to the lightweight
+        # list this document's id would normally be discovered from — a
+        # doc_id obtained any other way (stale link, guessed id) must not
+        # bypass consent just because the summary list itself is gated.
+        owner = Patient.objects.using(request.tenant_db).filter(awpid=doc.awpid).first()
+        if not owner or not owner.hie_consent_given:
+            from core.audit import log_action
+            log_action(request, request.tenant_db, action="patient.document.view_blocked_no_consent",
+                        resource_type="SharedDocument", resource_id=doc.id)
+            return error("This patient hasn't consented to cross-hospital record sharing.", status=403)
+
         from core.audit import log_action
         log_action(request, request.tenant_db, action="patient.document.view",
                     resource_type="SharedDocument", resource_id=doc.id)
@@ -258,7 +309,7 @@ class PatientDocumentDetailView(APIView):
         return success(data={
             "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,
             "file_name": doc.file_name, "mime_type": doc.mime_type,
-            "file_data": doc.file_data, "created_at": doc.created_at,
+            "file_data": blob_storage.signed_url(doc.file_data), "created_at": doc.created_at,
         })
 
 
@@ -279,13 +330,22 @@ class PatientLabResultDetailView(APIView):
         except SharedLabResult.DoesNotExist:
             return not_found("Lab result not found.")
 
+        # Same HIE-consent gate as PatientDocumentDetailView above — see
+        # that view's comment.
+        owner = Patient.objects.using(request.tenant_db).filter(awpid=r.awpid).first()
+        if not owner or not owner.hie_consent_given:
+            from core.audit import log_action
+            log_action(request, request.tenant_db, action="patient.lab_result.view_blocked_no_consent",
+                        resource_type="SharedLabResult", resource_id=r.id)
+            return error("This patient hasn't consented to cross-hospital record sharing.", status=403)
+
         from core.audit import log_action
         log_action(request, request.tenant_db, action="patient.lab_result.view",
                     resource_type="SharedLabResult", resource_id=r.id)
 
         return success(data={
             "id": r.id, "test_name": r.test_name, "result_summary": r.result_summary,
-            "mime_type": r.mime_type, "file_data": r.file_data, "delivered_at": r.delivered_at,
+            "mime_type": r.mime_type, "file_data": blob_storage.signed_url(r.file_data), "delivered_at": r.delivered_at,
         })
 
 

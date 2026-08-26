@@ -151,6 +151,31 @@ export default function PatientDoctorProfilePage() {
       .finally(() => setSlotsLoading(false));
   }, [tenantId, doctorId, date]);
 
+  // Live slot availability — the exact bug this fixes: if another patient
+  // books the slot you're looking at, you'd otherwise only find out (with a
+  // confusing error) when you tried to confirm. Silently re-checks in the
+  // background so a slot that just got taken visibly greys out, and clears
+  // your selection if it was the one taken. Pauses once booking is
+  // confirmed (nothing left to keep live) or the tab is backgrounded.
+  useEffect(() => {
+    if (!date || confirmation) return undefined;
+    const id = setInterval(() => {
+      if (document.hidden) return;
+      apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(tenantId, doctorId), { params: { date } })
+        .then(({ data: d }) => {
+          const fresh = d?.results || [];
+          setSlots(fresh);
+          setSelectedSlot(prev => {
+            if (!prev) return prev;
+            const stillOpen = fresh.find(s => s.time === prev && s.available);
+            return stillOpen ? prev : null;
+          });
+        })
+        .catch(() => {});
+    }, 15000);
+    return () => clearInterval(id);
+  }, [tenantId, doctorId, date, confirmation]);
+
   async function book(dataSharingConsent) {
     if (!selectedSlot) return;
     setBooking(true);

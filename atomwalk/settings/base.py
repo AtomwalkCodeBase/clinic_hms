@@ -48,6 +48,33 @@ else:
 # a clean validation error instead of a hard 400 from Django itself.
 DATA_UPLOAD_MAX_MEMORY_SIZE = config("DATA_UPLOAD_MAX_MEMORY_SIZE", default=10 * 1024 * 1024, cast=int)
 
+# ── Object storage (S3) ──────────────────────────────────────────────────────
+# Every user-uploaded file — staff/patient profile photos, hospital logos,
+# doctor signatures, lab reports, patient-uploaded documents, vaccination
+# certificates — lives in S3, not as base64 in a Postgres TextField (the old
+# convention; see core/storage.py's module docstring for the full rationale
+# and core/file_validation.py for the magic-byte check every upload still
+# goes through before it reaches here).
+#
+# Bucket must be PRIVATE. Nothing is ever served via a public bucket URL —
+# core.storage.signed_url() mints a short-lived presigned URL per request
+# instead. This matters because several of these fields hold PHI (lab
+# reports, vaccination certificates, discharge summaries).
+#
+# Left blank by default rather than required-at-boot: unlike SECRET_KEY/
+# JWT_SIGNING_KEY, a missing bucket shouldn't crash the whole process on
+# startup (most of the app works fine without it) — core.storage raises a
+# clear, catchable error only at the point a file is actually uploaded, and
+# reads degrade to "no file" instead of a 500.
+AWS_S3_BUCKET         = config("AWS_S3_BUCKET", default="")
+AWS_S3_REGION         = config("AWS_S3_REGION", default="ap-south-1")
+AWS_ACCESS_KEY_ID     = config("AWS_ACCESS_KEY_ID", default="")
+AWS_SECRET_ACCESS_KEY = config("AWS_SECRET_ACCESS_KEY", default="")
+# How long a presigned URL stays valid, in seconds. Short enough that a
+# leaked/cached link (browser history, a forwarded screenshot's link, etc.)
+# stops working soon; long enough that a slow page load doesn't race it.
+AWS_S3_URL_EXPIRY     = config("AWS_S3_URL_EXPIRY", default=3600, cast=int)
+
 # ── Installed Apps ──────────────────────────────────────────────────────────
 DJANGO_APPS = [
     "django.contrib.admin",
@@ -237,6 +264,11 @@ REST_FRAMEWORK = {
         # per-code attempt cap (core.otp.MAX_VERIFY_ATTEMPTS) are the real
         # defenses; this is a per-IP backstop on top of them.
         "otp": "6/min",
+        # Emergency QR summary view (apps/patients/emergency_views.py) — public,
+        # unauthenticated, reachable by anyone with the token. The token itself
+        # is an unguessable signed JWT and expires in ~20 minutes, so this is a
+        # per-IP backstop against scripted enumeration, not the primary defense.
+        "emergency": "20/min",
     },
 }
 
@@ -300,7 +332,9 @@ DEFAULT_FROM_EMAIL  = config("DEFAULT_FROM_EMAIL", default="Atomwalk HMS <no-rep
 # "log" (default) writes the message to the app log instead of sending it —
 # there is no SMS gateway account configured for this deployment. Set to
 # "msg91" (and MSG91_AUTH_KEY/MSG91_TEMPLATE_ID below) once the hospital has
-# its own MSG91 account with a DLT-approved template; see core/sms.py.
+# its own MSG91 account with a DLT-approved template, or "android_gateway"
+# (and SMS_GATEWAY_* below) to relay through a self-hosted phone+SIM instead
+# of a paid aggregator.
 SMS_BACKEND = config("SMS_BACKEND", default="log")
 MSG91_AUTH_KEY     = config("MSG91_AUTH_KEY", default="")
 MSG91_TEMPLATE_ID  = config("MSG91_TEMPLATE_ID", default="")
@@ -308,6 +342,18 @@ MSG91_TEMPLATE_ID  = config("MSG91_TEMPLATE_ID", default="")
 # MSG91 dashboard (commonly "VAR1" for a single-variable template, e.g.
 # "Your Atomwalk verification code is ##VAR1##.").
 MSG91_OTP_VAR_NAME = config("MSG91_OTP_VAR_NAME", default="VAR1")
+# "SMS Gateway for Android" (github.com/capcom6/android-sms-gateway) app
+# credentials — shown on the app's Home screen. BASE_URL is the phone's own
+# address in Local mode (e.g. "http://192.168.1.50:8080", requires the
+# Django server on the same network) or a Private/Cloud server URL.
+SMS_GATEWAY_BASE_URL = config("SMS_GATEWAY_BASE_URL", default="")
+SMS_GATEWAY_USERNAME = config("SMS_GATEWAY_USERNAME", default="")
+SMS_GATEWAY_PASSWORD = config("SMS_GATEWAY_PASSWORD", default="")
+# Optional one-hop fallback: tried automatically if SMS_BACKEND's actual
+# send attempt fails (not just "unconfigured"). E.g. SMS_BACKEND=
+# android_gateway + SMS_FALLBACK_BACKEND=msg91 means a gateway outage
+# falls through to MSG91 instead of silently failing. See core/sms.py.
+SMS_FALLBACK_BACKEND = config("SMS_FALLBACK_BACKEND", default="")
 
 # ── OTP (core/otp.py) ────────────────────────────────────────────────────────
 # Separate from JWT_SIGNING_KEY so it can be rotated independently — falls

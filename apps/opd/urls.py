@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     AppointmentListCreateView, AppointmentDetailView, AppointmentStatusView, AppointmentRescheduleView,
     VitalsView, OPDStatsView,
-    AppointmentHistoryView,
+    AppointmentHistoryView, AppointmentUpcomingView,
     TranscribeView, MonitoringListView,
     EncounterCreateView, EncounterDetailView, EncounterSignView,
     PrescriptionCreateView, PrescriptionDetailView, PrescriptionItemView,
@@ -21,6 +21,9 @@ urlpatterns = [
 
     # Visit history — searchable, not date-limited to today
     path("history/", AppointmentHistoryView.as_view(), name="appointment-history"),
+
+    # Upcoming — today onward, ascending, powers the doctor's multi-day dashboard
+    path("appointments/upcoming/", AppointmentUpcomingView.as_view(), name="appointment-upcoming"),
 
     # Appointments / Queue
     path("appointments/", AppointmentListCreateView.as_view(), name="appointment-list-create"),

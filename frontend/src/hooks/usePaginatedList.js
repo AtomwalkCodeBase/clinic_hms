@@ -13,12 +13,20 @@
  * Usage:
  *   const { items, isLoading, isLoadingMore, hasMore, loadMore, refetch } =
  *     usePaginatedList(API_ENDPOINTS.PORTAL.MY_RECORDS, { pageSize: 20 });
+ *
+ * Options:
+ *   pollMs — if set, silently re-fetches page 1 on this interval to keep
+ *            the list live (e.g. a new booking/prescription appearing
+ *            without a manual refresh). Skipped while the user has loaded
+ *            additional pages (page > 1), so a background tick never
+ *            discards "Load more" progress, and paused while the tab is
+ *            hidden.
  */
 
 import { useState, useEffect, useCallback } from "react";
 import apiClient from "../services/api.client";
 
-export function usePaginatedList(url, { pageSize = 20, params = {} } = {}) {
+export function usePaginatedList(url, { pageSize = 20, params = {}, pollMs = 0 } = {}) {
   const [items,         setItems]         = useState([]);
   const [page,          setPage]          = useState(1);
   const [pagination,    setPagination]    = useState(null);
@@ -28,10 +36,13 @@ export function usePaginatedList(url, { pageSize = 20, params = {} } = {}) {
 
   const paramsKey = JSON.stringify(params);
 
-  const fetchPage = useCallback(async (targetPage, append) => {
+  const fetchPage = useCallback(async (targetPage, append, opts = {}) => {
     if (!url) return;
-    if (append) setIsLoadingMore(true); else setIsLoading(true);
-    setError(null);
+    const { silent = false } = opts;
+    if (!silent) {
+      if (append) setIsLoadingMore(true); else setIsLoading(true);
+      setError(null);
+    }
     try {
       const { data: responseData } = await apiClient.get(url, {
         params: { ...params, page: targetPage, page_size: pageSize },
@@ -42,10 +53,14 @@ export function usePaginatedList(url, { pageSize = 20, params = {} } = {}) {
       setItems(prev => (append ? [...prev, ...newItems] : newItems));
       setPage(targetPage);
     } catch (err) {
-      setError(err);
-      if (!append) setItems([]);
+      if (!silent) {
+        setError(err);
+        if (!append) setItems([]);
+      }
     } finally {
-      if (append) setIsLoadingMore(false); else setIsLoading(false);
+      if (!silent) {
+        if (append) setIsLoadingMore(false); else setIsLoading(false);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, paramsKey, pageSize]);
@@ -54,6 +69,22 @@ export function usePaginatedList(url, { pageSize = 20, params = {} } = {}) {
     fetchPage(1, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, paramsKey]);
+
+  useEffect(() => {
+    if (!pollMs || !url) return undefined;
+    const tick = () => {
+      if (document.hidden) return;
+      if (page > 1) return; // don't clobber "Load more" progress
+      fetchPage(1, false, { silent: true });
+    };
+    const id = setInterval(tick, pollMs);
+    const onVisible = () => { if (!document.hidden && page === 1) fetchPage(1, false, { silent: true }); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [pollMs, url, page, fetchPage]);
 
   const loadMore = useCallback(() => {
     if (pagination?.has_next && !isLoadingMore) fetchPage(page + 1, true);

@@ -10,7 +10,7 @@
  */
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Building2, Calendar, ClipboardList, Pill, FlaskConical, Search } from "lucide-react";
+import { Building2, Calendar, ClipboardList, Pill, FlaskConical, Search, SlidersHorizontal, X } from "lucide-react";
 import { AppShell }    from "../../components/layout/AppShell";
 import { PageShell }   from "../../components/common/PageShell";
 import DoctorCard      from "../../components/common/DoctorCard";
@@ -110,7 +110,7 @@ export default function PatientDashboardPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  const { data, isLoading } = useApi(API_ENDPOINTS.PORTAL.MY_BOOKINGS);
+  const { data, isLoading } = useApi(API_ENDPOINTS.PORTAL.MY_BOOKINGS, { pollMs: 20000 });
   const bookings = data?.results || [];
   // "Upcoming" = still active (not done/cancelled/no_show) AND its day hasn't
   // already passed — an appointment the hospital never closed out shouldn't
@@ -128,17 +128,30 @@ export default function PatientDashboardPage() {
   const [specialty, setSpecialty] = useState("");
   const [city, setCity] = useState("");
   const [sort, setSort] = useState("");
-  const [showFilters, setShowFilters] = useState(false);
+  const [minExperience, setMinExperience] = useState("");
+  const [maxFee, setMaxFee] = useState("");
+  // Filters used to be tucked behind a small text link most patients never
+  // noticed — the panel now starts open so it's actually seen, with a
+  // toggle only to collapse it out of the way once they know it's there.
+  const [showFilters, setShowFilters] = useState(true);
   const [results, setResults] = useState(null); // { hospitals, doctors } once searched
   const [searching, setSearching] = useState(false);
   const debounceRef = useRef(null);
+
+  const activeFilterCount = [specialty, city, minExperience, maxFee].filter(Boolean).length;
+
+  function clearFilters() {
+    setSpecialty(""); setCity(""); setSort(""); setMinExperience(""); setMaxFee("");
+  }
 
   useEffect(() => {
     clearTimeout(debounceRef.current);
     const q = query.trim();
     const spec = specialty.trim();
     const cty = city.trim();
-    if (q.length < 2 && !spec && !cty) {
+    const minExp = minExperience.trim();
+    const maxF = maxFee.trim();
+    if (q.length < 2 && !spec && !cty && !minExp && !maxF) {
       setResults(null);
       setSearching(false);
       return;
@@ -150,13 +163,15 @@ export default function PatientDashboardPage() {
       if (spec) params.specialty = spec;
       if (cty) params.city = cty;
       if (sort) params.sort = sort;
+      if (minExp) params.min_experience = minExp;
+      if (maxF) params.max_fee = maxF;
       apiClient.get(API_ENDPOINTS.PORTAL.SEARCH, { params })
         .then(({ data: d }) => setResults(d))
         .catch(() => setResults({ hospitals: [], doctors: [] }))
         .finally(() => setSearching(false));
     }, 350);
     return () => clearTimeout(debounceRef.current);
-  }, [query, specialty, city, sort]);
+  }, [query, specialty, city, sort, minExperience, maxFee]);
 
   const greeting = () => {
     const h = new Date().getHours();
@@ -165,7 +180,8 @@ export default function PatientDashboardPage() {
     return "Good evening";
   };
   const firstName = (user?.full_name || user?.email?.split("@")[0] || "there").split(" ")[0];
-  const isSearchActive = query.trim().length >= 2 || specialty.trim().length > 0 || city.trim().length > 0;
+  const isSearchActive = query.trim().length >= 2 || specialty.trim().length > 0 || city.trim().length > 0
+    || minExperience.trim().length > 0 || maxFee.trim().length > 0;
 
   return (
     <AppShell>
@@ -195,64 +211,130 @@ export default function PatientDashboardPage() {
             />
           </div>
 
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: 12 }}>
             <button
               onClick={() => setShowFilters(s => !s)}
-              style={{ fontSize: 12, fontWeight: 600, color: "var(--color-hero-text)", background: "none", border: "none", cursor: "pointer", padding: 0, opacity: 0.85 }}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 700,
+                color: "var(--color-hero-text)", background: "color-mix(in srgb, var(--color-hero-text) 14%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--color-hero-text) 26%, transparent)",
+                borderRadius: 20, cursor: "pointer", padding: "8px 16px",
+              }}
             >
-              {showFilters ? "Hide filters ▲" : "Filter by specialty / city ▼"}
+              <SlidersHorizontal size={14} />
+              {showFilters ? "Hide filters" : "Search filters"}
+              {!showFilters && activeFilterCount > 0 && (
+                <span style={{
+                  background: "var(--color-accent)", color: "#fff", borderRadius: 20, fontSize: 10.5,
+                  fontWeight: 800, padding: "1px 7px", minWidth: 18, textAlign: "center",
+                }}>
+                  {activeFilterCount}
+                </span>
+              )}
             </button>
             {showFilters && (
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-                <select
-                  className="form-input"
-                  value={specialty}
-                  onChange={e => setSpecialty(e.target.value)}
-                  style={{ flex: "1 1 200px", padding: "10px 12px", fontSize: 13, borderRadius: 8, border: "none" }}
-                >
-                  <option value="">All specialties</option>
-                  {specialties.map(s => (
-                    <option key={s.name} value={s.name}>{s.name} ({s.doctor_count})</option>
-                  ))}
-                </select>
-                <input
-                  className="form-input"
-                  value={city}
-                  onChange={e => setCity(e.target.value)}
-                  placeholder="City"
-                  style={{ flex: "1 1 160px", padding: "10px 12px", fontSize: 13, borderRadius: 8, border: "none" }}
-                />
-                <select
-                  className="form-input"
-                  value={sort}
-                  onChange={e => setSort(e.target.value)}
-                  style={{ flex: "1 1 200px", padding: "10px 12px", fontSize: 13, borderRadius: 8, border: "none" }}
-                >
-                  {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
+              <div style={{
+                marginTop: 12, padding: 14, borderRadius: 12,
+                background: "color-mix(in srgb, var(--color-hero-text) 8%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--color-hero-text) 18%, transparent)",
+              }}>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ flex: "1 1 200px" }}>
+                    <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "var(--color-hero-muted)", marginBottom: 4 }}>Specialization</label>
+                    <select
+                      className="form-input"
+                      value={specialty}
+                      onChange={e => setSpecialty(e.target.value)}
+                      style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", fontSize: 13, borderRadius: 8, border: "none" }}
+                    >
+                      <option value="">All specialties</option>
+                      {specialties.map(s => (
+                        <option key={s.name} value={s.name}>{s.name} ({s.doctor_count})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ flex: "1 1 160px" }}>
+                    <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "var(--color-hero-muted)", marginBottom: 4 }}>City / near</label>
+                    <input
+                      className="form-input"
+                      value={city}
+                      onChange={e => setCity(e.target.value)}
+                      placeholder="e.g. Bengaluru"
+                      style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", fontSize: 13, borderRadius: 8, border: "none" }}
+                    />
+                  </div>
+                  <div style={{ flex: "1 1 160px" }}>
+                    <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "var(--color-hero-muted)", marginBottom: 4 }}>Min. experience (yrs)</label>
+                    <input
+                      className="form-input" type="number" min="0" max="60"
+                      value={minExperience}
+                      onChange={e => setMinExperience(e.target.value)}
+                      placeholder="Any"
+                      style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", fontSize: 13, borderRadius: 8, border: "none" }}
+                    />
+                  </div>
+                  <div style={{ flex: "1 1 160px" }}>
+                    <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "var(--color-hero-muted)", marginBottom: 4 }}>Max. fee (₹)</label>
+                    <input
+                      className="form-input" type="number" min="0"
+                      value={maxFee}
+                      onChange={e => setMaxFee(e.target.value)}
+                      placeholder="Any"
+                      style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", fontSize: 13, borderRadius: 8, border: "none" }}
+                    />
+                  </div>
+                  <div style={{ flex: "1 1 200px" }}>
+                    <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "var(--color-hero-muted)", marginBottom: 4 }}>Sort by</label>
+                    <select
+                      className="form-input"
+                      value={sort}
+                      onChange={e => setSort(e.target.value)}
+                      style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", fontSize: 13, borderRadius: 8, border: "none" }}
+                    >
+                      {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </div>
+                  {activeFilterCount > 0 && (
+                    <div style={{ display: "flex", alignItems: "flex-end" }}>
+                      <button
+                        onClick={clearFilters}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700,
+                          color: "var(--color-hero-text)", background: "none",
+                          border: "1px solid color-mix(in srgb, var(--color-hero-text) 26%, transparent)",
+                          borderRadius: 8, cursor: "pointer", padding: "9px 14px",
+                        }}
+                      >
+                        <X size={13} /> Clear
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
 
-          {/* Hero stats — each in a tinted mini-card with accent color */}
+          {/* Hero stats — glass chips derived from the active theme's hero
+              text/accent colors (not fixed hues), so they always sit
+              correctly on whatever the hero gradient is this theme. */}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 24 }}>
             <div style={{
-              background: "rgba(44,93,124,0.18)", borderRadius: 12, padding: "12px 20px", minWidth: 140,
-              border: "1px solid rgba(44,93,124,0.25)",
+              background: "color-mix(in srgb, var(--color-hero-text) 14%, transparent)", borderRadius: 12, padding: "12px 20px", minWidth: 140,
+              border: "1px solid color-mix(in srgb, var(--color-hero-text) 22%, transparent)",
             }}>
-              <div className="hero-number" style={{ fontSize: 26, color: "#B9D3E0" }}>{stats ? stats.hospitals : "—"}</div>
-              <div className="stat-label" style={{ marginTop: 2, color: "#C9D9E5" }}>Hospitals on the platform</div>
+              <div className="hero-number" style={{ fontSize: 26, color: "var(--color-hero-text)" }}>{stats ? stats.hospitals : "—"}</div>
+              <div className="stat-label" style={{ marginTop: 2, color: "var(--color-hero-muted)" }}>Hospitals on the platform</div>
             </div>
             <div style={{
-              background: "color-mix(in srgb, var(--color-primary) 18%, transparent)", borderRadius: 12, padding: "12px 20px", minWidth: 140,
-              border: "1px solid color-mix(in srgb, var(--color-primary) 25%, transparent)",
+              background: "color-mix(in srgb, var(--color-hero-text) 10%, transparent)", borderRadius: 12, padding: "12px 20px", minWidth: 140,
+              border: "1px solid color-mix(in srgb, var(--color-hero-text) 18%, transparent)",
             }}>
-              <div className="hero-number" style={{ fontSize: 26, color: "color-mix(in srgb, var(--color-primary) 60%, white 40%)" }}>{stats ? stats.doctors : "—"}</div>
-              <div className="stat-label" style={{ marginTop: 2, color: "color-mix(in srgb, var(--color-primary) 40%, white 60%)" }}>Doctors available</div>
+              <div className="hero-number" style={{ fontSize: 26, color: "var(--color-hero-text)" }}>{stats ? stats.doctors : "—"}</div>
+              <div className="stat-label" style={{ marginTop: 2, color: "var(--color-hero-muted)" }}>Doctors available</div>
             </div>
             <div style={{
-              background: "color-mix(in srgb, var(--color-accent) 16%, transparent)", borderRadius: 12, padding: "12px 20px", minWidth: 140,
-              border: "1px solid color-mix(in srgb, var(--color-accent) 28%, transparent)",
+              background: "color-mix(in srgb, var(--color-accent) 22%, transparent)", borderRadius: 12, padding: "12px 20px", minWidth: 140,
+              border: "1px solid color-mix(in srgb, var(--color-accent) 34%, transparent)",
             }}>
               <div className="hero-number" style={{ fontSize: 26, color: "var(--color-accent)" }}>{isLoading ? "—" : upcoming.length}</div>
               <div className="stat-label" style={{ marginTop: 2, color: "color-mix(in srgb, var(--color-accent) 60%, white 40%)" }}>Upcoming visits</div>

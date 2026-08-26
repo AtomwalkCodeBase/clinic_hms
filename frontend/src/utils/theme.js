@@ -50,7 +50,14 @@ export function deriveThemeVars(t) {
   // Hero (sidebar/topbar/hero-card) now uses the primary color directly,
   // not a separately hand-picked darker shade — so light chips (Aqua,
   // Teal Mist, Spring, ...) need dark text, and dark chips need light text.
-  const heroIsLight = yiq(t.primary) >= 145;
+  // 150 (not the more "correct" 145) is deliberate: Emerald Glass's primary
+  // (#01D4C7) sits right at YIQ~147 — technically "light" by the strict
+  // midpoint, but it's a saturated, fairly vivid teal, not a pale tint, and
+  // dark text on it reads as muddy/low-contrast rather than crisp (this is
+  // what "colours not matching" turned out to be). 150 flips just this one
+  // borderline theme to light text without touching any other theme's
+  // classification (next nearest is sand-sage at ~152, which stays dark-text).
+  const heroIsLight = yiq(t.primary) >= 150;
   const heroText = heroIsLight ? t.text : t.sidebarText;
 
   return {

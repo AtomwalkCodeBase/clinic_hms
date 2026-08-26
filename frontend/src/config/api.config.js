@@ -58,6 +58,7 @@ export const API_ENDPOINTS = {
     STAFF_MEMBER:(id) => `${API_V1}/org/staff/${id}/`,
     DOCTORS:          `${API_V1}/org/doctors/`,
     DOCTOR:     (id) => `${API_V1}/org/doctors/${id}/`,
+    DOCTOR_SPECIALISATIONS: `${API_V1}/org/doctors/specialisations/`,
     MY_DOCTOR_PROFILE: `${API_V1}/org/me/doctor-profile/`,
     MY_STAFF_PROFILE:  `${API_V1}/org/me/staff-profile/`,
     MY_PROFILE:        `${API_V1}/org/me/profile/`,
@@ -81,6 +82,7 @@ export const API_ENDPOINTS = {
     REGISTER:         `${API_V1}/patients/register/`,
     LOOKUP:           `${API_V1}/patients/lookup/`,
     SEARCH:           `${API_V1}/patients/search/`,
+    FAMILY_TREE:      `${API_V1}/patients/family-tree/`,
     DETAIL:     (id) => `${API_V1}/patients/${id}/`,
     HISTORY:    (id) => `${API_V1}/patients/${id}/history/`,
     ALLERGIES:  (id) => `${API_V1}/patients/${id}/allergies/`,
@@ -109,6 +111,7 @@ export const API_ENDPOINTS = {
     MONITORING:       `${API_V1}/opd/monitoring/`,
     HISTORY:          `${API_V1}/opd/history/`,
     APPOINTMENTS:     `${API_V1}/opd/appointments/`,
+    APPOINTMENTS_UPCOMING: `${API_V1}/opd/appointments/upcoming/`,
     APPOINTMENT:(id) => `${API_V1}/opd/appointments/${id}/`,
     APPT_STATUS:(id) => `${API_V1}/opd/appointments/${id}/status/`,
     APPT_RESCHEDULE:(id) => `${API_V1}/opd/appointments/${id}/reschedule/`,
@@ -148,6 +151,7 @@ export const API_ENDPOINTS = {
     LAB_REPORT_FILE: (tenantDb, requestId) => `${API_V1}/portal/lab-orders/${tenantDb}/${requestId}/report/`,
     PRESCRIPTIONS:         `${API_V1}/portal/prescriptions/`,
     PRESCRIPTION_CHOICE:   `${API_V1}/portal/prescriptions/choice/`,
+    PRESCRIPTION_RECEIPT: (tenantDb, id) => `${API_V1}/portal/prescriptions/${tenantDb}/${id}/receipt/`,
     PROFILE:                `${API_V1}/portal/profile/`,
     CHANGE_PASSWORD:        `${API_V1}/portal/profile/change-password/`,
     // Forgot-password is now OTP-based — see AUTH.OTP_REQUEST / AUTH.OTP_VERIFY
@@ -162,6 +166,14 @@ export const API_ENDPOINTS = {
     TIMELINE:               `${API_V1}/portal/timeline/`,
     NOTIFICATIONS:          `${API_V1}/portal/notifications/`,
     NOTIFICATION_READ: (tenantDb, id) => `${API_V1}/portal/notifications/${tenantDb}/${id}/read/`,
+    EMERGENCY_TOKEN:        `${API_V1}/portal/emergency/token/`,
+  },
+
+  // Emergency QR summary — public, no auth (see apps/patients/emergency_views.py).
+  // Fetched with publicClient, not apiClient, since the person scanning this
+  // has no Atomwalk login at all.
+  EMERGENCY: {
+    SUMMARY: (token) => `${API_V1}/emergency/${token}/`,
   },
 
   // apps.clinical was retired (HMS-07c-1) — live consultation flow is
@@ -184,6 +196,7 @@ export const API_ENDPOINTS = {
     REQUESTS:             `${API_V1}/lab/requests/`,
     REQUEST_LOOKUP:       `${API_V1}/lab/requests/lookup/`,
     REQUEST_CHOICE: (id) => `${API_V1}/lab/requests/${id}/choice/`,
+    REQUEST_ATTACH_DOCUMENT: (id) => `${API_V1}/lab/requests/${id}/attach-document/`,
     REQUEST_STATUS: (id) => `${API_V1}/lab/requests/${id}/status/`,
     REQUEST_REPORT: (id) => `${API_V1}/lab/requests/${id}/report/`,
     DELIVER:        (id) => `${API_V1}/lab/reports/${id}/deliver/`,

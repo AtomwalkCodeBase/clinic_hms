@@ -233,7 +233,7 @@ export default function PrescriptionsPage() {
   const [tab, setTab] = useState("active");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.PHARMACY.PRESCRIPTIONS, { params: { status: tab, page, page_size: pageSize } });
+  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.PHARMACY.PRESCRIPTIONS, { params: { status: tab, page, page_size: pageSize }, pollMs: 20000 });
   // Full (unpaginated) batch list — the dispense modal below name-matches
   // against every batch on hand, not just whatever's on the current page of
   // this list, so this stays a plain high-cap fetch rather than a paged one.

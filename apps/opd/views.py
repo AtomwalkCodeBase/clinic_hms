@@ -69,8 +69,12 @@ class AppointmentListCreateView(APIView):
         appt_date = request.query_params.get("date", str(date.today()))
         qs = qs.filter(scheduled_date=appt_date)
 
-        # Doctor sees only their queue unless admin
-        if request.user.role == "doctor":
+        # Doctor sees only their queue unless admin. Checks acts_as too, not
+        # just the literal role — a custom role bundling "doctor" (e.g. a
+        # solo-clinic role) must get the same self-scoping a literal doctor
+        # gets, not the unscoped whole-clinic view meant for admin/front-desk.
+        acts_as = getattr(request.user, "acts_as", [])
+        if request.user.role == "doctor" or "doctor" in acts_as:
             qs = qs.filter(doctor_user_id=request.user.id)
 
         # Branch scoping — explicit ?branch_id= wins; otherwise front-desk/nurse
@@ -85,20 +89,55 @@ class AppointmentListCreateView(APIView):
         # passing its id.
         branch_param = request.query_params.get("branch_id")
         if branch_param and branch_param != "all":
-            if request.user.role == "doctor":
+            if request.user.role == "doctor" or "doctor" in acts_as:
                 from apps.org.models import StaffUser
                 from apps.org.branch_utils import is_staff_in_branch
                 doctor = StaffUser.objects.using(db).filter(pk=request.user.id).first()
                 if not doctor or not is_staff_in_branch(doctor, branch_param, db):
                     return api_forbidden("You are not assigned to that branch.")
             qs = qs.filter(branch_id=branch_param)
-        elif not branch_param and request.user.role in ("front_desk", "nurse") and request.user.branch_id:
+        elif not branch_param and (
+            request.user.role in ("front_desk", "nurse") or set(acts_as) & {"front_desk", "nurse"}
+        ) and request.user.branch_id:
             qs = qs.filter(branch_id=request.user.branch_id)
 
         # Status filter
         appt_status = request.query_params.get("status")
         if appt_status:
             qs = qs.filter(status=appt_status)
+
+        # Doctor / room filters — same query param names as
+        # AppointmentUpcomingView so a frontend filter bar can share one
+        # set of controls across both "today" and "upcoming" views.
+        doctor_param = request.query_params.get("doctor_user_id")
+        if doctor_param:
+            qs = qs.filter(doctor_user_id=doctor_param)
+        room_param = request.query_params.get("room_id")
+        if room_param:
+            qs = qs.filter(room_id=room_param)
+
+        # Free-text search across every header the front-desk queue table
+        # shows: patient name/UHID/AWPID/mobile (via Patient), plus doctor
+        # name, chief complaint, and room — all plain fields on Appointment
+        # itself so no extra join is needed for those.
+        patient_q = (request.query_params.get("patient") or "").strip()
+        if patient_q:
+            from apps.patients.models import Patient
+            matching_awpids = list(
+                Patient.objects.using(db).filter(
+                    Q(full_name__icontains=patient_q) |
+                    Q(uhid__icontains=patient_q) |
+                    Q(awpid__icontains=patient_q) |
+                    Q(mobile__icontains=patient_q)
+                ).values_list("awpid", flat=True)
+            )
+            qs = qs.filter(
+                Q(patient_awpid__in=matching_awpids)
+                | Q(doctor_name__icontains=patient_q)
+                | Q(chief_complaint__icontains=patient_q)
+                | Q(room_name__icontains=patient_q)
+                | Q(token_number__icontains=patient_q)
+            )
 
         # Status counts over the WHOLE day (pre-pagination) so dashboard stat
         # cards stay accurate regardless of which page is currently loaded.
@@ -205,6 +244,15 @@ class AppointmentListCreateView(APIView):
             branch_id=branch_id,
             **room_fields,
         )
+
+        # Make this visible in the patient's own portal login, if they (or
+        # their guardian, for a dependent) have one — front-desk/nurse
+        # bookings used to never appear there at all, since only the portal's
+        # own booking flow wrote the registry-side PortalBooking row that
+        # "My Bookings" actually reads from. See apps.registry.portal_sync.
+        from apps.registry.portal_sync import sync_portal_booking
+        sync_portal_booking(appointment, db)
+
         return Response(AppointmentSerializer(appointment, context={"db": db}).data, status=status.HTTP_201_CREATED)
 
 
@@ -225,7 +273,7 @@ class AppointmentHistoryView(APIView):
         db = request.tenant_db
         qs = Appointment.objects.using(db).select_related("vitals")
 
-        if request.user.role == "doctor":
+        if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
             qs = qs.filter(doctor_user_id=request.user.id)
 
         patient_q = (request.query_params.get("patient") or "").strip()
@@ -252,6 +300,98 @@ class AppointmentHistoryView(APIView):
             qs = qs.filter(status=appt_status)
 
         qs = qs.order_by("-scheduled_date", "-token_number")
+        page_items, meta = paginate_queryset(request, qs)
+        serializer = AppointmentSerializer(page_items, many=True, context={"db": db})
+        return Response({"results": serializer.data, "pagination": meta})
+
+
+class AppointmentUpcomingView(APIView):
+    """
+    GET /api/v1/opd/appointments/upcoming/?date_from=&date_to=&status=&room_id=&branch_id=&patient=
+
+    Every appointment from today onward (ascending date/time), NOT limited
+    to a single day like AppointmentListCreateView's queue — this is what
+    powers the doctor's "know my whole upcoming schedule" dashboard, not
+    just today's. Doctor sees only their own (same acts_as-aware scoping as
+    the live queue); other staff see the whole hospital, narrowable to one
+    branch/room. date_from defaults to today; passing an earlier date_from
+    lets the same endpoint show a recent-past window too if ever needed,
+    but the frontend dashboard only ever asks for today-forward.
+
+    Deliberately a flat, filterable, paginated list rather than pre-grouped
+    "today/tomorrow/this week" buckets server-side — the frontend groups by
+    scheduled_date client-side, which stays correct across timezones/DST
+    without this endpoint needing to know the caller's "today" separately
+    from scheduled_date's.
+    """
+    permission_classes = [IsTenantStaff]
+
+    def get(self, request):
+        from apps.patients.models import Patient
+
+        db = request.tenant_db
+        qs = Appointment.objects.using(db).select_related("vitals")
+
+        acts_as = getattr(request.user, "acts_as", [])
+        if request.user.role == "doctor" or "doctor" in acts_as:
+            qs = qs.filter(doctor_user_id=request.user.id)
+
+        date_from = request.query_params.get("date_from") or str(date.today())
+        qs = qs.filter(scheduled_date__gte=date_from)
+        date_to = request.query_params.get("date_to")
+        if date_to:
+            qs = qs.filter(scheduled_date__lte=date_to)
+
+        appt_status = request.query_params.get("status")
+        if appt_status:
+            qs = qs.filter(status=appt_status)
+        else:
+            # Default view excludes cancelled/no-show clutter from "what's
+            # coming up" — still reachable via an explicit ?status= filter.
+            qs = qs.exclude(status__in=[Appointment.STATUS_CANCELLED, Appointment.STATUS_NO_SHOW])
+
+        room_id = request.query_params.get("room_id")
+        if room_id:
+            qs = qs.filter(room_id=room_id)
+
+        doctor_param = request.query_params.get("doctor_user_id")
+        if doctor_param:
+            qs = qs.filter(doctor_user_id=doctor_param)
+
+        branch_param = request.query_params.get("branch_id")
+        if branch_param and branch_param != "all":
+            qs = qs.filter(branch_id=branch_param)
+        elif not branch_param and (
+            request.user.role in ("front_desk", "nurse") or set(acts_as) & {"front_desk", "nurse"}
+        ) and request.user.branch_id:
+            qs = qs.filter(branch_id=request.user.branch_id)
+
+        patient_q = (request.query_params.get("patient") or "").strip()
+        if patient_q:
+            matching_awpids = list(
+                Patient.objects.using(db).filter(
+                    Q(full_name__icontains=patient_q) |
+                    Q(uhid__icontains=patient_q) |
+                    Q(awpid__icontains=patient_q) |
+                    Q(mobile__icontains=patient_q)
+                ).values_list("awpid", flat=True)
+            )
+            qs = qs.filter(
+                Q(patient_awpid__in=matching_awpids)
+                | Q(doctor_name__icontains=patient_q)
+                | Q(chief_complaint__icontains=patient_q)
+                | Q(room_name__icontains=patient_q)
+                | Q(token_number__icontains=patient_q)
+            )
+
+        # Ascending — "what's next" reads top-to-bottom chronologically,
+        # the opposite of AppointmentHistoryView's newest-first "what
+        # already happened" ordering. Nulls (no time picked — a walk-in
+        # slot) sort after timed appointments on the same day so a
+        # doctor's fixed-time bookings aren't pushed down by untimed ones.
+        from django.db.models import F
+        qs = qs.order_by("scheduled_date", F("scheduled_time").asc(nulls_last=True), "token_number")
+
         page_items, meta = paginate_queryset(request, qs)
         serializer = AppointmentSerializer(page_items, many=True, context={"db": db})
         return Response({"results": serializer.data, "pagination": meta})
@@ -338,7 +478,7 @@ class OPDStatsView(APIView):
         qs = Appointment.objects.using(db).filter(
             scheduled_date__gte=start, scheduled_date__lte=today,
         )
-        if request.user.role == "doctor":
+        if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
             qs = qs.filter(doctor_user_id=request.user.id)
 
         rows = qs.values("scheduled_date").annotate(
@@ -637,7 +777,7 @@ class EncounterCreateView(APIView):
         appointment_id = request.query_params.get("appointment")
         if appointment_id:
             qs = qs.filter(appointment_id=appointment_id)
-        if request.user.role == "doctor":
+        if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
             qs = qs.filter(doctor_user_id=request.user.id)
         qs = qs.order_by("-created_at")
         page_items, meta = paginate_queryset(request, qs)
@@ -647,7 +787,12 @@ class EncounterCreateView(APIView):
         })
 
     def post(self, request):
-        if request.user.role not in ("doctor",):
+        # Checks acts_as too — a custom role bundling "doctor" (e.g. a
+        # solo-clinic role that's also nurse/front-desk) must be able to
+        # open a consultation, the same as a literal doctor. Before this,
+        # any custom-role staff hit a hard "Only doctors can create
+        # encounters" wall here even when invited specifically to act as one.
+        if request.user.role != "doctor" and "doctor" not in getattr(request.user, "acts_as", []):
             return api_forbidden("Only doctors can create encounters.")
         db = request.tenant_db
         serializer = OPDEncounterCreateSerializer(data=request.data, context={"db": db})

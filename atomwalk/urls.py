@@ -38,6 +38,11 @@ urlpatterns = [
     path("api/v1/opd/",          include("apps.opd.urls")),
     path("api/v1/patients/",     include("apps.patients.urls")),
     path("api/v1/portal/",       include("apps.patients.portal_urls")),
+    # Deliberately its own top-level prefix, not nested under /portal/ — that
+    # prefix implies patient-JWT auth everywhere else; this is the one
+    # intentionally public, unauthenticated endpoint (see
+    # apps/patients/emergency_views.py for why).
+    path("api/v1/emergency/",    include("apps.patients.emergency_urls")),
     # apps.clinical's Encounter/Vital/Diagnosis/FollowUp/ClinicalDocument were
     # retired (HMS-07c-1, confirmed dead — the live flow writes through
     # apps.opd, see apps/opd/views.py::_sync_to_hie for the actual HIE write

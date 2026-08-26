@@ -30,6 +30,8 @@ from rest_framework.permissions import IsAuthenticated
 from core.permissions import IsHospitalAdmin, IsHospitalStaff, IsDoctor, RequireFeature
 from core.response import success, created, error, not_found
 from core.pagination import paginate_queryset
+from core.file_validation import validate_data_uri, FileValidationError
+from core import storage as blob_storage
 from apps.registry.models import StaffMobileIndex
 
 from .models import Branch, Department, StaffUser, DoctorProfile, StaffProfile, Role, Permission, UserRole, Room, RoomAssignment
@@ -642,9 +644,17 @@ class StaffDetailView(APIView):
         # Refuse to role-change away the last active hospital_admin — see the
         # matching check in apps/platform_admin/views.py for the deactivate
         # case (this view's DELETE, below, does the deactivate check).
-        if "role" in d and d["role"] != "hospital_admin" and staff.role == "hospital_admin" and staff.is_active:
+        # Checks acts_as too — a custom role bundling "hospital_admin" counts
+        # as an effective admin here just like a literal one, on both sides
+        # (is THIS staff member currently one, and are there OTHERS besides
+        # them) — otherwise a hospital could be silently left with zero
+        # effective admins while this guard believed one still existed.
+        staff_old_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
+        staff_is_admin = staff.role == "hospital_admin" or "hospital_admin" in staff_old_acts_as
+        if "role" in d and d["role"] != "hospital_admin" and staff_is_admin and staff.is_active:
+            ADMIN_Q = Q(role="hospital_admin") | Q(role="custom", custom_role__acts_as__contains=["hospital_admin"])
             other_admins = StaffUser.objects.using(request.tenant_db).filter(
-                role="hospital_admin", is_active=True
+                ADMIN_Q, is_active=True
             ).exclude(pk=staff.id).exists()
             if not other_admins:
                 return error(
@@ -762,9 +772,12 @@ class StaffDetailView(APIView):
         if not staff:
             return not_found("Staff member not found.")
 
-        if staff.role == "hospital_admin" and staff.is_active:
+        staff_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
+        staff_is_admin = staff.role == "hospital_admin" or "hospital_admin" in staff_acts_as
+        if staff_is_admin and staff.is_active:
+            ADMIN_Q = Q(role="hospital_admin") | Q(role="custom", custom_role__acts_as__contains=["hospital_admin"])
             other_admins = StaffUser.objects.using(request.tenant_db).filter(
-                role="hospital_admin", is_active=True
+                ADMIN_Q, is_active=True
             ).exclude(pk=staff.id).exists()
             if not other_admins:
                 return error(
@@ -1160,12 +1173,45 @@ class MyDoctorProfileView(APIView):
             staff_id=request.user.id
         )
         ctx = {"fee_editable": self._fee_editable(request)}
+
+        # digital_signature is handled separately from the generic serializer
+        # loop below — same reasoning as MyStaffProfileView's photo handling:
+        # base64 in, S3 key out, nothing but the key touches the DB.
+        # DoctorSelfProfileSerializer.digital_signature is read-only for this
+        # reason.
+        old_sig_key = profile.digital_signature
+        if "digital_signature" in request.data:
+            sig = request.data.get("digital_signature") or ""
+            if not sig:
+                profile.digital_signature = ""
+            else:
+                try:
+                    mime_type = validate_data_uri(sig)
+                except FileValidationError as exc:
+                    return error(str(exc), errors={"digital_signature": str(exc)})
+                from apps.tenants.models import Tenant as _Tenant
+                _tenant = _Tenant.objects.using("default").filter(pk=request.tenant_id).first()
+                folder = blob_storage.tenant_folder(_tenant) if _tenant else request.tenant_db
+                _staff = StaffUser.objects.using(request.tenant_db).filter(pk=request.user.id).first()
+                identity = blob_storage.identity_slug(
+                    name=_staff.get_full_name() if _staff else "", identifier=request.user.email,
+                )
+                try:
+                    profile.digital_signature = blob_storage.upload_data_uri(
+                        sig, prefix=f"doctor-signatures/{folder}", mime_type=mime_type,
+                        category="doctor-signature", identity=identity,
+                    )
+                except blob_storage.StorageError as exc:
+                    return error(str(exc), errors={"digital_signature": str(exc)})
+
         s = DoctorSelfProfileSerializer(profile, data=request.data, partial=True, context=ctx)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         for attr, val in s.validated_data.items():
             setattr(profile, attr, val)
         profile.save(using=request.tenant_db)
+        if "digital_signature" in request.data and old_sig_key and old_sig_key != profile.digital_signature:
+            blob_storage.delete(old_sig_key)
         return success(data=DoctorSelfProfileSerializer(profile, context=ctx).data, message="Profile updated.")
 
 
@@ -1293,10 +1339,36 @@ class MyStaffProfileView(APIView):
         except StaffUser.DoesNotExist:
             return not_found("Staff member not found.")
 
-        photo = request.data.get("photo")
-        if photo and len(photo) > _MAX_PHOTO_BASE64_CHARS:
-            return error("Photo is too large. Please use an image under ~1.5MB.",
-                         errors={"photo": "Too large."})
+        # photo is handled separately from the generic serializer loop below
+        # — it arrives as a base64 data URI and needs to be verified + pushed
+        # to S3 (core.storage), with only the resulting object key ever
+        # touching the DB. StaffMeSerializer.photo is read-only for exactly
+        # this reason (see its definition) so it never appears in
+        # validated_data.
+        old_photo_key = staff.photo
+        if "photo" in request.data:
+            photo = request.data.get("photo") or ""
+            if not photo:
+                staff.photo = ""
+            else:
+                if len(photo) > _MAX_PHOTO_BASE64_CHARS:
+                    return error("Photo is too large. Please use an image under ~1.5MB.",
+                                 errors={"photo": "Too large."})
+                try:
+                    mime_type = validate_data_uri(photo)
+                except FileValidationError as exc:
+                    return error(str(exc), errors={"photo": str(exc)})
+                from apps.tenants.models import Tenant as _Tenant
+                _tenant = _Tenant.objects.using("default").filter(pk=request.tenant_id).first()
+                folder = blob_storage.tenant_folder(_tenant) if _tenant else request.tenant_db
+                identity = blob_storage.identity_slug(name=staff.get_full_name(), identifier=staff.email)
+                try:
+                    staff.photo = blob_storage.upload_data_uri(
+                        photo, prefix=f"staff-photos/{folder}", mime_type=mime_type,
+                        category="staff-photo", identity=identity,
+                    )
+                except blob_storage.StorageError as exc:
+                    return error(str(exc), errors={"photo": str(exc)})
 
         s = StaffMeSerializer(staff, data=request.data, partial=True)
         if not s.is_valid():
@@ -1304,6 +1376,8 @@ class MyStaffProfileView(APIView):
         for attr, val in s.validated_data.items():
             setattr(staff, attr, val)
         staff.save(using=request.tenant_db)
+        if "photo" in request.data and old_photo_key and old_photo_key != staff.photo:
+            blob_storage.delete(old_photo_key)
         return success(data=StaffMeSerializer(staff).data, message="Profile updated.")
 
 
@@ -1311,12 +1385,21 @@ class MyStaffProfileView(APIView):
 
 class DoctorListView(APIView):
     """
-    GET /api/v1/org/doctors/ — list doctors with profiles (any staff).
-    Includes custom-role staff whose Role.acts_as includes "doctor" (e.g. a
-    solo-clinic role bundling doctor+nurse+front_desk) — see
-    apps.org.rbac.resolve_acts_as. They get a DoctorProfile at invite time
-    the same as a literal doctor (see StaffInviteView), so they show up here
-    with real specialisation/fee/schedule data, not a blank card.
+    GET /api/v1/org/doctors/?q=&specialisation=&branch_id= — list doctors
+    with profiles (any staff). Includes custom-role staff whose
+    Role.acts_as includes "doctor" (e.g. a solo-clinic role bundling
+    doctor+nurse+front_desk) — see apps.org.rbac.resolve_acts_as. They get
+    a DoctorProfile at invite time the same as a literal doctor (see
+    StaffInviteView), so they show up here with real specialisation/fee/
+    schedule data, not a blank card.
+
+    ?q= matches first/last name or specialisation (front-desk doctor
+    search — "cardio" finds every cardiologist, "sharma" finds every
+    doctor named Sharma). ?specialisation= narrows to an exact
+    specialisation for a dedicated filter dropdown. ?branch_id= narrows to
+    doctors assigned to that branch (see apps.org.branch_utils) — omitted
+    means "every branch", same default as everywhere else that filter is
+    optional.
     """
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
@@ -1325,7 +1408,48 @@ class DoctorListView(APIView):
             Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"]),
             is_active=True,
         ).prefetch_related("doctor_profile")
-        return success(data=StaffSerializer(qs, many=True).data)
+
+        q = (request.query_params.get("q") or "").strip()
+        if q:
+            qs = qs.filter(
+                Q(first_name__icontains=q) | Q(last_name__icontains=q)
+                | Q(doctor_profile__specialisation__icontains=q)
+                | Q(doctor_profile__known_for__icontains=q)
+            )
+
+        specialisation = (request.query_params.get("specialisation") or "").strip()
+        if specialisation:
+            qs = qs.filter(doctor_profile__specialisation__iexact=specialisation)
+
+        branch_id = request.query_params.get("branch_id")
+        if branch_id:
+            from apps.org.branch_utils import get_staff_ids_in_branch
+            qs = qs.filter(pk__in=get_staff_ids_in_branch(branch_id, request.tenant_db))
+
+        return success(data=StaffSerializer(qs.distinct(), many=True).data)
+
+
+class DoctorSpecialisationListView(APIView):
+    """
+    GET /api/v1/org/doctors/specialisations/ — distinct, non-blank
+    specialisation values currently in use at this hospital, for a filter
+    dropdown (front desk doctor search) instead of free-typing.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalStaff]
+
+    def get(self, request):
+        values = (
+            StaffUser.objects.using(request.tenant_db)
+            .filter(
+                Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"]),
+                is_active=True,
+            )
+            .exclude(doctor_profile__specialisation="")
+            .values_list("doctor_profile__specialisation", flat=True)
+            .distinct()
+            .order_by("doctor_profile__specialisation")
+        )
+        return success(data=[v for v in values if v])
 
 
 # ── Tenant-level clinical settings ───────────────────────────────────────────
@@ -1363,14 +1487,21 @@ class TenantSettingsView(APIView):
             "registration_fee_amount": str(tenant.registration_fee_amount),
             "default_tax_rate": str(tenant.default_tax_rate),
             # ── Branding ───────────────────────────────────────────────
-            "logo": tenant.logo,
+            # tenant.logo stores an S3 object key, not a usable URL — sign
+            # it fresh on every read (see core/storage.py).
+            "logo": blob_storage.signed_url(tenant.logo),
+            # Empty means "using the auto-generated default" (tenant.db_name)
+            # — see core.storage.tenant_folder(). Frontend shows the
+            # effective folder name as a placeholder when this is blank.
+            "storage_folder": tenant.storage_folder,
+            "storage_folder_default": tenant.db_name,
         })
 
     def patch(self, request):
         tenant = self._get_tenant(request)
         if not tenant:
             return not_found("Tenant not found.")
-        allowed = {"fee_ownership", "registration_fee_enabled", "registration_fee_amount", "default_tax_rate", "logo"}
+        allowed = {"fee_ownership", "registration_fee_enabled", "registration_fee_amount", "default_tax_rate", "logo", "storage_folder"}
         for key, val in request.data.items():
             if key not in allowed:
                 return error(f"Field '{key}' is not configurable here.")
@@ -1399,21 +1530,49 @@ class TenantSettingsView(APIView):
             if rate < 0 or rate > 100:
                 return error("default_tax_rate must be between 0 and 100.")
             tenant.default_tax_rate = rate
+        if "storage_folder" in request.data:
+            raw = (request.data.get("storage_folder") or "").strip()
+            if not raw:
+                tenant.storage_folder = ""
+            else:
+                slug = blob_storage.sanitize_folder_name(raw)
+                if not slug:
+                    return error("Storage folder name must contain at least one letter or number.",
+                                 errors={"storage_folder": "Invalid."})
+                tenant.storage_folder = slug
+        old_logo_key = tenant.logo
         if "logo" in request.data:
             logo = request.data["logo"] or ""
             # Client resizes before upload (see HospitalLogoUpload.jsx), but
-            # don't trust that — cap the stored string so a bypassed client
-            # can't wedge an enormous base64 blob into this TextField.
+            # don't trust that — cap the incoming string so a bypassed client
+            # can't force an enormous upload through.
             if len(logo) > 1_500_000:
                 return error("Logo image is too large. Please upload a smaller file.")
-            tenant.logo = logo
+            if not logo:
+                tenant.logo = ""
+            else:
+                try:
+                    mime_type = validate_data_uri(logo)
+                except FileValidationError as exc:
+                    return error(str(exc), errors={"logo": str(exc)})
+                try:
+                    tenant.logo = blob_storage.upload_data_uri(
+                        logo, prefix=f"hospital-logos/{blob_storage.tenant_folder(tenant)}", mime_type=mime_type,
+                        category="hospital-logo",
+                    )
+                except blob_storage.StorageError as exc:
+                    return error(str(exc), errors={"logo": str(exc)})
         tenant.save(using="default")
+        if "logo" in request.data and old_logo_key and old_logo_key != tenant.logo:
+            blob_storage.delete(old_logo_key)
         return success(data={
             "fee_ownership": tenant.fee_ownership,
             "registration_fee_enabled": tenant.registration_fee_enabled,
             "registration_fee_amount": str(tenant.registration_fee_amount),
             "default_tax_rate": str(tenant.default_tax_rate),
-            "logo": tenant.logo,
+            "logo": blob_storage.signed_url(tenant.logo),
+            "storage_folder": tenant.storage_folder,
+            "storage_folder_default": tenant.db_name,
         }, message="Settings updated.")
 
 

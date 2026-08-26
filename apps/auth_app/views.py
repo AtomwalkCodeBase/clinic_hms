@@ -434,13 +434,14 @@ class MeView(APIView):
         # up to date without needing a fresh login every time it changes.
         data["photo"] = ""
         try:
+            from core import storage as blob_storage
             if p.get("role") == "patient":
                 from apps.registry.models import PatientAccount
                 acct = PatientAccount.objects.using("default").get(pk=p.get("user_id"))
-                data["photo"] = acct.photo or ""
+                data["photo"] = blob_storage.signed_url(acct.photo)
             elif not p.get("is_platform") and p.get("db_name"):
                 staff = StaffUser.objects.using(p["db_name"]).get(pk=p.get("user_id"))
-                data["photo"] = staff.photo or ""
+                data["photo"] = blob_storage.signed_url(staff.photo)
         except Exception:
             # Best-effort: platform admins (no row to look up) and missing/
             # inactive accounts are expected and shouldn't break /me/, but a
@@ -457,8 +458,9 @@ class MeView(APIView):
         data["logo"] = ""
         if not p.get("is_platform") and p.get("role") != "patient" and p.get("tenant_id"):
             try:
+                from core import storage as blob_storage
                 tenant = Tenant.objects.using("default").get(pk=p["tenant_id"])
-                data["logo"] = tenant.logo or ""
+                data["logo"] = blob_storage.signed_url(tenant.logo)
             except Exception:
                 logger.debug("MeView: could not resolve hospital logo for tenant_id=%s", p.get("tenant_id"), exc_info=True)
 

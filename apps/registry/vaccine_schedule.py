@@ -149,7 +149,7 @@ def _serialize_matched(rule, record):
     }
 
 
-def build_roadmap(awpid, date_of_birth, rules):
+def build_roadmap(awpid, date_of_birth, rules, *, viewer_tenant_id=None, hie_consent=True):
     """
     Merges a patient's real SharedVaccination records with a schedule's
     rules to produce one ordered list: rule slots that are fulfilled show
@@ -166,16 +166,39 @@ def build_roadmap(awpid, date_of_birth, rules):
     which schedule's rules to pass — see PortalVaccinationListView /
     PatientVaccinationListCreateView for the per-hospital / cross-hospital
     resolution logic.
+
+    `hie_consent` (default True — unchanged behavior for every existing
+    caller) — when explicitly passed False, records attributed to a
+    DIFFERENT hospital than `viewer_tenant_id` are excluded, mirroring the
+    same HIE-consent gate PatientHistoryView/PatientGrowthView already
+    apply to every other cross-hospital data type. Two kinds of record are
+    deliberately exempt from this filter even without consent:
+      - source_tenant_id is None (a self-reported upload that's never been
+        attributed to any hospital), and
+      - verification_status is still "pending_review" — per the
+        state-machine note on SharedVaccination, ANY hospital's doctor/
+        nurse must be able to review a pending self-report regardless of
+        this patient's consent status at THIS hospital, or the review
+        workflow breaks for every patient who hasn't consented yet.
+    Only PatientVaccinationListCreateView.get() (the staff-side roadmap)
+    passes hie_consent=False; the patient portal intentionally never gates
+    — a patient can always see their own full history — and the staff
+    "administer/order/decline" write views don't call build_roadmap() at
+    all, so this only affects what's rendered, never what's written.
     """
     from .models import SharedVaccination
 
     rules = list(rules)
 
-    records = list(
-        SharedVaccination.objects.using("default")
-        .filter(awpid=awpid)
-        .order_by("administered_date")
-    )
+    records_qs = SharedVaccination.objects.using("default").filter(awpid=awpid)
+    if not hie_consent:
+        from django.db.models import Q
+        records_qs = records_qs.filter(
+            Q(source_tenant_id__isnull=True)
+            | Q(source_tenant_id=viewer_tenant_id)
+            | Q(verification_status=SharedVaccination.STATUS_PENDING)
+        )
+    records = list(records_qs.order_by("administered_date"))
     matched_ids = set()
     today = date.today()
     age_days = (today - date_of_birth).days if date_of_birth else None

@@ -6,6 +6,7 @@
  */
 import { useState, useCallback } from "react";
 import { useNavigate }   from "react-router-dom";
+import { CalendarClock, ChevronDown, ChevronUp } from "lucide-react";
 import { AppShell }      from "../../components/layout/AppShell";
 import { PageShell }     from "../../components/common/PageShell";
 import { useApi }        from "../../hooks/useApi";
@@ -13,10 +14,28 @@ import { useAuth }       from "../../hooks/useAuth";
 import { useToast }      from "../../hooks/useToast";
 import { useActiveBranch } from "../../hooks/useActiveBranch";
 import BranchSwitcher    from "../../components/common/BranchSwitcher";
+import PaginationControls from "../../components/common/PaginationControls";
 import apiClient         from "../../services/api.client";
 import API_ENDPOINTS     from "../../config/api.config";
 
 const TODAY = new Date().toISOString().split("T")[0];
+const TOMORROW = (() => {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().split("T")[0];
+})();
+
+function formatScheduleDate(dateStr) {
+  if (dateStr === TODAY) return "Today";
+  if (dateStr === TOMORROW) return "Tomorrow";
+  try {
+    return new Date(dateStr + "T00:00:00").toLocaleDateString("en-IN", {
+      weekday: "short", day: "2-digit", month: "short",
+    });
+  } catch {
+    return dateStr;
+  }
+}
 
 const STATUS_COLORS = {
   waiting:     { bg: "var(--color-warning-light)", color: "var(--color-warning)" },
@@ -91,6 +110,32 @@ export default function DoctorDashboardPage() {
     params: { days: 7 },
   });
   const weekStats = statsData?.results || [];
+
+  // ── Upcoming schedule — everything from tomorrow onward, not just today.
+  // Collapsed by default to the first 5 (view more/less), with full
+  // pagination once expanded — the doctor's whole future booking list
+  // shouldn't dump onto the dashboard by default.
+  const [upcomingExpanded, setUpcomingExpanded] = useState(false);
+  const [upcomingPage, setUpcomingPage] = useState(1);
+  const [upcomingPageSize, setUpcomingPageSize] = useState(5);
+  const { data: upcomingData, isLoading: upcomingLoading } = useApi(API_ENDPOINTS.OPD.APPOINTMENTS_UPCOMING, {
+    params: {
+      date_from: TOMORROW,
+      page: upcomingPage,
+      page_size: upcomingExpanded ? upcomingPageSize : 5,
+      ...(hasMultiple && activeBranchId ? { branch_id: activeBranchId } : {}),
+    },
+    pollMs: 30000,
+  });
+  const upcomingList = upcomingData?.results || [];
+  const upcomingPagination = upcomingData?.pagination || null;
+  const upcomingRemaining = Math.max(0, (upcomingPagination?.total_count || 0) - upcomingList.length);
+
+  function collapseUpcoming() {
+    setUpcomingExpanded(false);
+    setUpcomingPage(1);
+    setUpcomingPageSize(5);
+  }
 
   const appointments = apptData?.results || [];
   // Prefer server-computed whole-day counts (accurate even beyond 100/day);
@@ -257,6 +302,85 @@ export default function DoctorDashboardPage() {
                 ))}
               </tbody>
             </table>
+          )}
+        </div>
+
+        {/* ── Upcoming schedule (tomorrow onward) ────────────────────── */}
+        <div className="card" style={{ padding: 0, overflow: "hidden", marginTop: 22 }}>
+          <div style={{
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            padding: "14px 20px", borderBottom: "1px solid var(--color-border)", flexWrap: "wrap", gap: 8,
+          }}>
+            <span className="dot-label dot-label--blue" style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <CalendarClock size={14} /> Upcoming schedule
+            </span>
+            <button className="btn-primary" style={{ fontSize: 12, padding: "6px 16px" }} onClick={() => navigate("/doctor/queue")}>
+              Full queue & filters →
+            </button>
+          </div>
+
+          {upcomingLoading && upcomingList.length === 0 ? (
+            <div style={{ padding: 32, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
+          ) : upcomingList.length === 0 ? (
+            <div style={{ padding: 36, textAlign: "center" }}>
+              <div style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
+                Nothing booked beyond today
+              </div>
+              <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
+                Future bookings front desk makes for you will show up here.
+              </div>
+            </div>
+          ) : (
+            <>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Time</th>
+                    <th>Patient</th>
+                    <th>Room</th>
+                    <th>Chief Complaint</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {upcomingList.map(a => (
+                    <tr key={a.id}>
+                      <td style={{ fontSize: 12, fontWeight: 700 }}>{formatScheduleDate(a.scheduled_date)}</td>
+                      <td style={{ fontSize: 12, fontWeight: 700 }}>{a.scheduled_time ? a.scheduled_time.slice(0, 5) : "—"}</td>
+                      <td style={{ fontSize: 13, fontWeight: 600 }}>{a.patient_name || "—"}</td>
+                      <td style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                        {a.room_name ? `${a.room_name}${a.floor ? ` · Fl ${a.floor}` : ""}` : "—"}
+                      </td>
+                      <td style={{ fontSize: 12 }}>{a.chief_complaint || "—"}</td>
+                      <td><Badge status={a.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {upcomingExpanded ? (
+                <>
+                  <PaginationControls
+                    pagination={upcomingPagination}
+                    page={upcomingPage} pageSize={upcomingPageSize}
+                    onPageChange={setUpcomingPage} onPageSizeChange={setUpcomingPageSize}
+                  />
+                  <div style={{ padding: "10px 20px 16px", textAlign: "center" }}>
+                    <button className="btn-outline" style={{ fontSize: 12, padding: "6px 16px" }} onClick={collapseUpcoming}>
+                      <ChevronUp size={13} style={{ verticalAlign: -2, marginRight: 4 }} /> View less
+                    </button>
+                  </div>
+                </>
+              ) : upcomingRemaining > 0 ? (
+                <div style={{ padding: "12px 20px 16px", textAlign: "center", borderTop: "1px solid var(--color-border)" }}>
+                  <button className="btn-outline" style={{ fontSize: 12.5, padding: "7px 18px", fontWeight: 700 }}
+                    onClick={() => setUpcomingExpanded(true)}>
+                    <ChevronDown size={13} style={{ verticalAlign: -2, marginRight: 4 }} /> View more ({upcomingRemaining} more)
+                  </button>
+                </div>
+              ) : null}
+            </>
           )}
         </div>
 

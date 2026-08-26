@@ -28,6 +28,7 @@ from core.permissions import IsPatient
 from core.response import success, error, not_found
 from core.pagination import paginate_list, paginate_queryset
 from core.file_validation import validate_data_uri, FileValidationError
+from core import storage as blob_storage
 from apps.tenants.models import Tenant
 from apps.registry.models import PatientAccount, PatientIdentity
 
@@ -194,7 +195,7 @@ class PortalHospitalListView(APIView):
                 "state": t.state or "",
                 "accreditations": [a.strip() for a in (t.accreditations or "").split(",") if a.strip()],
                 "about": t.about or "",
-                "logo": t.logo or "",
+                "logo": blob_storage.signed_url(t.logo),
             }
             for t in Tenant.objects.using("default").filter(is_active=True, id__in=enabled_tenant_ids).order_by("name")
         ]
@@ -296,7 +297,23 @@ class PortalSearchView(APIView):
         specialty = (request.query_params.get("specialty") or "").strip()
         city = (request.query_params.get("city") or "").strip()
         sort = (request.query_params.get("sort") or "").strip()  # "experience" | "fee" | "name"
-        if len(q) < 2 and not specialty and not city:
+
+        # Optional numeric refinements — doctors with unknown data on either
+        # field are kept rather than hidden (a profile the hospital hasn't
+        # finished filling in shouldn't disappear from search just because
+        # the patient added a price/experience filter).
+        min_experience_raw = (request.query_params.get("min_experience") or "").strip()
+        max_fee_raw = (request.query_params.get("max_fee") or "").strip()
+        try:
+            min_experience = int(min_experience_raw) if min_experience_raw else None
+        except ValueError:
+            min_experience = None
+        try:
+            max_fee = float(max_fee_raw) if max_fee_raw else None
+        except ValueError:
+            max_fee = None
+
+        if len(q) < 2 and not specialty and not city and min_experience is None and max_fee is None:
             return Response({"hospitals": [], "doctors": []})
 
         terms = _expand_search_terms(q) if q else set()
@@ -386,6 +403,14 @@ class PortalSearchView(APIView):
             except Exception as exc:
                 logger.warning("portal search: skipped %s (%s)", db, exc)
 
+        if min_experience is not None:
+            doctors = [d for d in doctors if d["experience_years"] is None or d["experience_years"] >= min_experience]
+        if max_fee is not None:
+            doctors = [
+                d for d in doctors
+                if d["consultation_fee"] is None or float(d["consultation_fee"]) <= max_fee
+            ]
+
         if sort == "experience":
             doctors.sort(key=lambda d: d["experience_years"] or 0, reverse=True)
         elif sort == "fee":
@@ -416,7 +441,7 @@ def _doctor_card(staff, profile):
     return {
         "id": staff.id,
         "name": _doctor_display_name(staff),
-        "photo":            staff.photo or None,
+        "photo":            blob_storage.signed_url(staff.photo) or None,
         "specialisation":   profile.specialisation if profile else "",
         "qualification":    profile.qualification if profile else "",
         "experience_years": profile.experience_years if profile else None,
@@ -496,7 +521,7 @@ class PortalDoctorListView(APIView):
         doctors = [_doctor_card(s, profiles.get(s.id)) for s in staff_list]
         return Response({
             "results": doctors,
-            "hospital": {"tenant_id": tenant.id, "name": tenant.name, "logo": tenant.logo or ""},
+            "hospital": {"tenant_id": tenant.id, "name": tenant.name, "logo": blob_storage.signed_url(tenant.logo)},
         })
 
 
@@ -527,7 +552,7 @@ class PortalDoctorDetailView(APIView):
         data["hospital"] = {
             "tenant_id": tenant.id, "name": tenant.name, "city": tenant.city or "",
             "accreditations": [a.strip() for a in (tenant.accreditations or "").split(",") if a.strip()],
-            "logo": tenant.logo or "",
+            "logo": blob_storage.signed_url(tenant.logo),
         }
 
         # Which payment modes this hospital currently accepts (hospital admin
@@ -945,6 +970,7 @@ class PortalMyRecordsView(APIView):
                     enc = OPDEncounter.objects.using(db).filter(appointment_id=appt.id).first()
                     record = {
                         "hospital":        tenant.name,
+                        "tenant_db":       db,
                         "date":            str(appt.scheduled_date),
                         "time":            appt.scheduled_time.strftime("%H:%M") if appt.scheduled_time else None,
                         "doctor":          appt.doctor_name,
@@ -952,6 +978,8 @@ class PortalMyRecordsView(APIView):
                         "chief_complaint": appt.chief_complaint,
                         "diagnoses":       [],
                         "prescription":    [],
+                        "prescription_id": None,
+                        "rx_number":       None,
                         "investigations":  "",
                         "advice":          "",
                         "follow_up_in_days": None,
@@ -988,6 +1016,11 @@ class PortalMyRecordsView(APIView):
                                 }
                                 for i in rx.items.using(db).all()
                             ]
+                            # So the frontend can offer a PDF download right
+                            # on this card — PortalPrescriptionReceiptPDFView
+                            # takes exactly (tenant_db, prescription pk).
+                            record["prescription_id"] = str(rx.id)
+                            record["rx_number"] = rx.rx_number
                     results.append(record)
             except Exception as e:
                 logger.warning("my-records: skipped %s (%s)", db, e)
@@ -1166,6 +1199,15 @@ class PortalMyBookingsView(APIView):
         ).order_by("-scheduled_date", "-id")
         bookings, meta = paginate_queryset(request, qs)
 
+        # Batched once per page (not per booking) — city/state are the same
+        # for every booking at a given hospital, so this is one query for
+        # the whole page rather than N.
+        tenant_map = {
+            t.id: t for t in Tenant.objects.using("default").filter(
+                id__in={b.tenant_id for b in bookings}
+            )
+        }
+
         today = str(date.today())
         # States where the patient is still "in the queue" — before this,
         # nothing to wait for (not checked in); at/after in_progress or done,
@@ -1183,6 +1225,8 @@ class PortalMyBookingsView(APIView):
             doctor_id = None
             room_name = None
             floor = None
+            doctor_photo = None
+            doctor_specialisation = ""
             try:
                 _ensure_db(b.db_name)
                 appt = Appointment.objects.using(b.db_name).get(pk=b.appointment_id)
@@ -1199,9 +1243,47 @@ class PortalMyBookingsView(APIView):
                 doctor_id = appt.doctor_user_id.int if isinstance(appt.doctor_user_id, uuid.UUID) else appt.doctor_user_id
                 room_name = appt.room_name or None
                 floor = appt.floor or None
+
+                # Same doctor detail already shown on "Find Doctors" (see
+                # _doctor_card above) — a patient shouldn't lose the doctor's
+                # photo/specialisation just because they're viewing a past
+                # booking instead of browsing. Best-effort: folded into the
+                # same try/except as the rest of this per-booking lookup.
+                if doctor_id:
+                    from apps.org.models import StaffUser, DoctorProfile
+                    staff_obj = StaffUser.objects.using(b.db_name).filter(pk=doctor_id).first()
+                    if staff_obj and staff_obj.photo:
+                        doctor_photo = blob_storage.signed_url(staff_obj.photo) or None
+                    profile_obj = DoctorProfile.objects.using(b.db_name).filter(staff_id=doctor_id).first()
+                    if profile_obj:
+                        doctor_specialisation = profile_obj.specialisation or ""
+
+                # Self-heal every ledger field that a STAFF-side action can
+                # change out from under this row, not just status — front
+                # desk's AppointmentRescheduleView/AppointmentStatusView (see
+                # apps.opd.views) move the date, change the complaint, or
+                # swap the doctor directly on the tenant-DB Appointment, and
+                # neither one touches PortalBooking (unlike the patient's own
+                # PortalRescheduleBookingView, which does). Without this, a
+                # front-desk reschedule would leave the patient's "My
+                # Bookings" silently showing the old date forever, same bug
+                # class as the original front-desk-booking-invisible issue —
+                # just on an existing row instead of a missing one.
+                dirty_fields = []
                 if status_now != b.status:
                     b.status = status_now
-                    b.save(using="default", update_fields=["status"])
+                    dirty_fields.append("status")
+                if appt.scheduled_date != b.scheduled_date:
+                    b.scheduled_date = appt.scheduled_date
+                    dirty_fields.append("scheduled_date")
+                if (appt.chief_complaint or "") != b.chief_complaint:
+                    b.chief_complaint = appt.chief_complaint or ""
+                    dirty_fields.append("chief_complaint")
+                if (appt.doctor_name or "") != b.doctor_name:
+                    b.doctor_name = appt.doctor_name or ""
+                    dirty_fields.append("doctor_name")
+                if dirty_fields:
+                    b.save(using="default", update_fields=dirty_fields)
 
                 # Real, live queue position — only meaningful same-day, and
                 # only while this appointment hasn't itself been called yet.
@@ -1224,11 +1306,16 @@ class PortalMyBookingsView(APIView):
                 # schema change breaking this join tenant-wide) is visible
                 # somewhere instead of just presenting as "missing token".
                 logger.debug("PortalMyBookingsView: live status lookup failed for booking_id=%s db=%s", b.id, b.db_name, exc_info=True)
+            tenant = tenant_map.get(b.tenant_id)
             results.append({
                 "id": b.id,
                 "tenant_id": b.tenant_id,
                 "hospital": b.hospital_name,
+                "hospital_city": (tenant.city if tenant else "") or "",
+                "hospital_state": (tenant.state if tenant else "") or "",
                 "doctor": b.doctor_name,
+                "doctor_photo": doctor_photo,
+                "doctor_specialisation": doctor_specialisation,
                 # So "Book follow-up" can deep-link straight to this same
                 # doctor's profile instead of dropping the patient back at
                 # the generic hospital doctor-list to re-find who they saw.
@@ -1249,6 +1336,10 @@ class PortalMyBookingsView(APIView):
                 # those were always for the account owner.
                 "patient_name": b.patient_name or None,
                 "patient_awpid": b.patient_awpid or None,
+                # "Booked on" — when this appointment was actually reserved,
+                # distinct from the visit date itself (see reference mockup's
+                # "Booked on" field).
+                "booked_at": b.created_at.isoformat() if b.created_at else None,
             })
         return Response({"results": results, "pagination": meta})
 
@@ -1447,9 +1538,28 @@ class PortalDocumentListCreateView(APIView):
         source_ref = (d.get("source_ref") or "").strip()
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        identity = blob_storage.identity_slug(name=acct.full_name, identifier=acct.awpid)
+        try:
+            file_key = blob_storage.upload_data_uri(
+                file_data, prefix="patient-documents", mime_type=mime_type,
+                category="patient-document", identity=identity,
+            )
+        except blob_storage.StorageError as exc:
+            return error(str(exc), errors={"file_data": str(exc)})
+
+        # file_name is named after the upload category plus the patient's
+        # own title and identity, not whatever the phone/scanner called the
+        # file — title itself (above, stored separately) stays exactly as
+        # the patient wrote it; this is just what the downloaded file is
+        # called, so it's recognizable outside this app too.
+        file_name = blob_storage.display_file_name(
+            "patient-document", mime_type,
+            detail=title, name=acct.full_name, identifier=acct.awpid,
+        )
+
         doc = SharedDocument.objects.using("default").create(
             awpid=acct.awpid, title=title, doc_type=doc_type,
-            file_name=file_name, mime_type=mime_type, file_data=file_data,
+            file_name=file_name, mime_type=mime_type, file_data=file_key,
             uploaded_by="patient", source_tenant_id=None, source_ref=source_ref,
         )
         return Response({
@@ -1774,6 +1884,89 @@ class PortalPrescriptionChoiceView(APIView):
         return success(message="Choice saved.")
 
 
+class PortalPrescriptionReceiptPDFView(APIView):
+    """
+    GET /api/v1/portal/prescriptions/<tenant_db>/<pk>/receipt/
+    A real, printable PDF of a prescription — same base64-data-URI envelope
+    as PortalInvoiceReceiptPDFView (see that view's docstring: patient auth
+    is a JWT bearer header, so a plain <a href> to the API URL wouldn't
+    carry it). Ownership check follows the exact same encounter -> appointment
+    -> patient chain as PortalPrescriptionChoiceView above, for the same
+    reason documented there (rx.patient_id isn't guaranteed to agree with
+    the appointment's patient_id).
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request, tenant_db, pk):
+        import base64
+        import uuid as _uuid
+        from apps.opd.models import Appointment, Prescription
+        from apps.org.models import StaffUser, Branch
+        from apps.opd.pdf import generate_prescription_pdf
+        from apps.patients.models import Patient
+
+        if not Tenant.objects.using("default").filter(db_name=tenant_db, is_active=True).exists():
+            return error("Unknown hospital.")
+        _ensure_db(tenant_db)
+
+        try:
+            # NOT prefetch_related("items") — under this app's custom
+            # multi-db router, Django's prefetch machinery issues the
+            # related-object query against the "default" registry DB
+            # instead of tenant_db (confirmed: it 500s with "relation
+            # opd_prescription_item does not exist", because that table
+            # only exists on tenant DBs, not the registry one). Every other
+            # working call site in this file (PortalMyRecordsView,
+            # PortalPrescriptionListView) sidesteps this the same way —
+            # access rx.items explicitly with .using(tenant_db) below
+            # instead of prefetching.
+            rx = Prescription.objects.using(tenant_db).select_related("encounter").get(pk=pk)
+        except Prescription.DoesNotExist:
+            return not_found("Prescription not found.")
+
+        try:
+            appt = Appointment.objects.using(tenant_db).get(pk=rx.encounter.appointment_id)
+            patient = Patient.objects.using(tenant_db).get(uuid=appt.patient_id)
+        except (Appointment.DoesNotExist, Patient.DoesNotExist, AttributeError):
+            return not_found("Prescription not found.")
+
+        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        if patient.awpid != acct.awpid:
+            from apps.registry.models import PatientRelationship
+            is_family = PatientRelationship.objects.using("default").filter(
+                guardian_awpid=acct.awpid, dependent_awpid=patient.awpid,
+            ).exists()
+            if not is_family:
+                return error("This prescription does not belong to you.")
+
+        doctor_name = None
+        try:
+            raw = rx.doctor_user_id.int if isinstance(rx.doctor_user_id, _uuid.UUID) else rx.doctor_user_id
+            doctor_name = StaffUser.objects.using(tenant_db).get(pk=raw).get_full_name()
+        except Exception:
+            logger.debug("PortalPrescriptionReceiptPDFView: doctor lookup failed for rx=%s", rx.id, exc_info=True)
+
+        branch = Branch.objects.using(tenant_db).filter(pk=appt.branch_id).first() if appt.branch_id else None
+        tenant = Tenant.objects.using("default").filter(db_name=tenant_db).first()
+        hospital_name = tenant.name if tenant else "Hospital"
+
+        pdf_bytes = generate_prescription_pdf(
+            # .using(tenant_db) explicitly — see the comment on the rx fetch
+            # above; the plain rx.items.all() form is what triggers the
+            # cross-DB router bug.
+            prescription=rx, items=list(rx.items.using(tenant_db).all()), doctor_name=doctor_name,
+            patient=patient, branch=branch, hospital_name=hospital_name,
+            visit_date=appt.scheduled_date,
+        )
+        data_uri = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
+        rx_label = rx.rx_number or str(rx.id)[:8]
+        return success(data={
+            "file_data": data_uri,
+            "file_name": f"Prescription-{rx_label}.pdf",
+            "mime_type": "application/pdf",
+        })
+
+
 class PortalLabReportFileView(APIView):
     """
     GET /api/v1/portal/lab-orders/<tenant_db>/<request_id>/report/
@@ -1819,7 +2012,7 @@ class PortalLabReportFileView(APIView):
             return error("This report hasn't been released yet.")
 
         return success(data={
-            "file_data": report.file_url,
+            "file_data": blob_storage.signed_url(report.file_url),
             "file_name": report.file_name,
             "mime_type": report.mime_type,
             "result_summary": report.result_summary,
@@ -1909,7 +2102,7 @@ class PortalProfileView(APIView):
             "created_at":    acct.created_at,
             "last_login":    acct.last_login,
             "blood_group":   identity.blood_group if identity else "",
-            "photo":         acct.photo,
+            "photo":         blob_storage.signed_url(acct.photo),
             "emergency_contact_name":     acct.emergency_contact_name,
             "emergency_contact_phone":    acct.emergency_contact_phone,
             "emergency_contact_relation": acct.emergency_contact_relation,
@@ -2007,14 +2200,32 @@ class PortalProfileView(APIView):
         if "emergency_contact_relation" in d:
             acct.emergency_contact_relation = (d.get("emergency_contact_relation") or "").strip()
             fields.append("emergency_contact_relation")
+        old_photo_key = acct.photo
         if "photo" in d:
-            acct.photo = d.get("photo") or ""
+            photo = d.get("photo") or ""
+            if not photo:
+                acct.photo = ""
+            else:
+                try:
+                    mime_type = validate_data_uri(photo)
+                except FileValidationError as exc:
+                    return error(str(exc), errors={"photo": str(exc)})
+                identity = blob_storage.identity_slug(name=acct.full_name, identifier=acct.awpid)
+                try:
+                    acct.photo = blob_storage.upload_data_uri(
+                        photo, prefix="patient-photos", mime_type=mime_type,
+                        category="patient-photo", identity=identity,
+                    )
+                except blob_storage.StorageError as exc:
+                    return error(str(exc), errors={"photo": str(exc)})
             fields.append("photo")
 
         if not fields:
             return error("No editable fields provided.")
 
         acct.save(using="default", update_fields=fields)
+        if "photo" in d and old_photo_key and old_photo_key != acct.photo:
+            blob_storage.delete(old_photo_key)
         return success(message="Profile updated.", data={
             "awpid":         acct.awpid,
             "full_name":     acct.full_name,
@@ -2025,7 +2236,7 @@ class PortalProfileView(APIView):
             "emergency_contact_name":     acct.emergency_contact_name,
             "emergency_contact_phone":    acct.emergency_contact_phone,
             "emergency_contact_relation": acct.emergency_contact_relation,
-            "photo":         acct.photo,
+            "photo":         blob_storage.signed_url(acct.photo),
         })
 
 
@@ -2345,6 +2556,29 @@ class PortalVaccinationUploadView(APIView):
                 mime_type = validate_data_uri(file_data)
             except FileValidationError as exc:
                 return error(str(exc), errors={"file_data": str(exc)})
+            from apps.registry.models import PatientIdentity
+            _identity_row = PatientIdentity.objects.using("default").filter(awpid=target_awpid).first()
+            identity = blob_storage.identity_slug(
+                name=_identity_row.full_name if _identity_row else "", identifier=target_awpid,
+            )
+            try:
+                file_data = blob_storage.upload_data_uri(
+                    file_data, prefix="vaccination-certs", mime_type=mime_type,
+                    category="vaccination-certificate", identity=identity,
+                )
+            except blob_storage.StorageError as exc:
+                return error(str(exc), errors={"file_data": str(exc)})
+            # Named after what it is — the specific vaccine plus who it
+            # belongs to — not whatever the parent's phone/scanner called
+            # the file, and not just a generic "Vaccination Certificate"
+            # that's indistinguishable from any other patient's once
+            # downloaded outside this app's own folder-organized S3 view.
+            file_name = blob_storage.display_file_name(
+                "vaccination-certificate", mime_type,
+                detail=vaccine_name,
+                name=_identity_row.full_name if _identity_row else "",
+                identifier=target_awpid,
+            )
 
         record = SharedVaccination.objects.using("default").create(
             awpid=target_awpid,
@@ -2397,7 +2631,7 @@ class PortalVaccinationFileView(APIView):
             return not_found("No certificate has been uploaded for this record.")
 
         return success(data={
-            "file_data": record.file_data,
+            "file_data": blob_storage.signed_url(record.file_data),
             "file_name": record.file_name,
             "mime_type": record.mime_type,
         })
@@ -2786,3 +3020,128 @@ class PortalFamilyListCreateView(APIView):
         except ValueError as exc:
             return error(str(exc))
         return success(data=member, message="Family member added.")
+
+
+# ── Emergency QR ─────────────────────────────────────────────────────────────
+# See core/emergency_access.py for the token mechanics and the security
+# reasoning (why the token payload carries only an awpid, never PHI). This
+# generation endpoint is patient-authenticated (IsPatient); the endpoint
+# that actually serves the summary a scanned QR opens is deliberately
+# public/unauthenticated — see apps/patients/emergency_views.py, mounted
+# at /api/v1/emergency/ (NOT under /api/v1/portal/) specifically so it
+# reads as the one intentionally-public endpoint in this codebase rather
+# than being buried inside a URL prefix that otherwise implies patient auth.
+#
+# Shown to the patient verbatim in the pre-generation consent prompt, and
+# kept in sync with what apps.patients.emergency_views.EmergencySummaryView
+# actually returns. Deliberately broader than HIE_SHARE_CATEGORIES above —
+# this is a full history dump for acute treatment, not the trimmed roadmap
+# a passively-consenting hospital sees.
+EMERGENCY_SHARE_CATEGORIES = [
+    "Diagnoses and clinical notes",
+    "Allergies on record",
+    "Recent vitals (BP, pulse, temperature, etc.)",
+    "Prescriptions, including current medication",
+    "Lab test results and reports (viewable, not just listed)",
+    "Uploaded documents — old reports, scans, discharge summaries",
+    "Vaccination records and certificates",
+    "Your emergency contact's name and phone number",
+]
+
+
+class PortalEmergencyTokenView(APIView):
+    """
+    POST /api/v1/portal/emergency/token/
+    Body: { patient_awpid?, consent_confirmed }  — patient_awpid defaults to
+    self (or a linked family member); consent_confirmed must be true or the
+    request is rejected with 428 (mirrors PortalBookView's first-booking
+    consent gate below — same "explain what's being shared, require an
+    explicit yes" shape, reused rather than reinvented).
+
+    Every generation mints a brand-new token and is a fresh disclosure
+    decision, so consent is required on every call, not just the first —
+    unlike the standing hie_consent_given flag, there is no "already
+    consented, don't ask again" state here by design: this shares MORE than
+    the passive HIE roadmap (full history + viewable files), and each QR is
+    a one-off act the patient chooses to perform for a specific doctor in
+    front of them right now.
+
+    Mints a fresh ~20-minute emergency-access token for the target patient
+    and returns everything the frontend needs to render the QR screen: the
+    raw token (for a "copy link" fallback), the absolute URL a scan should
+    open, an expiry timestamp so the UI can show a countdown, and a ready-
+    to-display QR code image (server-rendered, same `qrcode` library
+    already used for the invoice-receipt QR in apps/billing/pdf.py — no new
+    frontend dependency needed).
+    """
+    permission_classes = [IsPatient]
+
+    def post(self, request):
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+
+        if not request.data.get("consent_confirmed"):
+            target_name = ""
+            if target_awpid != PatientAccount.objects.using("default").filter(
+                pk=request.user.id).values_list("awpid", flat=True).first():
+                identity = PatientIdentity.objects.using("default").filter(awpid=target_awpid).first()
+                target_name = identity.full_name if identity else ""
+            return Response({
+                "consent_required": True,
+                "share_categories": EMERGENCY_SHARE_CATEGORIES,
+                "ttl_minutes": 20,
+                "message": (
+                    f"Generating this code will share {target_name or 'your'} full medical "
+                    "history with whoever scans it, for the next 20 minutes. Confirm you want "
+                    "to proceed."
+                ),
+            }, status=428)
+
+        from core.emergency_access import make_emergency_token, EMERGENCY_TOKEN_TTL_MINUTES
+        from apps.registry.models import EmergencyAccessLog
+
+        token = make_emergency_token(target_awpid)
+        view_url = f"{settings.FRONTEND_URL.rstrip('/')}/emergency/{token}"
+        expires_at = timezone.now() + timedelta(minutes=EMERGENCY_TOKEN_TTL_MINUTES)
+
+        qr_image = _render_qr_data_uri(view_url)
+
+        try:
+            xff = request.META.get("HTTP_X_FORWARDED_FOR")
+            EmergencyAccessLog.objects.using("default").create(
+                awpid=target_awpid, event=EmergencyAccessLog.EVENT_GENERATED,
+                generated_by_account_id=request.user.id, consent_confirmed=True,
+                ip_address=(xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR")),
+            )
+        except Exception:
+            logger.exception("EmergencyAccessLog write failed (generated) for awpid=%s", target_awpid)
+
+        return success(data={
+            "token": token,
+            "view_url": view_url,
+            "qr_image": qr_image,
+            "expires_at": expires_at,
+            "ttl_minutes": EMERGENCY_TOKEN_TTL_MINUTES,
+        })
+
+
+def _render_qr_data_uri(text: str) -> str:
+    """
+    Renders `text` as a QR code PNG and returns it as a base64 data URI,
+    ready to drop straight into an <img src>. Mirrors _generate_qr_image()
+    in apps/billing/pdf.py (same qrcode library, same box_size/border) —
+    kept separate rather than imported from there since that helper returns
+    a PIL Image for embedding in a ReportLab PDF, not a web-ready data URI.
+    """
+    import base64
+    import io
+    import qrcode
+
+    qr = qrcode.QRCode(box_size=6, border=2)
+    qr.add_data(text)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")

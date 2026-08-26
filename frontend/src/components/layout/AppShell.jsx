@@ -64,6 +64,7 @@ const ICONS = {
   vaccination: "M12 2L4 5v6c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V5l-8-3zm-1 14l-3-3 1.41-1.41L11 13.17l4.59-4.58L17 10l-6 6z",
   bell:       "M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0",
   compliance: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  qrcode:     "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM19 14h2v2h-2zM14 19h2v2h-2zM19 19h2v2h-2z",
 };
 
 // ── Hospital monogram (fallback logo) ────────────────────────────────────────
@@ -162,8 +163,14 @@ const NAV_BY_ROLE = {
     // inside EncounterPage/HistoryPage — that's the correct doctor-facing
     // surface for both, so the dead links were removed rather than granted
     // write access to another role's queue.
-    { type: "section", label: "Schedule" },
-    { type: "link",    label: "Appointments",  iconKey: "appointments", to: ROUTES.FRONT_DESK.APPOINTMENTS },
+    // A doctor-facing "Appointments" link used to sit here pointing at
+    // ROUTES.FRONT_DESK.APPOINTMENTS — the exact same copy-paste mistake as
+    // the Laboratory/Prescriptions links documented above (another role's
+    // page, role-gated to front_desk only, so doctors got silently bounced
+    // back to their dashboard). "My Queue" already covers a doctor's whole
+    // schedule (today + upcoming, with filters), so removed rather than
+    // pointed at a real page — there's nothing a doctor-facing Appointments
+    // page would show that Queue doesn't already.
     { type: "section", label: "Account" },
     { type: "link",    label: "My Profile",    iconKey: "settings",     to: ROUTES.DOCTOR.MY_PROFILE },
   ],
@@ -222,6 +229,7 @@ const NAV_BY_ROLE = {
     { type: "link",  label: "Prescriptions", iconKey: "prescription", to: ROUTES.PATIENT.PRESCRIPTIONS },
     { type: "link",  label: "Lab Reports",   iconKey: "lab",          to: ROUTES.PATIENT.LAB_REPORTS },
     { type: "link",  label: "Notifications", iconKey: "bell",         to: ROUTES.PATIENT.NOTIFICATIONS },
+    { type: "link",  label: "Emergency QR",  iconKey: "qrcode",       to: ROUTES.PATIENT.EMERGENCY_QR },
     { type: "section", label: "Family Members" },
     { type: "family-list" },
     { type: "section", label: "Account" },

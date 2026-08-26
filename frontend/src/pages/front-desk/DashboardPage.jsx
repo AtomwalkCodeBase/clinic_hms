@@ -7,6 +7,7 @@
 import { useNavigate } from "react-router-dom";
 import { AppShell }    from "../../components/layout/AppShell";
 import { PageShell }   from "../../components/common/PageShell";
+import DependentBadge  from "../../components/common/DependentBadge";
 import { useApi }      from "../../hooks/useApi";
 import { useAuth }     from "../../hooks/useAuth";
 import API_ENDPOINTS   from "../../config/api.config";
@@ -38,6 +39,7 @@ export default function FrontDeskDashboardPage() {
 
   const { data: apptData, isLoading } = useApi(API_ENDPOINTS.OPD.APPOINTMENTS, {
     params: { date: TODAY },
+    pollMs: 15000,
   });
   const appointments = apptData?.results || apptData || [];
 
@@ -154,6 +156,7 @@ export default function FrontDeskDashboardPage() {
                   <th style={{ width: 60 }}>#</th>
                   <th>Patient</th>
                   <th>Doctor</th>
+                  <th>Time</th>
                   <th>Complaint</th>
                   <th>Status</th>
                 </tr>
@@ -162,8 +165,26 @@ export default function FrontDeskDashboardPage() {
                 {appointments.slice(0, 8).map(a => (
                   <tr key={a.id}>
                     <td style={{ fontWeight: 800, color: "var(--color-primary)" }}>{a.token_number}</td>
-                    <td style={{ fontWeight: 600 }}>{a.patient_name || "—"}</td>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 600 }}>{a.patient_name || "—"}</span>
+                        <DependentBadge patient={a} />
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+                        {a.patient_uhid || a.patient_awpid || ""}
+                        {a.patient_age != null && ` · ${a.patient_age}y`}
+                        {a.is_dependent && a.guardian_name && ` · guardian: ${a.guardian_name}`}
+                      </div>
+                    </td>
                     <td style={{ fontSize: 12, color: "var(--color-text-muted)" }}>{a.doctor_name || "—"}</td>
+                    <td style={{ fontSize: 12 }}>
+                      <div style={{ fontWeight: 700 }}>{a.scheduled_time ? a.scheduled_time.slice(0, 5) : "—"}</div>
+                      {a.room_name && (
+                        <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+                          {a.room_name}{a.floor && ` · Fl ${a.floor}`}
+                        </div>
+                      )}
+                    </td>
                     <td style={{ fontSize: 12 }}>{a.chief_complaint || "—"}</td>
                     <td>
                       <span className={`badge ${

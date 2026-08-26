@@ -28,6 +28,7 @@ const SetupPasswordPage = lazy(() => import("./pages/auth/SetupPasswordPage"));
 const ChangePasswordPage = lazy(() => import("./pages/auth/ChangePasswordPage"));
 const StaffForgotPasswordPage   = lazy(() => import("./pages/auth/StaffForgotPasswordPage"));
 const PatientForgotPasswordPage = lazy(() => import("./pages/auth/PatientForgotPasswordPage"));
+const EmergencyViewPage         = lazy(() => import("./pages/public/EmergencyViewPage"));
 
 // Platform Admin
 const PlatformDashboard  = lazy(() => import("./pages/platform-admin/DashboardPage"));
@@ -102,6 +103,7 @@ const PatientLabReports    = lazy(() => import("./pages/patient/LabReportsPage")
 const PatientNotifications = lazy(() => import("./pages/patient/NotificationsPage"));
 const PatientMyProfile     = lazy(() => import("./pages/patient/MyProfilePage"));
 const PatientCorrectionRequests = lazy(() => import("./pages/patient/CorrectionRequestsPage"));
+const PatientEmergencyQR = lazy(() => import("./pages/patient/EmergencyQRPage"));
 
 // ── Protected route wrapper ───────────────────────────────────────────────────
 function ProtectedRoute({ children, roles = [] }) {
@@ -199,6 +201,7 @@ export default function App() {
           <Route path={ROUTES.SETUP_PASSWORD} element={<SetupPasswordPage />} />
           <Route path={ROUTES.FORGOT_PASSWORD_STAFF}   element={<StaffForgotPasswordPage />} />
           <Route path={ROUTES.FORGOT_PASSWORD_PATIENT} element={<PatientForgotPasswordPage />} />
+          <Route path={ROUTES.EMERGENCY_VIEW(":token")} element={<EmergencyViewPage />} />
           <Route path="/change-password"      element={<ProtectedRoute><ChangePasswordPage /></ProtectedRoute>} />
 
           {/* Platform Admin */}
@@ -333,6 +336,8 @@ export default function App() {
             element={<PatientRoute><PatientMyProfile /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.CORRECTION_REQUESTS}
             element={<PatientRoute><PatientCorrectionRequests /></PatientRoute>} />
+          <Route path={ROUTES.PATIENT.EMERGENCY_QR}
+            element={<PatientRoute><PatientEmergencyQR /></PatientRoute>} />
 
           {/* Catch-all */}
           <Route path="*" element={<Navigate to="/" replace />} />

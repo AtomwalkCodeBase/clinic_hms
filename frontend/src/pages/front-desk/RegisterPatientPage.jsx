@@ -12,11 +12,13 @@
  */
 
 import { useState, useEffect, useRef } from "react";
-import { useNavigate }   from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { AppShell }      from "../../components/layout/AppShell";
 import { PageShell }     from "../../components/common/PageShell";
+import QuickRegisterModal from "../../components/front-desk/QuickRegisterModal";
 import { useToast }      from "../../hooks/useToast";
 import { useApi }        from "../../hooks/useApi";
+import { useAuth }       from "../../hooks/useAuth";
 import apiClient         from "../../services/api.client";
 import API_ENDPOINTS     from "../../config/api.config";
 import PaginationControls from "../../components/common/PaginationControls";
@@ -123,12 +125,30 @@ function ThreeCol({ children }) {
 // ── Main component ─────────────────────────────────────────────────────────────
 export default function RegisterPatientPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { toastSuccess, toastApiError } = useToast();
+  const { user } = useAuth();
   const { data: branches } = useApi(API_ENDPOINTS.ORG.BRANCHES);
   const branchList = branches || [];
+  const defaultBranchId = user?.branch_id || branchList?.[0]?.id || "";
 
   const [loading, setLoading] = useState(false);
   const [errors,  setErrors]  = useState({});
+
+  // A family member the mobile lookup already knows everything about (name/
+  // DOB/gender, from PatientService.list_family_members) just needs a click
+  // to get a local record at THIS hospital — routing them through the full
+  // 5-section form below (insurance, emergency contact, the works) to
+  // re-confirm data that's already on file is exactly the "why am I
+  // registering her again?" friction QuickRegisterModal exists to avoid.
+  const [quickRegisterMember, setQuickRegisterMember] = useState(null);
+
+  function handleQuickRegistered(created) {
+    // QuickRegisterModal already toasts the "registered" confirmation —
+    // straight to booking next, same as the rest of this page's flow.
+    setQuickRegisterMember(null);
+    navigate("/front-desk/appointments", { state: { patient: created, justRegistered: true } });
+  }
 
   const [form, setForm] = useState({
     // Personal
@@ -184,7 +204,11 @@ export default function RegisterPatientPage() {
   // first, and only reveal the registration fields once we know this is
   // genuinely a new patient (or the front desk explicitly chooses to
   // continue anyway).
-  const [mobileInput, setMobileInput] = useState("");
+  // Prefilled when arriving from Patient Search's "found in network, not
+  // registered here yet" prompt (PatientsPage.jsx) — lands the front desk
+  // straight into the mobile-check step already populated instead of
+  // making them retype the number they just searched.
+  const [mobileInput, setMobileInput] = useState(location.state?.mobile || "");
   const [lookup, setLookup] = useState(null);       // API result once mobile is long enough
   const [lookupLoading, setLookupLoading] = useState(false);
   const [proceeded, setProceeded] = useState(false); // form unlocked
@@ -208,7 +232,6 @@ export default function RegisterPatientPage() {
         .finally(() => setLookupLoading(false));
     }, 400);
     return () => clearTimeout(lookupDebounce.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mobileInput]);
 
   const mobileDigits = mobileInput.replace(/\D/g, "");
@@ -379,6 +402,22 @@ export default function RegisterPatientPage() {
     <AppShell>
       <PageShell title="Register New Patient">
 
+        <QuickRegisterModal
+          key={quickRegisterMember?.awpid || "closed"}
+          open={!!quickRegisterMember}
+          onClose={() => setQuickRegisterMember(null)}
+          onRegistered={handleQuickRegistered}
+          branchId={defaultBranchId}
+          guardian={quickRegisterMember ? {
+            awpid: lookup?.awpid, full_name: lookup?.full_name, relation: quickRegisterMember.relationship,
+          } : null}
+          prefill={quickRegisterMember ? {
+            full_name: quickRegisterMember.full_name,
+            date_of_birth: quickRegisterMember.date_of_birth,
+            gender: quickRegisterMember.gender,
+          } : null}
+        />
+
         <Stepper step={proceeded ? 2 : 1} />
 
         {/* ── Step 1: find the patient before anything else ── */}
@@ -510,9 +549,14 @@ export default function RegisterPatientPage() {
                   background: "#FAF5FF", border: "1px solid #E9D5FF", borderRadius: 8,
                   padding: "14px 16px", marginTop: 10,
                 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#6B21A8", marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#6B21A8", marginBottom: 2 }}>
                     Family Members
                   </div>
+                  {(lookup.family_members || []).length > 0 && (
+                    <div style={{ fontSize: 11.5, color: "#7E22CE", marginBottom: 8 }}>
+                      Already known from {lookup.full_name}'s record — no need to re-type their details.
+                    </div>
+                  )}
                   {(lookup.family_members || []).length === 0 ? (
                     <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 10 }}>
                       No family members linked to {lookup.full_name} yet.
@@ -539,8 +583,8 @@ export default function RegisterPatientPage() {
                             </button>
                           ) : (
                             <button type="button" className="btn-primary" style={{ fontSize: 11, padding: "5px 12px" }}
-                              onClick={() => continueAsDependent(m)}>
-                              Register here →
+                              onClick={() => setQuickRegisterMember(m)}>
+                              Add at this hospital →
                             </button>
                           )}
                         </div>

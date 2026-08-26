@@ -53,12 +53,33 @@ export default function SettingsPage() {
 
   const [settings, setSettings]   = useState(null);   // { fee_ownership }
   const [saving,   setSaving]      = useState(false);
+  const [folderInput, setFolderInput] = useState("");
+  const [savingFolder, setSavingFolder] = useState(false);
 
   useEffect(() => {
     apiClient.get("/org/settings/")
-      .then(r => setSettings(r.data?.data ?? r.data))
+      .then(r => {
+        const data = r.data?.data ?? r.data;
+        setSettings(data);
+        setFolderInput(data?.storage_folder || "");
+      })
       .catch(() => {});   // non-fatal; section stays hidden
   }, []);
+
+  async function saveStorageFolder() {
+    setSavingFolder(true);
+    try {
+      const r = await apiClient.patch("/org/settings/", { storage_folder: folderInput.trim() });
+      const data = r.data?.data ?? r.data;
+      setSettings(data);
+      setFolderInput(data?.storage_folder || "");
+      toastSuccess("Storage folder updated.");
+    } catch (e) {
+      toastApiError(e);
+    } finally {
+      setSavingFolder(false);
+    }
+  }
 
   async function saveFeeOwnership(newValue) {
     setSaving(true);
@@ -105,6 +126,45 @@ export default function SettingsPage() {
                   refreshUser();
                 }}
               />
+            </div>
+          )}
+
+          {/* ── File storage ────────────────────────────────────────── */}
+          {settings && (
+            <div className="card" style={{ padding: 28, marginBottom: 20 }}>
+              <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>File Storage</h2>
+              <p style={{ fontSize: 13, color: "var(--color-text-muted)", marginBottom: 16 }}>
+                Staff photos, doctor signatures, your logo, and lab reports are all kept in one shared storage area, organized under a folder named for your hospital. Leave this blank to use the default; set your own name if you'd rather it read something recognizable.
+              </p>
+              <label style={labelStyle}>Folder name</label>
+              <div style={{ display: "flex", gap: 10 }}>
+                <input
+                  type="text"
+                  value={folderInput}
+                  onChange={e => setFolderInput(e.target.value)}
+                  placeholder={settings.storage_folder_default}
+                  style={{
+                    flex: 1, padding: "9px 12px", borderRadius: 8,
+                    border: "1.5px solid var(--color-border)", fontSize: 14,
+                  }}
+                />
+                <button
+                  onClick={saveStorageFolder}
+                  disabled={savingFolder || folderInput.trim() === (settings.storage_folder || "")}
+                  style={{
+                    padding: "9px 20px", borderRadius: 8, border: "none",
+                    background: "var(--color-primary)", color: "#fff",
+                    fontSize: 14, fontWeight: 600,
+                    cursor: savingFolder ? "not-allowed" : "pointer",
+                    opacity: (savingFolder || folderInput.trim() === (settings.storage_folder || "")) ? 0.6 : 1,
+                  }}
+                >
+                  {savingFolder ? "Saving…" : "Save"}
+                </button>
+              </div>
+              <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 8 }}>
+                Only letters, numbers, and hyphens. Changing this only affects files uploaded from now on — existing files stay where they are.
+              </p>
             </div>
           )}
 

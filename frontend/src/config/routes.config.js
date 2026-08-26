@@ -14,6 +14,11 @@ export const ROUTES = {
   // components/auth/ForgotPasswordFlow.jsx.
   FORGOT_PASSWORD_STAFF:   "/forgot-password/staff",
   FORGOT_PASSWORD_PATIENT: "/forgot-password/patient",
+  // Emergency QR scan target — deliberately outside every ProtectedRoute/
+  // PatientRoute guard below, since a doctor scanning this at a hospital
+  // that isn't even on this platform has no Atomwalk login at all. See
+  // apps/patients/emergency_views.py for the backend half.
+  EMERGENCY_VIEW: (token) => `/emergency/${token}`,
 
   // Platform Admin
   PLATFORM: {
@@ -110,6 +115,7 @@ export const ROUTES = {
     NOTIFICATIONS:      "/patient/notifications",
     MY_PROFILE:         "/patient/my-profile",
     CORRECTION_REQUESTS: "/patient/correction-requests",
+    EMERGENCY_QR:       "/patient/emergency-qr",
   },
 };
 

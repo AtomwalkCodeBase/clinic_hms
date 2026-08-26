@@ -38,6 +38,9 @@ EXEMPT_PREFIXES = (
     "/api/v1/auth/otp/",             # OTP request/verify — pre-auth by definition (apps/auth_app/otp_views.py)
     "/api/v1/auth/forgot-password/", # staff+patient OTP reset (action_token in body, not Bearer)
     "/api/v1/portal/register/",      # patient self-signup + registration OTP (request/verify use /auth/otp/ above)
+    "/api/v1/emergency/",            # Emergency QR summary (apps/patients/emergency_views.py) — scanned by a
+                                      # doctor's phone with no Atomwalk login at all; auth is the signed token
+                                      # in the URL itself (core/emergency_access.py), not a Bearer header.
     "/health/",
     "/admin/",
 )

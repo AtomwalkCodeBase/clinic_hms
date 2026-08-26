@@ -13,10 +13,22 @@ import { useApi }    from "../../hooks/useApi";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
-import { Syringe, FlaskConical } from "lucide-react";
+import { Syringe, FlaskConical, Paperclip } from "lucide-react";
 import { dataUrlToBlob, openDataUrlInNewTab } from "../../utils/fileViewer";
 
 const TODAY = new Date().toISOString().split("T")[0];
+
+// Same helper duplicated in RecordsPage.jsx / EncounterPage.jsx / lab's
+// RequestsPage.jsx — no shared utils module for it yet, matches this
+// codebase's existing per-file convention rather than introducing one here.
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 const STATUS_BADGE = {
   in_progress: "badge--info",
@@ -42,6 +54,26 @@ function LabOrderRow({ order, onChoiceSaved }) {
   const { toastSuccess, toastApiError } = useToast();
   const [payPref, setPayPref] = useState(order.payment_preference || "pay_at_lab");
   const [saving, setSaving] = useState(false);
+  const [attaching, setAttaching] = useState(false);
+
+  async function attachDocument(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file if it fails
+    if (!file) return;
+    setAttaching(true);
+    try {
+      const file_data = await fileToDataUrl(file);
+      await apiClient.post(API_ENDPOINTS.LAB.REQUEST_ATTACH_DOCUMENT(order.id), {
+        file_data, file_name: file.name, title: `${order.test_name} — outside report`,
+      });
+      toastSuccess("Report attached — visible to the patient and any doctor viewing this order.");
+      onChoiceSaved?.();
+    } catch (err) {
+      toastApiError(err, "Could not attach the report.");
+    } finally {
+      setAttaching(false);
+    }
+  }
   // Once a choice exists, show it as a confirmed record rather than live
   // buttons — otherwise every nurse who opens this page after the first
   // one sees the same "unset" picker and can't tell anything happened.
@@ -166,8 +198,24 @@ function LabOrderRow({ order, onChoiceSaved }) {
         order.attached_document ? (
           <ViewUploadedReportButton documentId={order.attached_document.id} />
         ) : (
-          <div style={{ marginTop: 8, fontSize: 11, color: "var(--color-text-muted)" }}>
-            Awaiting the patient's upload.
+          <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+              Awaiting the report — patient can upload it themselves, or:
+            </span>
+            <label
+              className="btn-outline"
+              style={{
+                fontSize: 11, padding: "3px 10px", display: "inline-flex", alignItems: "center", gap: 5,
+                cursor: attaching ? "default" : "pointer", opacity: attaching ? 0.6 : 1,
+              }}
+            >
+              <Paperclip size={12} />
+              {attaching ? "Uploading…" : "Attach report for patient"}
+              <input
+                type="file" accept="image/*,application/pdf" hidden disabled={attaching}
+                onChange={attachDocument}
+              />
+            </label>
           </div>
         )
       )}
@@ -236,6 +284,10 @@ function VaccinationsForPatient({ patientPk }) {
     patientPk ? API_ENDPOINTS.PATIENTS.VACCINATIONS(patientPk) : null, { skip: !patientPk }
   );
   const [administeringKey, setAdministeringKey] = useState(null);
+  // Optional certificate/photo to attach when administering — keyed by the
+  // same record_id/vaccine_name key the Administer button uses, same
+  // pattern as EncounterPage.jsx's doctor-side version of this action.
+  const [fileByKey, setFileByKey] = useState({});
   const roadmap = data?.roadmap || [];
   const actionable = roadmap.filter(
     v => v.status === "ordered" || (v.status === "unknown" && v.timing === "due_now")
@@ -246,12 +298,20 @@ function VaccinationsForPatient({ patientPk }) {
     const key = v.record_id ?? v.vaccine_name;
     setAdministeringKey(key);
     try {
-      await apiClient.post(API_ENDPOINTS.PATIENTS.VACCINATION_ADMINISTER(patientPk), {
+      const body = {
         record_id: v.record_id || undefined,
         vaccine_name: v.vaccine_name,
         scheduled_label: v.scheduled_label,
-      });
+      };
+      const file = fileByKey[key];
+      if (file) {
+        body.file_data = await fileToDataUrl(file);
+        body.file_name = file.name;
+        body.mime_type = file.type;
+      }
+      await apiClient.post(API_ENDPOINTS.PATIENTS.VACCINATION_ADMINISTER(patientPk), body);
       toastSuccess(`${v.vaccine_name} recorded as administered.`);
+      setFileByKey(p => { const n = { ...p }; delete n[key]; return n; });
       refetch?.();
     } catch (err) {
       toastApiError(err, "Could not record the vaccination.");
@@ -284,12 +344,35 @@ function VaccinationsForPatient({ patientPk }) {
                   <span style={{ color: "var(--color-text-muted)" }}> · ordered by {v.verified_by_name || "doctor"}{v.due_date ? ` — due ${new Date(v.due_date).toLocaleDateString("en-IN")}` : ""}</span>
                 )}
               </span>
-              <button
-                type="button" className="btn-primary" style={{ fontSize: 11, padding: "4px 10px" }}
-                disabled={busy} onClick={() => administer(v)}
-              >
-                {busy ? "Recording…" : "Administer"}
-              </button>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+                <button
+                  type="button" className="btn-primary" style={{ fontSize: 11, padding: "4px 10px" }}
+                  disabled={busy} onClick={() => administer(v)}
+                >
+                  {busy ? "Recording…" : "Administer"}
+                </button>
+                <label
+                  title="Attach a certificate/photo before administering (optional)"
+                  style={{
+                    display: "flex", alignItems: "center", gap: 4, fontSize: 9.5,
+                    color: fileByKey[key] ? "var(--color-primary)" : "var(--color-text-muted)",
+                    cursor: "pointer", maxWidth: 130, overflow: "hidden",
+                  }}
+                >
+                  <Paperclip size={10} style={{ flexShrink: 0 }} />
+                  <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {fileByKey[key]?.name || "Attach report"}
+                  </span>
+                  <input
+                    type="file" accept="image/*,application/pdf"
+                    style={{ display: "none" }}
+                    onChange={e => {
+                      const f = e.target.files?.[0] || null;
+                      setFileByKey(p => ({ ...p, [key]: f }));
+                    }}
+                  />
+                </label>
+              </div>
             </div>
           );
         })}
@@ -302,6 +385,7 @@ export default function NurseTasksPage() {
   const [page, setPage] = useState(1);
   const { data, isLoading, refetch } = useApi(API_ENDPOINTS.OPD.MONITORING, {
     params: { date: TODAY, page, page_size: 20 },
+    pollMs: 15000,
   });
   const tasks = data?.results || [];
   const pagination = data?.pagination || null;

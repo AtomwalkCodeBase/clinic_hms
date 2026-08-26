@@ -30,7 +30,7 @@ import PatientRegisterFlow from "../../components/auth/PatientRegisterFlow";
 // back to Emerald Glass right here on the root wrapper; CSS custom
 // properties cascade, so this override wins for this whole subtree without
 // touching ThemeProvider or any other page.
-const FIXED_BRAND_VARS = deriveThemeVars(getThemeById("emerald"));
+const FIXED_BRAND_VARS = deriveThemeVars(getThemeById("emerald-glass"));
 
 const TABS = [
   { key: "staff",    label: "Staff" },

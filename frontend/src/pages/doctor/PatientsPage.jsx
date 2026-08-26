@@ -10,7 +10,7 @@
  * at the hospital (via PATIENTS.SEARCH) for cases where the doctor needs to
  * look someone up who isn't in their own history yet.
  */
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useNavigate }       from "react-router-dom";
 import { AppShell }          from "../../components/layout/AppShell";
 import { PageShell }         from "../../components/common/PageShell";
@@ -18,7 +18,7 @@ import DependentBadge        from "../../components/common/DependentBadge";
 import apiClient             from "../../services/api.client";
 import API_ENDPOINTS         from "../../config/api.config";
 import { ROUTES }            from "../../config/routes.config";
-import { Search, AlertTriangle, FolderOpen, SearchX } from "lucide-react";
+import { Search, AlertTriangle, FolderOpen, SearchX, Filter, X } from "lucide-react";
 
 function calcAge(dob) {
   if (!dob) return "—";
@@ -32,6 +32,7 @@ export default function DoctorPatientsPage() {
   const [results,      setResults]      = useState(null);
   const [totalMatches, setTotalMatches] = useState(0);
   const [truncated,    setTruncated]    = useState(false);
+  const [networkMatch, setNetworkMatch] = useState(null);
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState(null);
   const timerRef = useRef(null);
@@ -75,11 +76,13 @@ export default function DoctorPatientsPage() {
       setResults(payload.results || []);
       setTotalMatches(payload.total_matches ?? (payload.results || []).length);
       setTruncated(!!payload.truncated);
+      setNetworkMatch(payload.network_match || null);
     } catch (err) {
       setError("Search failed. Please try again.");
       setResults([]);
       setTotalMatches(0);
       setTruncated(false);
+      setNetworkMatch(null);
     } finally {
       setLoading(false);
     }
@@ -89,6 +92,43 @@ export default function DoctorPatientsPage() {
     e.preventDefault();
     if (query.trim().length >= 2) doSearch(query.trim());
   }
+
+  // ── Filters — applied client-side over whichever list is showing (the
+  // roster or a search result set). Last-visit range only makes sense for
+  // the roster (search results don't carry a visit date), so it's hidden
+  // once the doctor is actually searching.
+  const [showFilters,     setShowFilters]     = useState(false);
+  const [genderFilter,    setGenderFilter]    = useState("");
+  const [dependentFilter, setDependentFilter] = useState(""); // "" | "dependent" | "adult"
+  const [visitFrom,       setVisitFrom]       = useState("");
+  const [visitTo,         setVisitTo]         = useState("");
+  const hasActiveFilters = !!(genderFilter || dependentFilter || visitFrom || visitTo);
+
+  function clearFilters() {
+    setGenderFilter(""); setDependentFilter(""); setVisitFrom(""); setVisitTo("");
+  }
+
+  const filteredRoster = useMemo(() => {
+    if (!myPatients) return myPatients;
+    return myPatients.filter(p => {
+      if (genderFilter && p.patient_gender !== genderFilter) return false;
+      if (dependentFilter === "dependent" && !p.is_dependent) return false;
+      if (dependentFilter === "adult" && p.is_dependent) return false;
+      if (visitFrom && (!p.scheduled_date || p.scheduled_date < visitFrom)) return false;
+      if (visitTo && (!p.scheduled_date || p.scheduled_date > visitTo)) return false;
+      return true;
+    });
+  }, [myPatients, genderFilter, dependentFilter, visitFrom, visitTo]);
+
+  const filteredResults = useMemo(() => {
+    if (!results) return results;
+    return results.filter(p => {
+      if (genderFilter && p.gender !== genderFilter) return false;
+      if (dependentFilter === "dependent" && !p.is_dependent) return false;
+      if (dependentFilter === "adult" && p.is_dependent) return false;
+      return true;
+    });
+  }, [results, genderFilter, dependentFilter]);
 
   function viewInHistory(uhid) {
     navigate(ROUTES.DOCTOR.HISTORY, { state: { patient: uhid } });
@@ -100,8 +140,8 @@ export default function DoctorPatientsPage() {
 
         {/* Search bar */}
         <form onSubmit={onSubmit}>
-          <div style={{ display: "flex", gap: 10, marginBottom: 24 }}>
-            <div style={{ flex: 1, position: "relative" }}>
+          <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 260px", position: "relative" }}>
               <span style={{
                 position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)",
                 display: "inline-flex", color: "var(--color-text-muted)", pointerEvents: "none",
@@ -126,8 +166,62 @@ export default function DoctorPatientsPage() {
             <button type="submit" className="btn-primary" style={{ padding: "10px 24px" }}>
               Search
             </button>
+            <button
+              type="button"
+              className={hasActiveFilters ? "btn-primary" : "btn-outline"}
+              style={{ padding: "10px 20px", display: "flex", alignItems: "center", gap: 7, fontWeight: 700 }}
+              onClick={() => setShowFilters(v => !v)}
+            >
+              <Filter size={14} /> Filters{hasActiveFilters ? " •" : ""}
+            </button>
           </div>
         </form>
+
+        {showFilters && (
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10,
+            padding: 16, borderRadius: 12, marginBottom: 20,
+            background: "var(--color-bg)", border: "1px solid var(--color-border)",
+          }}>
+            <div>
+              <label className="stat-label" style={{ display: "block", marginBottom: 5 }}>Gender</label>
+              <select className="form-input" style={{ appearance: "auto" }} value={genderFilter} onChange={e => setGenderFilter(e.target.value)}>
+                <option value="">Any</option>
+                <option value="M">Male</option>
+                <option value="F">Female</option>
+                <option value="O">Other</option>
+              </select>
+            </div>
+            <div>
+              <label className="stat-label" style={{ display: "block", marginBottom: 5 }}>Patient type</label>
+              <select className="form-input" style={{ appearance: "auto" }} value={dependentFilter} onChange={e => setDependentFilter(e.target.value)}>
+                <option value="">Any</option>
+                <option value="dependent">Dependents only</option>
+                <option value="adult">Adults only</option>
+              </select>
+            </div>
+            {results === null && (
+              <>
+                <div>
+                  <label className="stat-label" style={{ display: "block", marginBottom: 5 }}>Last visit from</label>
+                  <input type="date" className="form-input" value={visitFrom} onChange={e => setVisitFrom(e.target.value)} />
+                </div>
+                <div>
+                  <label className="stat-label" style={{ display: "block", marginBottom: 5 }}>Last visit to</label>
+                  <input type="date" className="form-input" value={visitTo} onChange={e => setVisitTo(e.target.value)} />
+                </div>
+              </>
+            )}
+            {hasActiveFilters && (
+              <div style={{ display: "flex", alignItems: "flex-end" }}>
+                <button type="button" className="btn-outline" style={{ fontSize: 12, padding: "8px 14px", display: "flex", alignItems: "center", gap: 5 }}
+                  onClick={clearFilters}>
+                  <X size={12} /> Clear
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Default state — this doctor's own patient roster, shown until they search */}
         {results === null && !loading && (
@@ -147,14 +241,25 @@ export default function DoctorPatientsPage() {
                 Patients you've seen will show up here. Search above to find any patient at this hospital.
               </div>
             </div>
+          ) : filteredRoster.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "48px 0" }}>
+              <SearchX size={32} style={{ color: "var(--color-text-muted)", marginBottom: 10 }} />
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>Nothing matches these filters</div>
+              <div style={{ fontSize: 13, color: "var(--color-text-muted)", marginBottom: 12 }}>
+                Try widening the gender, patient type, or visit date range.
+              </div>
+              <button className="btn-outline" style={{ fontSize: 12, padding: "6px 14px" }} onClick={clearFilters}>Clear filters</button>
+            </div>
           ) : (
             <div className="card" style={{ padding: 0, overflow: "hidden" }}>
               <div style={{
                 padding: "12px 20px", borderBottom: "1px solid var(--color-border)",
                 fontSize: 13, color: "var(--color-text-muted)", display: "flex",
-                justifyContent: "space-between", alignItems: "center",
+                justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6,
               }}>
-                <span>My Patients — {myPatients.length} patient{myPatients.length !== 1 ? "s" : ""}</span>
+                <span>
+                  My Patients — {filteredRoster.length}{hasActiveFilters ? ` of ${myPatients.length}` : ""} patient{filteredRoster.length !== 1 ? "s" : ""}
+                </span>
                 <span style={{ fontSize: 11 }}>Search above to find any patient at this hospital</span>
               </div>
               <table className="data-table">
@@ -169,7 +274,7 @@ export default function DoctorPatientsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {myPatients.map(p => (
+                  {filteredRoster.map(p => (
                     <tr key={p.awpid || p.patient_uhid}>
                       <td>
                         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -227,12 +332,37 @@ export default function DoctorPatientsPage() {
         {results !== null && !loading && (
           <>
             {results.length === 0 ? (
+              networkMatch ? (
+                <div style={{ textAlign: "center", padding: "48px 0" }}>
+                  <SearchX size={32} style={{ color: "var(--color-text-muted)", marginBottom: 10 }} />
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                    Not registered at this hospital yet
+                  </div>
+                  <div style={{ fontSize: 13, color: "var(--color-text-muted)", marginBottom: 4 }}>
+                    <strong style={{ color: "var(--color-text)" }}>{networkMatch.full_name}</strong> already
+                    exists on the Atomwalk network, just not at this hospital.
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                    Ask front desk to register them here — their shared history will carry over.
+                  </div>
+                </div>
+              ) : (
+                <div style={{ textAlign: "center", padding: "48px 0" }}>
+                  <SearchX size={32} style={{ color: "var(--color-text-muted)", marginBottom: 10 }} />
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>No patients found</div>
+                  <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
+                    Try a different name, UHID, or mobile number.
+                  </div>
+                </div>
+              )
+            ) : filteredResults.length === 0 ? (
               <div style={{ textAlign: "center", padding: "48px 0" }}>
                 <SearchX size={32} style={{ color: "var(--color-text-muted)", marginBottom: 10 }} />
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>No patients found</div>
-                <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
-                  Try a different name, UHID, or mobile number.
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Nothing matches these filters</div>
+                <div style={{ fontSize: 13, color: "var(--color-text-muted)", marginBottom: 12 }}>
+                  {results.length} search result{results.length !== 1 ? "s" : ""}, but none match the gender/patient-type filter.
                 </div>
+                <button className="btn-outline" style={{ fontSize: 12, padding: "6px 14px" }} onClick={clearFilters}>Clear filters</button>
               </div>
             ) : (
               <div className="card" style={{ padding: 0, overflow: "hidden" }}>
@@ -241,8 +371,8 @@ export default function DoctorPatientsPage() {
                   fontSize: 13, color: "var(--color-text-muted)",
                 }}>
                   {truncated
-                    ? `Showing first ${results.length} of ${totalMatches} matches — refine your search to narrow this down.`
-                    : `${results.length} result${results.length !== 1 ? "s" : ""} for "${query}"`}
+                    ? `Showing first ${filteredResults.length} of ${totalMatches} matches — refine your search to narrow this down.`
+                    : `${filteredResults.length}${hasActiveFilters ? ` of ${results.length}` : ""} result${filteredResults.length !== 1 ? "s" : ""} for "${query}"`}
                 </div>
                 <table className="data-table">
                   <thead>
@@ -257,7 +387,7 @@ export default function DoctorPatientsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {results.map(p => (
+                    {filteredResults.map(p => (
                       <tr key={p.id}>
                         <td>
                           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>

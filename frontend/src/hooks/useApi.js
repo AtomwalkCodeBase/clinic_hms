@@ -13,12 +13,20 @@
  *   params   — query params object (appended as ?key=value)
  *   skip     — if true, do not fetch (useful for conditional fetching)
  *   onSuccess — callback(data) called after a successful fetch
+ *   pollMs   — if set, silently re-fetches on this interval so this view
+ *              stays live without the user hitting refresh (e.g. a second
+ *              patient's slot list updating the moment someone else books).
+ *              Background polls don't flip isLoading (no spinner flash) —
+ *              only the very first load does. Polling pauses while the tab
+ *              is hidden/backgrounded and resumes (with an immediate
+ *              refetch) when it becomes visible again, so we're not
+ *              hammering the API from a dozen forgotten background tabs.
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import apiClient from "../services/api.client";
 
-export function useApi(url, { params = {}, skip = false, onSuccess } = {}) {
+export function useApi(url, { params = {}, skip = false, onSuccess, pollMs = 0 } = {}) {
   const [data,      setData]      = useState(null);
   const [isLoading, setIsLoading] = useState(!skip);
   const [error,     setError]     = useState(null);
@@ -27,9 +35,10 @@ export function useApi(url, { params = {}, skip = false, onSuccess } = {}) {
   const paramsKey = JSON.stringify(params);
   const isMounted = useRef(true);
 
-  const fetch = useCallback(async () => {
+  const fetch = useCallback(async (opts = {}) => {
     if (!url || skip) return;
-    setIsLoading(true);
+    const { silent = false } = opts;
+    if (!silent) setIsLoading(true);
     setError(null);
     try {
       const { data: responseData } = await apiClient.get(url, { params });
@@ -44,7 +53,7 @@ export function useApi(url, { params = {}, skip = false, onSuccess } = {}) {
     } catch (err) {
       if (isMounted.current) setError(err);
     } finally {
-      if (isMounted.current) setIsLoading(false);
+      if (isMounted.current && !silent) setIsLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, paramsKey, skip]);
@@ -54,6 +63,23 @@ export function useApi(url, { params = {}, skip = false, onSuccess } = {}) {
     fetch();
     return () => { isMounted.current = false; };
   }, [fetch]);
+
+  // Background polling — separate effect so a poll tick never touches
+  // isLoading/error the way the initial fetch does.
+  useEffect(() => {
+    if (!pollMs || !url || skip) return undefined;
+    const tick = () => {
+      if (document.hidden) return;
+      fetch({ silent: true });
+    };
+    const id = setInterval(tick, pollMs);
+    const onVisible = () => { if (!document.hidden) fetch({ silent: true }); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [pollMs, url, skip, fetch]);
 
   return { data, isLoading, error, refetch: fetch };
 }

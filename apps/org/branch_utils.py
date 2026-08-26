@@ -19,6 +19,29 @@ def get_staff_branch_ids(staff_id, db_name):
     )
 
 
+def get_staff_ids_in_branch(branch_id, db_name):
+    """
+    Reverse of get_staff_branch_ids() — every staff id assigned to
+    `branch_id`, via the mapping table OR the legacy single `branch` FK
+    (same fallback is_staff_in_branch() applies per-staff, done here as a
+    set query for filtering a whole queryset at once, e.g. DoctorListView's
+    ?branch_id= filter).
+    """
+    from .models import StaffUser
+    branch_id = int(branch_id)
+    mapped = set(
+        StaffBranchMapping.objects.using(db_name)
+        .filter(branch_id=branch_id)
+        .values_list("staff_id", flat=True)
+    )
+    legacy = set(
+        StaffUser.objects.using(db_name)
+        .filter(branch_id=branch_id)
+        .values_list("id", flat=True)
+    )
+    return mapped | legacy
+
+
 def is_staff_in_branch(staff, branch_id, db_name):
     """
     True if `staff` (a StaffUser instance) is assigned to `branch_id` —

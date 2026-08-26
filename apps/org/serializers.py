@@ -1,6 +1,7 @@
 import re
 
 from rest_framework import serializers
+from core import storage as blob_storage
 from .models import (
     Branch, Department, StaffUser, DoctorProfile, StaffProfile, StaffBranchMapping,
     Permission, Role, UserRole, DoctorSchedule, DoctorAvailabilitySlot,
@@ -92,6 +93,16 @@ class DoctorSelfProfileSerializer(serializers.ModelSerializer):
     followup_fee may be left blank — the invoice generator falls back to
     consultation_fee for follow-up visits when it's unset.
     """
+    # digital_signature stores an S3 object key (see core/storage.py), not a
+    # usable image source — this returns a freshly-signed URL on every read
+    # instead. Read-only here: the write side is handled explicitly in
+    # MyDoctorProfileView.patch() (decode base64 -> verify -> upload -> store
+    # key), same pattern as StaffMeSerializer.photo below.
+    digital_signature = serializers.SerializerMethodField()
+
+    def get_digital_signature(self, obj):
+        return blob_storage.signed_url(obj.digital_signature)
+
     def get_fields(self):
         fields = super().get_fields()
         if not self.context.get("fee_editable", False):
@@ -181,6 +192,15 @@ class StaffMeSerializer(serializers.ModelSerializer):
     nurse, front desk, lab tech, pharmacist, hospital admin) via
     MyStaffProfileView, scoped to request.user's own row.
     """
+    # photo stores an S3 object key (see core/storage.py), not a usable
+    # image source — signed fresh on every read. Read-only: the write side
+    # is handled explicitly in MyStaffProfileView.patch() (decode base64 ->
+    # verify -> upload -> store key).
+    photo = serializers.SerializerMethodField()
+
+    def get_photo(self, obj):
+        return blob_storage.signed_url(obj.photo)
+
     class Meta:
         model  = StaffUser
         fields = ["id", "first_name", "last_name", "email", "role", "photo", "date_of_birth"]
@@ -206,6 +226,17 @@ class StaffSerializer(serializers.ModelSerializer):
     # entry means this person, almost always a doctor, works multiple
     # branches; see apps.org.branch_utils).
     branches = serializers.SerializerMethodField()
+
+    # photo stores an S3 object key — signed fresh on every read, same
+    # reasoning as StaffMeSerializer.photo above. This serializer is
+    # read-only wherever staff.photo would otherwise be written (staff
+    # invite/edit doesn't set photo — only the staff member's own
+    # self-service profile does, via StaffMeSerializer), so no write-side
+    # handling is needed here.
+    photo = serializers.SerializerMethodField()
+
+    def get_photo(self, obj):
+        return blob_storage.signed_url(obj.photo)
 
     def get_branches(self, obj):
         mappings = (

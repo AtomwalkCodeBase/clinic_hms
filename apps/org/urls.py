@@ -3,7 +3,7 @@ from .views import (
     BranchListCreateView, BranchDetailView,
     DepartmentListCreateView, DepartmentDetailView,
     StaffListView, StaffInviteView, StaffDetailView, StaffResendInviteView,
-    DoctorProfileView, DoctorListView, MyDoctorProfileView, MyStaffProfileView,
+    DoctorProfileView, DoctorListView, DoctorSpecialisationListView, MyDoctorProfileView, MyStaffProfileView,
     StaffProfileView, MyStaffProfileDetailsView,
     StaffBranchesView, MyBranchesView,
     PermissionListView, RoleListCreateView, RoleDetailView, StaffRolesView,
@@ -52,6 +52,7 @@ urlpatterns = [
 
     # Doctors list (for scheduling dropdowns, any staff can read)
     path("doctors/",               DoctorListView.as_view(), name="doctor-list"),
+    path("doctors/specialisations/", DoctorSpecialisationListView.as_view(), name="doctor-specialisations"),
 
     # Table-driven RBAC — see apps.org.rbac
     path("permissions/",           PermissionListView.as_view(),  name="permission-list"),

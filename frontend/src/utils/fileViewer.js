@@ -19,15 +19,37 @@ export function dataUrlToBlob(dataUrl) {
 }
 
 /**
- * Opens a base64 data URI in an already-open browser tab/window.
+ * Opens a file — either a base64 data URI or a real (signed S3) URL — in an
+ * already-open browser tab/window.
+ *
+ * Most upload/document endpoints (lab reports, vaccination certificates,
+ * patient documents, photos, signatures, logos) now return a short-lived
+ * signed S3 URL instead of the raw base64 payload — see core/storage.py on
+ * the backend. A handful of endpoints that generate a file on the fly and
+ * never persist it (e.g. invoice PDF receipts) still return a plain "data:"
+ * URI. Both shapes land here, so this checks which one it got: a real URL
+ * is opened directly (no CORS issue navigating a tab cross-origin — that's
+ * different from fetching it via JS); a data URI still goes through the
+ * blob-conversion path, since Chrome/Edge block navigating a top-level tab
+ * straight to a "data:" URL.
  *
  * Pass the `win` reference from a synchronous `window.open()` call made
  * directly inside the click handler (before any `await`) so the popup
- * isn't blocked; this function then points that tab at a blob: URL once
- * the file data is available.
+ * isn't blocked; this function then points that tab at the file once it's
+ * available.
  */
 export function openDataUrlInNewTab(win, dataUrl) {
   if (!win) return null;
+  if (!dataUrl) {
+    win.close();
+    return null;
+  }
+  if (!dataUrl.startsWith("data:")) {
+    // Already a real URL (signed S3 link, or any other http(s) URL) — no
+    // blob conversion needed, just navigate the already-open tab to it.
+    win.location.href = dataUrl;
+    return dataUrl;
+  }
   try {
     const blobUrl = URL.createObjectURL(dataUrlToBlob(dataUrl));
     win.location.href = blobUrl;

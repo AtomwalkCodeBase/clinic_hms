@@ -76,12 +76,24 @@ class Tenant(models.Model):
     default_tax_rate         = models.DecimalField(max_digits=5, decimal_places=2, default=0)
 
     # Hospital's own logo, uploaded by their hospital admin (Settings page) —
-    # base64 data URI, same no-object-storage-yet convention as
-    # StaffUser.photo / PatientAccount.photo. Shown in the staff AppShell
+    # stores an S3 object key, not a usable URL (see core/storage.py); read
+    # sites sign it fresh on every request. Shown in the staff AppShell
     # topbar (replacing the deterministic monogram fallback) across every
     # role at this hospital, and on the patient portal's hospital/doctor
     # cards. Blank until the hospital uploads one.
     logo = models.TextField(blank=True)
+
+    # Human-friendly S3 folder name for this clinic's uploads (staff photos,
+    # doctor signatures, lab reports, the logo above) — e.g. "sunrise-clinic"
+    # instead of the auto-generated db_name ("aw_sunrise_clinic_7f2a"). Set
+    # by the hospital admin via /org/settings/ (core.storage.sanitize_folder
+    # enforces lowercase/hyphen-only on save so it's always a safe S3 key
+    # segment). Blank means "use db_name" — see
+    # core.storage.tenant_folder(tenant), the single place this fallback is
+    # resolved, so every upload call site stays in sync automatically.
+    # Changing this only affects NEW uploads; files already in S3 under the
+    # old folder name aren't moved.
+    storage_folder = models.CharField(max_length=60, blank=True)
 
     created_at  = models.DateTimeField(auto_now_add=True)
     updated_at  = models.DateTimeField(auto_now=True)

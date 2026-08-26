@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from core import storage as blob_storage
 from .models import LabTest, LabRequest, LabReport, LabReportItem
 
 
@@ -18,6 +19,14 @@ class LabReportItemSerializer(serializers.ModelSerializer):
 
 class LabReportSerializer(serializers.ModelSerializer):
     items = LabReportItemSerializer(many=True, read_only=True)
+    # file_url stores an S3 object key (see core/storage.py), not a usable
+    # link — signed fresh on every read. Read-only here: the write side is
+    # handled explicitly in LabReportDeliverView (decode base64 -> verify ->
+    # upload -> store key).
+    file_url = serializers.SerializerMethodField()
+
+    def get_file_url(self, obj):
+        return blob_storage.signed_url(obj.file_url)
 
     class Meta:
         model  = LabReport
@@ -66,7 +75,7 @@ class LabRequestSerializer(serializers.ModelSerializer):
             return None
         return {
             "id": r.id, "status": r.status, "report_number": r.report_number,
-            "result_summary": r.result_summary, "file_data": r.file_url,
+            "result_summary": r.result_summary, "file_data": blob_storage.signed_url(r.file_url),
             "file_name": r.file_name, "mime_type": r.mime_type,
             "delivered_at": r.delivered_at,
             "items": LabReportItemSerializer(r.items.all(), many=True).data,

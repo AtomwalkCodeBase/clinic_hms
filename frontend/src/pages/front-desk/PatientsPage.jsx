@@ -62,9 +62,28 @@ export default function FrontDeskPatientsPage() {
           {isLoading ? (
             <div style={{ padding: 40, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
           ) : patients.length === 0 ? (
-            <div style={{ padding: 48, textAlign: "center", color: "var(--color-text-muted)" }}>
-              {debouncedQuery ? `No patients matched "${debouncedQuery}"` : "No patients registered here yet."}
-            </div>
+            data?.network_match ? (
+              <div style={{ padding: 40, textAlign: "center" }}>
+                <div style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 4 }}>
+                  Nobody registered here yet for "{debouncedQuery}" — but this person is already on the
+                  Atomwalk network:
+                </div>
+                <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 14 }}>
+                  {data.network_match.full_name}
+                </div>
+                <button
+                  className="btn-primary"
+                  style={{ fontSize: 12, padding: "8px 18px" }}
+                  onClick={() => navigate(ROUTES.FRONT_DESK.REGISTER_PATIENT, { state: { mobile: debouncedQuery } })}
+                >
+                  Register them at this hospital
+                </button>
+              </div>
+            ) : (
+              <div style={{ padding: 48, textAlign: "center", color: "var(--color-text-muted)" }}>
+                {debouncedQuery ? `No patients matched "${debouncedQuery}"` : "No patients registered here yet."}
+              </div>
+            )
           ) : (
             <table className="data-table">
               <thead>

@@ -6,13 +6,14 @@ from .portal_views import (
     PortalSlotListView, PortalBookView, PortalMyBookingsView, PortalCancelBookingView, PortalRescheduleBookingView,
     PortalMyRecordsView,
     PortalDocumentListCreateView, PortalLabOrderListView, PortalLabOrderChoiceView,
-    PortalPrescriptionListView, PortalPrescriptionChoiceView,
+    PortalPrescriptionListView, PortalPrescriptionChoiceView, PortalPrescriptionReceiptPDFView,
     PortalLabReportFileView, PortalProfileView, PortalChangePasswordView,
     PortalMobileChangeRequestOTPView,
     PortalInvoiceListView, PortalInvoiceReceiptPDFView,
     PortalFamilyListCreateView, PortalHealthSummaryView,
     PortalVaccinationListView, PortalVaccinationUploadView, PortalVaccinationFileView, PortalGrowthView,
     PortalHealthTimelineView, PortalNotificationsView, PortalNotificationMarkReadView,
+    PortalEmergencyTokenView,
 )
 
 urlpatterns = [
@@ -38,6 +39,7 @@ urlpatterns = [
     path("lab-orders/<str:tenant_db>/<int:request_id>/report/", PortalLabReportFileView.as_view(), name="portal-lab-report-file"),
     path("prescriptions/",                  PortalPrescriptionListView.as_view(), name="portal-prescriptions"),
     path("prescriptions/choice/",           PortalPrescriptionChoiceView.as_view(), name="portal-prescription-choice"),
+    path("prescriptions/<str:tenant_db>/<uuid:pk>/receipt/", PortalPrescriptionReceiptPDFView.as_view(), name="portal-prescription-receipt"),
     path("profile/",                        PortalProfileView.as_view(),      name="portal-profile"),
     path("profile/change-password/",        PortalChangePasswordView.as_view(), name="portal-change-password"),
     path("profile/mobile-change/request-otp/", PortalMobileChangeRequestOTPView.as_view(), name="portal-mobile-change-request-otp"),
@@ -50,4 +52,5 @@ urlpatterns = [
     path("timeline/",                       PortalHealthTimelineView.as_view(), name="portal-timeline"),
     path("notifications/",                  PortalNotificationsView.as_view(), name="portal-notifications"),
     path("notifications/<str:tenant_db>/<int:pk>/read/", PortalNotificationMarkReadView.as_view(), name="portal-notifications-read"),
+    path("emergency/token/",                PortalEmergencyTokenView.as_view(), name="portal-emergency-token"),
 ]

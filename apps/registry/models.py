@@ -668,3 +668,47 @@ class PortalBooking(models.Model):
 
     def __str__(self):
         return f"{self.account.email} @ {self.hospital_name} on {self.scheduled_date}"
+
+
+class EmergencyAccessLog(models.Model):
+    """
+    Audit trail for the "Emergency QR" feature (see core/emergency_access.py)
+    — every time a patient generates an emergency QR code, and every time
+    someone actually opens the resulting link, gets one row here. Lives in
+    the registry DB (not a tenant DB) because the whole point of this
+    feature is it has NO tenant context: it can be scanned by a doctor at a
+    hospital that isn't even on this platform.
+
+    Two event types, not two models — a "generated" row and its later
+    "viewed" row(s) share every other field, and a patient's own "how many
+    times has this been looked at" view (if ever surfaced) wants both kinds
+    interleaved by time, not queried separately.
+    """
+    EVENT_GENERATED = "generated"
+    EVENT_VIEWED    = "viewed"
+    EVENT_CHOICES = [
+        (EVENT_GENERATED, "QR code generated"),
+        (EVENT_VIEWED,     "Summary viewed"),
+    ]
+
+    awpid      = models.CharField(max_length=30, db_index=True)
+    event      = models.CharField(max_length=10, choices=EVENT_CHOICES)
+    # Which account actually triggered generation — blank for "viewed" rows,
+    # since a scan is by definition someone without an account here.
+    generated_by_account_id = models.IntegerField(null=True, blank=True)
+    # True only for EVENT_GENERATED rows — durable proof the account holder
+    # explicitly confirmed the consent prompt (see PortalEmergencyTokenView)
+    # before this specific token was minted, not just a standing preference.
+    # Meaningless/always False on EVENT_VIEWED rows (a scan has no consent
+    # step of its own — consent already happened at generation time).
+    consent_confirmed = models.BooleanField(default=False)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "emergency_access_log"
+        ordering  = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.awpid} — {self.event} @ {self.created_at}"

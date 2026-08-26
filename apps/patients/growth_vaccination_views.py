@@ -29,6 +29,8 @@ from rest_framework.views import APIView
 
 from core.response import success, created, error, not_found
 from core.permissions import IsHospitalStaff, IsDoctorOrNurse, IsDoctor
+from core.file_validation import validate_data_uri, FileValidationError
+from core import storage as blob_storage
 
 from .models import Patient
 
@@ -40,6 +42,53 @@ def _age_years(dob):
         return None
     today = date.today()
     return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+
+
+def _handle_vaccination_file(patient, d, vaccine_name=""):
+    """
+    Optional certificate upload for a staff-logged vaccination — same S3
+    fields (file_name/mime_type/file_data-as-key) a parent's self-reported
+    upload sets via PortalVaccinationUploadView, just attached by the
+    clinician instead. Most clinic-administered doses won't have a scanned
+    certificate, so this is opt-in: returns ("", "", "", None) when the
+    request carried no file_data at all.
+
+    `vaccine_name`, when known at the call site, is baked into file_name
+    alongside the patient's name/AWPID (see display_file_name()) — without
+    it, every certificate for every patient would download as the same
+    generic "Vaccination Certificate.png", indistinguishable once saved
+    outside this app's own folder-organized S3 view.
+
+    Returns (file_name, mime_type, file_key, error_response) — on any
+    validation/upload failure the first three are None and error_response
+    is a ready-to-return DRF response, matching the pattern every other
+    upload call site in this codebase uses (see apps/lab/views.py,
+    apps/patients/portal_views.py).
+    """
+    file_data = d.get("file_data") or ""
+    if not file_data:
+        return "", "", "", None
+    try:
+        mime_type = validate_data_uri(file_data)
+    except FileValidationError as exc:
+        return None, None, None, error(str(exc), errors={"file_data": str(exc)})
+    identity = blob_storage.identity_slug(name=patient.full_name, identifier=patient.awpid)
+    try:
+        file_key = blob_storage.upload_data_uri(
+            file_data, prefix="vaccination-certs", mime_type=mime_type,
+            category="vaccination-certificate", identity=identity,
+        )
+    except blob_storage.StorageError as exc:
+        return None, None, None, error(str(exc), errors={"file_data": str(exc)})
+    # Named after what it is (the specific vaccine, not just "a vaccination
+    # certificate") plus who it belongs to, not whatever the clinic's
+    # scanner/phone called the file — same convention as every other
+    # upload category.
+    file_name = blob_storage.display_file_name(
+        "vaccination-certificate", mime_type,
+        detail=vaccine_name, name=patient.full_name, identifier=patient.awpid,
+    )
+    return file_name, mime_type, file_key, None
 
 
 class PatientGrowthView(APIView):
@@ -154,10 +203,19 @@ class PatientVaccinationListCreateView(APIView):
                 .order_by("sort_order")
             )
 
-        roadmap = build_roadmap(patient.awpid, patient.date_of_birth, rules)
+        # HIE-consent gate — mirrors PatientHistoryView/PatientGrowthView:
+        # without consent, other hospitals' vaccination records are hidden
+        # from this hospital's staff (pending self-reports and this
+        # hospital's own records stay visible regardless — see
+        # build_roadmap()'s hie_consent docstring).
+        roadmap = build_roadmap(
+            patient.awpid, patient.date_of_birth, rules,
+            viewer_tenant_id=request.tenant_id, hie_consent=patient.hie_consent_given,
+        )
         return success(data={
             "patient_name": patient.full_name,
             "date_of_birth": patient.date_of_birth,
+            "consent_given": patient.hie_consent_given,
             "roadmap": roadmap,
         })
 
@@ -178,6 +236,10 @@ class PatientVaccinationListCreateView(APIView):
         if not administered_date:
             return error("Administered date is required.", errors={"administered_date": "Required."})
 
+        file_name, mime_type, file_key, err = _handle_vaccination_file(patient, d, vaccine_name)
+        if err:
+            return err
+
         staff_name = getattr(request.user, "full_name", None) or getattr(request.user, "email", "Staff")
         record = SharedVaccination.objects.using("default").create(
             awpid=patient.awpid,
@@ -190,12 +252,16 @@ class PatientVaccinationListCreateView(APIView):
             verified_at=timezone.now(),
             source_tenant_id=request.tenant_id,
             recorded_by="staff",
+            file_name=file_name,
+            mime_type=mime_type,
+            file_data=file_key,
         )
         return created(data={
             "id": record.id,
             "vaccine_name": record.vaccine_name,
             "administered_date": str(record.administered_date),
             "verification_status": record.verification_status,
+            "has_certificate": bool(record.file_data),
         }, message="Vaccination logged.")
 
 
@@ -393,10 +459,32 @@ class PatientVaccinationAdministerView(APIView):
         staff_name = getattr(request.user, "full_name", None) or getattr(request.user, "email", "Staff")
         record_id = d.get("record_id")
 
+        # Resolve which vaccine this is BEFORE handling any attached file —
+        # _handle_vaccination_file() bakes the vaccine name into file_name
+        # (see display_file_name()), so for the record_id path that means
+        # fetching the record first rather than after, purely to know its
+        # vaccine_name in time for naming the file.
+        record = None
         if record_id:
             record = SharedVaccination.objects.using("default").filter(pk=record_id, awpid=patient.awpid).first()
             if not record:
                 return not_found("Vaccination record not found for this patient.")
+            vaccine_name_for_file = record.vaccine_name
+        else:
+            vaccine_name_for_file = (d.get("vaccine_name") or "").strip()
+
+        file_name, mime_type, file_key, err = _handle_vaccination_file(patient, d, vaccine_name_for_file)
+        if err:
+            return err
+        has_file = bool(file_key)
+
+        if record_id:
+            # Replacing whatever certificate (if any) was already on file —
+            # e.g. a doctor-ordered row administered here had none, or a
+            # rejected self-reported upload is being corrected — so clean up
+            # the old S3 object first, same replace-on-write pattern used
+            # everywhere else a stored file can be overwritten.
+            old_file_key = record.file_data
             record.administered_date = administered_date
             record.source = SharedVaccination.SOURCE_CLINIC
             record.verification_status = SharedVaccination.STATUS_VERIFIED
@@ -407,10 +495,18 @@ class PatientVaccinationAdministerView(APIView):
             if record.source_tenant_id is None:
                 record.source_tenant_id = request.tenant_id
             record.recorded_by = "staff"
-            record.save(using="default", update_fields=[
+            update_fields = [
                 "administered_date", "source", "verification_status", "verified_by_name",
                 "verified_at", "dose_number", "source_tenant_id", "recorded_by",
-            ])
+            ]
+            if has_file:
+                record.file_name = file_name
+                record.mime_type = mime_type
+                record.file_data = file_key
+                update_fields += ["file_name", "mime_type", "file_data"]
+            record.save(using="default", update_fields=update_fields)
+            if has_file and old_file_key:
+                blob_storage.delete(old_file_key)
         else:
             vaccine_name = (d.get("vaccine_name") or "").strip()
             if not vaccine_name:
@@ -428,6 +524,9 @@ class PatientVaccinationAdministerView(APIView):
                 verified_at=timezone.now(),
                 source_tenant_id=request.tenant_id,
                 recorded_by="staff",
+                file_name=file_name,
+                mime_type=mime_type,
+                file_data=file_key,
             )
 
         return success(data={
@@ -435,4 +534,5 @@ class PatientVaccinationAdministerView(APIView):
             "vaccine_name": record.vaccine_name,
             "administered_date": str(record.administered_date),
             "verification_status": record.verification_status,
+            "has_certificate": bool(record.file_data),
         }, message="Vaccination recorded as administered.")

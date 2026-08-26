@@ -41,7 +41,7 @@ export const THEMES = [
   theme("plum", "Plum", "#4A2F5C", "#2E1D3A", "#EFE8F3", "#F8F5FA", "#E7DDEE", "#251820", "#96828C", "#3B9E8C", true),
 ];
 
-export const DEFAULT_THEME_ID = "emerald";
+export const DEFAULT_THEME_ID = "emerald-glass";
 
 export function getThemeById(id) {
   return THEMES.find(t => t.id === id) || THEMES.find(t => t.id === DEFAULT_THEME_ID);
