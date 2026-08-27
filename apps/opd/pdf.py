@@ -160,3 +160,188 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
     c.showPage()
     c.save()
     return buf.getvalue()
+
+
+def generate_encounter_summary_pdf(encounter, appointment, diagnoses, rx_items, doctor_name,
+                                    patient, branch, hospital_name):
+    """
+    A real, printable consultation summary PDF — replaces the doctor's old
+    "Download Summary" button, which built a plain .txt file client-side
+    with no server round trip. Same reportlab pattern as
+    generate_prescription_pdf/apps.billing.pdf.generate_invoice_pdf above.
+
+    encounter:   opd.OPDEncounter instance (signed or draft — either way,
+                 this reflects whatever's on the encounter right now)
+    appointment: opd.Appointment instance (for chief_complaint/visit date)
+    diagnoses:   encounter.diagnoses (list of {"code","description","is_primary"})
+    rx_items:    list of opd.PrescriptionItem, or [] if nothing prescribed
+    doctor_name: str (already resolved by the caller)
+    patient:     patients.Patient instance
+    branch:      org.Branch instance (may be None)
+    hospital_name: str
+    """
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+    left = 20 * mm
+    right = width - 20 * mm
+    y = height - 20 * mm
+
+    # ── Header ──────────────────────────────────────────────────────────
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(left, y, hospital_name or "Hospital")
+    c.setFont("Helvetica", 9)
+    y -= 6 * mm
+    if branch:
+        addr_parts = [p for p in [branch.address, branch.city, branch.state, branch.pincode] if p]
+        if addr_parts:
+            c.drawString(left, y, ", ".join(addr_parts))
+            y -= 5 * mm
+        if branch.phone:
+            c.drawString(left, y, f"Phone: {branch.phone}")
+            y -= 5 * mm
+
+    c.setFont("Helvetica-Bold", 14)
+    c.drawRightString(right, height - 20 * mm, "CONSULTATION SUMMARY")
+    c.setFont("Helvetica", 9)
+    visit_date = appointment.scheduled_date if appointment else None
+    c.drawRightString(right, height - 26 * mm, f"Date: {visit_date.strftime('%d %b %Y') if visit_date else '—'}")
+    c.drawRightString(right, height - 31 * mm, f"Status: {encounter.get_status_display()}")
+
+    y -= 6 * mm
+    c.setStrokeColor(colors.HexColor("#DDDDDD"))
+    c.line(left, y, right, y)
+    y -= 10 * mm
+
+    # ── Patient / doctor ────────────────────────────────────────────────
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(left, y, "Patient")
+    c.drawString(left + 95 * mm, y, "Consulting doctor")
+    y -= 5 * mm
+    c.setFont("Helvetica", 10)
+    c.drawString(left, y, patient.full_name if patient else "—")
+    c.drawString(left + 95 * mm, y, f"Dr. {doctor_name}" if doctor_name else "—")
+    y -= 5 * mm
+    c.setFont("Helvetica", 9)
+    if patient:
+        detail_bits = [f"UHID: {patient.uhid}"]
+        if patient.gender:
+            detail_bits.append({"M": "Male", "F": "Female", "O": "Other"}.get(patient.gender, patient.gender))
+        if getattr(patient, "date_of_birth", None):
+            detail_bits.append(f"DOB: {patient.date_of_birth.strftime('%d %b %Y')}")
+        c.drawString(left, y, " · ".join(detail_bits))
+    y -= 10 * mm
+
+    def section_header(title):
+        nonlocal y
+        if y < 30 * mm:
+            c.showPage()
+            y = height - 20 * mm
+        c.setFillColor(colors.HexColor("#F5F5F0"))
+        c.rect(left, y - 6 * mm, right - left, 8 * mm, fill=1, stroke=0)
+        c.setFillColor(colors.black)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(left + 2 * mm, y - 4 * mm, title)
+        y -= 11 * mm
+
+    def wrapped_text(text, font="Helvetica", size=9, indent=0):
+        """Simple word-wrap so long free-text fields don't run off the page edge."""
+        nonlocal y
+        c.setFont(font, size)
+        max_width = right - left - indent
+        words = (text or "").split()
+        line = ""
+        for word in words:
+            trial = f"{line} {word}".strip()
+            if c.stringWidth(trial, font, size) > max_width and line:
+                if y < 20 * mm:
+                    c.showPage()
+                    y = height - 20 * mm
+                    c.setFont(font, size)
+                c.drawString(left + indent, y, line)
+                y -= 5 * mm
+                line = word
+            else:
+                line = trial
+        if line:
+            if y < 20 * mm:
+                c.showPage()
+                y = height - 20 * mm
+                c.setFont(font, size)
+            c.drawString(left + indent, y, line)
+            y -= 5 * mm
+
+    # ── Chief complaint ─────────────────────────────────────────────────
+    chief_complaint = getattr(appointment, "chief_complaint", "") if appointment else ""
+    if chief_complaint:
+        section_header("Chief Complaint")
+        wrapped_text(chief_complaint)
+        y -= 4 * mm
+
+    # ── Diagnoses ────────────────────────────────────────────────────────
+    section_header(f"Diagnoses (ICD-10) — {len(diagnoses)}" if diagnoses else "Diagnoses (ICD-10)")
+    if diagnoses:
+        for d in diagnoses:
+            if y < 20 * mm:
+                c.showPage()
+                y = height - 20 * mm
+            c.setFont("Helvetica-Bold", 9)
+            c.drawString(left + 2 * mm, y, d.get("code", "—"))
+            c.setFont("Helvetica", 9)
+            label = d.get("description", "")
+            if d.get("is_primary"):
+                label += "  (Primary)"
+            c.drawString(left + 22 * mm, y, label[:90])
+            y -= 6 * mm
+    else:
+        c.setFont("Helvetica-Oblique", 9)
+        c.setFillColor(colors.HexColor("#888888"))
+        c.drawString(left + 2 * mm, y, "None recorded")
+        c.setFillColor(colors.black)
+        y -= 6 * mm
+    y -= 4 * mm
+
+    # ── Prescription ─────────────────────────────────────────────────────
+    section_header(f"Prescription — {len(rx_items)} item(s)" if rx_items else "Prescription")
+    if rx_items:
+        for item in rx_items:
+            if y < 20 * mm:
+                c.showPage()
+                y = height - 20 * mm
+            c.setFont("Helvetica-Bold", 9)
+            c.drawString(left + 2 * mm, y, (item.drug_name or "—")[:38])
+            c.setFont("Helvetica", 9)
+            bits = [b for b in [item.dosage, FREQ_LABEL.get(item.frequency, item.frequency),
+                                 ROUTE_LABEL.get(item.route, item.route),
+                                 f"× {item.duration_days}d" if item.duration_days else None] if b]
+            c.drawString(left + 65 * mm, y, " · ".join(bits))
+            y -= 6 * mm
+    else:
+        c.setFont("Helvetica-Oblique", 9)
+        c.setFillColor(colors.HexColor("#888888"))
+        c.drawString(left + 2 * mm, y, "None recorded")
+        c.setFillColor(colors.black)
+        y -= 6 * mm
+    y -= 4 * mm
+
+    # ── Advice + follow-up ─────────────────────────────────────────────
+    if encounter.advice_to_patient or encounter.follow_up_in_days:
+        section_header("Advice & Follow-up")
+        if encounter.advice_to_patient:
+            wrapped_text(encounter.advice_to_patient)
+        if encounter.follow_up_in_days:
+            if y < 20 * mm:
+                c.showPage()
+                y = height - 20 * mm
+            c.setFont("Helvetica", 9)
+            c.drawString(left + 2 * mm, y, f"Follow-up in {encounter.follow_up_in_days} day(s)")
+            y -= 6 * mm
+
+    # ── Footer ──────────────────────────────────────────────────────────
+    c.setFont("Helvetica-Oblique", 8)
+    c.setFillColor(colors.HexColor("#888888"))
+    c.drawCentredString(width / 2, 15 * mm, "This is a system-generated consultation summary. Please consult your doctor before making any changes.")
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()

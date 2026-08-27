@@ -206,6 +206,40 @@ class StaffBranchMapping(models.Model):
         return f"{self.staff.get_full_name()} @ {self.branch.name}{' (primary)' if self.is_primary else ''}"
 
 
+class NurseDoctorAssignment(models.Model):
+    """
+    Which doctor(s) a nurse supports — set by the hospital admin (Staff page,
+    "Assign Doctors" on a nurse's row). Many-to-many: a nurse commonly floats
+    across a few doctors sharing a floor/OPD block, and a doctor can have more
+    than one nurse rostered to them (shift coverage).
+
+    This is the source of truth apps/opd/views.py's nurse-scoping reads from
+    (AppointmentListCreateView / AppointmentUpcomingView / AppointmentHistoryView
+    / MonitoringListView) — a nurse with no rows here sees no patients at all,
+    the same "assigned, not everyone" behavior a doctor already gets from
+    doctor_user_id=request.user.id. Deliberately a flat join table with no
+    day/time dimension (unlike RoomAssignment) — nothing in the product today
+    asks "which doctor is this nurse covering on Tuesdays specifically".
+    """
+    nurse       = models.ForeignKey(StaffUser, on_delete=models.CASCADE,
+                                    related_name="assigned_doctor_links",
+                                    limit_choices_to={"role": "nurse"})
+    doctor      = models.ForeignKey(StaffUser, on_delete=models.CASCADE,
+                                    related_name="assigned_nurse_links",
+                                    limit_choices_to={"role": "doctor"})
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "org"
+        db_table  = "nurse_doctor_assignment"
+        constraints = [
+            models.UniqueConstraint(fields=["nurse", "doctor"], name="uniq_nurse_doctor"),
+        ]
+
+    def __str__(self):
+        return f"{self.nurse.get_full_name()} → Dr. {self.doctor.get_full_name()}"
+
+
 class Permission(models.Model):
     """
     Fixed catalog of grantable actions — see apps.org.rbac.PERMISSION_CATALOG

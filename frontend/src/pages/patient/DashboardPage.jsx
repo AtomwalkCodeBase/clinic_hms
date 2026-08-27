@@ -10,7 +10,7 @@
  */
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Building2, Calendar, ClipboardList, Pill, FlaskConical, Search, SlidersHorizontal, X } from "lucide-react";
+import { Building2, Calendar, ClipboardList, Pill, FlaskConical, Search, SlidersHorizontal, X, MapPin } from "lucide-react";
 import { AppShell }    from "../../components/layout/AppShell";
 import { PageShell }   from "../../components/common/PageShell";
 import DoctorCard      from "../../components/common/DoctorCard";
@@ -452,6 +452,12 @@ export default function PatientDashboardPage() {
                             <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15, color: "#fff" }}>
                               {b.hospital}
                             </div>
+                            {(b.hospital_city || b.hospital_state) && (
+                              <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--color-hero-muted)", marginTop: 2 }}>
+                                <MapPin size={11} />
+                                {[b.hospital_city, b.hospital_state].filter(Boolean).join(", ")}
+                              </div>
+                            )}
                             <div style={{ fontSize: 12, color: "var(--color-hero-muted)", marginTop: 3 }}>
                               {b.doctor}{b.date ? ` · ${b.date}` : ""}{b.time ? ` · ${b.time}` : ""}
                               {b.room_name && ` · ${b.room_name}${b.floor ? ` (Fl ${b.floor})` : ""}`}

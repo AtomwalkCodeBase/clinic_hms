@@ -41,6 +41,38 @@ const ROLE_BASICS = {
   hospital_admin: { license: false },
 };
 
+// Dropdown options for Specialisation (doctor) and Qualification (per role)
+// — rendered as <input list="..."> + <datalist>, so it behaves like a real
+// dropdown (click the field, pick from the list) while still accepting a
+// value that isn't on the list, since real-world staff qualifications and
+// specialisations are too varied for any fixed list to fully cover.
+const SPECIALISATIONS = [
+  "General Physician", "General Medicine", "Family Medicine", "Cardiology",
+  "Dermatology", "ENT (Otorhinolaryngology)", "Gynaecology & Obstetrics",
+  "Orthopedics", "Pediatrics", "Psychiatry", "Neurology", "Nephrology",
+  "Urology", "Gastroenterology", "Endocrinology", "Pulmonology",
+  "Oncology", "Ophthalmology", "General Surgery", "Anesthesiology",
+  "Radiology", "Pathology", "Emergency Medicine", "Rheumatology",
+  "Infectious Disease", "Nutrition & Dietetics", "Dentistry",
+  "Physiotherapy", "Diabetology", "Geriatrics",
+];
+
+const QUALIFICATIONS_BY_ROLE = {
+  doctor: [
+    "MBBS", "MBBS, MD (General Medicine)", "MBBS, MS (General Surgery)",
+    "MBBS, MD (Pediatrics)", "MBBS, MD (Dermatology)", "MBBS, MS (Orthopedics)",
+    "MBBS, MD (Obstetrics & Gynaecology)", "MBBS, MD (Psychiatry)",
+    "MBBS, MD, DM (Cardiology)", "MBBS, MD, DM (Neurology)",
+    "MBBS, MD, DM (Nephrology)", "MBBS, MS, MCh", "MBBS, DNB",
+    "BDS", "BDS, MDS", "BAMS", "BHMS", "BUMS",
+  ],
+  nurse: ["ANM", "GNM", "BSc Nursing", "Post Basic BSc Nursing", "MSc Nursing"],
+  pharmacist: ["D.Pharm", "B.Pharm", "M.Pharm", "Pharm.D"],
+  lab_tech: ["DMLT", "BSc MLT", "MSc MLT", "BSc Biotechnology", "DMRT"],
+  front_desk: ["12th Pass", "Graduate (Any Discipline)", "BBA", "Diploma in Hospital Management"],
+  hospital_admin: ["Graduate (Any Discipline)", "MBA (Hospital Administration)", "MHA", "PGDHM"],
+};
+
 // role="custom" has no fixed label/color of its own (it's a hospital-defined
 // Role — see apps/org/rbac.py) — falls back to the actual role's name, and a
 // neutral color unless it happens to act as exactly one system role (in
@@ -638,10 +670,16 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                     Doctor basics — shown to patients right away
                   </div>
                   <div><label style={labelStyle}>Specialisation</label>
-                    <input style={inputStyle} value={form.specialisation} onChange={set("specialisation")} placeholder="e.g. Cardiology, General Physician, Gynaecology" />
+                    <input style={inputStyle} list="specialisation-options" value={form.specialisation} onChange={set("specialisation")} placeholder="e.g. Cardiology, General Physician, Gynaecology" />
+                    <datalist id="specialisation-options">
+                      {SPECIALISATIONS.map(s => <option key={s} value={s} />)}
+                    </datalist>
                   </div>
                   <div><label style={labelStyle}>Qualification</label>
-                    <input style={inputStyle} value={form.qualification} onChange={set("qualification")} placeholder="MBBS, MD (Cardiology)" />
+                    <input style={inputStyle} list="qualification-options-doctor" value={form.qualification} onChange={set("qualification")} placeholder="MBBS, MD (Cardiology)" />
+                    <datalist id="qualification-options-doctor">
+                      {QUALIFICATIONS_BY_ROLE.doctor.map(q => <option key={q} value={q} />)}
+                    </datalist>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div><label style={labelStyle}>MCI/NMC Registration No.</label>
@@ -764,7 +802,10 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                     <div><label style={labelStyle}>Qualification</label>
-                      <input style={inputStyle} value={form.qualification} onChange={set("qualification")} placeholder="e.g. BSc Nursing" />
+                      <input style={inputStyle} list="qualification-options-invite" value={form.qualification} onChange={set("qualification")} placeholder="e.g. BSc Nursing" />
+                      <datalist id="qualification-options-invite">
+                        {(QUALIFICATIONS_BY_ROLE[form.role] || []).map(q => <option key={q} value={q} />)}
+                      </datalist>
                     </div>
                     <div><label style={labelStyle}>Experience (years)</label>
                       <input style={inputStyle} type="number" min="0" value={form.experience_years} onChange={set("experience_years")} placeholder="5" />
@@ -932,8 +973,18 @@ function DoctorProfileModal({ staff, onClose, onSaved }) {
           <form onSubmit={handleSubmit}>
             <div style={{ display: "grid", gap: 14 }}>
               <div><label style={labelStyle}>MCI/NMC Registration No.</label><input style={inputStyle} value={form.registration_no} onChange={set("registration_no")} placeholder="MH-12345" /></div>
-              <div><label style={labelStyle}>Specialisation</label><input style={inputStyle} value={form.specialisation} onChange={set("specialisation")} placeholder="Cardiology" /></div>
-              <div><label style={labelStyle}>Qualification</label><input style={inputStyle} value={form.qualification} onChange={set("qualification")} placeholder="MBBS, MD (Cardiology)" /></div>
+              <div><label style={labelStyle}>Specialisation</label>
+                <input style={inputStyle} list="specialisation-options-profile" value={form.specialisation} onChange={set("specialisation")} placeholder="Cardiology" />
+                <datalist id="specialisation-options-profile">
+                  {SPECIALISATIONS.map(s => <option key={s} value={s} />)}
+                </datalist>
+              </div>
+              <div><label style={labelStyle}>Qualification</label>
+                <input style={inputStyle} list="qualification-options-profile" value={form.qualification} onChange={set("qualification")} placeholder="MBBS, MD (Cardiology)" />
+                <datalist id="qualification-options-profile">
+                  {QUALIFICATIONS_BY_ROLE.doctor.map(q => <option key={q} value={q} />)}
+                </datalist>
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div><label style={labelStyle}>Gender</label>
                   <select style={inputStyle} value={form.gender} onChange={set("gender")}>
@@ -1055,7 +1106,12 @@ function StaffProfileModal({ staff, onClose, onSaved }) {
           <form onSubmit={handleSubmit}>
             <div style={{ display: "grid", gap: 14 }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <div><label style={labelStyle}>Qualification</label><input style={inputStyle} value={form.qualification} onChange={set("qualification")} placeholder="e.g. BSc Nursing" /></div>
+                <div><label style={labelStyle}>Qualification</label>
+                  <input style={inputStyle} list="qualification-options-staffprofile" value={form.qualification} onChange={set("qualification")} placeholder="e.g. BSc Nursing" />
+                  <datalist id="qualification-options-staffprofile">
+                    {(QUALIFICATIONS_BY_ROLE[staff.role] || []).map(q => <option key={q} value={q} />)}
+                  </datalist>
+                </div>
                 <div><label style={labelStyle}>Experience (years)</label><input style={inputStyle} type="number" min="0" value={form.experience_years} onChange={set("experience_years")} placeholder="5" /></div>
               </div>
 
@@ -1272,6 +1328,106 @@ function EditStaffModal({ staff, branches, onClose, onSaved }) {
   );
 }
 
+function AssignDoctorsModal({ nurse, onClose, onSaved }) {
+  const api = apiClient;
+  const { toastSuccess, toastApiError } = useToast();
+  const [doctors, setDoctors] = useState([]);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      api.get(API_ENDPOINTS.ORG.DOCTORS),
+      api.get(API_ENDPOINTS.ORG.STAFF_DOCTORS(nurse.id)),
+    ]).then(([doctorsRes, assignedRes]) => {
+      if (cancelled) return;
+      setDoctors(doctorsRes.data?.data?.results || doctorsRes.data?.data || []);
+      setSelectedIds((assignedRes.data?.data || []).map(d => d.id));
+    }).catch(() => {}).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nurse.id]);
+
+  function toggleDoctor(id) {
+    setSelectedIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.put(API_ENDPOINTS.ORG.STAFF_DOCTORS(nurse.id), { doctor_ids: selectedIds });
+      toastSuccess("Doctor assignment updated.");
+      onSaved();
+      onClose();
+    } catch (err) { toastApiError(err, "Failed to update assignment."); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 1000,
+      background: "rgba(0,0,0,0.45)",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+    }}>
+      <div style={{
+        background: "var(--color-surface)", borderRadius: 16,
+        width: "100%", maxWidth: 480,
+        padding: 32, boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <h2 style={{ margin: 0, fontSize: 18 }}>
+            Assign Doctors — {nurse.first_name} {nurse.last_name}
+          </h2>
+          <button type="button" onClick={onClose}
+            style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "var(--color-text-muted)" }}>✕</button>
+        </div>
+        <p style={{ margin: "0 0 20px", fontSize: 13, color: "var(--color-text-muted)" }}>
+          This nurse's queue, vitals list, patient monitoring, and upcoming schedule will only
+          show patients booked with the doctor(s) checked below.
+        </p>
+        <form onSubmit={handleSubmit}>
+          {loading ? (
+            <div style={{ textAlign: "center", padding: 30, color: "var(--color-text-muted)" }}>Loading…</div>
+          ) : doctors.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 30, color: "var(--color-text-muted)" }}>
+              No doctors yet — invite a doctor first.
+            </div>
+          ) : (
+            <div style={{
+              display: "flex", flexDirection: "column", gap: 6,
+              border: "1.5px solid var(--color-border)", borderRadius: 8, padding: "10px 12px",
+              maxHeight: 260, overflowY: "auto",
+            }}>
+              {doctors.map(d => (
+                <label key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                  <input type="checkbox" checked={selectedIds.includes(d.id)}
+                    onChange={() => toggleDoctor(d.id)} />
+                  Dr. {d.first_name} {d.last_name}
+                  {d.doctor_profile?.specialisation && (
+                    <span style={{ color: "var(--color-text-muted)" }}>— {d.doctor_profile.specialisation}</span>
+                  )}
+                </label>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+            <button type="button" onClick={onClose}
+              style={{ flex: 1, padding: "9px 0", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "none", cursor: "pointer", fontSize: 14, fontWeight: 600 }}>
+              Cancel
+            </button>
+            <button type="submit" disabled={saving || loading} className="btn-primary" style={{ flex: 2 }}>
+              {saving ? "Saving…" : "Save Assignment"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function StaffPage() {
   const api = apiClient;
   const { user } = useAuth();
@@ -1284,6 +1440,7 @@ export default function StaffPage() {
   const [doctorModal, setDoctorModal] = useState(null);
   const [profileModal, setProfileModal] = useState(null);
   const [editModal,   setEditModal]   = useState(null);
+  const [assignDoctorsModal, setAssignDoctorsModal] = useState(null);
   const [roleFilter, setRoleFilter]   = useState("all");
   const [search,     setSearch]       = useState("");
   const [page,       setPage]         = useState(1);
@@ -1440,6 +1597,13 @@ export default function StaffPage() {
                     {s.department_name && ` / ${s.department_name}`}
                     {calcAge(s.date_of_birth) != null && ` · ${calcAge(s.date_of_birth)}y`}
                   </div>
+                  {s.role === "nurse" && (
+                    <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 2 }}>
+                      {Array.isArray(s.assigned_doctors) && s.assigned_doctors.length > 0
+                        ? `Assigned to: ${s.assigned_doctors.map(d => `Dr. ${d.name}`).join(", ")}`
+                        : "Not assigned to any doctor yet"}
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
                   <button onClick={() => setEditModal(s)}
@@ -1450,6 +1614,12 @@ export default function StaffPage() {
                     style={{ padding: "6px 12px", borderRadius: 8, border: "1.5px solid var(--color-primary)", background: "none", color: "var(--color-primary)", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
                     Profile
                   </button>
+                  {s.role === "nurse" && (
+                    <button onClick={() => setAssignDoctorsModal(s)}
+                      style={{ padding: "6px 12px", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "none", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                      Assign Doctors
+                    </button>
+                  )}
                   {s.password === "!" && (
                     <button onClick={() => resendInvite(s)}
                       style={{ padding: "6px 12px", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "none", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
@@ -1530,6 +1700,14 @@ export default function StaffPage() {
             staff={editModal}
             branches={branches}
             onClose={() => setEditModal(null)}
+            onSaved={refetchCurrentPage}
+          />
+        )}
+
+        {assignDoctorsModal && (
+          <AssignDoctorsModal
+            nurse={assignDoctorsModal}
+            onClose={() => setAssignDoctorsModal(null)}
             onSaved={refetchCurrentPage}
           />
         )}

@@ -37,7 +37,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 
 from core.permissions import IsHospitalStaff as IsTenantStaff, IsDoctor, IsDoctorOrNurse, IsFrontDesk, RequireFeature
 from core.pagination import paginate_queryset
-from core.response import error as api_error, not_found as api_not_found, forbidden as api_forbidden
+from core.response import error as api_error, not_found as api_not_found, forbidden as api_forbidden, success
 
 from .models import Appointment, OPDEncounter, Prescription, PrescriptionItem, PrescriptionFavourite, Vitals
 from .serializers import (
@@ -48,6 +48,26 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _nurse_assigned_doctor_ids(request, db):
+    """
+    Doctor id(s) this nurse is rostered to (see apps.org.NurseDoctorAssignment
+    / StaffDoctorsView, admin-configured via the Staff page's "Assign
+    Doctors" action) — the nurse counterpart of the doctor self-scoping
+    block above (`doctor_user_id=request.user.id`). A nurse who isn't
+    literally role="nurse" but acts_as one (custom role) gets this too.
+    Returns None for anyone who isn't a nurse, meaning "don't scope by this".
+    A nurse with zero assignments gets `set()` back — deliberately: their
+    queue/vitals/upcoming-schedule/monitoring views show no patients until
+    an admin assigns them at least one doctor, the same "nothing until
+    configured" behavior an unassigned doctor's own queue would show.
+    """
+    acts_as = getattr(request.user, "acts_as", [])
+    if request.user.role != "nurse" and "nurse" not in acts_as:
+        return None
+    from apps.org.nurse_doctor_utils import get_nurse_doctor_ids
+    return get_nurse_doctor_ids(request.user.id, db)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -76,6 +96,14 @@ class AppointmentListCreateView(APIView):
         acts_as = getattr(request.user, "acts_as", [])
         if request.user.role == "doctor" or "doctor" in acts_as:
             qs = qs.filter(doctor_user_id=request.user.id)
+
+        # Nurse sees only the queue for doctor(s) the hospital admin has
+        # assigned them to (see NurseDoctorAssignment) — same idea as the
+        # doctor self-scoping above, just admin-configured. An unassigned
+        # nurse gets an empty queryset, not the whole hospital's queue.
+        nurse_doctor_ids = _nurse_assigned_doctor_ids(request, db)
+        if nurse_doctor_ids is not None:
+            qs = qs.filter(doctor_user_id__in=nurse_doctor_ids)
 
         # Branch scoping — explicit ?branch_id= wins; otherwise front-desk/nurse
         # default to their own branch so a multi-branch hospital doesn't see
@@ -236,10 +264,24 @@ class AppointmentListCreateView(APIView):
                     "floor": match.room.floor,
                 }
 
+        # Only a same-day booking means the patient is physically here now —
+        # that's the one case "Waiting" is true the moment it's booked (a
+        # walk-in front-desk is registering on the spot). A future-dated
+        # booking is not "waiting" at all yet; it's scheduled, and only
+        # becomes "waiting" when the patient actually checks in on the day
+        # (see AppointmentStatusView / QueuePage's "Check In" action). Every
+        # appointment used to get STATUS_WAITING unconditionally here, which
+        # made a booking made today for next week show as "waiting" — as if
+        # the patient were already sitting in the hospital — on both the
+        # doctor's dashboard and queue, days before they'd even arrive.
+        initial_status = (
+            Appointment.STATUS_WAITING if appt_date == date.today()
+            else Appointment.STATUS_SCHEDULED
+        )
         appointment = Appointment.objects.using(db).create(
             **data,
             token_number=next_token,
-            status=Appointment.STATUS_WAITING,
+            status=initial_status,
             booked_by_user_id=request.user.id,
             branch_id=branch_id,
             **room_fields,
@@ -263,7 +305,8 @@ class AppointmentHistoryView(APIView):
     Searchable visit history — NOT limited to today like the live queue.
     Search by patient name / UHID / AWPID, optionally narrowed to a date
     range. Doctors see only their own past patients (same scoping as their
-    live queue); front desk and nurse see the whole hospital.
+    live queue); nurse sees only their assigned doctor(s)' past patients
+    (see NurseDoctorAssignment); front desk sees the whole hospital.
     """
     permission_classes = [IsTenantStaff]
 
@@ -275,6 +318,10 @@ class AppointmentHistoryView(APIView):
 
         if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
             qs = qs.filter(doctor_user_id=request.user.id)
+
+        nurse_doctor_ids = _nurse_assigned_doctor_ids(request, db)
+        if nurse_doctor_ids is not None:
+            qs = qs.filter(doctor_user_id__in=nurse_doctor_ids)
 
         patient_q = (request.query_params.get("patient") or "").strip()
         if patient_q:
@@ -313,8 +360,9 @@ class AppointmentUpcomingView(APIView):
     to a single day like AppointmentListCreateView's queue — this is what
     powers the doctor's "know my whole upcoming schedule" dashboard, not
     just today's. Doctor sees only their own (same acts_as-aware scoping as
-    the live queue); other staff see the whole hospital, narrowable to one
-    branch/room. date_from defaults to today; passing an earlier date_from
+    the live queue); nurse sees only their assigned doctor(s)' upcoming
+    schedule (see NurseDoctorAssignment); other staff see the whole
+    hospital, narrowable to one branch/room. date_from defaults to today; passing an earlier date_from
     lets the same endpoint show a recent-past window too if ever needed,
     but the frontend dashboard only ever asks for today-forward.
 
@@ -335,6 +383,10 @@ class AppointmentUpcomingView(APIView):
         acts_as = getattr(request.user, "acts_as", [])
         if request.user.role == "doctor" or "doctor" in acts_as:
             qs = qs.filter(doctor_user_id=request.user.id)
+
+        nurse_doctor_ids = _nurse_assigned_doctor_ids(request, db)
+        if nurse_doctor_ids is not None:
+            qs = qs.filter(doctor_user_id__in=nurse_doctor_ids)
 
         date_from = request.query_params.get("date_from") or str(date.today())
         qs = qs.filter(scheduled_date__gte=date_from)
@@ -506,6 +558,8 @@ class MonitoringListView(APIView):
     Nurse's patient-monitoring list: every patient seen (or being seen) today
     with the doctor's orders — investigations to chase, prescriptions given,
     advice and follow-up. Lets nursing staff track patient condition post-consult.
+    A nurse only sees encounters for their assigned doctor(s) (see
+    NurseDoctorAssignment) — same scoping as their live queue.
     """
     permission_classes = [IsTenantStaff]
 
@@ -519,6 +573,10 @@ class MonitoringListView(APIView):
                       .select_related("appointment")
                       .filter(appointment__scheduled_date=mon_date)
                       .order_by("appointment__token_number"))
+
+        nurse_doctor_ids = _nurse_assigned_doctor_ids(request, db)
+        if nurse_doctor_ids is not None:
+            encounters = encounters.filter(doctor_user_id__in=nurse_doctor_ids)
 
         branch_param = request.query_params.get("branch_id")
         if branch_param and branch_param != "all":
@@ -832,6 +890,21 @@ class EncounterDetailView(APIView):
         if enc.status == OPDEncounter.STATUS_SIGNED:
             return api_error("Cannot edit a signed encounter.")
 
+        # A follow-up "in 0 days" isn't a real follow-up (it's just today,
+        # the same visit) — only a positive day count or clearing the field
+        # entirely (null) make sense, so reject 0/negative here rather than
+        # silently accepting a value the rest of the flow can't sensibly act
+        # on (e.g. front-desk's follow-up booking).
+        if "follow_up_in_days" in request.data:
+            raw = request.data["follow_up_in_days"]
+            if raw not in (None, "", "null"):
+                try:
+                    raw = int(raw)
+                except (TypeError, ValueError):
+                    return api_error("follow_up_in_days must be a whole number of days.")
+                if raw < 1:
+                    return api_error("Follow-up must be at least 1 day out — use 0 or leave it blank if there's no follow-up needed.")
+
         allowed_fields = ["subjective", "objective", "assessment", "plan",
                           "investigations", "advice_to_patient", "follow_up_in_days",
                           "diagnoses", "referred_to", "referral_notes"]
@@ -884,6 +957,71 @@ class EncounterSignView(APIView):
                     resource_id=enc.id, patient_id=enc.patient_id)
 
         return Response(OPDEncounterSerializer(enc, context={"db": db}).data)
+
+
+class EncounterSummaryPDFView(APIView):
+    """
+    GET /api/v1/opd/encounters/<id>/pdf/
+
+    Real, printable consultation-summary PDF for a doctor to hand a patient
+    or keep for their own records — replaces the old "Download Summary"
+    button, which built a plain-text .txt file entirely client-side (no
+    server round trip, so it could never reflect anything not already
+    sitting in the browser's own state). Same reportlab-generated,
+    base64-data-URI pattern as InvoicePDFView/PortalPrescriptionReceiptPDFView.
+    """
+    permission_classes = [IsTenantStaff]
+
+    def get(self, request, pk):
+        import base64
+        import uuid as _uuid
+        from apps.opd.pdf import generate_encounter_summary_pdf
+        from apps.patients.models import Patient
+        from apps.org.models import StaffUser, Branch
+
+        db = request.tenant_db
+        try:
+            enc = OPDEncounter.objects.using(db).select_related("appointment").get(pk=pk)
+        except OPDEncounter.DoesNotExist:
+            return api_not_found("Not found.")
+
+        appointment = enc.appointment
+        try:
+            patient = Patient.objects.using(db).get(uuid=enc.patient_id)
+        except Patient.DoesNotExist:
+            patient = None
+
+        doctor_name = None
+        try:
+            raw = enc.doctor_user_id.int if isinstance(enc.doctor_user_id, _uuid.UUID) else enc.doctor_user_id
+            doctor_name = StaffUser.objects.using(db).get(pk=raw).get_full_name()
+        except Exception:
+            logger.debug("EncounterSummaryPDFView: doctor lookup failed for encounter=%s", enc.id, exc_info=True)
+
+        rx_items = []
+        try:
+            rx = Prescription.objects.using(db).get(encounter_id=enc.id)
+            rx_items = list(rx.items.using(db).all())
+        except Prescription.DoesNotExist:
+            pass
+
+        branch = Branch.objects.using(db).filter(pk=appointment.branch_id).first() if appointment and appointment.branch_id else None
+        from apps.tenants.models import Tenant
+        tenant = Tenant.objects.using("default").filter(pk=request.tenant_id).first()
+        hospital_name = tenant.name if tenant else "Hospital"
+
+        pdf_bytes = generate_encounter_summary_pdf(
+            encounter=enc, appointment=appointment, diagnoses=enc.diagnoses or [],
+            rx_items=rx_items, doctor_name=doctor_name, patient=patient,
+            branch=branch, hospital_name=hospital_name,
+        )
+        data_uri = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
+        uhid = patient.uhid if patient else str(enc.id)[:8]
+        return success(data={
+            "file_data": data_uri,
+            "file_name": f"{uhid}_consultation_summary.pdf",
+            "mime_type": "application/pdf",
+        })
 
 
 def _sync_to_hie(encounter, db, patient):

@@ -575,6 +575,23 @@ class PortalDoctorDetailView(APIView):
             doctor_user_id=staff.id, status=OPDEncounter.STATUS_SIGNED
         ).count()
 
+        # Which weekdays this doctor actually works (0=Monday..6=Sunday, same
+        # as DoctorAvailabilitySlot.day_of_week) — lets the booking calendar
+        # grey out days before the patient picks one, instead of only finding
+        # out after picking a date and seeing an empty slot grid (see
+        # _slot_grid, which already has this same "no schedule configured"
+        # fallback: None here means "no restriction", not "no days work").
+        from apps.org.models import DoctorSchedule, DoctorAvailabilitySlot
+        schedule = DoctorSchedule.objects.using(tenant.db_name).filter(doctor_id=staff.id).first()
+        if schedule:
+            data["working_days"] = sorted(
+                DoctorAvailabilitySlot.objects.using(tenant.db_name)
+                .filter(schedule=schedule, is_available=True)
+                .values_list("day_of_week", flat=True)
+            )
+        else:
+            data["working_days"] = None
+
         return Response(data)
 
 
@@ -1116,7 +1133,15 @@ class PortalInvoiceReceiptPDFView(APIView):
         _ensure_db(tenant_db)
 
         try:
-            inv = Invoice.objects.using(tenant_db).prefetch_related("items", "payments").get(pk=pk)
+            # NOT prefetch_related("items", "payments") — under this app's
+            # custom multi-db router, Django's prefetch machinery issues the
+            # related-object queries against the "default" registry DB
+            # instead of tenant_db, which 500s with "relation ... does not
+            # exist" (those tables only exist on tenant DBs). Same bug
+            # already found and fixed at PortalPrescriptionReceiptPDFView/
+            # PortalPrescriptionListView — access inv.items/inv.payments
+            # explicitly with .using(tenant_db) below instead of prefetching.
+            inv = Invoice.objects.using(tenant_db).get(pk=pk)
         except Invoice.DoesNotExist:
             return not_found("Bill not found.")
         if inv.status == Invoice.STATUS_DRAFT:
@@ -1141,8 +1166,11 @@ class PortalInvoiceReceiptPDFView(APIView):
 
         pdf_bytes = generate_invoice_pdf(
             invoice=inv,
-            items=list(inv.items.all()),
-            payments=list(inv.payments.all().order_by("paid_at")),
+            # .using(tenant_db) explicitly — see the comment on the inv
+            # fetch above; the plain .all() form is what triggers the
+            # cross-DB router bug.
+            items=list(inv.items.using(tenant_db).all()),
+            payments=list(inv.payments.using(tenant_db).all().order_by("paid_at")),
             patient=patient,
             branch=branch,
             hospital_name=hospital_name,
@@ -1773,8 +1801,18 @@ class PortalPrescriptionListView(APIView):
                 # prescriptions belong to this patient.
                 appt_ids = Appointment.objects.using(db).filter(patient_id=patient.uuid).values_list("id", flat=True)
                 enc_ids = OPDEncounter.objects.using(db).filter(appointment_id__in=list(appt_ids)).values_list("id", flat=True)
+                # NOT prefetch_related("items") — under this app's custom
+                # multi-db router, Django's prefetch machinery issues the
+                # related-object query against the "default" registry DB
+                # instead of `db`, which throws "relation
+                # opd_prescription_item does not exist" (that table only
+                # exists on tenant DBs). That exception was being swallowed
+                # by the `except Exception` below, silently dropping this
+                # hospital's prescriptions from the response instead of
+                # raising. Access rx.items explicitly with .using(db)
+                # instead, same as PortalMyRecordsView/
+                # PortalPrescriptionReceiptPDFView already do.
                 rxs = (Prescription.objects.using(db)
-                       .prefetch_related("items")
                        .filter(encounter_id__in=list(enc_ids))
                        .order_by("-created_at")[:50])
                 for rx in rxs:
@@ -1802,7 +1840,7 @@ class PortalPrescriptionListView(APIView):
                             "dosage": it.dosage,
                             "frequency": it.frequency,
                             "quantity": it.quantity,
-                        } for it in rx.items.all()],
+                        } for it in rx.items.using(db).all()],
                     })
             except Exception as e:
                 logger.warning("prescriptions: skipped %s (%s)", db, e)
@@ -3020,6 +3058,52 @@ class PortalFamilyListCreateView(APIView):
         except ValueError as exc:
             return error(str(exc))
         return success(data=member, message="Family member added.")
+
+
+class PortalFamilyDetailView(APIView):
+    """
+    PATCH  /api/v1/portal/family/<awpid>/  — edit a family member's name/DOB/
+                                              gender/relationship.
+    DELETE /api/v1/portal/family/<awpid>/  — unlink a family member from this
+                                              account (their identity and any
+                                              existing booking/medical history
+                                              is untouched — see
+                                              PatientService.remove_family_member).
+    Both scoped to a PatientRelationship actually linking the logged-in
+    account to this AWPID, same ownership check PortalFamilyListCreateView's
+    sibling reads use elsewhere on the portal.
+    """
+    permission_classes = [IsPatient]
+
+    def patch(self, request, awpid):
+        from apps.patients.services import PatientService
+        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        d = request.data
+        patch_data = {}
+        if "full_name" in d:
+            patch_data["full_name"] = d.get("full_name")
+        if "date_of_birth" in d:
+            patch_data["date_of_birth"] = d.get("date_of_birth")
+        if "gender" in d:
+            patch_data["gender"] = d.get("gender")
+        if "relationship" in d:
+            patch_data["relationship"] = d.get("relationship")
+        try:
+            member = PatientService.update_family_member(
+                guardian_awpid=acct.awpid, dependent_awpid=awpid, data=patch_data,
+            )
+        except ValueError as exc:
+            return error(str(exc))
+        return success(data=member, message="Family member updated.")
+
+    def delete(self, request, awpid):
+        from apps.patients.services import PatientService
+        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        try:
+            PatientService.remove_family_member(guardian_awpid=acct.awpid, dependent_awpid=awpid)
+        except ValueError as exc:
+            return error(str(exc))
+        return success(message="Family member removed.")
 
 
 # ── Emergency QR ─────────────────────────────────────────────────────────────

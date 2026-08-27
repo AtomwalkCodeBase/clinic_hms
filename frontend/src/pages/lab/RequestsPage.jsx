@@ -8,7 +8,8 @@
  * the existing HIE signal, so it shows up on the doctor's and nurse's
  * views automatically without anything extra on their end.
  */
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { Filter, X } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useApi }    from "../../hooks/useApi";
@@ -194,6 +195,30 @@ export default function RequestsPage() {
     o.patient_choice === "in_house" && o.status !== "cancelled"
   );
 
+  const [showFilters, setShowFilters] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [urgencyFilter, setUrgencyFilter] = useState("");
+  const hasActiveFilters = !!(search || statusFilter || urgencyFilter);
+
+  const filteredOrders = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return orders.filter(o => {
+      if (q && !(
+        o.patient_name?.toLowerCase().includes(q) ||
+        o.patient_uhid?.toLowerCase().includes(q) ||
+        o.test_name?.toLowerCase().includes(q)
+      )) return false;
+      if (statusFilter && o.status !== statusFilter) return false;
+      if (urgencyFilter && (o.urgency || "routine") !== urgencyFilter) return false;
+      return true;
+    });
+  }, [orders, search, statusFilter, urgencyFilter]);
+
+  function clearFilters() {
+    setSearch(""); setStatusFilter(""); setUrgencyFilter("");
+  }
+
   async function advance(order) {
     const next = NEXT_STATUS[order.status];
     if (!next) return;
@@ -217,14 +242,47 @@ export default function RequestsPage() {
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
             <span className="dot-label dot-label--green">In-house test queue</span>
-            <button className="btn-outline" style={{ fontSize: 12, padding: "5px 14px" }} onClick={refetch}>Refresh</button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn-outline" style={{ fontSize: 12, padding: "5px 14px", display: "inline-flex", alignItems: "center", gap: 6 }}
+                onClick={() => setShowFilters(s => !s)}>
+                <Filter size={13} /> Filters {hasActiveFilters && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-primary)" }} />}
+              </button>
+              <button className="btn-outline" style={{ fontSize: 12, padding: "5px 14px" }} onClick={refetch}>Refresh</button>
+            </div>
           </div>
+
+          {showFilters && (
+            <div style={{
+              padding: "14px 20px", borderBottom: "1px solid var(--color-border)", background: "#FAFAFA",
+              display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 10,
+            }}>
+              <input className="form-input" placeholder="Search patient, UHID, or test…"
+                value={search} onChange={e => setSearch(e.target.value)} />
+              <select className="form-input" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+                <option value="">All statuses</option>
+                {Object.keys(STATUS_BADGE).filter(s => s !== "cancelled").map(s => (
+                  <option key={s} value={s}>{STATUS_BADGE[s].label}</option>
+                ))}
+              </select>
+              <select className="form-input" value={urgencyFilter} onChange={e => setUrgencyFilter(e.target.value)}>
+                <option value="">All urgencies</option>
+                <option value="urgent">Urgent</option>
+                <option value="routine">Routine</option>
+              </select>
+              {hasActiveFilters && (
+                <button className="btn-outline" style={{ fontSize: 12, padding: "5px 14px", display: "inline-flex", alignItems: "center", gap: 6, justifySelf: "start" }}
+                  onClick={clearFilters}>
+                  <X size={13} /> Clear
+                </button>
+              )}
+            </div>
+          )}
 
           {isLoading ? (
             <div style={{ padding: 40, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
-          ) : orders.length === 0 ? (
+          ) : filteredOrders.length === 0 ? (
             <div style={{ padding: 48, textAlign: "center", color: "var(--color-text-muted)" }}>
-              No in-house tests waiting right now.
+              {orders.length === 0 ? "No in-house tests waiting right now." : "No tests match your filters."}
             </div>
           ) : (
             <table className="data-table">
@@ -238,7 +296,7 @@ export default function RequestsPage() {
                 </tr>
               </thead>
               <tbody>
-                {orders.map(o => {
+                {filteredOrders.map(o => {
                   const status = STATUS_BADGE[o.status] || STATUS_BADGE.ordered;
                   return (
                     <tr key={o.id}>

@@ -8,8 +8,9 @@
  *   - Recent invoices — "Record Payment" collects cash/card/UPI against
  *     whatever's still outstanding.
  */
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { Filter, X } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useApi }    from "../../hooks/useApi";
@@ -500,16 +501,46 @@ export default function BillingPage() {
 
   const { data: invData, isLoading: invLoading, refetch: refetchInvoices } =
     useApi(API_ENDPOINTS.BILLING.INVOICES, { params: { page_size: 20 } });
-  const invoices = invData?.results || [];
+  const invoices = useMemo(() => invData?.results || [], [invData]);
 
   const { data: svcData } = useApi(API_ENDPOINTS.BILLING.SERVICES);
   const services = svcData?.data || svcData || [];
 
   const refreshAll = useCallback(() => { refetchAppts(); refetchInvoices(); }, [refetchAppts, refetchInvoices]);
 
-  const needsBilling = appointments.filter(a => a.payment_preference !== "pay_online" || true);
+  const needsBillingAll = appointments.filter(a => a.payment_preference !== "pay_online" || true);
   // ^ show every non-cancelled appointment today — front desk may need to
   // bill a "pay online" patient too if online payment didn't go through.
+
+  // ── Today's patients: search ────────────────────────────────────────────
+  const [patientSearch, setPatientSearch] = useState("");
+  const needsBilling = useMemo(() => {
+    const q = patientSearch.trim().toLowerCase();
+    if (!q) return needsBillingAll;
+    return needsBillingAll.filter(a =>
+      a.patient_name?.toLowerCase().includes(q) ||
+      a.doctor_name?.toLowerCase().includes(q) ||
+      String(a.token_number || "").includes(q)
+    );
+  }, [needsBillingAll, patientSearch]);
+
+  // ── Recent invoices: search + status filter ─────────────────────────────
+  const [showInvFilters, setShowInvFilters] = useState(false);
+  const [invSearch, setInvSearch] = useState("");
+  const [invStatusFilter, setInvStatusFilter] = useState("");
+  const hasActiveInvFilters = !!(invSearch || invStatusFilter);
+  const filteredInvoices = useMemo(() => {
+    const q = invSearch.trim().toLowerCase();
+    return invoices.filter(inv => {
+      if (q && !(
+        inv.invoice_number?.toLowerCase().includes(q) ||
+        inv.patient_name?.toLowerCase().includes(q)
+      )) return false;
+      if (invStatusFilter && inv.status !== invStatusFilter) return false;
+      return true;
+    });
+  }, [invoices, invSearch, invStatusFilter]);
+  function clearInvFilters() { setInvSearch(""); setInvStatusFilter(""); }
 
   return (
     <AppShell>
@@ -520,12 +551,15 @@ export default function BillingPage() {
           <div className="card" style={{ padding: 0, overflow: "hidden" }}>
             <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
               <span className="dot-label dot-label--gold">Today's patients</span>
+              <input className="form-input" placeholder="Search patient, doctor, or token…"
+                value={patientSearch} onChange={e => setPatientSearch(e.target.value)}
+                style={{ marginTop: 10, width: "100%", boxSizing: "border-box" }} />
             </div>
             {apptLoading ? (
               <div style={{ padding: 32, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
             ) : needsBilling.length === 0 ? (
               <div style={{ padding: 32, textAlign: "center", color: "var(--color-text-muted)", fontSize: 13 }}>
-                No appointments today.
+                {needsBillingAll.length === 0 ? "No appointments today." : "No patients match your search."}
               </div>
             ) : (
               <div>
@@ -559,17 +593,46 @@ export default function BillingPage() {
               padding: "14px 20px", borderBottom: "1px solid var(--color-border)",
             }}>
               <span className="dot-label dot-label--green">Recent invoices</span>
-              <button className="btn-outline" style={{ fontSize: 12, padding: "5px 14px" }} onClick={refreshAll}>Refresh</button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn-outline" style={{ fontSize: 12, padding: "5px 14px", display: "inline-flex", alignItems: "center", gap: 6 }}
+                  onClick={() => setShowInvFilters(s => !s)}>
+                  <Filter size={13} /> Filters {hasActiveInvFilters && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-primary)" }} />}
+                </button>
+                <button className="btn-outline" style={{ fontSize: 12, padding: "5px 14px" }} onClick={refreshAll}>Refresh</button>
+              </div>
             </div>
+
+            {showInvFilters && (
+              <div style={{
+                padding: "14px 20px", borderBottom: "1px solid var(--color-border)", background: "#FAFAFA",
+                display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px,1fr))", gap: 10,
+              }}>
+                <input className="form-input" placeholder="Search patient or invoice #…"
+                  value={invSearch} onChange={e => setInvSearch(e.target.value)} />
+                <select className="form-input" value={invStatusFilter} onChange={e => setInvStatusFilter(e.target.value)}>
+                  <option value="">All statuses</option>
+                  {Object.keys(INVOICE_BADGE).map(s => (
+                    <option key={s} value={s}>{s.replace("_", " ")}</option>
+                  ))}
+                </select>
+                {hasActiveInvFilters && (
+                  <button className="btn-outline" style={{ fontSize: 12, padding: "5px 14px", display: "inline-flex", alignItems: "center", gap: 6, justifySelf: "start" }}
+                    onClick={clearInvFilters}>
+                    <X size={13} /> Clear
+                  </button>
+                )}
+              </div>
+            )}
+
             {invLoading ? (
               <div style={{ padding: 32, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
-            ) : invoices.length === 0 ? (
+            ) : filteredInvoices.length === 0 ? (
               <div style={{ padding: 32, textAlign: "center", color: "var(--color-text-muted)", fontSize: 13 }}>
-                No invoices yet — bill a patient from the left.
+                {invoices.length === 0 ? "No invoices yet — bill a patient from the left." : "No invoices match your filters."}
               </div>
             ) : (
               <div>
-                {invoices.map(inv => {
+                {filteredInvoices.map(inv => {
                   const outstanding = Number(inv.total_amount) - Number(inv.paid_amount);
                   return (
                     <div key={inv.id} style={{
@@ -581,6 +644,9 @@ export default function BillingPage() {
                           style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontWeight: 600, fontSize: 13, color: "var(--color-primary)", textDecoration: "underline" }}>
                           {inv.invoice_number}
                         </button>
+                        {inv.patient_name && (
+                          <div style={{ fontSize: 12, fontWeight: 600, marginTop: 2 }}>{inv.patient_name}</div>
+                        )}
                         <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
                           ₹{inv.total_amount} total
                           {outstanding > 0 && ` · ₹${outstanding.toFixed(2)} due`}

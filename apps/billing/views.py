@@ -242,7 +242,7 @@ class InvoiceListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
-        qs = Invoice.objects.using(request.tenant_db).order_by("-created_at")
+        qs = Invoice.objects.using(request.tenant_db).select_related("patient").order_by("-created_at")
         if pid := request.query_params.get("patient_id"):
             qs = qs.filter(patient_id=pid)
         if status_filter := request.query_params.get("status"):

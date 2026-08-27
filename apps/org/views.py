@@ -844,6 +844,61 @@ class StaffBranchesView(APIView):
         return success(data=StaffSerializer(staff).data["branches"], message="Branch assignment updated.")
 
 
+class StaffDoctorsView(APIView):
+    """
+    GET /api/v1/org/staff/{id}/doctors/ — the doctor(s) this nurse is
+    rostered to (empty for every other role).
+    PUT /api/v1/org/staff/{id}/doctors/  — replace it. Body: {"doctor_ids": [1, 2]}
+
+    This is what apps.opd.views's nurse-scoping (AppointmentListCreateView /
+    AppointmentUpcomingView / AppointmentHistoryView / MonitoringListView)
+    reads to decide which patients a nurse's queue/vitals/upcoming-schedule
+    views show — same "assigned, not everyone" idea a doctor already gets
+    from doctor_user_id=request.user.id, just admin-configured instead of
+    identity-derived. An empty list is valid (unassigns everything) and is
+    also every nurse's starting state until an admin sets this.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def _get_staff(self, request, pk):
+        try:
+            return StaffUser.objects.using(request.tenant_db).get(pk=pk)
+        except StaffUser.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        staff = self._get_staff(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+        return success(data=StaffSerializer(staff).data["assigned_doctors"])
+
+    def put(self, request, pk):
+        staff = self._get_staff(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+        if staff.role != "nurse":
+            return error("Doctor assignment only applies to nurses.", errors={"role": "Not a nurse."})
+
+        doctor_ids = request.data.get("doctor_ids")
+        if doctor_ids is None or not isinstance(doctor_ids, list):
+            return error("doctor_ids (a list) is required.", errors={"doctor_ids": "Required."})
+
+        if doctor_ids:
+            valid_ids = set(
+                StaffUser.objects.using(request.tenant_db)
+                .filter(pk__in=doctor_ids, role="doctor", is_active=True)
+                .values_list("id", flat=True)
+            )
+            invalid = set(int(d) for d in doctor_ids) - valid_ids
+            if invalid:
+                return error(f"Unknown or inactive doctor id(s): {sorted(invalid)}", errors={"doctor_ids": "Invalid."})
+
+        from .nurse_doctor_utils import set_nurse_doctors
+        set_nurse_doctors(staff, doctor_ids, request.tenant_db)
+
+        return success(data=StaffSerializer(staff).data["assigned_doctors"], message="Doctor assignment updated.")
+
+
 class MyBranchesView(APIView):
     """
     GET /api/v1/org/me/branches/ — the logged-in staff member's own branch

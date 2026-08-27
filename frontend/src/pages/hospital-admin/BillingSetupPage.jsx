@@ -40,14 +40,31 @@ function SectionCard({ icon: Icon, title, subtitle, children }) {
 }
 
 // ── Tenant-wide billing settings (registration fee, default tax rate) ──────
+// Both amount fields used to be uncontrolled (defaultValue + onBlur) — that
+// meant a failed save (e.g. clearing the field to blank, or a stray value
+// outside 0-100 for tax) left the input showing whatever the admin typed
+// with no way to tell it hadn't actually been saved, and a successful save
+// never visibly reflected the server's normalized value either, since a
+// defaultValue prop is only ever read once at mount. Rewritten as fully
+// controlled: local text state tracks what's on screen, client-side range
+// validation runs before the request goes out, and on any failure — client
+// or server-side — the field snaps back to the last known-good saved value
+// instead of sitting there silently wrong.
 function TenantBillingSettings() {
-  const { toastSuccess, toastApiError } = useToast();
+  const { toastSuccess, toastApiError, toastError } = useToast();
   const [settings, setSettings] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [regFeeInput, setRegFeeInput] = useState("");
+  const [taxRateInput, setTaxRateInput] = useState("");
 
   const load = useCallback(() => {
     apiClient.get("/org/settings/")
-      .then(r => setSettings(r.data?.data || r.data))
+      .then(r => {
+        const s = r.data?.data || r.data;
+        setSettings(s);
+        setRegFeeInput(String(s.registration_fee_amount ?? ""));
+        setTaxRateInput(String(s.default_tax_rate ?? ""));
+      })
       .catch(() => {});
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -56,13 +73,48 @@ function TenantBillingSettings() {
     setSaving(true);
     try {
       const { data: res } = await apiClient.patch("/org/settings/", patch);
-      setSettings(s => ({ ...s, ...(res.data || {}) }));
+      const updated = res.data || {};
+      setSettings(s => ({ ...s, ...updated }));
+      // Re-sync the specific field(s) just saved to the server's own
+      // (normalized/rounded) value, so the field always shows exactly
+      // what's actually stored rather than the raw text the admin typed.
+      if ("registration_fee_amount" in updated) setRegFeeInput(String(updated.registration_fee_amount));
+      if ("default_tax_rate" in updated) setTaxRateInput(String(updated.default_tax_rate));
       toastSuccess("Billing settings saved.");
     } catch (err) {
       toastApiError(err, "Could not save settings.");
+      // Revert the visible field to the last known-good value — otherwise
+      // a rejected save (e.g. an out-of-range or non-numeric value) leaves
+      // the input showing something that was never actually saved.
+      if ("registration_fee_amount" in patch) setRegFeeInput(String(settings?.registration_fee_amount ?? ""));
+      if ("default_tax_rate" in patch) setTaxRateInput(String(settings?.default_tax_rate ?? ""));
     } finally {
       setSaving(false);
     }
+  }
+
+  function saveRegFee() {
+    const trimmed = regFeeInput.trim();
+    const num = Number(trimmed);
+    if (trimmed === "" || Number.isNaN(num) || num < 0) {
+      toastError("Registration fee must be a number of 0 or more.");
+      setRegFeeInput(String(settings.registration_fee_amount ?? ""));
+      return;
+    }
+    if (String(num) === String(settings.registration_fee_amount)) return; // unchanged, skip the round-trip
+    save({ registration_fee_amount: num });
+  }
+
+  function saveTaxRate() {
+    const trimmed = taxRateInput.trim();
+    const num = Number(trimmed);
+    if (trimmed === "" || Number.isNaN(num) || num < 0 || num > 100) {
+      toastError("Default tax rate must be a number between 0 and 100.");
+      setTaxRateInput(String(settings.default_tax_rate ?? ""));
+      return;
+    }
+    if (String(num) === String(settings.default_tax_rate)) return;
+    save({ default_tax_rate: num });
   }
 
   if (!settings) return <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>Loading…</div>;
@@ -91,8 +143,10 @@ function TenantBillingSettings() {
         <div style={{ display: "flex", gap: 8 }}>
           <input
             style={{ ...inputStyle, width: 140 }} type="number" min="0" step="0.01"
-            defaultValue={settings.registration_fee_amount}
-            onBlur={e => save({ registration_fee_amount: e.target.value })}
+            value={regFeeInput} disabled={saving}
+            onChange={e => setRegFeeInput(e.target.value)}
+            onBlur={saveRegFee}
+            onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
           />
         </div>
       </div>
@@ -102,8 +156,10 @@ function TenantBillingSettings() {
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <input
             style={{ ...inputStyle, width: 100 }} type="number" min="0" max="100" step="0.01"
-            defaultValue={settings.default_tax_rate}
-            onBlur={e => save({ default_tax_rate: e.target.value })}
+            value={taxRateInput} disabled={saving}
+            onChange={e => setTaxRateInput(e.target.value)}
+            onBlur={saveTaxRate}
+            onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
           />
           <span style={{ fontSize: 13, color: "var(--color-text-muted)" }}>%</span>
         </div>

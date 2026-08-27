@@ -137,7 +137,7 @@ export default function DashboardPage() {
 
   const [weekStats, setWeekStats] = useState([]);
   const [opdStats, setOpdStats] = useState({
-    total: 0, waiting: 0, vitals_done: 0, in_progress: 0, done: 0,
+    total: 0, waiting: 0, vitals_done: 0, in_progress: 0, done: 0, cancelled: 0,
   });
   const [loading, setLoading] = useState(true);
 
@@ -156,12 +156,18 @@ export default function DashboardPage() {
       if (opdRes.status === "fulfilled") {
         const body  = opdRes.value.data;
         const appts = body?.results || body?.data?.results || [];
+        // "Patients today" should reflect patients actually expected/seen
+        // today — a cancelled or no-show booking isn't that, so it's
+        // excluded from the headline total (same fix applied to front-desk's
+        // equivalent "Appointments today" stat, which had the same bug).
+        const notCancelled = appts.filter(a => a.status !== "cancelled" && a.status !== "no_show");
         setOpdStats({
-          total:       appts.length,
+          total:       notCancelled.length,
           waiting:     appts.filter(a => a.status === "waiting" || a.status === "scheduled").length,
           vitals_done: appts.filter(a => a.status === "vitals_done").length,
           in_progress: appts.filter(a => a.status === "in_progress").length,
           done:        appts.filter(a => a.status === "done").length,
+          cancelled:   appts.filter(a => a.status === "cancelled" || a.status === "no_show").length,
         });
       }
     } catch {
@@ -227,6 +233,7 @@ export default function DashboardPage() {
               <div className="hero-number">{loading ? "—" : opdStats.total}</div>
               <div className="hero-sub" style={{ marginTop: 6 }}>
                 {opdStats.done} completed · {opdStats.waiting + opdStats.vitals_done} in queue
+                {opdStats.cancelled > 0 && ` · ${opdStats.cancelled} cancelled`}
               </div>
             </div>
             <div style={{ textAlign: "right" }}>

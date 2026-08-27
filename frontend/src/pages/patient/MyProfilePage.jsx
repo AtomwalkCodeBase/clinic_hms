@@ -140,6 +140,14 @@ export default function MyProfilePage() {
   const [familyOpen, setFamilyOpen] = useState(false);
   const [memberForm, setMemberForm] = useState(EMPTY_MEMBER);
   const [memberSaving, setMemberSaving] = useState(false);
+  // Editing an existing family member reuses the same field shape as adding
+  // one, just keyed to which member's card is currently expanded for
+  // editing (awpid, or null when none is) — only one edit form open at a
+  // time, same as the add-member form above.
+  const [editingMemberAwpid, setEditingMemberAwpid] = useState(null);
+  const [editMemberForm, setEditMemberForm] = useState(EMPTY_MEMBER);
+  const [memberEditSaving, setMemberEditSaving] = useState(false);
+  const [memberDeletingAwpid, setMemberDeletingAwpid] = useState(null);
 
   const [emergency, setEmergency] = useState({ emergency_contact_name: "", emergency_contact_phone: "", emergency_contact_relation: "" });
   const [emergencyEditing, setEmergencyEditing] = useState(false);
@@ -203,6 +211,55 @@ export default function MyProfilePage() {
       toastApiError(err, "Failed to add family member.");
     } finally {
       setMemberSaving(false);
+    }
+  }
+
+  function startEditMember(m) {
+    setEditingMemberAwpid(m.awpid);
+    setEditMemberForm({
+      full_name: m.full_name || "",
+      date_of_birth: m.date_of_birth || "",
+      gender: m.gender || "",
+      relationship: m.relationship || "other",
+    });
+    setFamilyOpen(false); // don't show both the add-member and edit-member forms at once
+  }
+
+  function cancelEditMember() {
+    setEditingMemberAwpid(null);
+    setEditMemberForm(EMPTY_MEMBER);
+  }
+
+  async function handleUpdateMember(e) {
+    e.preventDefault();
+    if (!editMemberForm.full_name.trim() || !editMemberForm.date_of_birth) {
+      toastApiError({ message: "Name and date of birth are required." }, "Name and date of birth are required.");
+      return;
+    }
+    setMemberEditSaving(true);
+    try {
+      await apiClient.patch(API_ENDPOINTS.PORTAL.FAMILY_DETAIL(editingMemberAwpid), editMemberForm);
+      toastSuccess("Family member updated.");
+      cancelEditMember();
+      loadFamily();
+    } catch (err) {
+      toastApiError(err, "Failed to update family member.");
+    } finally {
+      setMemberEditSaving(false);
+    }
+  }
+
+  async function handleRemoveMember(m) {
+    if (!window.confirm(`Remove ${m.full_name} from your family members? Their past appointments and records stay intact — you just won't be able to book for them from this list anymore unless you add them again.`)) return;
+    setMemberDeletingAwpid(m.awpid);
+    try {
+      await apiClient.delete(API_ENDPOINTS.PORTAL.FAMILY_DETAIL(m.awpid));
+      toastSuccess("Family member removed.");
+      loadFamily();
+    } catch (err) {
+      toastApiError(err, "Failed to remove family member.");
+    } finally {
+      setMemberDeletingAwpid(null);
     }
   }
 
@@ -606,7 +663,7 @@ export default function MyProfilePage() {
             title="Family Members"
             action={
               <button type="button" className="btn-outline" style={{ fontSize: 11, padding: "4px 12px", whiteSpace: "nowrap" }}
-                onClick={() => setFamilyOpen(o => !o)}>
+                onClick={() => { setFamilyOpen(o => !o); cancelEditMember(); }}>
                 {familyOpen ? "Cancel" : "+ Add Family Member"}
               </button>
             }
@@ -622,44 +679,95 @@ export default function MyProfilePage() {
               <div style={{ display: "grid", gap: 10, marginBottom: familyOpen ? 16 : 0 }}>
                 {family.map(m => (
                   <div key={m.awpid} className="card--interactive" style={{
-                    display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12,
                     background: "var(--color-surface)", border: "1px solid var(--color-border)",
                     borderRadius: 12, padding: "12px 16px",
                   }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                      <div style={{
-                        width: 40, height: 40, borderRadius: "50%", flexShrink: 0,
-                        background: "var(--color-accent-light)",
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                      }}>
-                        {(() => {
-                          const RelIcon = REL_ICONS[m.relationship] || User;
-                          return <RelIcon size={18} />;
-                        })()}
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                        <div style={{
+                          width: 40, height: 40, borderRadius: "50%", flexShrink: 0,
+                          background: "var(--color-accent-light)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>
+                          {(() => {
+                            const RelIcon = REL_ICONS[m.relationship] || User;
+                            return <RelIcon size={18} />;
+                          })()}
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 14 }}>{m.full_name}</div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, flexWrap: "wrap" }}>
+                            <span className="tag-pill">{REL_LABELS[m.relationship] || m.relationship}</span>
+                            <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+                              {m.date_of_birth ? `DOB ${m.date_of_birth}${calcAge(m.date_of_birth) != null ? ` · ${calcAge(m.date_of_birth)}y` : ""}` : ""}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 2, fontFamily: "monospace" }}>
+                            {m.awpid}
+                          </div>
+                        </div>
                       </div>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: 14 }}>{m.full_name}</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, flexWrap: "wrap" }}>
-                          <span className="tag-pill">{REL_LABELS[m.relationship] || m.relationship}</span>
-                          <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
-                            {m.date_of_birth ? `DOB ${m.date_of_birth}${calcAge(m.date_of_birth) != null ? ` · ${calcAge(m.date_of_birth)}y` : ""}` : ""}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 2, fontFamily: "monospace" }}>
-                          {m.awpid}
-                        </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button className="btn-outline" style={{ fontSize: 11, padding: "6px 14px" }}
+                          onClick={() => navigate(ROUTES.PATIENT.HOSPITALS)}>
+                          Book Appointment
+                        </button>
+                        <button className="btn-outline" style={{ fontSize: 11, padding: "6px 14px" }}
+                          onClick={() => { selectPatient(m.awpid, m.full_name); navigate(ROUTES.PATIENT.RECORDS); }}>
+                          View Records
+                        </button>
+                        <button className="btn-outline" style={{ fontSize: 11, padding: "6px 14px" }}
+                          onClick={() => (editingMemberAwpid === m.awpid ? cancelEditMember() : startEditMember(m))}>
+                          {editingMemberAwpid === m.awpid ? "Cancel" : "Edit"}
+                        </button>
+                        <button className="btn-outline" style={{ fontSize: 11, padding: "6px 14px", color: "var(--color-error)", borderColor: "var(--color-error)" }}
+                          disabled={memberDeletingAwpid === m.awpid}
+                          onClick={() => handleRemoveMember(m)}>
+                          {memberDeletingAwpid === m.awpid ? "Removing…" : "Remove"}
+                        </button>
                       </div>
                     </div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button className="btn-outline" style={{ fontSize: 11, padding: "6px 14px" }}
-                        onClick={() => navigate(ROUTES.PATIENT.HOSPITALS)}>
-                        Book Appointment
-                      </button>
-                      <button className="btn-outline" style={{ fontSize: 11, padding: "6px 14px" }}
-                        onClick={() => { selectPatient(m.awpid, m.full_name); navigate(ROUTES.PATIENT.RECORDS); }}>
-                        View Records
-                      </button>
-                    </div>
+
+                    {editingMemberAwpid === m.awpid && (
+                      <form onSubmit={handleUpdateMember} style={{ maxWidth: 420, marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--color-border)" }}>
+                        <div style={{ display: "grid", gap: 14 }}>
+                          <div><label style={labelStyle}>Full Name</label>
+                            <input className="profile-edit-input" style={inputStyle} value={editMemberForm.full_name}
+                              onChange={e => setEditMemberForm(f => ({ ...f, full_name: e.target.value }))} required />
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                            <div><label style={labelStyle}>Date of Birth</label>
+                              <input type="date" className="profile-edit-input" style={inputStyle} value={editMemberForm.date_of_birth}
+                                onChange={e => setEditMemberForm(f => ({ ...f, date_of_birth: e.target.value }))} required />
+                            </div>
+                            <div><label style={labelStyle}>Gender</label>
+                              <select className="profile-edit-input" style={inputStyle} value={editMemberForm.gender}
+                                onChange={e => setEditMemberForm(f => ({ ...f, gender: e.target.value }))}>
+                                <option value="">—</option>
+                                <option value="M">Male</option>
+                                <option value="F">Female</option>
+                                <option value="O">Other</option>
+                              </select>
+                            </div>
+                          </div>
+                          <div><label style={labelStyle}>Relationship to You</label>
+                            <select className="profile-edit-input" style={inputStyle} value={editMemberForm.relationship}
+                              onChange={e => setEditMemberForm(f => ({ ...f, relationship: e.target.value }))}>
+                              {Object.entries(REL_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                          <button type="button" className="btn-outline" style={{ flex: 1, padding: "9px 0", fontSize: 13 }}
+                            onClick={cancelEditMember}>
+                            Cancel
+                          </button>
+                          <button type="submit" className="btn-primary" disabled={memberEditSaving} style={{ flex: 2, padding: "9px 0", fontSize: 13, fontWeight: 700 }}>
+                            {memberEditSaving ? "Saving…" : "Save Changes"}
+                          </button>
+                        </div>
+                      </form>
+                    )}
                   </div>
                 ))}
               </div>

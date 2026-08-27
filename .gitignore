@@ -19,7 +19,8 @@ static_root/
 .env
 .env.local
 .env.*.local
-
+EMPLOYEE_LOGIN_CODES.md
+INVESTOR_DEMO_CREDENTIALS.md
 # Frontend
 frontend/node_modules/
 frontend/dist/

@@ -53,6 +53,12 @@ class MockUser:
         self.db_name     = payload.get("db_name", "default")
         self.branch_id   = payload.get("branch_id")
         self.subscription = None
+        # Baked in at login time (see PatientLoginView / PatientOTPLoginView).
+        # Kept alongside .id purely so JWTTenantAuthentication can detect a
+        # stale token below — every patient-portal view still re-fetches
+        # PatientAccount by .id fresh on every request, never trusts this
+        # value for anything else.
+        self.awpid       = payload.get("awpid")
 
     def __str__(self):
         return self.email
@@ -140,6 +146,32 @@ class JWTTenantAuthentication(BaseAuthentication):
             if not still_active:
                 raise PermissionDenied(
                     "Your account has been deactivated. Contact your hospital admin."
+                )
+
+        # ── Stale-token / reused-ID guard (patients) ────────────────────────
+        # Every patient-portal view resolves "which patient is this" by
+        # re-fetching PatientAccount fresh with .get(pk=request.user.id) —
+        # deliberately, so profile edits etc. take effect without a re-login.
+        # That's only safe if a given numeric PK still belongs to the same
+        # patient it did when this token was issued. If the registry
+        # (`default`) DB is ever wiped and reseeded — e.g. test accounts
+        # recreated during a go-live — Postgres restarts its autoincrement
+        # sequence and an old, still-unexpired token's user_id can silently
+        # get reassigned to a completely different patient. A browser that
+        # kept an old session open across that reset would then
+        # authenticate as a stranger with the UI still showing the old
+        # name. Checked fresh every request (one extra indexed lookup,
+        # same tradeoff already accepted for the staff checks above) so a
+        # reused/orphaned ID is caught immediately instead of silently
+        # leaking another patient's records.
+        if user.role == "patient":
+            from apps.registry.models import PatientAccount
+            current_awpid = PatientAccount.objects.using("default").filter(
+                pk=user.id, is_active=True
+            ).values_list("awpid", flat=True).first()
+            if not current_awpid or current_awpid != user.awpid:
+                raise AuthenticationFailed(
+                    "Your session is no longer valid. Please log in again."
                 )
 
         return (user, token)

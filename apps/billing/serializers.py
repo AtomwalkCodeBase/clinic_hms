@@ -50,10 +50,22 @@ class PaymentSerializer(serializers.ModelSerializer):
 class InvoiceSerializer(serializers.ModelSerializer):
     items    = InvoiceItemSerializer(many=True, read_only=True)
     payments = PaymentSerializer(many=True, read_only=True)
+    # `patient` on its own is just a FK id — front desk's billing list needs
+    # a name to search/scan by, same as every other patient-facing list in
+    # this app. `patient` is a real same-DB ForeignKey (not cross-tenant),
+    # so `.full_name`/`.uhid` are free reads off the already-fetched row.
+    patient_name = serializers.SerializerMethodField()
+    patient_uhid = serializers.SerializerMethodField()
 
     class Meta:
         model  = Invoice
-        fields = ["id", "patient", "branch", "invoice_number", "status",
+        fields = ["id", "patient", "patient_name", "patient_uhid", "branch", "invoice_number", "status",
                   "subtotal", "tax_amount", "discount_amount", "total_amount", "paid_amount",
                   "notes", "issued_at", "created_at", "items", "payments"]
         read_only_fields = ["id", "invoice_number", "created_at"]
+
+    def get_patient_name(self, obj):
+        return obj.patient.full_name if obj.patient_id else None
+
+    def get_patient_uhid(self, obj):
+        return obj.patient.uhid if obj.patient_id else None

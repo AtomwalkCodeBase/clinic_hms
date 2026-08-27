@@ -48,3 +48,23 @@ def resolve_room_for_slot(db_name, doctor_user_id, day_of_week, slot_time):
         .select_related("room")
         .first()
     )
+
+
+def get_doctor_home_room(db_name, doctor_user_id):
+    """
+    A doctor's "home" room, ignoring day/time entirely — just any active
+    RoomAssignment row they have. Every doctor in this system sits in one
+    dedicated room across all their working days (RoomAssignment rows for
+    a doctor all point at the same Room), so this is a safe fallback when
+    resolve_room_for_slot() finds no assignment covering the *exact*
+    day/time (e.g. backfilling a historical or randomly-seeded appointment
+    whose stored time doesn't fall inside the doctor's configured window).
+    Returns the matching RoomAssignment (with .room preloaded) or None if
+    the doctor has no room assignment at all.
+    """
+    return (
+        RoomAssignment.objects.using(db_name)
+        .filter(doctor_id=doctor_user_id, is_active=True)
+        .select_related("room")
+        .first()
+    )

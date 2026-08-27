@@ -672,86 +672,6 @@ export default function RegisterPatientPage() {
             </FieldGroup>
           )}
 
-          {/* Shared browse/search results list — visible under BOTH tabs, so
-              front desk can page through recently registered patients (or an
-              in-progress name/UHID search) without switching tabs. */}
-          {nameResults != null && (
-            <div style={{ marginTop: searchTab === "mobile" ? 16 : 0, paddingTop: searchTab === "mobile" ? 14 : 0, borderTop: searchTab === "mobile" ? "1px dashed var(--color-border)" : "none" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", margin: "4px 0 8px" }}>
-                {nameIsBrowse
-                  ? `Recently registered at this hospital${namePagination ? ` (${namePagination.total_count})` : ""}`
-                  : `${namePagination ? namePagination.total_count : nameResults.length} match${(namePagination ? namePagination.total_count : nameResults.length) === 1 ? "" : "es"} for "${nameQuery}"`}
-              </div>
-
-              {nameResults.length === 0 ? (
-                <div style={{
-                  textAlign: "center", padding: "28px 16px", color: "var(--color-text-muted)",
-                  background: "#F8FAFC", border: "1px dashed var(--color-border)", borderRadius: 10,
-                }}>
-                  <Search size={24} style={{ marginBottom: 6 }} />
-                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>
-                    {nameIsBrowse ? "No patients registered here yet" : `No patients matched "${nameQuery}"`}
-                  </div>
-                  <div style={{ fontSize: 12 }}>
-                    {nameIsBrowse ? "New registrations will show up here." : "Try Mobile Number, or create a new record below."}
-                  </div>
-                </div>
-              ) : (
-                <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-                  <div style={{ display: "grid", gap: 8, padding: 10, maxHeight: 420, overflowY: "auto" }}>
-                    {nameResults.map(p => {
-                      const age = calcAge(p.date_of_birth);
-                      const initials = (p.full_name || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
-                      return (
-                        <div key={p.id} style={{
-                          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-                          background: "#fff", border: "1px solid var(--color-border)", borderRadius: 10,
-                          padding: "12px 16px", transition: "box-shadow 0.15s, border-color 0.15s",
-                        }}
-                          onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--color-primary)"; e.currentTarget.style.boxShadow = "0 2px 10px rgba(0,0,0,0.06)"; }}
-                          onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--color-border)"; e.currentTarget.style.boxShadow = "none"; }}
-                        >
-                          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-                            <div style={{
-                              width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
-                              background: "#EDE9FF", color: "#5B52EE",
-                              display: "flex", alignItems: "center", justifyContent: "center",
-                              fontSize: 13, fontWeight: 700,
-                            }}>{initials}</div>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                                <span style={{ fontWeight: 700, fontSize: 13.5 }}>{p.full_name}</span>
-                                {p.is_dependent && (
-                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 10, background: "#F1E9FA", color: "#6B3FA0" }}>
-                                    Dependent{p.guardian_relation ? ` · ${p.guardian_relation}` : ""}
-                                  </span>
-                                )}
-                              </div>
-                              <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginTop: 2, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                <span>UHID {p.uhid}</span>
-                                {p.mobile && <span>· {p.mobile}</span>}
-                                {(age != null || p.gender) && <span>· {[age != null ? `${age}y` : null, p.gender].filter(Boolean).join(" ")}</span>}
-                                {p.branch_name && <span>· {p.branch_name}</span>}
-                              </div>
-                            </div>
-                          </div>
-                          <button type="button" className="btn-outline" style={{ fontSize: 12, padding: "6px 14px", flexShrink: 0 }}
-                            onClick={() => navigate("/front-desk/appointments", { state: { patient: p } })}>
-                            Book Appointment →
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <PaginationControls
-                    pagination={namePagination}
-                    page={namePage} pageSize={namePageSize}
-                    onPageChange={setNamePage} onPageSizeChange={setNamePageSize}
-                  />
-                </div>
-              )}
-            </div>
-          )}
         </SectionCard>
 
         {!proceeded ? null : (
@@ -1071,6 +991,92 @@ export default function RegisterPatientPage() {
             </button>
           </div>
         </form>
+        )}
+
+        {/* Shared browse/search results list — visible under BOTH tabs, so
+            front desk can page through recently registered patients (or an
+            in-progress name/UHID search) without switching tabs. Rendered
+            last, after the registration form above (when it's showing) —
+            whatever the front desk is actively doing (finding a patient or
+            filling in a new one) belongs above the fold; the recently-
+            registered browse list is reference material, not the task at
+            hand, so it always sits at the bottom of the page. */}
+        {nameResults != null && (
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px dashed var(--color-border)" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", margin: "4px 0 8px" }}>
+              {nameIsBrowse
+                ? `Recently registered at this hospital${namePagination ? ` (${namePagination.total_count})` : ""}`
+                : `${namePagination ? namePagination.total_count : nameResults.length} match${(namePagination ? namePagination.total_count : nameResults.length) === 1 ? "" : "es"} for "${nameQuery}"`}
+            </div>
+
+            {nameResults.length === 0 ? (
+              <div style={{
+                textAlign: "center", padding: "28px 16px", color: "var(--color-text-muted)",
+                background: "#F8FAFC", border: "1px dashed var(--color-border)", borderRadius: 10,
+              }}>
+                <Search size={24} style={{ marginBottom: 6 }} />
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>
+                  {nameIsBrowse ? "No patients registered here yet" : `No patients matched "${nameQuery}"`}
+                </div>
+                <div style={{ fontSize: 12 }}>
+                  {nameIsBrowse ? "New registrations will show up here." : "Try Mobile Number, or create a new record below."}
+                </div>
+              </div>
+            ) : (
+              <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                <div style={{ display: "grid", gap: 8, padding: 10, maxHeight: 420, overflowY: "auto" }}>
+                  {nameResults.map(p => {
+                    const age = calcAge(p.date_of_birth);
+                    const initials = (p.full_name || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
+                    return (
+                      <div key={p.id} style={{
+                        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                        background: "#fff", border: "1px solid var(--color-border)", borderRadius: 10,
+                        padding: "12px 16px", transition: "box-shadow 0.15s, border-color 0.15s",
+                      }}
+                        onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--color-primary)"; e.currentTarget.style.boxShadow = "0 2px 10px rgba(0,0,0,0.06)"; }}
+                        onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--color-border)"; e.currentTarget.style.boxShadow = "none"; }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                          <div style={{
+                            width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
+                            background: "#EDE9FF", color: "#5B52EE",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            fontSize: 13, fontWeight: 700,
+                          }}>{initials}</div>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                              <span style={{ fontWeight: 700, fontSize: 13.5 }}>{p.full_name}</span>
+                              {p.is_dependent && (
+                                <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 10, background: "#F1E9FA", color: "#6B3FA0" }}>
+                                  Dependent{p.guardian_relation ? ` · ${p.guardian_relation}` : ""}
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginTop: 2, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              <span>UHID {p.uhid}</span>
+                              {p.mobile && <span>· {p.mobile}</span>}
+                              {(age != null || p.gender) && <span>· {[age != null ? `${age}y` : null, p.gender].filter(Boolean).join(" ")}</span>}
+                              {p.branch_name && <span>· {p.branch_name}</span>}
+                            </div>
+                          </div>
+                        </div>
+                        <button type="button" className="btn-outline" style={{ fontSize: 12, padding: "6px 14px", flexShrink: 0 }}
+                          onClick={() => navigate("/front-desk/appointments", { state: { patient: p } })}>
+                          Book Appointment →
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <PaginationControls
+                  pagination={namePagination}
+                  page={namePage} pageSize={namePageSize}
+                  onPageChange={setNamePage} onPageSizeChange={setNamePageSize}
+                />
+              </div>
+            )}
+          </div>
         )}
       </PageShell>
     </AppShell>

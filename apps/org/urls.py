@@ -5,7 +5,7 @@ from .views import (
     StaffListView, StaffInviteView, StaffDetailView, StaffResendInviteView,
     DoctorProfileView, DoctorListView, DoctorSpecialisationListView, MyDoctorProfileView, MyStaffProfileView,
     StaffProfileView, MyStaffProfileDetailsView,
-    StaffBranchesView, MyBranchesView,
+    StaffBranchesView, MyBranchesView, StaffDoctorsView,
     PermissionListView, RoleListCreateView, RoleDetailView, StaffRolesView,
     TenantSettingsView, DoctorScheduleView,
     RoomListCreateView, RoomDetailView,
@@ -30,6 +30,7 @@ urlpatterns = [
     path("staff/<int:pk>/",        StaffDetailView.as_view(), name="staff-detail"),
     path("staff/<int:pk>/resend-invite/", StaffResendInviteView.as_view(), name="staff-resend-invite"),
     path("staff/<int:pk>/branches/", StaffBranchesView.as_view(), name="staff-branches"),
+    path("staff/<int:pk>/doctors/",  StaffDoctorsView.as_view(),  name="staff-doctors"),
 
     # Doctor profiles (nested under staff — admin only)
     path("staff/<int:pk>/doctor-profile/", DoctorProfileView.as_view(), name="doctor-profile"),

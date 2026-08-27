@@ -5,7 +5,7 @@ from core import storage as blob_storage
 from .models import (
     Branch, Department, StaffUser, DoctorProfile, StaffProfile, StaffBranchMapping,
     Permission, Role, UserRole, DoctorSchedule, DoctorAvailabilitySlot,
-    Room, RoomAssignment,
+    Room, RoomAssignment, NurseDoctorAssignment,
 )
 
 
@@ -255,16 +255,38 @@ class StaffSerializer(serializers.ModelSerializer):
             for m in mappings
         ]
 
+    # Only meaningful for role="nurse" — which doctor(s) the hospital admin
+    # has rostered this nurse to (see NurseDoctorAssignment). Empty for
+    # every other role, and empty for a nurse nobody's assigned yet — that
+    # nurse's queue/vitals/upcoming-schedule views show no patients until
+    # an admin sets this via StaffDoctorsView (Staff page "Assign Doctors").
+    assigned_doctors = serializers.SerializerMethodField()
+
+    def get_assigned_doctors(self, obj):
+        if obj.role != "nurse":
+            return []
+        links = (
+            NurseDoctorAssignment.objects
+            .filter(nurse_id=obj.id)
+            .select_related("doctor")
+            .order_by("doctor__first_name", "doctor__last_name")
+        )
+        return [
+            {"id": l.doctor_id, "name": l.doctor.get_full_name()}
+            for l in links
+        ]
+
     class Meta:
         model  = StaffUser
         fields = ["id", "email", "first_name", "last_name", "role",
                   "custom_role", "custom_role_name", "custom_role_acts_as",
-                  "branch", "branch_name", "branches", "department", "department_name",
+                  "branch", "branch_name", "branches", "assigned_doctors",
+                  "department", "department_name",
                   "phone", "employee_id", "date_of_birth", "is_active", "must_change_password", "photo",
                   "date_joined", "last_login", "doctor_profile", "staff_profile"]
         read_only_fields = ["id", "date_joined", "last_login",
                             "custom_role_name", "custom_role_acts_as",
-                            "branch_name", "branches", "department_name", "doctor_profile",
+                            "branch_name", "branches", "assigned_doctors", "department_name", "doctor_profile",
                             "staff_profile", "must_change_password"]
 
 

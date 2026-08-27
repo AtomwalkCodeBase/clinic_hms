@@ -63,6 +63,7 @@ export const API_ENDPOINTS = {
     MY_STAFF_PROFILE:  `${API_V1}/org/me/staff-profile/`,
     MY_PROFILE:        `${API_V1}/org/me/profile/`,
     STAFF_BRANCHES: (id) => `${API_V1}/org/staff/${id}/branches/`,
+    STAFF_DOCTORS: (id) => `${API_V1}/org/staff/${id}/doctors/`,
     MY_BRANCHES:       `${API_V1}/org/me/branches/`,
     PERMISSIONS:       `${API_V1}/org/permissions/`,
     ROLES:             `${API_V1}/org/roles/`,
@@ -119,6 +120,7 @@ export const API_ENDPOINTS = {
     ENCOUNTERS:       `${API_V1}/opd/encounters/`,
     ENCOUNTER:  (id) => `${API_V1}/opd/encounters/${id}/`,
     ENCOUNTER_SIGN:(id) => `${API_V1}/opd/encounters/${id}/sign/`,
+    ENCOUNTER_PDF:(id) => `${API_V1}/opd/encounters/${id}/pdf/`,
     PRESCRIPTIONS:              `${API_V1}/opd/prescriptions/`,
     PRESCRIPTION:        (id) => `${API_V1}/opd/prescriptions/${id}/`,
     PRESCRIPTION_ITEMS:  (id) => `${API_V1}/opd/prescriptions/${id}/items/`,
@@ -158,6 +160,7 @@ export const API_ENDPOINTS = {
     // / AUTH.PATIENT_FORGOT_PASSWORD_RESET (apps/auth_app/otp_views.py).
     MOBILE_CHANGE_REQUEST_OTP: `${API_V1}/portal/profile/mobile-change/request-otp/`,
     FAMILY:                 `${API_V1}/portal/family/`,
+    FAMILY_DETAIL:  (awpid) => `${API_V1}/portal/family/${awpid}/`,
     HEALTH_SUMMARY:         `${API_V1}/portal/health-summary/`,
     VACCINATIONS:           `${API_V1}/portal/vaccinations/`,
     VACCINATION_UPLOAD:     `${API_V1}/portal/vaccinations/upload/`,

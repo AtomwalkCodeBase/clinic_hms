@@ -19,6 +19,7 @@ import { useParams, useNavigate, Link } from "react-router-dom";
 import { Building2, ShieldCheck, CircleCheck, Lock, Clock } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
+import AvailabilityCalendar from "../../components/common/AvailabilityCalendar";
 import { useApi }    from "../../hooks/useApi";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
@@ -543,11 +544,16 @@ export default function PatientDoctorProfilePage() {
               )}
 
               <label className="stat-label" style={{ display: "block", marginBottom: 6 }}>Date</label>
-              <input
-                type="date" className="form-input" value={date} min={TODAY} max={MAX_BOOKING_DATE}
-                onChange={e => setDate(e.target.value)}
-                style={{ marginBottom: 16, width: "100%" }}
-              />
+              <div style={{ marginBottom: 16 }}>
+                <AvailabilityCalendar
+                  value={date}
+                  onChange={setDate}
+                  min={TODAY}
+                  max={MAX_BOOKING_DATE}
+                  workingDays={doctor?.working_days ?? null}
+                  doctorLabel={doctor?.name}
+                />
+              </div>
 
               <label className="stat-label" style={{ display: "block", marginBottom: 8 }}>
                 Available slots

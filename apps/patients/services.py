@@ -348,6 +348,69 @@ class PatientService:
             "created": created,
         }
 
+    @staticmethod
+    def update_family_member(guardian_awpid: str, dependent_awpid: str, data: dict) -> dict:
+        """
+        Portal self-service edit — a guardian correcting a typo'd name/DOB or
+        updating gender/relationship on a dependent they already added.
+        Scoped to a PatientRelationship actually linking this guardian to
+        this dependent, so one account can never edit another's family
+        member by guessing an AWPID. Only touches fields actually present in
+        `data` — a partial patch, not a full overwrite.
+        """
+        rel = PatientRelationship.objects.using("default").filter(
+            guardian_awpid=guardian_awpid, dependent_awpid=dependent_awpid,
+        ).first()
+        if not rel:
+            raise ValueError("Family member not found.")
+
+        identity = PatientIdentity.objects.using("default").filter(awpid=dependent_awpid).first()
+        if not identity:
+            raise ValueError("Family member not found.")
+
+        if "full_name" in data:
+            full_name = (data.get("full_name") or "").strip()
+            if not full_name:
+                raise ValueError("Full name is required.")
+            identity.full_name = full_name
+        if "date_of_birth" in data:
+            if not data.get("date_of_birth"):
+                raise ValueError("Date of birth is required to identify a family member across hospitals.")
+            identity.date_of_birth = data["date_of_birth"]
+        if "gender" in data:
+            identity.gender = _normalize_gender(data.get("gender", ""))
+        identity.save(using="default")
+
+        if "relationship" in data:
+            rel.relationship = data.get("relationship", "other")
+            rel.save(using="default", update_fields=["relationship"])
+
+        return {
+            "awpid": identity.awpid,
+            "full_name": identity.full_name,
+            "date_of_birth": identity.date_of_birth,
+            "gender": identity.gender,
+            "relationship": rel.relationship,
+        }
+
+    @staticmethod
+    def remove_family_member(guardian_awpid: str, dependent_awpid: str) -> None:
+        """
+        Unlinks a dependent from this guardian's family list. Deliberately
+        only deletes the PatientRelationship row, never the underlying
+        PatientIdentity — that identity may already carry real appointment/
+        prescription/lab history at one or more hospitals (via patient_awpid
+        on those rows), and those records must stay resolvable even after
+        the guardian removes the family-list entry. This mirrors how
+        cancelling a booking never deletes the Appointment row either.
+        """
+        rel = PatientRelationship.objects.using("default").filter(
+            guardian_awpid=guardian_awpid, dependent_awpid=dependent_awpid,
+        ).first()
+        if not rel:
+            raise ValueError("Family member not found.")
+        rel.delete(using="default")
+
     # ── Family tree ──────────────────────────────────────────────────────
     @staticmethod
     def get_family_tree(awpid: str, db_name: str) -> dict:

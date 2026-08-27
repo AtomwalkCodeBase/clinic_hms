@@ -49,6 +49,12 @@ export default function FrontDeskDashboardPage() {
   const waiting    = appointments.filter(a => ["waiting", "scheduled"].includes(a.status)).length;
   const inProgress = appointments.filter(a => a.status === "in_progress").length;
   const done       = appointments.filter(a => a.status === "done").length;
+  const cancelled  = appointments.filter(a => a.status === "cancelled" || a.status === "no_show").length;
+  // "Appointments today" should mean appointments actually happening today —
+  // a cancelled or no-show booking isn't one, so it's excluded from the
+  // headline count (same fix applied to the hospital-admin dashboard's
+  // equivalent "Patients today" stat, which had the same bug).
+  const activeToday = appointments.filter(a => a.status !== "cancelled" && a.status !== "no_show").length;
 
   const greeting = () => {
     const h = new Date().getHours();
@@ -99,9 +105,10 @@ export default function FrontDeskDashboardPage() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
             <div>
               <div className="stat-label" style={{ marginBottom: 8 }}>Appointments today</div>
-              <div className="hero-number">{isLoading ? "—" : appointments.length}</div>
+              <div className="hero-number">{isLoading ? "—" : activeToday}</div>
               <div className="hero-sub" style={{ marginTop: 6 }}>
                 {waiting} in queue · {done} completed
+                {cancelled > 0 && ` · ${cancelled} cancelled`}
               </div>
             </div>
             <div style={{ textAlign: "right" }}>
