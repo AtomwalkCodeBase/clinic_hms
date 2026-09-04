@@ -116,6 +116,8 @@ UPLOAD_CATEGORIES = {
     "patient-document":        "Patient Document",
     "vaccination-certificate": "Vaccination Certificate",
     "shared-lab-result":       "Lab Result",
+    "consult-note":            "Consultation Note",
+    "prescription":            "Prescription",
 }
 
 

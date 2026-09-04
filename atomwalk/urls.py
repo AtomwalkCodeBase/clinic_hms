@@ -43,6 +43,10 @@ urlpatterns = [
     # intentionally public, unauthenticated endpoint (see
     # apps/patients/emergency_views.py for why).
     path("api/v1/emergency/",    include("apps.patients.emergency_urls")),
+    # Also intentionally public (see apps/patients/consult_pad_views.py) —
+    # the phone side of the consultation-scratchpad QR. Same reasoning as
+    # /emergency/ above: reached by scanning a QR, no login.
+    path("api/v1/consult-pad/",  include("apps.patients.consult_pad_urls")),
     # apps.clinical's Encounter/Vital/Diagnosis/FollowUp/ClinicalDocument were
     # retired (HMS-07c-1, confirmed dead — the live flow writes through
     # apps.opd, see apps/opd/views.py::_sync_to_hie for the actual HIE write

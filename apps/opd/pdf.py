@@ -6,11 +6,13 @@ apps/billing/pdf.py's invoice PDF (see that module's docstring for why this
 returns raw bytes rather than a rendered template, and why the view layer
 wraps them as a base64 data URI instead of a raw application/pdf response).
 """
+import base64
 from io import BytesIO
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib import colors
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 FREQ_LABEL = {
@@ -343,5 +345,55 @@ def generate_encounter_summary_pdf(encounter, appointment, diagnoses, rx_items, 
     c.drawCentredString(width / 2, 15 * mm, "This is a system-generated consultation summary. Please consult your doctor before making any changes.")
 
     c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def images_to_pdf(page_data_uris, *, header=None):
+    """
+    Stitch a list of "data:image/...;base64,..." strings into one PDF, one
+    image per A4 page, scaled to fit with a margin and aspect ratio kept.
+
+    Used to archive the consult-pad's raw handwriting (ConsultSession
+    rx_pages / note_pages) as a permanent PDF on encounter sign — see
+    apps.opd.views._store_handwriting_pdfs.
+
+    Returns PDF bytes, or None if nothing decodable was passed.
+    """
+    imgs = []
+    for uri in page_data_uris or []:
+        if not isinstance(uri, str) or "," not in uri:
+            continue
+        try:
+            raw = base64.b64decode(uri.split(",", 1)[1])
+            imgs.append(ImageReader(BytesIO(raw)))
+        except Exception:
+            continue
+    if not imgs:
+        return None
+
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+    margin = 12 * mm
+    top_pad = 16 * mm if header else margin
+
+    for i, img in enumerate(imgs):
+        if header:
+            c.setFont("Helvetica-Oblique", 8)
+            c.setFillColor(colors.HexColor("#777777"))
+            c.drawString(margin, height - 11 * mm, f"{header}  ·  page {i + 1} of {len(imgs)}")
+            c.setFillColor(colors.black)
+
+        iw, ih = img.getSize()
+        avail_w = width - 2 * margin
+        avail_h = height - top_pad - margin
+        scale = min(avail_w / iw, avail_h / ih)
+        dw, dh = iw * scale, ih * scale
+        x = (width - dw) / 2
+        y = height - top_pad - dh
+        c.drawImage(img, x, y, width=dw, height=dh, preserveAspectRatio=True, mask="auto")
+        c.showPage()
+
     c.save()
     return buf.getvalue()

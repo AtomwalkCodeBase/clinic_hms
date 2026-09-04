@@ -29,6 +29,7 @@ const ChangePasswordPage = lazy(() => import("./pages/auth/ChangePasswordPage"))
 const StaffForgotPasswordPage   = lazy(() => import("./pages/auth/StaffForgotPasswordPage"));
 const PatientForgotPasswordPage = lazy(() => import("./pages/auth/PatientForgotPasswordPage"));
 const EmergencyViewPage         = lazy(() => import("./pages/public/EmergencyViewPage"));
+const ConsultPadPage            = lazy(() => import("./pages/public/ConsultPadPage"));
 
 // Platform Admin
 const PlatformDashboard  = lazy(() => import("./pages/platform-admin/DashboardPage"));
@@ -202,6 +203,7 @@ export default function App() {
           <Route path={ROUTES.FORGOT_PASSWORD_STAFF}   element={<StaffForgotPasswordPage />} />
           <Route path={ROUTES.FORGOT_PASSWORD_PATIENT} element={<PatientForgotPasswordPage />} />
           <Route path={ROUTES.EMERGENCY_VIEW(":token")} element={<EmergencyViewPage />} />
+          <Route path={ROUTES.CONSULT_PAD(":token")} element={<ConsultPadPage />} />
           <Route path="/change-password"      element={<ProtectedRoute><ChangePasswordPage /></ProtectedRoute>} />
 
           {/* Platform Admin */}

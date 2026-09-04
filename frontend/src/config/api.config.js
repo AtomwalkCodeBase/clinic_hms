@@ -121,6 +121,7 @@ export const API_ENDPOINTS = {
     ENCOUNTER:  (id) => `${API_V1}/opd/encounters/${id}/`,
     ENCOUNTER_SIGN:(id) => `${API_V1}/opd/encounters/${id}/sign/`,
     ENCOUNTER_PDF:(id) => `${API_V1}/opd/encounters/${id}/pdf/`,
+    ENCOUNTER_CONSULT_SESSION:(id) => `${API_V1}/opd/encounters/${id}/consult-session/`,
     PRESCRIPTIONS:              `${API_V1}/opd/prescriptions/`,
     PRESCRIPTION:        (id) => `${API_V1}/opd/prescriptions/${id}/`,
     PRESCRIPTION_ITEMS:  (id) => `${API_V1}/opd/prescriptions/${id}/items/`,
@@ -148,6 +149,7 @@ export const API_ENDPOINTS = {
     INVOICES:              `${API_V1}/portal/invoices/`,
     INVOICE_RECEIPT: (tenantDb, id) => `${API_V1}/portal/invoices/${tenantDb}/${id}/receipt/`,
     DOCUMENTS:             `${API_V1}/portal/documents/`,
+    DOCUMENT: (id) =>       `${API_V1}/portal/documents/${id}/`,
     LAB_ORDERS:            `${API_V1}/portal/lab-orders/`,
     LAB_ORDER_CHOICE:      `${API_V1}/portal/lab-orders/choice/`,
     LAB_REPORT_FILE: (tenantDb, requestId) => `${API_V1}/portal/lab-orders/${tenantDb}/${requestId}/report/`,
@@ -177,6 +179,14 @@ export const API_ENDPOINTS = {
   // has no Atomwalk login at all.
   EMERGENCY: {
     SUMMARY: (token) => `${API_V1}/emergency/${token}/`,
+  },
+
+  // Consultation handwriting pad — public, no auth (see
+  // apps/patients/consult_pad_views.py). One URL: GET returns the live
+  // session (both tabs' saved pages + recognised text), PUT autosaves one
+  // tab. Fetched with publicClient — the phone has no session in that browser.
+  CONSULT_PAD: {
+    BASE: (token) => `${API_V1}/consult-pad/${token}/`,
   },
 
   // apps.clinical was retired (HMS-07c-1) — live consultation flow is

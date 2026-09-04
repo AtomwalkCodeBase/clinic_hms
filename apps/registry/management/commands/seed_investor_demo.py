@@ -590,6 +590,7 @@ class Command(BaseCommand):
             # every seeded appointment showing a blank Room column.
             self.stdout.write("  Backfilling room assignment onto seeded appointments...")
             import uuid as _uuid
+            from apps.opd.models import Appointment
             from apps.org.room_utils import resolve_room_for_slot, get_doctor_home_room
             room_filled = 0
             for appt in Appointment.objects.using(db).filter(

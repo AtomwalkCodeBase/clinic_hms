@@ -349,7 +349,47 @@ class AppointmentHistoryView(APIView):
         qs = qs.order_by("-scheduled_date", "-token_number")
         page_items, meta = paginate_queryset(request, qs)
         serializer = AppointmentSerializer(page_items, many=True, context={"db": db})
-        return Response({"results": serializer.data, "pagination": meta})
+        data = serializer.data
+
+        # Per-visit indicators for the History module: does this visit have a
+        # prescription, and does it have an internal (clinical) note? So the
+        # UI can show an explicit "No prescription issued" / "No internal note
+        # recorded" instead of just an empty space.
+        enc_ids = [row["encounter"]["id"] for row in data if row.get("encounter")]
+        if enc_ids:
+            from apps.registry.models import SharedDocument
+            encs = {
+                str(e.id): e for e in OPDEncounter.objects.using(db)
+                .filter(id__in=enc_ids)
+                .only("id", "subjective", "objective", "assessment", "plan", "diagnoses")
+            }
+            rx_enc_ids = {
+                str(x) for x in Prescription.objects.using(db)
+                .filter(encounter_id__in=enc_ids, items__isnull=False)
+                .values_list("encounter_id", flat=True).distinct()
+            }
+            pres_docs = {
+                d["source_ref"].split(":", 1)[1]: d["id"]
+                for d in SharedDocument.objects.using("default")
+                .filter(doc_type="prescription",
+                        source_ref__in=[f"encounter:{i}" for i in enc_ids])
+                .values("id", "source_ref")
+            }
+            for row in data:
+                eid = row["encounter"]["id"] if row.get("encounter") else None
+                e = encs.get(eid) if eid else None
+                row["has_internal_note"] = bool(e and (
+                    (e.subjective or e.objective or e.assessment or e.plan or "").strip() or e.diagnoses
+                ))
+                row["prescription_doc_id"] = pres_docs.get(eid)
+                row["has_prescription"] = bool(row["prescription_doc_id"] or (eid in rx_enc_ids))
+        else:
+            for row in data:
+                row["has_internal_note"] = False
+                row["has_prescription"] = False
+                row["prescription_doc_id"] = None
+
+        return Response({"results": data, "pagination": meta})
 
 
 class AppointmentUpcomingView(APIView):
@@ -915,6 +955,316 @@ class EncounterDetailView(APIView):
         return Response(OPDEncounterSerializer(enc, context={"db": db}).data)
 
 
+def _open_consult_session(encounter_id, tenant_id):
+    from apps.registry.models import ConsultSession
+    return (ConsultSession.objects.using("default")
+            .filter(encounter_id=encounter_id, tenant_id=tenant_id, status=ConsultSession.STATUS_OPEN)
+            .order_by("-created_at").first())
+
+
+def _fold_session_into_encounter(sess, enc, db):
+    """
+    Belt-and-suspenders: if the doctor signs without pressing "Load
+    handwritten note", pull whatever the session's Internal-Note tab
+    recognised into any still-empty encounter field, and its Prescription
+    tab into Prescription rows. A field the doctor already filled is left
+    alone. Returns True if anything changed.
+    """
+    changed = False
+    note = (sess.note_recognised or {}) if sess else {}
+    if note.get("status") == "done":
+        m = {"subjective": "subjective", "objective": "objective",
+             "assessment": "assessment", "plan": "plan",
+             "investigations": "investigations", "advice": "advice_to_patient"}
+        soap_filled = False
+        for src, field in m.items():
+            val = (note.get(src) or "").strip()
+            if val and not (getattr(enc, field) or "").strip():
+                setattr(enc, field, val)
+                changed = True
+            if val:
+                soap_filled = True
+        # Model transcribed the note but didn't split it into SOAP sections —
+        # keep the verbatim text rather than dropping it on sign.
+        if not soap_filled:
+            raw = (note.get("raw_text") or "").strip()
+            if raw and not (enc.subjective or "").strip():
+                enc.subjective = raw
+                changed = True
+        fu = note.get("follow_up_days")
+        if fu and enc.follow_up_in_days is None:
+            enc.follow_up_in_days = int(fu)
+            changed = True
+        for d in (note.get("diagnoses") or []):
+            desc = (d.get("description") or "").strip()
+            if desc and not any((x.get("description") or "").lower() == desc.lower() for x in (enc.diagnoses or [])):
+                enc.diagnoses = (enc.diagnoses or []) + [{
+                    "code": (d.get("code") or "").strip(), "description": desc,
+                    "clinical_status": "active", "is_primary": not (enc.diagnoses or []),
+                }]
+                changed = True
+    if changed:
+        enc.save(using=db)
+
+    rx = (sess.rx_recognised or {}) if sess else {}
+    items = rx.get("items") or rx.get("prescription") or []
+    if rx.get("status") == "done" and items:
+        prescription = Prescription.objects.using(db).filter(encounter_id=enc.id).first()
+        if prescription is None:
+            prescription = _create_prescription_for(enc, db)
+        # De-dupe by drug name alone — folding on sign runs on top of whatever
+        # "Load handwritten note" already inserted, and the recognised dose text
+        # wobbles between OCR runs, so a (name, dose) key re-adds the same drug.
+        def _norm_drug(s):
+            return " ".join((s or "").strip().lower().split())
+        existing = {_norm_drug(i.drug_name)
+                    for i in PrescriptionItem.objects.using(db).filter(prescription=prescription)}
+        for it in items:
+            name = (it.get("drug_name") or "").strip()
+            if not name or _norm_drug(name) in existing:
+                continue
+            existing.add(_norm_drug(name))
+            freq = (it.get("frequency") or "od").strip().lower()
+            route = (it.get("route") or "oral").strip().lower()
+            dur = it.get("duration_days")
+            PrescriptionItem.objects.using(db).create(
+                prescription=prescription, drug_name=name,
+                dosage=(it.get("dosage") or "").strip() or "as directed",
+                frequency=freq if freq in dict(PrescriptionItem.FREQUENCY_CHOICES) else "od",
+                route=route if route in dict(PrescriptionItem.ROUTE_CHOICES) else "oral",
+                duration_days=int(dur) if isinstance(dur, int) and dur > 0 else None,
+                instructions=(it.get("instructions") or "").strip(),
+            )
+            changed = True
+    return changed
+
+
+def _create_prescription_for(enc, db):
+    from core.utils.nntm import get_next_number
+    from apps.patients.models import Patient
+    rx_number = None
+    try:
+        patient = Patient.objects.using(db).get(uuid=enc.patient_id)
+        rx_number, _ = get_next_number(branch_id=patient.branch_id or 1, entity="prescription", using=db)
+    except Exception:
+        pass
+    return Prescription.objects.using(db).create(
+        encounter=enc, patient_id=enc.patient_id, doctor_user_id=enc.doctor_user_id, rx_number=rx_number,
+    )
+
+
+def _store_prescription_pdf(enc, db, tenant_id):
+    """After sign: render the prescription to a PDF and store it as a
+    registry SharedDocument(doc_type='prescription') — available to both the
+    doctor (history) and the patient (portal). No-op if there's no Rx."""
+    rx = Prescription.objects.using(db).filter(encounter_id=enc.id).first()
+    if rx is None:
+        return
+    items = list(PrescriptionItem.objects.using(db).filter(prescription=rx))
+    if not items:
+        return
+    try:
+        import base64, uuid as _uuid
+        from apps.opd.pdf import generate_prescription_pdf
+        from apps.org.models import StaffUser, Branch
+        from apps.tenants.models import Tenant
+        from apps.patients.models import Patient
+        from apps.registry.models import SharedDocument
+        from core import storage as blob_storage
+
+        appt = enc.appointment
+        patient = Patient.objects.using(db).filter(uuid=enc.patient_id).first()
+        branch = Branch.objects.using(db).filter(pk=appt.branch_id).first() if appt.branch_id else None
+        tenant = Tenant.objects.using("default").filter(pk=tenant_id).first()
+        hospital_name = tenant.name if tenant else "Hospital"
+        doctor_name = None
+        try:
+            raw = rx.doctor_user_id.int if isinstance(rx.doctor_user_id, _uuid.UUID) else rx.doctor_user_id
+            doctor_name = StaffUser.objects.using(db).get(pk=raw).get_full_name()
+        except Exception:
+            pass
+
+        pdf_bytes = generate_prescription_pdf(
+            prescription=rx, items=items, doctor_name=doctor_name, patient=patient,
+            branch=branch, hospital_name=hospital_name, visit_date=appt.scheduled_date,
+        )
+        pdf_uri = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
+        title = f"Prescription {rx.rx_number or str(rx.id)[:8]} — {appt.scheduled_date}"
+        slug = blob_storage.identity_slug(name=patient.full_name if patient else "", identifier=getattr(patient, "awpid", ""))
+        try:
+            file_ref = blob_storage.upload_data_uri(
+                pdf_uri, prefix="prescriptions", mime_type="application/pdf",
+                category="prescription", identity=slug,
+            )
+        except blob_storage.StorageError:
+            file_ref = pdf_uri  # local dev / no S3 — inline, same as consult notes
+        SharedDocument.objects.using("default").create(
+            awpid=getattr(patient, "awpid", ""), title=title, doc_type="prescription",
+            file_name=f"{title}.pdf", mime_type="application/pdf", file_data=file_ref,
+            uploaded_by="staff", source_tenant_id=tenant_id,
+            source_ref=f"encounter:{enc.id}",
+        )
+    except Exception:
+        logger.exception("prescription PDF store failed for encounter=%s", enc.id)
+
+
+def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
+    """
+    After sign: archive the consult pad's RAW HANDWRITING as permanent PDFs
+    in object storage — the original-source record behind the typeset
+    prescription and the OCR'd SOAP note.
+
+      rx_pages   -> SharedDocument(doc_type="prescription")   [patient + doctor]
+      note_pages -> SharedDocument(doc_type="consult_note")   [doctor only —
+                    STAFF_ONLY_DOC_TYPES, excluded from every portal query]
+
+    Best-effort: any failure here is logged and swallowed, never blocks the
+    sign. On success the now-redundant base64 canvas is cleared from the
+    ConsultSession row. Idempotent via source_ref.
+    """
+    if not session_id:
+        return
+    try:
+        import base64
+        from apps.opd.pdf import images_to_pdf
+        from apps.patients.models import Patient
+        from apps.tenants.models import Tenant
+        from apps.registry.models import SharedDocument, ConsultSession
+        from core import storage as blob_storage
+
+        sess = ConsultSession.objects.using("default").filter(id=session_id).first()
+        if not sess:
+            return
+        patient = Patient.objects.using(db).filter(uuid=enc.patient_id).first()
+        if not patient:
+            return
+        tenant = Tenant.objects.using("default").filter(pk=tenant_id).first()
+        hospital = tenant.name if tenant else "Hospital"
+        appt = enc.appointment if enc.appointment_id else None
+        visit_date = appt.scheduled_date if appt else timezone.now().date()
+        slug = blob_storage.identity_slug(
+            name=patient.full_name if patient else "", identifier=getattr(patient, "awpid", ""),
+        )
+        rx = Prescription.objects.using(db).filter(encounter_id=enc.id).first()
+        rx_label = (rx.rx_number if rx and rx.rx_number else "")
+
+        # (tab, pages, doc_type, s3_prefix, s3_category, title)
+        #   doc_type    -> SharedDocument.doc_type (drives portal visibility)
+        #   s3_category -> a key from core.storage.UPLOAD_CATEGORIES (drives
+        #                  the stored file name segment)
+        specs = [
+            ("rx", sess.rx_pages, "prescription", "prescriptions", "prescription",
+             f"Handwritten Prescription{(' ' + rx_label) if rx_label else ''} — {visit_date}"),
+            ("note", sess.note_pages, "consult_note", "consult-notes", "consult-note",
+             f"Handwritten Consultation Note — {visit_date}"),
+        ]
+        cleared = {}
+        for tab, pages, doc_type, prefix, category, title in specs:
+            if not pages:
+                continue
+            ref = f"encounter:{enc.id}:handwritten:{tab}"
+            if SharedDocument.objects.using("default").filter(source_ref=ref).exists():
+                cleared[tab] = True  # already archived on a prior attempt
+                continue
+            pdf_bytes = images_to_pdf(pages, header=f"{title}  ·  {hospital}")
+            if not pdf_bytes:
+                continue
+            pdf_uri = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
+            try:
+                file_ref = blob_storage.upload_data_uri(
+                    pdf_uri, prefix=prefix, mime_type="application/pdf",
+                    category=category, identity=slug,
+                )
+            except blob_storage.StorageError:
+                file_ref = pdf_uri  # local dev / no S3 — inline
+            SharedDocument.objects.using("default").create(
+                awpid=getattr(patient, "awpid", ""), title=title, doc_type=doc_type,
+                file_name=f"{title}.pdf", mime_type="application/pdf", file_data=file_ref,
+                uploaded_by="staff", source_tenant_id=tenant_id, source_ref=ref,
+            )
+            cleared[tab] = True
+
+        upd = {}
+        if cleared.get("rx"):
+            upd["rx_pages"] = []
+        if cleared.get("note"):
+            upd["note_pages"] = []
+        if upd:
+            ConsultSession.objects.using("default").filter(id=sess.id).update(**upd)
+    except Exception:
+        logger.exception("consult-pad handwriting archive failed for encounter=%s", enc.id)
+
+
+class EncounterConsultSessionView(APIView):
+    """
+    POST /api/v1/opd/encounters/<id>/consult-session/  — start / resume the
+         handwriting session for this encounter, returns the QR to show.
+    GET  same URL                                       — the session's current
+         recognised state, for the "Load handwritten note" button.
+    """
+    permission_classes = [IsDoctor]
+
+    def _enc(self, request, pk):
+        return OPDEncounter.objects.using(request.tenant_db).get(pk=pk)
+
+    def post(self, request, pk):
+        import secrets
+        from django.conf import settings
+        from apps.registry.models import PatientIdentity, ConsultSession
+        from apps.patients.models import Patient
+        from core.qr import render_qr_data_uri
+
+        try:
+            enc = self._enc(request, pk)
+        except OPDEncounter.DoesNotExist:
+            return api_not_found("Encounter not found.")
+
+        patient = Patient.objects.using(request.tenant_db).filter(uuid=enc.patient_id).first()
+        if not patient:
+            return api_not_found("Patient not found.")
+        identity = PatientIdentity.objects.using("default").filter(awpid=patient.awpid).first()
+        if not identity:
+            return api_not_found("This patient has no registry identity yet.")
+
+        if not identity.consult_pad_token:
+            identity.consult_pad_token = secrets.token_urlsafe(32)
+        identity.consult_pad_owner_tenant_id = request.tenant_id
+        identity.save(using="default", update_fields=["consult_pad_token", "consult_pad_owner_tenant_id", "updated_at"])
+
+        sess = _open_consult_session(enc.id, request.tenant_id)
+        if not sess:
+            sess = ConsultSession.objects.using("default").create(
+                awpid=patient.awpid, tenant_id=request.tenant_id, encounter_id=enc.id,
+                doctor_user_id=request.user.id,
+                expires_at=timezone.now() + timedelta(hours=12),
+            )
+
+        pad_url = f"{settings.FRONTEND_URL.rstrip('/')}/consult-pad/{identity.consult_pad_token}"
+        return success(data={
+            "session_id": sess.id, "status": sess.status,
+            "pad_url": pad_url, "qr_image": render_qr_data_uri(pad_url),
+        })
+
+    def get(self, request, pk):
+        try:
+            enc = self._enc(request, pk)
+        except OPDEncounter.DoesNotExist:
+            return api_not_found("Encounter not found.")
+        sess = _open_consult_session(enc.id, request.tenant_id)
+        if not sess:
+            return success(data={"active": False})
+        return success(data={
+            "active": True,
+            "updated_at": sess.updated_at,
+            "rx": sess.rx_recognised or None,
+            "note": sess.note_recognised or None,
+            # Page images so the encounter screen can show the doctor the
+            # actual handwriting next to what was read.
+            "rx_pages": sess.rx_pages or [],
+            "note_pages": sess.note_pages or [],
+        })
+
+
 class EncounterSignView(APIView):
     """POST /api/v1/opd/encounters/<id>/sign/"""
     permission_classes = [IsDoctor]
@@ -928,6 +1278,16 @@ class EncounterSignView(APIView):
 
         if enc.status == OPDEncounter.STATUS_SIGNED:
             return api_error("Already signed.")
+
+        # Fold in any handwriting-session content the doctor didn't explicitly
+        # "Load" — so signing never silently drops what was written on the phone.
+        sess = _open_consult_session(enc.id, request.tenant_id)
+        if sess:
+            try:
+                _fold_session_into_encounter(sess, enc, db)
+                enc.refresh_from_db(using=db)
+            except Exception:
+                logger.exception("consult-session fold failed for encounter=%s", enc.id)
 
         if not enc.assessment and not enc.diagnoses:
             return api_error("Add an assessment or at least one ICD-10 diagnosis before signing.")
@@ -951,6 +1311,17 @@ class EncounterSignView(APIView):
         # the live OPD flow, so their own signals never fire. Writing straight
         # to the registry Shared* tables here is the actual source of truth.
         _sync_to_hie(enc, db, patient)
+
+        # Store the prescription as a PDF (doctor history + patient portal),
+        # archive the consult-pad's raw handwriting as PDFs, then close the
+        # handwriting session for this consultation.
+        _store_prescription_pdf(enc, db, request.tenant_id)
+        if sess:
+            _store_handwriting_pdfs(enc, db, request.tenant_id, sess.id)
+            from apps.registry.models import ConsultSession
+            ConsultSession.objects.using("default").filter(id=sess.id).update(
+                status=ConsultSession.STATUS_SIGNED, signed_at=timezone.now(),
+            )
 
         from core.audit import log_action
         log_action(request, db, action="encounter.sign", resource_type="OPDEncounter",

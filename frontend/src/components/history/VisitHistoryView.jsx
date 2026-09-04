@@ -18,10 +18,11 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { FolderOpen, Filter, Search, X } from "lucide-react";
+import { FolderOpen, Filter, Search, X, FileText } from "lucide-react";
 import apiClient      from "../../services/api.client";
 import API_ENDPOINTS  from "../../config/api.config";
 import { ROUTES }     from "../../config/routes.config";
+import { openDataUrlInNewTab } from "../../utils/fileViewer";
 import DependentBadge from "../common/DependentBadge";
 
 const BADGE = {
@@ -78,6 +79,23 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
 
   function clearFilters() {
     setPatient(""); setDateFrom(""); setDateTo(""); setStatusFilter("");
+  }
+
+  // Open a stored PDF SharedDocument (the prescription) in a new tab.
+  // window.open() must be synchronous in the click handler or the popup is
+  // blocked; the tab is pointed at the file once it loads. Responses are
+  // enveloped { success, data: {...} } — unwrap one level.
+  async function openDoc(docId) {
+    const win = window.open("", "_blank");
+    try {
+      const res = await apiClient.get(API_ENDPOINTS.PATIENTS.DOCUMENT(docId));
+      const doc = res.data?.data || res.data;
+      if (doc?.file_data) openDataUrlInNewTab(win, doc.file_data);
+      else if (win) win.close();
+    } catch (err) {
+      if (win) win.close();
+      window.alert(err?.message || err?.data?.message || "Could not open the document.");
+    }
   }
 
   const hasFilters = !!(patient || dateFrom || dateTo || statusFilter);
@@ -190,6 +208,28 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
                       <DependentBadge patient={r} />
                     </div>
                     <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{r.patient_uhid || ""}</div>
+                    {r.has_encounter && (
+                      <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2, fontSize: 10 }}>
+                        {r.prescription_doc_id ? (
+                          <button type="button" onClick={() => openDoc(r.prescription_doc_id)}
+                            style={{
+                              display: "inline-flex", alignItems: "center", gap: 4, alignSelf: "flex-start",
+                              fontWeight: 700, padding: "2px 7px", borderRadius: 6, cursor: "pointer",
+                              border: "1px solid var(--color-primary)", color: "var(--color-primary)",
+                              background: "var(--color-primary-light)",
+                            }}>
+                            <FileText size={10} /> Prescription PDF
+                          </button>
+                        ) : (
+                          <span style={{ color: "var(--color-text-muted)" }}>
+                            {r.has_prescription ? "Prescription (no PDF)" : "No prescription issued"}
+                          </span>
+                        )}
+                        <span style={{ color: r.has_internal_note ? "var(--color-text-secondary)" : "var(--color-text-muted)" }}>
+                          {r.has_internal_note ? "Internal note recorded" : "No internal note recorded"}
+                        </span>
+                      </div>
+                    )}
                   </td>
                   <td style={{ fontSize: 12 }}>{r.scheduled_date}</td>
                   <td style={{ fontSize: 12 }}>{r.scheduled_time ? r.scheduled_time.slice(0, 5) : "—"}</td>

@@ -20,3 +20,4 @@ phonenumbers==8.13.45
 dnspython==2.6.1
 requests==2.32.3
 boto3==1.34.144
+rapidfuzz==3.9.7

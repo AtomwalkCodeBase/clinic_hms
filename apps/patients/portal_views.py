@@ -836,11 +836,13 @@ class PortalBookView(APIView):
                 full_name=target_name,
                 gender=target_gender,
                 date_of_birth=target_dob,
-                mobile=acct.mobile if target_awpid == acct.awpid else "",
-                email=acct.email if target_awpid == acct.awpid else "",
+                # Patient.mobile/email are NOT NULL — a portal account that
+                # signed up by mobile has email=None, so coalesce to "".
+                mobile=(acct.mobile or "") if target_awpid == acct.awpid else "",
+                email=(acct.email or "") if target_awpid == acct.awpid else "",
                 is_dependent=target_awpid != acct.awpid,
                 guardian_name=acct.full_name if target_awpid != acct.awpid else "",
-                guardian_mobile=acct.mobile if target_awpid != acct.awpid else "",
+                guardian_mobile=(acct.mobile or "") if target_awpid != acct.awpid else "",
                 guardian_awpid=acct.awpid if target_awpid != acct.awpid else "",
                 hie_consent_given=True,
                 hie_consent_at=timezone.now(),
@@ -1520,6 +1522,7 @@ class PortalDocumentListCreateView(APIView):
 
         qs = (SharedDocument.objects.using("default")
               .filter(awpid=target_awpid)
+              .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
               .order_by("-created_at"))
         page_items, meta = paginate_queryset(request, qs)
         results = [{
@@ -1595,6 +1598,50 @@ class PortalDocumentListCreateView(APIView):
             "file_name": doc.file_name, "mime_type": doc.mime_type,
             "source_ref": doc.source_ref, "created_at": doc.created_at,
         }, status=201)
+
+
+class PortalDocumentDetailView(APIView):
+    """
+    GET /api/v1/portal/documents/<doc_id>/
+
+    Full content for one of the patient's own documents — the download path
+    for the list above (which is metadata-only). Returns `file_data` as a
+    short-lived signed URL when it's an object-storage key, or the inline
+    `data:` URI for older/local rows.
+
+    Gated three ways: the doc must belong to the caller's own AWPID (or a
+    linked family member), and its type must not be one of
+    SharedDocument.STAFF_ONLY_DOC_TYPES (the handwritten internal note never
+    leaves the clinician side).
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request, doc_id):
+        from apps.registry.models import SharedDocument
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+
+        doc = SharedDocument.objects.using("default").filter(pk=doc_id).first()
+        if not doc or doc.awpid != target_awpid:
+            return error("Document not found.", status=404)
+        if doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
+            # Not the patient's to see — 404, not 403, so its existence isn't
+            # even confirmed.
+            return error("Document not found.", status=404)
+
+        raw = doc.file_data or ""
+        file_data = raw if raw.startswith("data:") else blob_storage.signed_url(raw)
+        return success(data={
+            "id": doc.id,
+            "title": doc.title,
+            "doc_type": doc.doc_type,
+            "file_name": doc.file_name,
+            "mime_type": doc.mime_type,
+            "created_at": doc.created_at,
+            "file_data": file_data,
+        })
 
 
 # ── My lab orders ────────────────────────────────────────────────────────────
@@ -1776,6 +1823,7 @@ class PortalPrescriptionListView(APIView):
         from apps.opd.models import Appointment, OPDEncounter, Prescription
         from apps.org.models import StaffUser
         from apps.patients.models import Patient
+        from apps.registry.models import SharedDocument
         import uuid as _uuid
 
         target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
@@ -1815,6 +1863,18 @@ class PortalPrescriptionListView(APIView):
                 rxs = (Prescription.objects.using(db)
                        .filter(encounter_id__in=list(enc_ids))
                        .order_by("-created_at")[:50])
+
+                # The doctor's handwritten prescription, archived as a PDF on
+                # sign (apps.opd.views._store_handwriting_pdfs). Keyed by
+                # encounter, doc_type "prescription" (patient-visible).
+                hw_by_enc = {
+                    d.source_ref.split(":")[1]: d.id
+                    for d in SharedDocument.objects.using("default").filter(
+                        awpid=target_awpid, doc_type="prescription",
+                        source_ref__endswith=":handwritten:rx",
+                    )
+                }
+
                 for rx in rxs:
                     doctor_name = None
                     try:
@@ -1835,6 +1895,9 @@ class PortalPrescriptionListView(APIView):
                         "payment_preference": rx.payment_preference,
                         "payment_status": rx.payment_status,
                         "created_at": rx.created_at,
+                        # id of the archived handwritten-Rx PDF, if the doctor
+                        # used the consult pad — fetch via portal/documents/<id>/
+                        "handwritten_document_id": hw_by_enc.get(str(rx.encounter_id)),
                         "items": [{
                             "drug_name": it.drug_name,
                             "dosage": it.dosage,
@@ -2839,6 +2902,7 @@ class PortalHealthTimelineView(APIView):
         try:
             docs = (SharedDocument.objects.using("default")
                     .filter(awpid=target_awpid)
+                    .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
                     .order_by("-created_at")[:limit])
             for d in docs:
                 entries.append({

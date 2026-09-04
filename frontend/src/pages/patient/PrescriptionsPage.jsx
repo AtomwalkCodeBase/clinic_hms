@@ -38,6 +38,7 @@ function PrescriptionOrderCard({ rx, onChanged }) {
   const [saving, setSaving] = useState(false);
   const [editingPayment, setEditingPayment] = useState(!rx.payment_preference);
   const [downloading, setDownloading] = useState(false);
+  const [openingHw, setOpeningHw] = useState(false);
 
   async function downloadPdf() {
     const win = window.open("", "_blank");
@@ -55,6 +56,22 @@ function PrescriptionOrderCard({ rx, onChanged }) {
       if (win) win.close();
     } finally {
       setDownloading(false);
+    }
+  }
+
+  async function openHandwritten() {
+    const win = window.open("", "_blank");
+    setOpeningHw(true);
+    try {
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(rx.handwritten_document_id));
+      const data = res.data?.data || res.data;
+      if (data?.file_data) openDataUrlInNewTab(win, data.file_data);
+      else if (win) win.close();
+    } catch (err) {
+      toastApiError(err, "Could not open the handwritten prescription.");
+      if (win) win.close();
+    } finally {
+      setOpeningHw(false);
     }
   }
 
@@ -98,6 +115,19 @@ function PrescriptionOrderCard({ rx, onChanged }) {
           <span style={{ padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 700, background: statusBadge.bg, color: statusBadge.color }}>
             {statusBadge.label}
           </span>
+          {rx.handwritten_document_id && (
+            <button
+              onClick={openHandwritten}
+              disabled={openingHw}
+              title="Doctor's handwritten prescription"
+              style={{
+                display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.15)", border: "none",
+                borderRadius: 8, cursor: "pointer", padding: "5px 9px", fontSize: 11, fontWeight: 700, color: "#fff",
+              }}
+            >
+              <Download size={13} /> {openingHw ? "…" : "Handwritten"}
+            </button>
+          )}
           <button
             onClick={downloadPdf}
             disabled={downloading}

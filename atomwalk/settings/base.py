@@ -269,6 +269,11 @@ REST_FRAMEWORK = {
         # is an unguessable signed JWT and expires in ~20 minutes, so this is a
         # per-IP backstop against scripted enumeration, not the primary defense.
         "emergency": "20/min",
+        # Consultation-scratchpad pad (apps/patients/consult_pad_views.py) —
+        # public, unauthenticated, reached by scanning a permanent per-patient
+        # QR. The 43-char random token is the real gate; this is a per-IP
+        # backstop against someone scripting note spam against a leaked code.
+        "consult_pad": "20/min",
     },
 }
 
@@ -366,6 +371,20 @@ else:
 
 # ── Platform Admin ───────────────────────────────────────────────────────────
 PLATFORM_ADMIN_SECRET = config("PLATFORM_ADMIN_SECRET", default="change-this")
+
+# ── Handwriting recognition (consultation scratchpad) ───────────────────────
+# The consult-pad QR flow photographs a handwritten SOAP note; a vision model
+# transcribes it and splits it into S/O/A/P. Any OpenAI-compatible chat
+# endpoint works — OpenAI, Groq, OpenRouter, Together, a local vLLM/Ollama —
+# just point BASE + MODEL + KEY at it. A BLANK key is fine: recognition is
+# skipped, the handwritten PDF still saves, and the doctor types the note in.
+#   OpenAI  : BASE=https://api.openai.com/v1        MODEL=gpt-4o-mini
+#   Groq    : BASE=https://api.groq.com/openai/v1   MODEL=meta-llama/llama-4-scout-17b-16e-instruct
+#   OpenRouter: BASE=https://openrouter.ai/api/v1   MODEL=google/gemini-2.0-flash-001
+CONSULT_PAD_LLM_BASE  = config("CONSULT_PAD_LLM_BASE", default="https://api.groq.com/openai/v1")
+CONSULT_PAD_LLM_MODEL = config("CONSULT_PAD_LLM_MODEL", default="qwen/qwen3.8-27b")
+# Falls back to GROQ_API_KEY so an existing Groq key already in .env just works.
+CONSULT_PAD_LLM_KEY   = config("CONSULT_PAD_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
 
 # ── License tier constants ───────────────────────────────────────────────────
 class LicenseTier:

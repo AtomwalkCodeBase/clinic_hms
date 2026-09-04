@@ -1,10 +1,14 @@
 from .base import *  # noqa
+from decouple import config
 
 DEBUG = True
 
 ALLOWED_HOSTS = ["*"]
 
-FRONTEND_URL = "http://localhost:3000"  # Vite dev server
+# Vite dev server. Override via .env (FRONTEND_URL=http://<lan-ip>:3000) when
+# testing the consult-pad QR from a phone — the QR encodes this value, and a
+# phone can't resolve "localhost".
+FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 
 # Looser CORS for local dev
 CORS_ALLOW_ALL_ORIGINS = True

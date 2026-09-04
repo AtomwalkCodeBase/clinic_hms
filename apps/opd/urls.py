@@ -5,6 +5,7 @@ from .views import (
     AppointmentHistoryView, AppointmentUpcomingView,
     TranscribeView, MonitoringListView,
     EncounterCreateView, EncounterDetailView, EncounterSignView, EncounterSummaryPDFView,
+    EncounterConsultSessionView,
     PrescriptionCreateView, PrescriptionDetailView, PrescriptionItemView,
     FavouriteListCreateView, FavouriteDeleteView,
 )
@@ -36,6 +37,7 @@ urlpatterns = [
     path("encounters/", EncounterCreateView.as_view(), name="encounter-create"),
     path("encounters/<uuid:pk>/", EncounterDetailView.as_view(), name="encounter-detail"),
     path("encounters/<uuid:pk>/sign/", EncounterSignView.as_view(), name="encounter-sign"),
+    path("encounters/<uuid:pk>/consult-session/", EncounterConsultSessionView.as_view(), name="encounter-consult-session"),
     path("encounters/<uuid:pk>/pdf/", EncounterSummaryPDFView.as_view(), name="encounter-summary-pdf"),
 
     # Prescriptions
