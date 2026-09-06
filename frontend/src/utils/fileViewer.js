@@ -62,3 +62,42 @@ export function openDataUrlInNewTab(win, dataUrl) {
     return null;
   }
 }
+
+/**
+ * Force a "Save As" download rather than opening the file inline — the
+ * browser's own save dialog (pick a folder, then save), like downloading
+ * anything else off the web.
+ *
+ *  - `data:` URI  -> converted to a Blob and saved via a synthetic
+ *                    <a download="name">, so the filename is honoured.
+ *  - real URL     -> <a download href=url>. For a cross-origin S3 link the
+ *                    `download` attribute is ignored by the browser, so the
+ *                    URL itself must already carry `response-content-
+ *                    disposition=attachment` — pass `?download=1` to the
+ *                    document endpoint, which sets that on the presigned URL.
+ *
+ * No popup window needed (unlike openDataUrlInNewTab) — a same-tab
+ * programmatic <a> click isn't treated as a blocked popup.
+ */
+export function downloadFile(fileData, fileName = "download") {
+  if (!fileData) return;
+  const name = (fileName || "download").replace(/[\\/:*?"<>|]+/g, "_");
+  const a = document.createElement("a");
+  a.style.display = "none";
+  a.download = name;
+
+  if (fileData.startsWith("data:")) {
+    const blobUrl = URL.createObjectURL(dataUrlToBlob(fileData));
+    a.href = blobUrl;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(blobUrl); a.remove(); }, 4000);
+  } else {
+    a.href = fileData;
+    a.rel = "noopener";
+    a.target = "_blank"; // fallback if the browser opens instead of saving
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 4000);
+  }
+}

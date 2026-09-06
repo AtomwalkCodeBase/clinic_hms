@@ -18,11 +18,11 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { FolderOpen, Filter, Search, X, FileText } from "lucide-react";
+import { FolderOpen, Filter, Search, X, FileText, Download } from "lucide-react";
 import apiClient      from "../../services/api.client";
 import API_ENDPOINTS  from "../../config/api.config";
 import { ROUTES }     from "../../config/routes.config";
-import { openDataUrlInNewTab } from "../../utils/fileViewer";
+import { openDataUrlInNewTab, downloadFile } from "../../utils/fileViewer";
 import DependentBadge from "../common/DependentBadge";
 
 const BADGE = {
@@ -81,7 +81,7 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
     setPatient(""); setDateFrom(""); setDateTo(""); setStatusFilter("");
   }
 
-  // Open a stored PDF SharedDocument (the prescription) in a new tab.
+  // Open a stored PDF SharedDocument in a new tab.
   // window.open() must be synchronous in the click handler or the popup is
   // blocked; the tab is pointed at the file once it loads. Responses are
   // enveloped { success, data: {...} } — unwrap one level.
@@ -97,6 +97,38 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
       window.alert(err?.message || err?.data?.message || "Could not open the document.");
     }
   }
+
+  // Save a stored PDF to disk (browser "Save As"). ?download=1 makes the
+  // backend hand back an attachment-disposition URL / data URI.
+  async function downloadDoc(docId) {
+    try {
+      const res = await apiClient.get(API_ENDPOINTS.PATIENTS.DOCUMENT(docId), { params: { download: 1 } });
+      const doc = res.data?.data || res.data;
+      if (doc?.file_data) downloadFile(doc.file_data, doc.file_name || "document.pdf");
+      else window.alert("Could not download the document.");
+    } catch (err) {
+      window.alert(err?.message || err?.data?.message || "Could not download the document.");
+    }
+  }
+
+  // label + [View] [Save] for one stored PDF.
+  const miniBtn = {
+    display: "inline-flex", alignItems: "center", gap: 3, fontWeight: 700,
+    padding: "2px 6px", borderRadius: 5, cursor: "pointer", fontSize: 10,
+    border: "1px solid var(--color-primary)", color: "var(--color-primary)",
+    background: "var(--color-primary-light)",
+  };
+  const docActions = (docId, tag) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+      {tag && <span style={{ color: "var(--color-text-muted)" }}>({tag})</span>}
+      <button type="button" style={miniBtn} onClick={() => openDoc(docId)}>
+        <FileText size={9} /> View
+      </button>
+      <button type="button" style={miniBtn} onClick={() => downloadDoc(docId)}>
+        <Download size={9} /> Save
+      </button>
+    </span>
+  );
 
   const hasFilters = !!(patient || dateFrom || dateTo || statusFilter);
 
@@ -209,25 +241,28 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
                     </div>
                     <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{r.patient_uhid || ""}</div>
                     {r.has_encounter && (
-                      <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2, fontSize: 10 }}>
-                        {r.prescription_doc_id ? (
-                          <button type="button" onClick={() => openDoc(r.prescription_doc_id)}
-                            style={{
-                              display: "inline-flex", alignItems: "center", gap: 4, alignSelf: "flex-start",
-                              fontWeight: 700, padding: "2px 7px", borderRadius: 6, cursor: "pointer",
-                              border: "1px solid var(--color-primary)", color: "var(--color-primary)",
-                              background: "var(--color-primary-light)",
-                            }}>
-                            <FileText size={10} /> Prescription PDF
-                          </button>
+                      <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 4, fontSize: 10 }}>
+                        {(r.prescription_doc_id || r.handwritten_prescription_doc_id) ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                            <span style={{ fontWeight: 700, color: "var(--color-text-secondary)" }}>Prescription:</span>
+                            {r.prescription_doc_id && docActions(r.prescription_doc_id)}
+                            {r.handwritten_prescription_doc_id && docActions(r.handwritten_prescription_doc_id, "handwritten")}
+                          </div>
                         ) : (
                           <span style={{ color: "var(--color-text-muted)" }}>
                             {r.has_prescription ? "Prescription (no PDF)" : "No prescription issued"}
                           </span>
                         )}
-                        <span style={{ color: r.has_internal_note ? "var(--color-text-secondary)" : "var(--color-text-muted)" }}>
-                          {r.has_internal_note ? "Internal note recorded" : "No internal note recorded"}
-                        </span>
+                        {r.internal_note_doc_id ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                            <span style={{ fontWeight: 700, color: "var(--color-text-secondary)" }}>Internal note:</span>
+                            {docActions(r.internal_note_doc_id)}
+                          </div>
+                        ) : (
+                          <span style={{ color: r.has_internal_note ? "var(--color-text-secondary)" : "var(--color-text-muted)" }}>
+                            {r.has_internal_note ? "Internal note recorded" : "No internal note recorded"}
+                          </span>
+                        )}
                       </div>
                     )}
                   </td>

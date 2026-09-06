@@ -18,7 +18,6 @@ import { useParams } from "react-router-dom";
 import { publicClient } from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 
-const PEN_COLOR = "#1f2937";
 const PAPER = "#ffffff";
 const RULE_COLOR = "#eef1f5";
 const PEN_SIZES = [
@@ -26,6 +25,24 @@ const PEN_SIZES = [
   { key: "m", label: "M", width: 3.5 },
   { key: "l", label: "L", width: 6 },
 ];
+// Pen colours the doctor can pick on the phone. First is the default. The
+// colour bakes into the saved PNG, so no backend change is needed — a page
+// reloads/restores exactly as it was drawn.
+const PEN_COLORS = [
+  { key: "ink",   value: "#1f2937" },
+  { key: "blue",  value: "#1d4ed8" },
+  { key: "red",   value: "#dc2626" },
+  { key: "green", value: "#15803d" },
+];
+const PEN_COLOR = PEN_COLORS[0].value;
+
+// Zoom range for the pad. Applied as CSS display size (not a transform) so
+// scrolling/panning to any corner keeps working and pointer-to-canvas
+// mapping stays exact — see pointFrom().
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 3;
+const ZOOM_STEP = 0.25;
+const clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100));
 const UNDO_LIMIT = 25;
 const AUTOSAVE_MS = 1500;
 // Background sync: while a tab has unsaved strokes, retry the PUT on this
@@ -47,13 +64,15 @@ const nextPageId = () => `p${++_pid}`;
 // server. Keyed by the pad token; cleared once everything is saved.
 const LS_KEY = (t) => `consultpad:v1:${t}`;
 
-function pageDims() {
+function pageDims(containerW) {
   const vw = typeof window !== "undefined" ? window.innerWidth : 800;
-  const vh = typeof window !== "undefined" ? window.innerHeight : 1000;
-  // A4-ish portrait page. In landscape, don't let the page get so wide that
-  // (at 1.414 aspect) it becomes absurdly tall — cap the width by viewport
-  // height too, so it stays mostly visible after a rotate.
-  const w = Math.round(Math.max(280, Math.min(vw - 24, vh * 0.62, 860)));
+  // Base the A4-ish portrait page on the ACTUAL width the pad column has to
+  // work with (measured from the live container), not a guess off
+  // window.innerWidth — that's what made it mis-fit on some phones. Height
+  // just follows the 1.414 aspect; the column scrolls, and the doctor can
+  // zoom out if a page is too tall for their screen.
+  const avail = Math.max(240, (containerW || vw) - 20);
+  const w = Math.round(Math.max(280, Math.min(avail, 860)));
   return { w, h: Math.round(w * 1.414), dpr: (typeof window !== "undefined" && window.devicePixelRatio) || 1 };
 }
 
@@ -87,6 +106,8 @@ export default function ConsultPadPage() {
   const [tabsPages, setTabsPages] = useState({ rx: blankPages(), note: blankPages() });
   const [tool, setTool] = useState("pen"); // pen | eraser
   const [sizeKey, setSizeKey] = useState("m");
+  const [penColor, setPenColor] = useState(PEN_COLOR);
+  const [zoom, setZoom] = useState(1);
   const [mode, setMode] = useState("draw"); // draw | scroll
   const [saveState, setSaveState] = useState("idle"); // idle | unsaved | saving | saved | error
   const [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine !== false);
@@ -97,6 +118,10 @@ export default function ConsultPadPage() {
   const [geom, setGeom] = useState(0);            // bump to re-lay-out canvases after a rotate/resize
 
   const dims = useRef(pageDims());
+  const rootRef = useRef(null);       // stable shell element — measured for responsive page width
+  const padScrollRef = useRef(null);  // the scrolling pad column (pinch surface)
+  const pinch = useRef(null);         // { id1, id2, startDist, startZoom } while a 2-finger pinch is active
+  const pointers = useRef(new Map()); // live pointerId -> {x,y} on the pad column
   const sessionIdRef = useRef(null); // id of the consultation this pad is bound to
   const canvases = useRef(new Map()); // pageId -> { el, ctx }
   const undo = useRef(new Map());     // pageId -> [dataURL, ...]
@@ -109,6 +134,7 @@ export default function ConsultPadPage() {
 
   const toolRef = useRef(tool);        toolRef.current = tool;
   const sizeRef = useRef(sizeKey);     sizeRef.current = sizeKey;
+  const colorRef = useRef(penColor);  colorRef.current = penColor;
   const modeRef = useRef(mode);        modeRef.current = mode;
   const activeTabRef = useRef(activeTab); activeTabRef.current = activeTab;
   const tabsPagesRef = useRef(tabsPages); tabsPagesRef.current = tabsPages;
@@ -208,40 +234,54 @@ export default function ConsultPadPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Orientation / window resize ──────────────────────────────────────────
-  // Canvas geometry is fixed at mount. On a rotate (or any viewport change)
-  // re-lay-out every page at the new size, carrying the drawing across —
-  // snapshot each canvas, drop the old-sized contexts + undo stacks, bump
-  // `geom` so the pad remounts and repaints from those snapshots.
+  // ── Responsive geometry ────────────────────────────────────────────────
+  // Canvas geometry is fixed at mount. When the space the pad has to work
+  // with changes — a rotate, the on-screen keyboard, browser chrome showing
+  // / hiding, split-screen — re-lay-out every page at the new size, carrying
+  // the drawing across: snapshot each canvas, drop the old-sized contexts +
+  // undo stacks, bump `geom` so the pad remounts and repaints from those
+  // snapshots. Width is measured off the live container (rootRef), not
+  // window.innerWidth, so it fits every device.
+  const relayout = useCallback(() => {
+    const next = pageDims(rootRef.current?.clientWidth);
+    const cur = dims.current;
+    if (Math.abs(next.w - cur.w) < 2 && Math.abs(next.h - cur.h) < 2 && next.dpr === cur.dpr) return;
+    drawingId.current = null; // a stroke can't survive the remount
+    const active = activeTabRef.current;
+    const snap = (tabsPagesRef.current[active] || []).map((p) => ({
+      id: p.id,
+      src: canvases.current.get(p.id)?.el?.toDataURL("image/png") || p.src || null,
+    }));
+    canvases.current.clear();
+    undo.current = new Map();       // stacks hold old-size bitmaps — not reusable
+    dims.current = next;
+    setTabsPages((prev) => ({ ...prev, [active]: snap }));
+    setGeom((g) => g + 1);
+    persistLocal();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     let t;
-    const relayout = () => {
-      const next = pageDims();
-      const cur = dims.current;
-      if (Math.abs(next.w - cur.w) < 2 && Math.abs(next.h - cur.h) < 2 && next.dpr === cur.dpr) return;
-      drawingId.current = null; // a stroke can't survive the remount
-      const active = activeTabRef.current;
-      const snap = (tabsPagesRef.current[active] || []).map((p) => ({
-        id: p.id,
-        src: canvases.current.get(p.id)?.el?.toDataURL("image/png") || p.src || null,
-      }));
-      canvases.current.clear();
-      undo.current = new Map();       // stacks hold old-size bitmaps — not reusable
-      dims.current = next;
-      setTabsPages((prev) => ({ ...prev, [active]: snap }));
-      setGeom((g) => g + 1);
-      persistLocal();
-    };
     const onResize = () => { clearTimeout(t); t = setTimeout(relayout, 180); };
     window.addEventListener("resize", onResize);
     window.addEventListener("orientationchange", onResize);
+    window.visualViewport?.addEventListener("resize", onResize);
+    let ro;
+    if (rootRef.current && typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(onResize);
+      ro.observe(rootRef.current);
+    }
+    // One pass after first paint, once the real container width is known.
+    onResize();
     return () => {
       clearTimeout(t);
       window.removeEventListener("resize", onResize);
       window.removeEventListener("orientationchange", onResize);
+      window.visualViewport?.removeEventListener("resize", onResize);
+      ro?.disconnect();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [relayout]);
 
   // Background sync — the moment the connection is back (or every few seconds
   // while offline), push any unsaved strokes on their own. No stroke, no tap.
@@ -415,13 +455,18 @@ export default function ConsultPadPage() {
   };
   const dismissRecovery = () => { setRecovery(null); clearLocal(); };
 
-  // drawing
+  // drawing — map a screen point to canvas coordinates. getBoundingClientRect
+  // already reflects the element's rendered (zoomed) size, so dividing by it
+  // gives exact canvas-space coords at any zoom level.
   const pointFrom = (el, e) => {
     const r = el.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
+    const sx = r.width ? dims.current.w / r.width : 1;
+    const sy = r.height ? dims.current.h / r.height : 1;
+    return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
   };
   const onDown = (id) => (e) => {
     if (modeRef.current !== "draw") return;
+    if (pinch.current || pointers.current.size >= 2 || drawingId.current != null) return; // pinch, or already drawing
     e.preventDefault();
     const rec = canvases.current.get(id);
     if (!rec) return;
@@ -433,13 +478,14 @@ export default function ConsultPadPage() {
   };
   const onMove = (id) => (e) => {
     if (drawingId.current !== id) return;
+    if (pinch.current) { drawingId.current = null; return; } // second finger landed
     e.preventDefault();
     const rec = canvases.current.get(id);
     if (!rec) return;
     const p = pointFrom(rec.el, e);
     const { ctx } = rec;
     const w = PEN_SIZES.find((s) => s.key === sizeRef.current)?.width || 3.5;
-    ctx.strokeStyle = toolRef.current === "eraser" ? PAPER : PEN_COLOR;
+    ctx.strokeStyle = toolRef.current === "eraser" ? PAPER : colorRef.current;
     ctx.lineWidth = toolRef.current === "eraser" ? w * 5 : w;
     ctx.beginPath();
     ctx.moveTo(lastPt.current.x, lastPt.current.y);
@@ -454,6 +500,36 @@ export default function ConsultPadPage() {
     persistLocal(); // synchronous crash safety before the debounced PUT
     scheduleAutosave();
   };
+
+  // ── Pinch-to-zoom ─────────────────────────────────────────────────────
+  // Two pointers on the pad column drive `zoom`; a third+ is ignored. While a
+  // pinch is live the draw handlers bail (see onDown/onMove), so a stray
+  // stroke can't be drawn mid-gesture.
+  const pinchDist = () => {
+    const pts = Array.from(pointers.current.values());
+    if (pts.length < 2) return 0;
+    return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  };
+  const onPadPointerDown = (e) => {
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size === 2) {
+      drawingId.current = null; // abandon any half-drawn stroke
+      pinch.current = { startDist: pinchDist() || 1, startZoom: zoom };
+    }
+  };
+  const onPadPointerMove = (e) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch.current && pointers.current.size >= 2) {
+      const ratio = (pinchDist() || pinch.current.startDist) / pinch.current.startDist;
+      setZoom(clampZoom(pinch.current.startZoom * ratio));
+    }
+  };
+  const onPadPointerUp = (e) => {
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size < 2) pinch.current = null;
+  };
+  const setZoomTo = (z) => setZoom(clampZoom(z));
 
   const pushUndo = (id) => {
     const rec = canvases.current.get(id);
@@ -500,8 +576,9 @@ export default function ConsultPadPage() {
 
   // ── Chrome ───────────────────────────────────────────────────────────
   const shell = (children) => (
-    <div style={{ position: "fixed", inset: 0, background: "#eef2f7", display: "flex", flexDirection: "column",
-      fontFamily: "system-ui, -apple-system, sans-serif", color: "#0f172a", overflow: "hidden" }}>
+    <div ref={rootRef} style={{ position: "fixed", inset: 0, background: "#eef2f7", display: "flex", flexDirection: "column",
+      fontFamily: "system-ui, -apple-system, sans-serif", color: "#0f172a", overflow: "hidden",
+      paddingLeft: "env(safe-area-inset-left)", paddingRight: "env(safe-area-inset-right)" }}>
       {children}
     </div>
   );
@@ -544,6 +621,8 @@ export default function ConsultPadPage() {
     );
 
   const { w: PW, h: PH } = dims.current;
+  const PWz = Math.round(PW * zoom);
+  const PHz = Math.round(PH * zoom);
   const tabMeta = TABS.find((t) => t.key === activeTab);
 
   return shell(
@@ -598,9 +677,35 @@ export default function ConsultPadPage() {
               style={{ ...seg(tool === "pen" && sizeKey === s.key), width: 34 }}>{s.label}</button>
           ))}
         </div>
+        {/* Pen colour */}
+        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          {PEN_COLORS.map((c) => {
+            const on = tool === "pen" && penColor === c.value;
+            return (
+              <button key={c.key} type="button" aria-label={`Pen colour ${c.key}`}
+                onClick={() => { setPenColor(c.value); setTool("pen"); }}
+                style={{
+                  width: 24, height: 24, borderRadius: 999, cursor: "pointer", padding: 0,
+                  background: c.value, boxShadow: on ? "0 0 0 2px #fff, 0 0 0 4px #2563eb" : "none",
+                  border: on ? "none" : "2px solid #fff", outline: "1px solid #cbd5e1",
+                }} />
+            );
+          })}
+        </div>
         <button type="button" onClick={() => setTool("eraser")} style={seg(tool === "eraser")}>Eraser</button>
         <button type="button" onClick={doUndo} style={seg(false)}>Undo</button>
         <button type="button" onClick={clearPage} style={seg(false)}>Clear page</button>
+        {/* Zoom */}
+        <div style={{ display: "flex", alignItems: "center", border: "1px solid #cbd5e1", borderRadius: 8, overflow: "hidden" }}>
+          <button type="button" aria-label="Zoom out" onClick={() => setZoomTo(zoom - ZOOM_STEP)}
+            disabled={zoom <= ZOOM_MIN} style={{ ...seg(false), borderRadius: 0, border: "none", width: 34, opacity: zoom <= ZOOM_MIN ? 0.4 : 1 }}>−</button>
+          <button type="button" onClick={() => setZoomTo(1)} title="Reset zoom"
+            style={{ ...seg(zoom !== 1), borderRadius: 0, border: "none", borderLeft: "1px solid #cbd5e1", borderRight: "1px solid #cbd5e1", minWidth: 46 }}>
+            {Math.round(zoom * 100)}%
+          </button>
+          <button type="button" aria-label="Zoom in" onClick={() => setZoomTo(zoom + ZOOM_STEP)}
+            disabled={zoom >= ZOOM_MAX} style={{ ...seg(false), borderRadius: 0, border: "none", width: 34, opacity: zoom >= ZOOM_MAX ? 0.4 : 1 }}>+</button>
+        </div>
         <div style={{ flex: 1 }} />
         <button type="button" onClick={() => setMode((m) => (m === "draw" ? "scroll" : "draw"))} style={seg(mode === "scroll")}
           title="Switch between writing and scrolling">
@@ -608,12 +713,18 @@ export default function ConsultPadPage() {
         </button>
       </div>
 
-      {/* Pad — remounts per tab; each canvas restores from its page.src */}
-      <div key={`${activeTab}:${geom}`} style={{ flex: 1, overflow: "auto", padding: "14px 0 4px",
-        display: "flex", flexDirection: "column", alignItems: "center", gap: 14,
-        touchAction: mode === "draw" ? "pan-y" : "auto" }}>
+      {/* Pad — remounts per tab; each canvas restores from its page.src.
+          Zoom is applied as CSS display size on the page + canvas, so the
+          column simply scrolls to reach any corner. */}
+      <div key={`${activeTab}:${geom}`} ref={padScrollRef}
+        onPointerDown={onPadPointerDown} onPointerMove={onPadPointerMove}
+        onPointerUp={onPadPointerUp} onPointerCancel={onPadPointerUp}
+        style={{ flex: 1, overflow: "auto", padding: "14px 0 4px",
+          display: "flex", flexDirection: "column", alignItems: "safe center", gap: 14 * zoom,
+          touchAction: mode === "draw" ? (zoom > 1 ? "pan-x pan-y" : "pan-y") : "auto" }}>
         {pages.map((p, i) => (
-          <div key={p.id} style={{ position: "relative", width: PW, boxShadow: "0 1px 6px rgba(15,23,42,0.14)", borderRadius: 4 }}>
+          <div key={p.id} style={{ position: "relative", width: PWz, flexShrink: 0,
+            boxShadow: "0 1px 6px rgba(15,23,42,0.14)", borderRadius: 4 }}>
             <div style={{ position: "absolute", top: 6, left: 10, right: 10, fontSize: 10, color: "#cbd5e1",
               pointerEvents: "none", userSelect: "none" }}>
               {i === 0 ? tabMeta.hint : `Page ${i + 1}`}
@@ -624,12 +735,12 @@ export default function ConsultPadPage() {
               onPointerMove={onMove(p.id)}
               onPointerUp={onUp}
               onPointerCancel={onUp}
-              style={{ width: PW, height: PH, display: "block", borderRadius: 4,
+              style={{ width: PWz, height: PHz, display: "block", borderRadius: 4,
                 touchAction: mode === "draw" ? "none" : "auto", cursor: mode === "draw" ? "crosshair" : "grab" }}
             />
           </div>
         ))}
-        <button type="button" onClick={addPage} style={{ ...btn("#fff", "#2563eb", "#93c5fd"), width: PW, marginBottom: 6 }}>
+        <button type="button" onClick={addPage} style={{ ...btn("#fff", "#2563eb", "#93c5fd"), width: PWz, flexShrink: 0, marginBottom: 6 }}>
           + Add page
         </button>
       </div>

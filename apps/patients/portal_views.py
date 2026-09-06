@@ -1631,8 +1631,15 @@ class PortalDocumentDetailView(APIView):
             # even confirmed.
             return error("Document not found.", status=404)
 
+        # ?download=1 -> "Save As" instead of inline view (S3 URL gets a
+        # Content-Disposition override; a "data:" URI is saved client-side).
+        want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
+        dl_name = doc.file_name or f"{doc.title or 'document'}.pdf"
         raw = doc.file_data or ""
-        file_data = raw if raw.startswith("data:") else blob_storage.signed_url(raw)
+        if raw.startswith("data:"):
+            file_data = raw
+        else:
+            file_data = blob_storage.signed_url(raw, download_name=dl_name if want_download else None)
         return success(data={
             "id": doc.id,
             "title": doc.title,
@@ -1641,6 +1648,7 @@ class PortalDocumentDetailView(APIView):
             "mime_type": doc.mime_type,
             "created_at": doc.created_at,
             "file_data": file_data,
+            "download": want_download,
         })
 
 

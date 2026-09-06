@@ -244,7 +244,7 @@ def upload_data_uri(data_uri: str, *, prefix: str, mime_type: str, category: str
     return key
 
 
-def signed_url(key: str, *, expires_in: int = None) -> str:
+def signed_url(key: str, *, expires_in: int = None, download_name: str = None) -> str:
     """
     Generate a time-limited presigned GET URL for an S3 key.
 
@@ -255,6 +255,11 @@ def signed_url(key: str, *, expires_in: int = None) -> str:
     since a missing avatar/signature/report shouldn't 500 an entire profile
     or history page; it just renders as no-file, same as an empty field
     always has.
+
+    `download_name`: when given, the URL carries a `Content-Disposition:
+    attachment; filename="..."` override so the browser SAVES the file (with
+    that name) instead of rendering it inline. Used by the "Download" actions
+    on prescription / handwriting PDFs.
     """
     if not key:
         return ""
@@ -263,10 +268,14 @@ def signed_url(key: str, *, expires_in: int = None) -> str:
     except StorageError:
         return ""
     expires_in = expires_in or settings.AWS_S3_URL_EXPIRY
+    params = {"Bucket": settings.AWS_S3_BUCKET, "Key": key}
+    if download_name:
+        safe = download_name.replace('"', "").replace("\n", " ").strip() or "download"
+        params["ResponseContentDisposition"] = f'attachment; filename="{safe}"'
     try:
         return client.generate_presigned_url(
             "get_object",
-            Params={"Bucket": settings.AWS_S3_BUCKET, "Key": key},
+            Params=params,
             ExpiresIn=expires_in,
         )
     except Exception:

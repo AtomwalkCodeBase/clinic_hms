@@ -19,7 +19,7 @@ import { useToast } from "../../hooks/useToast";
 import apiClient from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { usePatientContext } from "../../context/PatientContext";
-import { openDataUrlInNewTab } from "../../utils/fileViewer";
+import { downloadFile } from "../../utils/fileViewer";
 
 const FREQ = { od: "Once daily", bd: "Twice daily", td: "3× daily", qid: "4× daily", sos: "As needed", stat: "Immediately", nocte: "At night", mane: "Morning" };
 
@@ -41,35 +41,28 @@ function PrescriptionOrderCard({ rx, onChanged }) {
   const [openingHw, setOpeningHw] = useState(false);
 
   async function downloadPdf() {
-    const win = window.open("", "_blank");
     setDownloading(true);
     try {
       const res = await apiClient.get(API_ENDPOINTS.PORTAL.PRESCRIPTION_RECEIPT(rx.tenant_db, rx.id));
       const data = res.data?.data || res.data;
-      if (data?.file_data) {
-        openDataUrlInNewTab(win, data.file_data);
-      } else if (win) {
-        win.close();
-      }
+      if (data?.file_data) downloadFile(data.file_data, `Prescription ${rx.rx_number || rx.id}.pdf`);
+      else toastApiError(null, "Could not generate the PDF.");
     } catch (err) {
       toastApiError(err, "Could not generate the PDF.");
-      if (win) win.close();
     } finally {
       setDownloading(false);
     }
   }
 
-  async function openHandwritten() {
-    const win = window.open("", "_blank");
+  async function downloadHandwritten() {
     setOpeningHw(true);
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(rx.handwritten_document_id));
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(rx.handwritten_document_id), { params: { download: 1 } });
       const data = res.data?.data || res.data;
-      if (data?.file_data) openDataUrlInNewTab(win, data.file_data);
-      else if (win) win.close();
+      if (data?.file_data) downloadFile(data.file_data, data.file_name || "Handwritten prescription.pdf");
+      else toastApiError(null, "Could not download the handwritten prescription.");
     } catch (err) {
-      toastApiError(err, "Could not open the handwritten prescription.");
-      if (win) win.close();
+      toastApiError(err, "Could not download the handwritten prescription.");
     } finally {
       setOpeningHw(false);
     }
@@ -117,9 +110,9 @@ function PrescriptionOrderCard({ rx, onChanged }) {
           </span>
           {rx.handwritten_document_id && (
             <button
-              onClick={openHandwritten}
+              onClick={downloadHandwritten}
               disabled={openingHw}
-              title="Doctor's handwritten prescription"
+              title="Download the doctor's handwritten prescription"
               style={{
                 display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.15)", border: "none",
                 borderRadius: 8, cursor: "pointer", padding: "5px 9px", fontSize: 11, fontWeight: 700, color: "#fff",
@@ -235,19 +228,14 @@ function ConsultRecordCard({ r }) {
   const [downloading, setDownloading] = useState(false);
 
   async function downloadPdf() {
-    const win = window.open("", "_blank");
     setDownloading(true);
     try {
       const res = await apiClient.get(API_ENDPOINTS.PORTAL.PRESCRIPTION_RECEIPT(r.tenant_db, r.prescription_id));
       const data = res.data?.data || res.data;
-      if (data?.file_data) {
-        openDataUrlInNewTab(win, data.file_data);
-      } else if (win) {
-        win.close();
-      }
+      if (data?.file_data) downloadFile(data.file_data, `Prescription ${r.rx_number || r.prescription_id}.pdf`);
+      else toastApiError(null, "Could not generate the PDF.");
     } catch (err) {
       toastApiError(err, "Could not generate the PDF.");
-      if (win) win.close();
     } finally {
       setDownloading(false);
     }

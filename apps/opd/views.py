@@ -368,26 +368,49 @@ class AppointmentHistoryView(APIView):
                 .filter(encounter_id__in=enc_ids, items__isnull=False)
                 .values_list("encounter_id", flat=True).distinct()
             }
-            pres_docs = {
-                d["source_ref"].split(":", 1)[1]: d["id"]
-                for d in SharedDocument.objects.using("default")
-                .filter(doc_type="prescription",
-                        source_ref__in=[f"encounter:{i}" for i in enc_ids])
-                .values("id", "source_ref")
-            }
+            # Three archived PDFs can hang off one encounter (see
+            # apps.opd.views._store_prescription_pdf / _store_handwriting_pdfs):
+            #   encounter:<id>                  -> typeset prescription  [pt + dr]
+            #   encounter:<id>:handwritten:rx   -> handwritten Rx        [pt + dr]
+            #   encounter:<id>:handwritten:note -> handwritten SOAP note [dr only]
+            # Fetch all three in one query and bucket by ref shape.
+            typeset_rx_docs, hw_rx_docs, note_docs = {}, {}, {}
+            wanted_refs = []
+            for i in enc_ids:
+                wanted_refs += [f"encounter:{i}",
+                                f"encounter:{i}:handwritten:rx",
+                                f"encounter:{i}:handwritten:note"]
+            for d in (SharedDocument.objects.using("default")
+                      .filter(source_ref__in=wanted_refs)
+                      .values("id", "source_ref", "doc_type")):
+                ref = d["source_ref"]
+                eid = ref.split(":", 2)[1]
+                if ref.endswith(":handwritten:rx"):
+                    hw_rx_docs[eid] = d["id"]
+                elif ref.endswith(":handwritten:note"):
+                    note_docs[eid] = d["id"]
+                elif d["doc_type"] == "prescription":
+                    typeset_rx_docs[eid] = d["id"]
             for row in data:
                 eid = row["encounter"]["id"] if row.get("encounter") else None
                 e = encs.get(eid) if eid else None
-                row["has_internal_note"] = bool(e and (
+                row["prescription_doc_id"] = typeset_rx_docs.get(eid)
+                row["handwritten_prescription_doc_id"] = hw_rx_docs.get(eid)
+                row["internal_note_doc_id"] = note_docs.get(eid)
+                row["has_internal_note"] = bool(row["internal_note_doc_id"]) or bool(e and (
                     (e.subjective or e.objective or e.assessment or e.plan or "").strip() or e.diagnoses
                 ))
-                row["prescription_doc_id"] = pres_docs.get(eid)
-                row["has_prescription"] = bool(row["prescription_doc_id"] or (eid in rx_enc_ids))
+                row["has_prescription"] = bool(
+                    row["prescription_doc_id"] or row["handwritten_prescription_doc_id"]
+                    or (eid in rx_enc_ids)
+                )
         else:
             for row in data:
                 row["has_internal_note"] = False
                 row["has_prescription"] = False
                 row["prescription_doc_id"] = None
+                row["handwritten_prescription_doc_id"] = None
+                row["internal_note_doc_id"] = None
 
         return Response({"results": data, "pagination": meta})
 

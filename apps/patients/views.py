@@ -328,13 +328,22 @@ class PatientDocumentDetailView(APIView):
         # Rows written before object storage (and the consult-pad's no-S3
         # fallback) hold the file inline as a "data:" URI — hand those back
         # as-is; only a real S3 object key gets a presigned URL.
+        # ?download=1 -> the caller wants a "Save As", not an inline view: an
+        # S3 URL gets a Content-Disposition override; a "data:" URI is saved
+        # client-side (utils/fileViewer.downloadFile).
+        want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
+        dl_name = doc.file_name or f"{doc.title or 'document'}.pdf"
         raw = doc.file_data or ""
-        file_data = raw if raw.startswith("data:") else blob_storage.signed_url(raw)
+        if raw.startswith("data:"):
+            file_data = raw
+        else:
+            file_data = blob_storage.signed_url(raw, download_name=dl_name if want_download else None)
 
         return success(data={
             "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,
             "file_name": doc.file_name, "mime_type": doc.mime_type,
             "file_data": file_data, "created_at": doc.created_at,
+            "download": want_download,
         })
 
 
