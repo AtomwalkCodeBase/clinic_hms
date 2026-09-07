@@ -59,14 +59,42 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
             c.drawString(left, y, f"Phone: {branch.phone}")
             y -= 5 * mm
 
-    c.setFont("Helvetica-Bold", 14)
-    c.drawRightString(right, height - 20 * mm, "PRESCRIPTION")
-    c.setFont("Helvetica", 9)
     rx_label = prescription.rx_number or str(prescription.id)[:8]
-    c.drawRightString(right, height - 26 * mm, f"Rx #: {rx_label}")
     when = visit_date or prescription.created_at
-    c.drawRightString(right, height - 31 * mm, f"Date: {when.strftime('%d %b %Y') if when else '—'}")
-    c.drawRightString(right, height - 36 * mm, f"Status: {prescription.status.replace('_', ' ').title()}")
+
+    # ── QR: "scan to save in My Reports" ────────────────────────────────
+    # Encodes an HMAC-signed token (core.qr_token) tying this Rx number to
+    # the patient's AWPID, so the portal can verify a re-uploaded photo of
+    # this sheet and file it under Prescriptions automatically. Best-effort:
+    # a missing rx_number / awpid, or any error, just omits the QR.
+    header_right = right
+    try:
+        awpid = getattr(patient, "awpid", "") if patient else ""
+        if prescription.rx_number and awpid:
+            import qrcode
+            from core.qr_token import issue as _qr_issue
+            _tok = _qr_issue(doc_type="prescription",
+                             public_document_id=prescription.rx_number, awpid=awpid)
+            _qr = qrcode.QRCode(box_size=4, border=1)
+            _qr.add_data(_tok)
+            _qr.make(fit=True)
+            _qr_img = _qr.make_image(fill_color="black", back_color="white")
+            qr_size = 20 * mm
+            c.drawImage(ImageReader(_qr_img), right - qr_size, height - 20 * mm - qr_size + 4 * mm,
+                        width=qr_size, height=qr_size, preserveAspectRatio=True, mask="auto")
+            c.setFont("Helvetica", 6)
+            c.drawCentredString(right - qr_size / 2, height - 20 * mm - qr_size + 1 * mm,
+                                "Scan to save in My Reports")
+            header_right = right - qr_size - 4 * mm
+    except Exception:
+        header_right = right
+
+    c.setFont("Helvetica-Bold", 14)
+    c.drawRightString(header_right, height - 20 * mm, "PRESCRIPTION")
+    c.setFont("Helvetica", 9)
+    c.drawRightString(header_right, height - 26 * mm, f"Rx #: {rx_label}")
+    c.drawRightString(header_right, height - 31 * mm, f"Date: {when.strftime('%d %b %Y') if when else '—'}")
+    c.drawRightString(header_right, height - 36 * mm, f"Status: {prescription.status.replace('_', ' ').title()}")
 
     y -= 6 * mm
     c.setStrokeColor(colors.HexColor("#DDDDDD"))

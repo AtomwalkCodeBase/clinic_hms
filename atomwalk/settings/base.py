@@ -372,6 +372,15 @@ else:
 # ── Platform Admin ───────────────────────────────────────────────────────────
 PLATFORM_ADMIN_SECRET = config("PLATFORM_ADMIN_SECRET", default="change-this")
 
+# ── My Reports document QR (core/qr_token.py) ────────────────────────────────
+# HMAC secret for the QR codes printed on prescriptions / lab reports.
+# RECOMMENDED to set a dedicated value in production: it can then be rotated
+# independently of SECRET_KEY (rotating SECRET_KEY would otherwise silently
+# invalidate every printed QR, sending re-uploads down the slower OCR path).
+# Falls back to SECRET_KEY when unset so a deploy never breaks on a missing
+# value — this feature is new, so there are no live QRs to invalidate yet.
+DOC_QR_SECRET = config("DOC_QR_SECRET", default="") or SECRET_KEY
+
 # ── Handwriting recognition (consultation scratchpad) ───────────────────────
 # The consult-pad QR flow photographs a handwritten SOAP note; a vision model
 # transcribes it and splits it into S/O/A/P. Any OpenAI-compatible chat

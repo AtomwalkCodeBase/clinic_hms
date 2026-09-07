@@ -14,6 +14,8 @@ DPDP Act compliance:
   - AWPID is the platform's cross-provider patient identifier.
 """
 
+import uuid
+
 from django.db import models
 
 
@@ -295,7 +297,7 @@ class SharedDocument(models.Model):
     doc_type         = models.CharField(max_length=20, choices=DOC_TYPE_CHOICES, default="other")
     file_name        = models.CharField(max_length=255, blank=True)
     mime_type        = models.CharField(max_length=100, blank=True)
-    file_data        = models.TextField()   # base64 data URI
+    file_data        = models.TextField()   # S3 object key (older rows: base64 data URI)
     uploaded_by      = models.CharField(max_length=10, choices=UPLOADED_BY_CHOICES, default="patient")
     source_tenant_id = models.IntegerField(null=True, blank=True)  # null when patient-uploaded
     # Links an "outside" upload back to the LabRequest that prompted it, e.g.
@@ -304,12 +306,118 @@ class SharedDocument(models.Model):
     source_ref       = models.CharField(max_length=120, blank=True, db_index=True)
     created_at       = models.DateTimeField(auto_now_add=True)
 
+    # ── My Reports pipeline (HMS-DOC) ─────────────────────────────────────
+    # public_document_id: the quotable hospital id (rx_number / report_number)
+    #   this row corresponds to. Set on the QR-verified path; blank for
+    #   external uploads. Used together with content_hash for de-duplication.
+    public_document_id = models.CharField(max_length=40, blank=True, db_index=True)
+    # document_date: the date printed ON the document (extracted or entered),
+    #   distinct from created_at (when it entered the vault).
+    document_date      = models.DateField(null=True, blank=True)
+    # content_hash: SHA-256 of the ORIGINAL uploaded bytes — exact-duplicate
+    #   detection, stable across the PDF-normalisation step.
+    content_hash       = models.CharField(max_length=64, blank=True, db_index=True)
+    # how the doc_type was decided: qr | ocr_keyword | patient_confirmed | staff
+    classification_method     = models.CharField(max_length=20, blank=True)
+    classification_confidence = models.FloatField(null=True, blank=True)  # 0..1 for ocr_keyword
+    # verified | unverified | needs_review | rejected
+    verification_status = models.CharField(max_length=16, default="unverified")
+    # filed | unsorted — 'unsorted' rows are excluded from the patient list's
+    # normal view and from get_shared_history() until the patient confirms.
+    review_state       = models.CharField(max_length=12, default="filed", db_index=True)
+    batch              = models.ForeignKey(
+        "registry.DocumentUploadBatch", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="documents",
+    )
+    is_duplicate_of    = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+    )
+    # free-text lab/hospital and doctor for EXTERNAL uploads
+    hospital_label     = models.CharField(max_length=120, blank=True)
+    doctor_label       = models.CharField(max_length=120, blank=True)
+    # soft links into the tenant DBs so the detail view can open structured data
+    prescription_ref   = models.CharField(max_length=60, blank=True)  # "<tenant_db>:<uuid>"
+    lab_report_ref     = models.CharField(max_length=60, blank=True)  # "<tenant_db>:<id>"
+    # "hide from my documents" (hospital-generated rows) vs real delete (patient uploads)
+    hidden_at          = models.DateTimeField(null=True, blank=True)
+    deleted_at         = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         app_label = "registry"
         db_table  = "shared_document"
+        indexes = [
+            models.Index(fields=["awpid", "review_state"], name="shared_doc_awpid_review_idx"),
+            models.Index(fields=["awpid", "doc_type", "document_date"], name="shared_doc_awpid_type_date_idx"),
+            models.Index(fields=["awpid", "content_hash"], name="shared_doc_awpid_hash_idx"),
+        ]
 
     def __str__(self):
         return f"{self.awpid} — {self.title}"
+
+
+class DocumentUploadBatch(models.Model):
+    """
+    One folder / multi-file upload from the patient portal. The client uploads
+    every file straight to S3 (presigned PUT) and this row plus its
+    DocumentUploadItem children track progress; the
+    process_document_batches management command (cron) drains it.
+    """
+    STATUS_CHOICES = [
+        ("pending", "Pending"), ("processing", "Processing"),
+        ("done", "Done"), ("partial", "Partial"),
+    ]
+    METHOD_CHOICES = [
+        ("folder", "Folder"), ("files", "Files"), ("photo", "Photo"), ("qr", "QR"),
+    ]
+    id           = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    awpid        = models.CharField(max_length=30, db_index=True)
+    initiated_by = models.CharField(max_length=10, default="patient")  # patient | staff
+    method       = models.CharField(max_length=12, choices=METHOD_CHOICES, default="files")
+    total_files  = models.IntegerField(default=0)
+    accepted     = models.IntegerField(default=0)   # filed as prescription / lab report
+    unsorted     = models.IntegerField(default=0)   # parked for review
+    ignored      = models.IntegerField(default=0)   # not medical / rejected
+    failed       = models.IntegerField(default=0)   # validation / scan errors
+    status       = models.CharField(max_length=12, choices=STATUS_CHOICES, default="pending", db_index=True)
+    created_at   = models.DateTimeField(auto_now_add=True)
+    finished_at  = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "document_upload_batch"
+        indexes = [models.Index(fields=["awpid", "status"], name="doc_batch_awpid_status_idx")]
+
+    def __str__(self):
+        return f"batch {self.id} [{self.status}] {self.awpid}"
+
+
+class DocumentUploadItem(models.Model):
+    """One file within a DocumentUploadBatch."""
+    STATUS_CHOICES = [
+        ("uploading", "Uploading"), ("scanning", "Scanning"),
+        ("classified", "Classified"), ("filed", "Filed"), ("unsorted", "Unsorted"),
+        ("ignored", "Ignored"), ("failed", "Failed"), ("duplicate", "Duplicate"),
+    ]
+    id                = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    batch             = models.ForeignKey(DocumentUploadBatch, on_delete=models.CASCADE, related_name="items")
+    original_filename = models.CharField(max_length=255, blank=True)  # display only
+    declared_size     = models.IntegerField(default=0)               # bytes, from the manifest
+    content_hash      = models.CharField(max_length=64, blank=True)
+    staging_key       = models.CharField(max_length=255, blank=True)  # S3 key under incoming/
+    status            = models.CharField(max_length=14, choices=STATUS_CHOICES, default="uploading", db_index=True)
+    reason            = models.CharField(max_length=160, blank=True)
+    result_document   = models.ForeignKey(SharedDocument, null=True, blank=True,
+                                          on_delete=models.SET_NULL, related_name="+")
+    classified_as     = models.CharField(max_length=20, blank=True)  # prescription | lab_report | not_medical
+    processed_at      = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "document_upload_item"
+        indexes = [models.Index(fields=["batch", "status"], name="doc_item_batch_status_idx")]
+
+    def __str__(self):
+        return f"item {self.id} [{self.status}] {self.original_filename}"
 
 
 class SharedVital(models.Model):

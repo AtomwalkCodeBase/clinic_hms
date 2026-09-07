@@ -1521,7 +1521,7 @@ class PortalDocumentListCreateView(APIView):
             return err
 
         qs = (SharedDocument.objects.using("default")
-              .filter(awpid=target_awpid)
+              .filter(awpid=target_awpid, hidden_at__isnull=True, deleted_at__isnull=True)
               .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
               .order_by("-created_at"))
         page_items, meta = paginate_queryset(request, qs)
@@ -1533,6 +1533,9 @@ class PortalDocumentListCreateView(APIView):
             "mime_type":  d.mime_type,
             "uploaded_by": d.uploaded_by,
             "created_at": d.created_at,
+            "review_state": d.review_state,
+            "verification_status": d.verification_status,
+            "document_date": d.document_date,
         } for d in page_items]
         return Response({"results": results, "pagination": meta})
 
@@ -1569,6 +1572,82 @@ class PortalDocumentListCreateView(APIView):
         source_ref = (d.get("source_ref") or "").strip()
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+
+        # ── My Reports pipeline: QR verify → dedup → classify → PDF ──────────
+        import base64, hashlib
+        from core import qr_token as _qt, doc_classifier as _dc, normalise as _nz
+
+        try:
+            raw = base64.b64decode(file_data.split(",", 1)[1]) if "," in file_data else b""
+        except Exception:
+            raw = b""
+        content_hash = hashlib.sha256(raw).hexdigest() if raw else ""
+
+        public_document_id = ""
+        verification_status = "unverified"
+        classification_method = ""
+        classification_confidence = None
+        document_date = None
+        review_state = "filed"
+
+        # 1. QR path — the phone decoded the hospital QR and posted the token.
+        qr_tok = (d.get("qr_token") or "").strip()
+        if qr_tok:
+            v = _qt.verify(qr_tok)
+            if v.ok and v.awpid and v.awpid != acct.awpid:
+                return error("This document belongs to another patient.", status=403)
+            if v.ok:
+                doc_type = v.doc_type
+                public_document_id = v.public_document_id
+                verification_status = "verified"
+                classification_method = "qr"
+
+        # 2. De-duplication — by hospital id (QR path) or exact content hash.
+        force = str(d.get("force") or "").strip().lower() in ("1", "true", "yes")
+        dup_qs = SharedDocument.objects.using("default").filter(
+            awpid=acct.awpid, deleted_at__isnull=True,
+        )
+        existing = None
+        if public_document_id:
+            existing = dup_qs.filter(public_document_id=public_document_id).first()
+        if existing is None and content_hash:
+            existing = dup_qs.filter(content_hash=content_hash).first()
+        if existing is not None and not force:
+            return Response({
+                "duplicate": True,
+                "existing_id": existing.id,
+                "existing_title": existing.title,
+                "existing_doc_type": existing.doc_type,
+            }, status=200)
+
+        # 3. No QR — classify from the page text (OCR when there's no text layer).
+        if classification_method != "qr":
+            try:
+                cr = _dc.classify(raw, mime_type)
+                classification_method = cr.method
+                classification_confidence = cr.confidence
+                document_date = cr.doc_date
+                if cr.confident:
+                    doc_type = cr.doc_type
+                    review_state = "filed"
+                else:
+                    doc_type = "other"
+                    review_state = "unsorted"
+                    verification_status = "needs_review"
+            except Exception:
+                logger.exception("doc classify failed; parking upload in Unsorted")
+                doc_type = "other"
+                review_state = "unsorted"
+                verification_status = "needs_review"
+                classification_method = "ocr_keyword"
+
+        # 4. Normalise every upload to a PDF (images become a single-page PDF).
+        try:
+            pdf_bytes, mime_type = _nz.to_pdf(raw, mime_type)
+            file_data = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
+        except Exception:
+            logger.exception("PDF normalise failed; storing the original file")
+
         identity = blob_storage.identity_slug(name=acct.full_name, identifier=acct.awpid)
         try:
             file_key = blob_storage.upload_data_uri(
@@ -1592,11 +1671,18 @@ class PortalDocumentListCreateView(APIView):
             awpid=acct.awpid, title=title, doc_type=doc_type,
             file_name=file_name, mime_type=mime_type, file_data=file_key,
             uploaded_by="patient", source_tenant_id=None, source_ref=source_ref,
+            public_document_id=public_document_id, content_hash=content_hash,
+            classification_method=classification_method,
+            classification_confidence=classification_confidence,
+            verification_status=verification_status, review_state=review_state,
+            document_date=document_date,
         )
         return Response({
             "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,
             "file_name": doc.file_name, "mime_type": doc.mime_type,
             "source_ref": doc.source_ref, "created_at": doc.created_at,
+            "review_state": doc.review_state,
+            "verification_status": doc.verification_status,
         }, status=201)
 
 
@@ -1650,6 +1736,137 @@ class PortalDocumentDetailView(APIView):
             "file_data": file_data,
             "download": want_download,
         })
+
+
+# ── My Reports: folder / multi-file upload (batch) ───────────────────────────
+
+_BATCH_MAX_FILES = 100
+_BATCH_MAX_BYTES = 300 * 1024 * 1024   # 300 MB
+_ITEM_MAX_BYTES = 20 * 1024 * 1024     # 20 MB per file
+_EXT_BY_MIME_NAME = {"pdf": "pdf", "jpg": "jpg", "jpeg": "jpg", "png": "png"}
+
+
+class PortalDocumentBatchView(APIView):
+    """
+    POST /api/v1/portal/documents/batch/
+        body: { method?, files: [ {name, size, sha256?}, ... ] }
+        -> creates a DocumentUploadBatch + one DocumentUploadItem per accepted
+           file and returns a presigned S3 PUT url for each. Non-document
+           extensions are dropped from the manifest (client should pre-filter
+           too). The client PUTs each file straight to S3, then calls
+           .../batch/<id>/process/. The process_document_batches command
+           (cron) does the actual validation + classification + filing.
+
+    GET  /api/v1/portal/documents/batch/?batch_id=<uuid>
+        -> { batch: {...counters, status}, items: [{id, filename, status, reason}] }
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request):
+        from apps.registry.models import DocumentUploadBatch
+
+        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        batch_id = (request.query_params.get("batch_id") or "").strip()
+        if not batch_id:
+            return error("batch_id is required.")
+        b = DocumentUploadBatch.objects.using("default").filter(pk=batch_id, awpid=acct.awpid).first()
+        if not b:
+            return error("Batch not found.", status=404)
+        items = list(b.items.values("id", "original_filename", "status", "reason",
+                                    "classified_as", "result_document_id"))
+        return success(data={
+            "batch": {
+                "id": str(b.id), "status": b.status, "method": b.method,
+                "total_files": b.total_files, "accepted": b.accepted,
+                "unsorted": b.unsorted, "ignored": b.ignored, "failed": b.failed,
+                "created_at": b.created_at, "finished_at": b.finished_at,
+            },
+            "items": [{**it, "id": str(it["id"]),
+                       "result_document_id": it["result_document_id"]} for it in items],
+        })
+
+    def post(self, request):
+        from apps.registry.models import DocumentUploadBatch, DocumentUploadItem
+
+        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        method = (request.data.get("method") or "files").strip()
+        if method not in ("folder", "files", "photo"):
+            method = "files"
+        files = request.data.get("files") or []
+        if not isinstance(files, list) or not files:
+            return error("files list is required.")
+
+        # one active batch per patient at a time
+        if (DocumentUploadBatch.objects.using("default")
+                .filter(awpid=acct.awpid, status__in=("pending", "processing")).exists()):
+            return error("You already have an upload in progress. Please wait for it to finish.")
+
+        accepted, ignored, total_bytes = [], 0, 0
+        for f in files:
+            name = str((f or {}).get("name") or "").strip()
+            size = int((f or {}).get("size") or 0)
+            ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+            if ext not in _EXT_BY_MIME_NAME:
+                ignored += 1
+                continue
+            if size and size > _ITEM_MAX_BYTES:
+                ignored += 1
+                continue
+            total_bytes += size
+            accepted.append({"name": name, "size": size,
+                             "sha256": str((f or {}).get("sha256") or ""),
+                             "ext": _EXT_BY_MIME_NAME[ext]})
+
+        if not accepted:
+            return error("None of the selected files are PDFs or images.")
+        if len(accepted) > _BATCH_MAX_FILES:
+            return error(f"Too many files. Upload at most {_BATCH_MAX_FILES} at a time.")
+        if total_bytes > _BATCH_MAX_BYTES:
+            return error("This folder is over the 300 MB per-upload limit. Split it into two.")
+
+        slug = blob_storage.identity_slug(name=acct.full_name, identifier=acct.awpid)
+        batch = DocumentUploadBatch.objects.using("default").create(
+            awpid=acct.awpid, initiated_by="patient", method=method,
+            total_files=len(accepted), ignored=ignored, status="pending",
+        )
+        out = []
+        for a in accepted:
+            item = DocumentUploadItem.objects.using("default").create(
+                batch=batch, original_filename=a["name"], declared_size=a["size"],
+                content_hash=a["sha256"], status="uploading",
+            )
+            key = f"incoming/{slug}/{batch.id}/{item.id}.{a['ext']}"
+            item.staging_key = key
+            item.save(using="default", update_fields=["staging_key"])
+            mime = {"pdf": "application/pdf", "jpg": "image/jpeg", "png": "image/png"}[a["ext"]]
+            out.append({
+                "item_id": str(item.id),
+                "filename": a["name"],
+                "put_url": blob_storage.presigned_put_url(key, mime_type=mime),
+                "content_type": mime,
+            })
+        return success(data={"batch_id": str(batch.id), "ignored": ignored, "items": out}, status=201)
+
+
+class PortalDocumentBatchProcessView(APIView):
+    """
+    POST /api/v1/portal/documents/batch/<batch_id>/process/
+    Marks the batch ready for the drain once the client has finished PUTting
+    every file to S3. The process_document_batches command picks it up.
+    """
+    permission_classes = [IsPatient]
+
+    def post(self, request, batch_id):
+        from apps.registry.models import DocumentUploadBatch
+
+        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        b = DocumentUploadBatch.objects.using("default").filter(pk=batch_id, awpid=acct.awpid).first()
+        if not b:
+            return error("Batch not found.", status=404)
+        if b.status == "pending":
+            b.status = "processing"
+            b.save(using="default", update_fields=["status"])
+        return success(data={"batch_id": str(b.id), "status": b.status})
 
 
 # ── My lab orders ────────────────────────────────────────────────────────────
