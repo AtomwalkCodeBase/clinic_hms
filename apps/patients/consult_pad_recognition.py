@@ -101,7 +101,7 @@ _USER_TEXT = "Read this handwritten consultation note and return the JSON descri
 # Note tab; telling the model which one it's looking at improves accuracy and
 # stops it hallucinating drugs into a plain note (or vice versa).
 _FOCUS_HINT = {
-    "rx": " This is a PRESCRIPTION page: fill the `prescription` array (every medication written) and leave subjective/objective/assessment/plan/diagnoses/investigations/advice/follow_up_days empty.",
+    "rx": " This page is PRIMARILY THE PRESCRIPTION: fill the `prescription` array with every medication written. Doctors often also jot a little clinical context on the same page — if any is present, still capture it: symptoms/history -> `subjective`, measured vitals or exam findings -> `objective`, non-drug advice (rest, fluids, diet, warning signs) -> `advice`, lab/imaging ordered -> `investigations`, review interval -> `follow_up_days`. Leave `assessment`, `plan` and `diagnoses` empty unless a diagnosis is clearly written.",
     "note": " This is a CLINICAL NOTE page with NO prescription: fill the SOAP fields, `diagnoses`, `investigations`, `advice` and `follow_up_days`, and leave `prescription` empty.",
     "all": "",
 }
@@ -132,6 +132,57 @@ _EMPTY = {
 
 _FREQ_OK = {"od", "bd", "td", "qid", "sos", "stat", "nocte", "mane"}
 _ROUTE_OK = {"oral", "iv", "im", "sc", "topical", "inhaled", "rectal", "sublingual"}
+
+# ── Frequency / sig shorthand ──────────────────────────────────────────────
+# Doctors write the dosing frequency a dozen different ways, and a small
+# vision model often drops it into `instructions` instead of `frequency`
+# ("3 days 2donly" -> instructions="2donly", frequency=""). This maps the
+# common written forms to the canonical enum. Checked in order — specific
+# words first, then the "N-N-N" grid, then "N daily"/"N times", then plain OD.
+_N_TO_FREQ = {1: "od", 2: "bd", 3: "td", 4: "qid"}
+_FREQ_PATTERNS = [
+    ("stat",  re.compile(r"\b(stat|immediately|at once|right now)\b", re.I)),
+    ("sos",   re.compile(r"\b(sos|p\.?r\.?n|as needed|if needed|when required|as required)\b", re.I)),
+    ("nocte", re.compile(r"\b(nocte|noct|h\.?s|at night|at bed\s?time|bed\s?time|before sleep|every night)\b", re.I)),
+    ("mane",  re.compile(r"\b(mane|o\.?m|in the morning|every morning|morning dose)\b", re.I)),
+    ("qid",   re.compile(r"\b(qid|qds|q\.?i\.?d|q6h|1\s*-\s*1\s*-\s*1\s*-\s*1|four times)\b", re.I)),
+    ("td",    re.compile(r"\b(tds|tid|t\.?i\.?d|q8h|thrice|1\s*-\s*1\s*-\s*1|three times)\b", re.I)),
+    ("bd",    re.compile(r"\b(bd|bid|b\.?i\.?d|bpd|q12h|twice|1\s*-\s*0\s*-\s*1)\b", re.I)),
+    ("od",    re.compile(r"\b(od|qd|o\.?d|q\.?d|q24h|1\s*-\s*0\s*-\s*0|once daily|once a day|every day|daily)\b", re.I)),
+]
+# "N daily / N times / N x" — tolerant of the model's misreads of "daily"
+# (2donly, 2dly, 3daly …) and of a missing space.
+_FREQ_NUM_RE = re.compile(r"\b([1-4])\s*(?:x|times?|d[a-z]{0,3}ly|/\s*day|per\s*day|a\s*day)\b", re.I)
+
+
+def _freq_from_text(s: str):
+    """(canonical enum, matched-substring) for the first frequency form found
+    in `s`, or (None, None). Pure."""
+    s = (s or "").strip()
+    if not s:
+        return None, None
+    m = _FREQ_NUM_RE.search(s)
+    if m:
+        f = _N_TO_FREQ.get(int(m.group(1)))
+        if f:
+            return f, m.group(0)
+    for enum, rx in _FREQ_PATTERNS:
+        m = rx.search(s)
+        if m:
+            return enum, m.group(0)
+    return None, None
+
+
+def _strip_span(s: str, frag: str) -> str:
+    """Remove the first occurrence of `frag` from `s` and tidy leftover
+    punctuation / double spaces."""
+    if not frag:
+        return s
+    i = s.lower().find(frag.lower())
+    if i < 0:
+        return s
+    out = (s[:i] + s[i + len(frag):])
+    return re.sub(r"\s{2,}", " ", out).strip(" ,;-·").strip()
 
 # ── Local pixel pre-check ────────────────────────────────────────────────────
 # Runs before any API call. A pen/finger stroke on the white pad is near-black;
@@ -275,12 +326,29 @@ def _parse_json(text: str) -> dict:
         name = str(it.get("drug_name", "")).strip()
         if not name:
             continue
-        freq = str(it.get("frequency", "")).strip().lower()
         route = str(it.get("route", "")).strip().lower()
         dur = _as_int(it.get("duration_days"))
         dur_val = dur if (dur is not None and dur > 0) else None
         dosage = str(it.get("dosage", "")).strip()
-        freq_ok = freq in _FREQ_OK
+        instr = str(it.get("instructions", "")).strip()
+
+        # Frequency: normalise the model's value (handles "1-0-1", "twice",
+        # "BD", …), and if it's still missing, try to recover one the model
+        # dropped into `instructions` / `dosage` ("3 days 2donly" -> bd) and
+        # strip that token back out of the instructions.
+        raw_freq = str(it.get("frequency", "")).strip().lower()
+        mapped = raw_freq if raw_freq in _FREQ_OK else (_freq_from_text(raw_freq)[0] if raw_freq else None)
+        freq_from = ""
+        if not mapped:
+            for label, src in (("instructions", instr), ("dose", dosage)):
+                m_enum, m_frag = _freq_from_text(src)
+                if m_enum:
+                    mapped = m_enum
+                    if label == "instructions":
+                        instr = _strip_span(instr, m_frag)
+                    freq_from = label
+                    break
+        freq_ok = mapped in _FREQ_OK
 
         # Surfaced to the doctor on the review panel — a line missing a dose or
         # duration, or one where we had to assume a frequency, needs a look
@@ -294,15 +362,17 @@ def _parse_json(text: str) -> dict:
             flags.append("duration missing")
         if not freq_ok:
             flags.append("frequency assumed OD")
+        elif freq_from:
+            flags.append(f"frequency read from {freq_from} text")
 
         clean.append({
             "drug_name": name,
             "dosage": dosage,
-            "frequency": freq if freq_ok else "od",
+            "frequency": mapped if freq_ok else "od",
             "frequency_defaulted": not freq_ok,
             "route": route if route in _ROUTE_OK else "oral",
             "duration_days": dur_val,
-            "instructions": str(it.get("instructions", "")).strip(),
+            "instructions": instr,
             "confidence": _as_float(it.get("confidence")),
             "flags": flags,
         })

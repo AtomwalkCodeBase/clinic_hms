@@ -132,6 +132,44 @@ SEED_DRUGS = [
 ]
 
 
+# Common handwriting / OCR misreads of frequent OPD drugs -> the standard
+# generic. These give the consult-pad recogniser an EXACT hit (no fuzzy
+# threshold to clear) for the mistakes that actually recur on the pad.
+# surface is lower-case; value must match a `generic` in SEED_DRUGS above.
+MISREADS = {
+    "panacetamol": "Paracetamol", "paracetmol": "Paracetamol",
+    "paracetamal": "Paracetamol", "paracetemol": "Paracetamol",
+    "paracitamol": "Paracetamol", "parcetamol": "Paracetamol",
+    "pcm": "Paracetamol",
+    "azithromicin": "Azithromycin", "azithromyacin": "Azithromycin",
+    "azithromycine": "Azithromycin", "azithral": "Azithromycin",
+    "amoxycillin": "Amoxicillin", "amoxicilin": "Amoxicillin",
+    "amoxycillin trihydrate": "Amoxicillin",
+    "pantoprazol": "Pantoprazole", "pantaprazole": "Pantoprazole",
+    "pantoprozole": "Pantoprazole",
+    "omeprazol": "Omeprazole", "omeprazol e": "Omeprazole",
+    "rabeprazol": "Rabeprazole",
+    "cetrizine": "Cetirizine", "cetirizin": "Cetirizine",
+    "levocetrizine": "Levocetirizine", "levocitirizine": "Levocetirizine",
+    "montelukas": "Montelukast", "montelukaste": "Montelukast",
+    "metronidazol": "Metronidazole", "metronidazole 400": "Metronidazole",
+    "ciprofloxacin hcl": "Ciprofloxacin", "ciprofloxacine": "Ciprofloxacin",
+    "levofloxacine": "Levofloxacin", "ofloxacine": "Ofloxacin",
+    "diclofenac sodium": "Diclofenac", "diclophenac": "Diclofenac",
+    "aceclofinac": "Aceclofenac", "aceclofenak": "Aceclofenac",
+    "ibuprufen": "Ibuprofen", "ibuprofin": "Ibuprofen",
+    "metformin hcl": "Metformin", "metformine": "Metformin",
+    "amlodipin": "Amlodipine", "amlodypine": "Amlodipine",
+    "telmisartan h": "Telmisartan", "telmisarton": "Telmisartan",
+    "atorvastatin calcium": "Atorvastatin", "atorvastatine": "Atorvastatin",
+    "rosuvastatine": "Rosuvastatin",
+    "azithromycin 500": "Azithromycin", "cefixime 200": "Cefixime",
+    "cefixim": "Cefixime", "cefpodoxim": "Cefpodoxime",
+    "domperidon": "Domperidone", "ondansetrone": "Ondansetron",
+    "prednisolon": "Prednisolone", "methylprednisolon": "Methylprednisolone",
+}
+
+
 def alias_pairs():
     """
     Yield (surface_lower, generic_lower) for every brand and alias in the
@@ -149,3 +187,27 @@ def alias_pairs():
             a = (a or "").strip().lower()
             if a:
                 yield a, gen
+
+
+def seed_name_pairs():
+    """
+    Yield (surface_lower, canonical) where `canonical` is the standard,
+    properly-cased generic name — for use as a STANDALONE drug-name resolver
+    when the tenant has no (or a sparse) Drug catalog. Covers every generic,
+    brand and alias in SEED_DRUGS plus the MISREADS table. The generic also
+    maps to itself so an already-standard string snaps to the right casing.
+    """
+    for d in SEED_DRUGS:
+        gen = (d.get("generic") or "").strip()
+        if not gen:
+            continue
+        yield gen.lower(), gen
+        brand = (d.get("brand") or "").strip().lower()
+        if brand:
+            yield brand, gen
+        for a in d.get("aliases") or []:
+            a = (a or "").strip().lower()
+            if a:
+                yield a, gen
+    for surface, canon in MISREADS.items():
+        yield surface, canon

@@ -20,7 +20,7 @@ from django.test import SimpleTestCase, override_settings
 
 from apps.patients import consult_pad_recognition as R
 from apps.patients import consult_pad_views as V
-from apps.patients.consult_pad_drug_aliases import alias_pairs
+from apps.patients.consult_pad_drug_aliases import alias_pairs, seed_name_pairs
 from apps.patients.consult_pad_lab_aliases import alias_pairs as lab_alias_pairs
 
 
@@ -290,22 +290,39 @@ class NormaliseOrchestratorTests(SimpleTestCase):
         V._normalise_rx_against_catalog(blob, tenant_id=1)
         self.assertEqual(blob["prescription"], [])
 
-    def test_items_get_keys_even_if_catalog_unavailable(self):
-        # tenant lookup will fail (no DB in SimpleTestCase) — items must still
-        # come back with the review-panel keys populated.
-        blob = {"prescription": [{"drug_name": "Dolo"}]}
+    def test_resolves_via_seed_table_when_no_catalog(self):
+        # tenant lookup fails (no DB in SimpleTestCase) — the standalone seed
+        # drug table must still canonicalise a known brand / misspelling.
+        blob = {"prescription": [
+            {"drug_name": "Dolo"},          # brand -> generic
+            {"drug_name": "Panacetamol"},   # misread -> Paracetamol
+            {"drug_name": "Zxqwerty"},      # unknown -> left verbatim, flagged
+        ]}
         V._normalise_rx_against_catalog(blob, tenant_id=999999)
-        it = blob["prescription"][0]
-        self.assertEqual(it["drug_name_raw"], "Dolo")
-        self.assertEqual(it["name_source"], "verbatim")
-        self.assertIsInstance(it["flags"], list)
+        dolo, pana, unk = blob["prescription"]
+        self.assertEqual(dolo["drug_name"], "Paracetamol")
+        self.assertEqual(dolo["name_source"], "catalog")
+        self.assertEqual(dolo["drug_name_raw"], "Dolo")
+        self.assertEqual(pana["drug_name"], "Paracetamol")
+        self.assertEqual(pana["drug_name_raw"], "Panacetamol")
+        self.assertEqual(unk["name_source"], "verbatim")
+        self.assertTrue(unk["flags"])
 
 
-class DecodePagesTests(SimpleTestCase):
-    def test_skips_malformed_and_decodes_valid(self):
-        good = "data:image/png;base64,aGVsbG8="  # "hello"
-        out = V._decode_pages([good, "garbage", None, ""])
-        self.assertEqual(out, [b"hello"])
+class DrugCandidateMapTests(SimpleTestCase):
+    def test_seed_gives_standalone_resolution(self):
+        c = V._drug_candidate_map([], seed_name_pairs())
+        self.assertEqual(c["dolo"], "Paracetamol")
+        self.assertEqual(c["panacetamol"], "Paracetamol")
+        self.assertEqual(c["paracetamol"], "Paracetamol")
+
+    def test_catalog_name_overrides_seed(self):
+        c = V._drug_candidate_map(
+            [{"name": "Dolo 650", "generic_name": "Paracetamol"}],
+            [("dolo", "Paracetamol"), ("paracetamol", "Paracetamol")],
+        )
+        self.assertEqual(c["dolo 650"], "Dolo 650")     # catalog name added
+        self.assertEqual(c["paracetamol"], "Paracetamol")  # seed alias kept
 
 
 class AliasTableTests(SimpleTestCase):
@@ -321,6 +338,77 @@ class AliasTableTests(SimpleTestCase):
         d = dict(alias_pairs())
         self.assertEqual(d.get("pcm"), "paracetamol")
         self.assertEqual(d.get("azithro"), "azithromycin")
+
+    def test_seed_name_pairs_are_cased_canonicals(self):
+        d = dict(seed_name_pairs())
+        self.assertEqual(d.get("panacetamol"), "Paracetamol")
+        self.assertEqual(d.get("azithromicin"), "Azithromycin")
+        self.assertEqual(d.get("dolo"), "Paracetamol")
+        for surface, canon in seed_name_pairs():
+            self.assertEqual(surface, surface.lower())
+            self.assertTrue(surface and canon)
+
+
+class DecodePagesTests(SimpleTestCase):
+    def test_skips_malformed_and_decodes_valid(self):
+        good = "data:image/png;base64,aGVsbG8="  # "hello"
+        out = V._decode_pages([good, "garbage", None, ""])
+        self.assertEqual(out, [b"hello"])
+
+
+# ── recognition: frequency / sig shorthand ───────────────────────────────
+
+class FreqFromTextTests(SimpleTestCase):
+    def test_blank(self):
+        self.assertEqual(R._freq_from_text(""), (None, None))
+        self.assertEqual(R._freq_from_text("after food"), (None, None))
+
+    def test_plain_enums(self):
+        for s, e in [("bd", "bd"), ("BID", "bd"), ("tds", "td"), ("tid", "td"),
+                     ("qid", "qid"), ("od", "od"), ("qd", "od"), ("hs", "nocte"),
+                     ("nocte", "nocte"), ("sos", "sos"), ("prn", "sos"), ("stat", "stat")]:
+            self.assertEqual(R._freq_from_text(s)[0], e, s)
+
+    def test_grids_and_words(self):
+        self.assertEqual(R._freq_from_text("1-0-1")[0], "bd")
+        self.assertEqual(R._freq_from_text("1-1-1")[0], "td")
+        self.assertEqual(R._freq_from_text("twice daily")[0], "bd")
+        self.assertEqual(R._freq_from_text("thrice a day")[0], "td")
+        self.assertEqual(R._freq_from_text("once a day")[0], "od")
+
+    def test_n_daily_including_misreads(self):
+        self.assertEqual(R._freq_from_text("2 daily")[0], "bd")
+        self.assertEqual(R._freq_from_text("2donly")[0], "bd")   # "2 daily" misread
+        self.assertEqual(R._freq_from_text("3daly")[0], "td")
+        self.assertEqual(R._freq_from_text("2x")[0], "bd")
+
+    def test_does_not_eat_duration(self):
+        self.assertEqual(R._freq_from_text("3 days")[0], None)
+        self.assertEqual(R._freq_from_text("x 5 days")[0], None)
+
+
+class ParseJsonFreqRecoveryTests(SimpleTestCase):
+    def test_recovers_frequency_from_instructions_and_strips_it(self):
+        out = R._parse_json(
+            '{"prescription": [{"drug_name": "Paracetamol", "dosage": "500 mg",'
+            ' "frequency": "", "duration_days": 3, "instructions": "2donly after food"}]}')
+        it = out["prescription"][0]
+        self.assertEqual(it["frequency"], "bd")
+        self.assertFalse(it["frequency_defaulted"])
+        self.assertNotIn("2donly", it["instructions"])
+        self.assertIn("after food", it["instructions"])
+        self.assertTrue(any("frequency read from instructions" in f for f in it["flags"]))
+
+    def test_normalises_grid_frequency(self):
+        out = R._parse_json('{"prescription": [{"drug_name": "X", "dosage": "1 tab", "frequency": "1-0-1", "duration_days": 5}]}')
+        self.assertEqual(out["prescription"][0]["frequency"], "bd")
+
+    def test_still_defaults_when_nothing_found(self):
+        out = R._parse_json('{"prescription": [{"drug_name": "X", "dosage": "1 tab", "frequency": "", "duration_days": 5, "instructions": "with milk"}]}')
+        it = out["prescription"][0]
+        self.assertEqual(it["frequency"], "od")
+        self.assertTrue(it["frequency_defaulted"])
+        self.assertIn("with milk", it["instructions"])
 
 
 # ── views: investigation-name resolution ──────────────────────────────────

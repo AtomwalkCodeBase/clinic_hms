@@ -2229,10 +2229,23 @@ export default function EncounterPage() {
     // note. Below the threshold we do NOT auto-fill the SOAP fields — the
     // doctor is pointed at "View text" to read it and copy anything useful by
     // hand, rather than have low-trust text land silently in the record.
-    const noteLowConf = !!note && note.status === "done" &&
-      typeof note.confidence === "number" && note.confidence < HW_LOW_CONFIDENCE;
+    const lowConf = (t) => !!t && t.status === "done" &&
+      typeof t.confidence === "number" && t.confidence < HW_LOW_CONFIDENCE;
+    const noteLowConf = lowConf(note);
+    const noteOk = !!note && note.status === "done" && !noteLowConf;
+    const rxOk   = !!rx   && rx.status === "done"   && !lowConf(rx);
+    // The Internal-Note tab is the SOAP source. But doctors often write a bit
+    // of clinical context on the Prescription page too — pull those "soft"
+    // fields from the rx tab when the note tab didn't supply them. Assessment
+    // / Plan / diagnoses stay note-tab-only.
+    const SOFT = new Set(["subjective", "objective", "investigations", "advice"]);
+    const pick = (src) => {
+      const nv = noteOk ? (note[src] || "").trim() : "";
+      if (nv) return nv;
+      return (rxOk && SOFT.has(src)) ? (rx[src] || "").trim() : "";
+    };
 
-    if (note && note.status === "done" && !noteLowConf) {
+    if (noteOk || rxOk) {
       const map = [
         ["subjective", "subjective"], ["objective", "objective"],
         ["assessment", "assessment"], ["plan", "plan"],
@@ -2242,7 +2255,7 @@ export default function EncounterPage() {
         const m = { ...prev };
         const before = { set, changed };
         for (const [src, field] of map) {
-          const inc = (note[src] || "").trim();
+          const inc = pick(src);
           if (!inc) continue;
           const cur = (prev[field] || "").trim();
           if (!cur || cur === (snap[field] || "")) { m[field] = inc; set++; }
@@ -2255,7 +2268,7 @@ export default function EncounterPage() {
         // screen for the doctor to re-file, instead of only living behind
         // "View text".
         if (set === before.set && changed === before.changed) {
-          const raw = (note.raw_text || "").trim();
+          const raw = ((noteOk && note.raw_text) || (rxOk && rx.raw_text) || "").trim();
           const cur = (prev.subjective || "").trim();
           if (raw && (!cur || cur === (snap.subjective || ""))) {
             m.subjective = raw;
@@ -2263,7 +2276,9 @@ export default function EncounterPage() {
             set++;
           }
         }
-        const fu = note.follow_up_days;
+        const fu = (noteOk && note.follow_up_days != null && note.follow_up_days !== "")
+          ? note.follow_up_days
+          : (rxOk ? rx.follow_up_days : null);
         if (fu != null && fu !== "") {
           const cur = String(prev.follow_up_in_days || "").trim();
           if (!cur || cur === (snap.follow_up_in_days || "")) { m.follow_up_in_days = String(fu); set++; }
@@ -2274,7 +2289,8 @@ export default function EncounterPage() {
 
       // Diagnoses are staged for review (same as Rx) — a hallucinated
       // diagnosis or a wrong ICD code must not land on the record unseen.
-      const dxIn = Array.isArray(note.diagnoses) ? note.diagnoses : [];
+      // Note-tab only; the prescription page isn't a diagnosis source.
+      const dxIn = (noteOk && Array.isArray(note.diagnoses)) ? note.diagnoses : [];
       if (dxIn.length) {
         const haveDx = new Set([
           ...diagnoses.map(d => _normName(d.description)),

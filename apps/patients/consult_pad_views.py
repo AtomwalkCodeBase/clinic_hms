@@ -61,9 +61,10 @@ def _age_years(dob):
 # frequency, route and duration are never touched, and the doctor still
 # reviews every row before signing. `drug_name_raw` keeps what was read so
 # the encounter screen can show "read X -> matched Y".
-_DRUG_MATCH_MIN = 85   # rapidfuzz WRatio; below this we leave the name alone
-_DRUG_MATCH_GAP = 6    # winner must beat the runner-up by at least this much
-_DRUG_MIN_LEN = 5      # don't fuzzy-match short tokens / abbreviations (e.g. "pcm")
+_DRUG_MATCH_MIN = 85     # rapidfuzz WRatio; below this we leave the name alone
+_DRUG_MATCH_GAP = 6      # winner must beat the next DIFFERENT drug by at least this
+_DRUG_MATCH_STRONG = 90  # a hit this good is accepted even without the gap
+_DRUG_MIN_LEN = 5        # don't fuzzy-match short tokens / abbreviations (e.g. "pcm")
 _RX_FORM_WORDS = {
     "tab", "tabs", "tablet", "tablets", "cap", "caps", "capsule", "capsules",
     "syp", "syr", "syrup", "susp", "suspension", "inj", "injection", "amp",
@@ -138,37 +139,67 @@ def _resolve_item_name(it, candidates, keys, process, fuzz):
         it["name_source"] = "catalog"
         return
 
-    # Fuzzy: only for tokens long enough to be meaningful, and only when the
-    # top hit is both strong and clearly ahead of the runner-up. Anything
-    # weaker is left exactly as written and flagged for the doctor rather than
-    # silently rewritten to a look-alike.
+    # Fuzzy: only for tokens long enough to be meaningful. Accept when the top
+    # hit is either near-exact (>= _DRUG_MATCH_STRONG) or clearly ahead of the
+    # next DIFFERENT drug (>= _DRUG_MATCH_GAP). Runner-ups that resolve to the
+    # same canonical (e.g. "Paracetamol" vs "Paracetamol Syrup" sharing the
+    # generic, or a brand alias) don't count as competition. Weaker matches
+    # are left verbatim and flagged for the doctor.
     if len(probe) < _DRUG_MIN_LEN:
         it["flags"].append("not found in catalog — check the name")
         return
-    hits = process.extract(probe, keys, scorer=fuzz.WRatio, limit=2)
-    s1 = hits[0][1] if hits else 0
-    s2 = hits[1][1] if len(hits) > 1 else 0
-    if hits and s1 >= _DRUG_MATCH_MIN and (s1 - s2) >= _DRUG_MATCH_GAP:
-        canon = candidates[hits[0][0]]
-        if canon.lower() != raw.lower():
-            it["drug_name"] = canon
+    hits = process.extract(probe, keys, scorer=fuzz.WRatio, limit=8)
+    if not hits or hits[0][1] < _DRUG_MATCH_MIN:
+        it["flags"].append("not found in catalog — check the name")
+        return
+    s1 = hits[0][1]
+    win_canon = candidates[hits[0][0]]
+    rival = next((sc for (k, sc, *_ ) in hits[1:] if candidates.get(k) != win_canon), 0)
+    if s1 >= _DRUG_MATCH_STRONG or (s1 - rival) >= _DRUG_MATCH_GAP:
+        if win_canon.lower() != raw.lower():
+            it["drug_name"] = win_canon
         it["name_source"] = "catalog_fuzzy"
         it["flags"].append(f'best-guess match for "{raw}" — confirm')
     else:
         it["flags"].append("not found in catalog — check the name")
 
 
+def _drug_candidate_map(catalog_rows, seed_iter):
+    """Build {probe_lower: canonical drug name}. `seed_iter` is
+    (surface_lower, canonical) from consult_pad_drug_aliases.seed_name_pairs()
+    — the standalone base, so drug names still resolve when the tenant has no
+    Drug catalog. `catalog_rows` (dicts with "name"/"generic_name") are layered
+    on top and win for spelling — a clinic that stocks "Dolo 650" gets that
+    exact string. Pure (no DB / no network)."""
+    candidates = {}
+    for surface, canon in seed_iter or []:
+        surface = (surface or "").strip().lower()
+        canon = (canon or "").strip()
+        if surface and canon:
+            candidates.setdefault(surface, canon)
+    for r in catalog_rows or []:
+        canon = (r.get("name") or "").strip()
+        if not canon:
+            continue
+        candidates[canon.lower()] = canon            # catalog overrides the seed
+        gen = (r.get("generic_name") or "").strip().lower()
+        if gen:
+            candidates.setdefault(gen, canon)
+    return candidates
+
+
 def _normalise_rx_against_catalog(recognized: dict, tenant_id):
     """Mutate recognized['prescription'] in place: canonicalise each drug_name
-    against the tenant's Drug catalog (enriched with shorthand aliases).
-    Best-effort — any failure leaves the names exactly as recognised."""
+    against a standard drug-name table (consult_pad_drug_aliases), enriched
+    with the tenant's own Drug catalog when it has one. Best-effort — any
+    failure leaves the names exactly as recognised."""
     items = recognized.get("prescription") or []
     if not items:
         return
 
     # Make sure every item carries these keys even if we bail out early below
-    # (no catalog, rapidfuzz missing, tenant lookup fails) so the encounter
-    # page's review panel renders consistently.
+    # (rapidfuzz missing) so the encounter page's review panel renders
+    # consistently.
     for it in items:
         it.setdefault("drug_name_raw", (it.get("drug_name") or "").strip())
         it.setdefault("name_source", "verbatim")
@@ -178,30 +209,29 @@ def _normalise_rx_against_catalog(recognized: dict, tenant_id):
         from rapidfuzz import process, fuzz
     except Exception:
         return
-    try:
-        from apps.tenants.models import Tenant
-        tenant = Tenant.objects.using("default").filter(pk=tenant_id).first()
-    except Exception:
-        return
-    if not tenant:
-        return
-    try:
-        from apps.prescriptions.models import Drug
-        rows = list(Drug.objects.using(tenant.db_name)
-                    .filter(is_active=True).values("name", "generic_name"))
-    except Exception:
-        logger.debug("consult-pad: drug catalog unavailable for %s", tenant.db_name, exc_info=True)
-        return
-    if not rows:
-        return
+
+    # Tenant Drug catalog — nice-to-have, not required. Any failure (no
+    # tenant, DB down, empty catalog) just leaves catalog_rows empty and the
+    # seed table does the work.
+    catalog_rows = []
+    if tenant_id:
+        try:
+            from apps.tenants.models import Tenant
+            tenant = Tenant.objects.using("default").filter(pk=tenant_id).first()
+            if tenant:
+                from apps.prescriptions.models import Drug
+                catalog_rows = list(Drug.objects.using(tenant.db_name)
+                                    .filter(is_active=True).values("name", "generic_name"))
+        except Exception:
+            logger.debug("consult-pad: drug catalog unavailable for tenant %s — seed table only", tenant_id)
 
     try:
-        from apps.patients.consult_pad_drug_aliases import alias_pairs
-        alias_iter = list(alias_pairs())
+        from apps.patients.consult_pad_drug_aliases import seed_name_pairs
+        seed_iter = list(seed_name_pairs())
     except Exception:
-        alias_iter = None
+        seed_iter = []
 
-    candidates = _candidate_map(rows, alias_iter)
+    candidates = _drug_candidate_map(catalog_rows, seed_iter)
     keys = list(candidates)
     for it in items:
         _resolve_item_name(it, candidates, keys, process, fuzz)
