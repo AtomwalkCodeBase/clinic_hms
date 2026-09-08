@@ -24,6 +24,7 @@ Design choices:
 """
 
 import base64
+import hashlib
 import io
 import json
 import logging
@@ -101,7 +102,7 @@ _USER_TEXT = "Read this handwritten consultation note and return the JSON descri
 # Note tab; telling the model which one it's looking at improves accuracy and
 # stops it hallucinating drugs into a plain note (or vice versa).
 _FOCUS_HINT = {
-    "rx": " This page is PRIMARILY THE PRESCRIPTION: fill the `prescription` array with every medication written. Doctors often also jot a little clinical context on the same page — if any is present, still capture it: symptoms/history -> `subjective`, measured vitals or exam findings -> `objective`, non-drug advice (rest, fluids, diet, warning signs) -> `advice`, lab/imaging ordered -> `investigations`, review interval -> `follow_up_days`. Leave `assessment`, `plan` and `diagnoses` empty unless a diagnosis is clearly written.",
+    "rx": " This page is PRIMARILY THE PRESCRIPTION: fill the `prescription` array with every medication written. Doctors also write clinical context on the same page — capture everything that IS written: symptoms/history -> `subjective`, measured vitals or exam findings -> `objective`, the diagnosis / clinical impression if one is written -> `assessment` (and `diagnoses`), the non-drug plan — advice, rest, fluids, follow-up, tests ordered -> `plan` / `advice` / `investigations` / `follow_up_days`. Do NOT repeat the medication lines inside `plan`; those go ONLY in `prescription`. Do not invent an assessment or plan that is not written.",
     "note": " This is a CLINICAL NOTE page with NO prescription: fill the SOAP fields, `diagnoses`, `investigations`, `advice` and `follow_up_days`, and leave `prescription` empty.",
     "all": "",
 }
@@ -186,11 +187,16 @@ def _strip_span(s: str, frag: str) -> str:
 
 # ── Local pixel pre-check ────────────────────────────────────────────────────
 # Runs before any API call. A pen/finger stroke on the white pad is near-black;
-# this lets us answer "is the page blank / barely-written?" ourselves instead
-# of paying for a vision call and then trusting the model's self-report.
+# this lets us answer "is this page blank?" ourselves instead of paying for a
+# vision call and then trusting the model's self-report.
 _INK_LUMA_MAX = 200          # greyscale value at/below which a pixel counts as ink
-_BLANK_INK_FRACTION = 0.0025  # below this on every page → treat as blank, skip the model
-_SPARSE_INK_FRACTION = 0.010  # mean below this (but not blank) → cap confidence
+# Only a canvas essentially untouched by pen falls below this. A page with even
+# a few scrawled words sits well clear of it, so a real (if sparse) note is
+# never mistaken for blank and dropped. Kept deliberately low: a genuine note
+# in a light hand should still reach the model (and get its confidence capped
+# by _SPARSE_INK_FRACTION), not be discarded here.
+_BLANK_INK_FRACTION = 0.0006
+_SPARSE_INK_FRACTION = 0.010  # mean over the written pages below this → cap confidence
 
 
 def _ink_fraction(png_bytes: bytes) -> float:
@@ -209,14 +215,48 @@ def _ink_fraction(png_bytes: bytes) -> float:
         return 1.0
 
 
-def _blankness(page_images: list) -> tuple:
-    """(_all_blank, _sparse) from local pixel inspection only."""
+def _partition_pages(page_images: list) -> tuple:
+    """(written_pages, blank_page_numbers) from local pixel inspection.
+
+    A sheet the patient never wrote on — an extra page added by accident, a
+    trailing empty page — is dropped here so it can't sink a note that WAS
+    written on the other pages. Only when every page is blank does the caller
+    treat the whole load as empty.
+    """
+    written, blank_nums = [], []
+    for idx, png in enumerate(page_images):
+        if _ink_fraction(png) >= _BLANK_INK_FRACTION:
+            written.append(png)
+        else:
+            blank_nums.append(idx + 1)
+    return written, blank_nums
+
+
+def _is_sparse(page_images: list) -> bool:
+    """True when the written pages carry, on average, very little ink — a real
+    note in a light hand: cap the model's confidence rather than trust it."""
+    if not page_images:
+        return False
     fracs = [_ink_fraction(p) for p in page_images]
-    if not fracs:
-        return True, True
-    all_blank = all(f < _BLANK_INK_FRACTION for f in fracs)
-    sparse = (sum(fracs) / len(fracs)) < _SPARSE_INK_FRACTION
-    return all_blank, sparse
+    return (sum(fracs) / len(fracs)) < _SPARSE_INK_FRACTION
+
+
+# A per-page transcription that is really just the model saying "nothing here".
+# Dropped from the joined text so one such page can't drag a multi-page note
+# into a false "not a clinical note".
+_BLANKISH_TRANSCRIPTION_RE = re.compile(
+    r"^[\s\W]*(?:\[?\s*(?:blank(?:\s+page)?|empty|illegible|"
+    r"no(?:thing)?(?:\s+(?:text|writing|content|written|here|visible))*|"
+    r"this\s+page\s+(?:is|appears\s+(?:to\s+be\s+)?)\s*blank)\s*\]?[.\s]*)+$",
+    re.I,
+)
+
+
+def _looks_blank_transcription(text: str) -> bool:
+    t = (text or "").strip()
+    if len(re.sub(r"[^0-9A-Za-z]+", "", t)) < 3:
+        return True
+    return bool(_BLANKISH_TRANSCRIPTION_RE.match(t))
 
 
 # ── Dose sanity ─────────────────────────────────────────────────────────────
@@ -390,15 +430,20 @@ def _post_chat(payload: dict) -> str:
     key = settings.CONSULT_PAD_LLM_KEY
     url = settings.CONSULT_PAD_LLM_BASE.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    _MAX_TRIES = 6
+    # Recognition is serialised per session (one call at a time), so a single
+    # request can afford a few honest retries against the provider's small
+    # per-minute budget. Kept bounded so a hard quota wall still surfaces as
+    # `failed` (→ "type it in") rather than hanging; the doctor's Load button
+    # auto-polls, so a slow success is fine.
+    _MAX_TRIES = 5
     resp = None
     for attempt in range(_MAX_TRIES):
-        resp = requests.post(url, json=payload, headers=headers, timeout=120)
+        resp = requests.post(url, json=payload, headers=headers, timeout=60)
         if resp.status_code == 400 and "response_format" in resp.text:
             payload.pop("response_format", None)
             continue
         if resp.status_code in (429, 413) and attempt < _MAX_TRIES - 1:
-            wait = int(resp.headers.get("retry-after") or 0) or (12 * (attempt + 1))
+            wait = min(20, int(resp.headers.get("retry-after") or 0) or (5 * (attempt + 1)))
             logger.warning("consult-pad LLM rate-limited (%s) — retry %d/%d in %ss",
                            resp.status_code, attempt + 1, _MAX_TRIES - 1, wait)
             time.sleep(wait)
@@ -412,7 +457,7 @@ def _transcribe_page(png_bytes: bytes) -> str:
     """One page image -> plain verbatim text (one request, fits a small TPM)."""
     return _post_chat({
         "model": settings.CONSULT_PAD_LLM_MODEL,
-        "max_tokens": 2000,
+        "max_tokens": 1200,
         "temperature": 0,
         "messages": [
             {"role": "system", "content": _TRANSCRIBE_SYS},
@@ -428,7 +473,7 @@ def _structure_text(full_text: str, focus: str = "all") -> dict:
     """Joined transcription -> the structured SOAP/Dx/Rx JSON (text-only call)."""
     content = _post_chat({
         "model": settings.CONSULT_PAD_LLM_MODEL,
-        "max_tokens": 4000,
+        "max_tokens": 2500,
         "temperature": 0,
         "response_format": {"type": "json_object"},
         "messages": [
@@ -441,88 +486,105 @@ def _structure_text(full_text: str, focus: str = "all") -> dict:
     return out
 
 
-def recognise(page_images: list, *, focus: str = "all") -> dict:
+def _page_key(png_bytes: bytes) -> str:
+    return hashlib.sha1(png_bytes).hexdigest()
+
+
+def recognise(page_images: list, *, focus: str = "all", page_text_cache: dict | None = None) -> dict:
     """
     page_images: list of raw PNG byte strings, in page order.
     focus: "all" | "rx" | "note" — which consult-session tab these pages are.
+    page_text_cache: {sha1(png): verbatim_text} from a PRIOR compile of this
+        tab. Pages whose bytes are unchanged are reused from here and cost no
+        model call — so a re-load after the doctor "adds something" only
+        transcribes the NEW pages, then re-structures the whole note. The
+        result carries an updated cache back under recognized["_page_texts"].
 
     Returns {"status": "done" | "empty" | "skipped" | "failed",
              "recognized": {subjective, objective, assessment, plan, raw_text,
                             diagnoses, prescription, investigations, advice,
-                            follow_up_days, is_clinical_note, confidence},
+                            follow_up_days, is_clinical_note, confidence,
+                            _page_texts},
              "error": ""}.
-    "empty" means the pages were blank / unreadable / not a clinical note —
-    nothing to load, and the encounter page says so instead of silently
-    filling nothing.
+    "empty" means the pages were blank / unreadable / not a clinical note.
     Never raises — a recognition failure must not lose the handwritten note.
-
-    One page  -> a single image->JSON call (fast).
-    Many pages -> transcribe each page on its own (so no single request blows
-    the provider's per-minute token budget), then one text-only structuring
-    call over the joined transcription.
     """
     key = settings.CONSULT_PAD_LLM_KEY
+    cache_in = dict(page_text_cache or {})
     if not key:
         return {"status": "skipped", "recognized": dict(_EMPTY), "error": ""}
     if not page_images:
         return {"status": "failed", "recognized": dict(_EMPTY), "error": "no pages"}
 
-    # Local pixel pre-check — a blank pad never reaches the model.
-    all_blank, sparse_ink = _blankness(page_images)
-    if all_blank:
-        logger.info("consult-pad recognition: pages blank on pixel check (pages=%d) — skipped model",
+    # Local pixel pre-check. Drop any sheet with essentially no pen on it, so
+    # one stray blank page can't sink a note written on the others. Only when
+    # every page is blank is the whole load "empty".
+    written_pages, blank_page_nums = _partition_pages(page_images)
+    if not written_pages:
+        logger.info("consult-pad recognition: all %d page(s) blank on pixel check — skipped model",
                     len(page_images))
-        return {"status": "empty", "recognized": dict(_EMPTY), "error": ""}
+        return {"status": "empty", "recognized": dict(_EMPTY, _page_texts={}), "error": ""}
+
+    sparse_ink = _is_sparse(written_pages)
+    blank_note = ""
+    if blank_page_nums:
+        nums = ", ".join(map(str, blank_page_nums))
+        blank_note = (
+            f"Page{'' if len(blank_page_nums) == 1 else 's'} {nums} "
+            f"{'was' if len(blank_page_nums) == 1 else 'were'} blank and skipped."
+        )
+        logger.info("consult-pad recognition: skipped %d blank page(s) of %d (pages %s)",
+                    len(blank_page_nums), len(page_images), nums)
+    page_images = written_pages
 
     try:
         page_warnings = ""
-        if len(page_images) == 1:
-            content = _post_chat({
-                "model": settings.CONSULT_PAD_LLM_MODEL,
-                "max_tokens": 4000,
-                "temperature": 0,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": _SYSTEM},
-                    {"role": "user", "content": [
-                        {"type": "image_url", "image_url": {"url": _prep_image(page_images[0])}},
-                        {"type": "text", "text": _USER_TEXT + _FOCUS_HINT.get(focus, "")},
-                    ]},
-                ],
-            })
-            recognized = _parse_json(content)
-            if not recognized["raw_text"]:
-                recognized["raw_text"] = "\n".join(
-                    recognized[k] for k in ("subjective", "objective", "assessment", "plan") if recognized[k]
-                )
-        else:
-            # Per-page transcription is resilient: one page failing must not
-            # discard the pages that read fine.
-            page_texts, failed_pages = [], []
-            for idx, png in enumerate(page_images):
-                try:
-                    page_texts.append(_transcribe_page(png))
-                except Exception:
-                    logger.warning("consult-pad: page %d/%d transcription failed",
-                                   idx + 1, len(page_images), exc_info=True)
-                    failed_pages.append(idx + 1)
-                    page_texts.append("")
-                if idx < len(page_images) - 1:
-                    time.sleep(4)  # space requests so rate-limit retries stay rare
-            full = "\n\n".join(t for t in page_texts if t).strip()
-            if not full:
-                if failed_pages:
-                    return {"status": "failed", "recognized": dict(_EMPTY),
-                            "error": "all pages unreadable"}
-                return {"status": "empty", "recognized": dict(_EMPTY), "error": ""}
-            recognized = _structure_text(full, focus=focus)
-            if failed_pages:
-                page_warnings = (
-                    f"{len(failed_pages)} of {len(page_images)} page(s) could not be read "
-                    f"(page {', '.join(map(str, failed_pages))}) — load again or add them by hand."
-                )
+        # Per-page transcription, cache-aware. An unchanged page is free; only
+        # new/edited pages hit the model. One failing page never discards the
+        # rest. `cache_out` keeps only the pages present now, so it can't grow
+        # without bound across reloads.
+        page_texts, failed_pages, cache_out, calls_made = [], [], {}, 0
+        for idx, png in enumerate(page_images):
+            h = _page_key(png)
+            cached = cache_in.get(h)
+            if cached is not None:
+                page_texts.append("" if _looks_blank_transcription(cached) else cached)
+                cache_out[h] = cached
+                continue
+            if calls_made and idx < len(page_images):
+                time.sleep(4)  # space real requests so rate-limit retries stay rare
+            try:
+                txt = _transcribe_page(png)
+                calls_made += 1
+                cache_out[h] = txt
+                page_texts.append("" if _looks_blank_transcription(txt) else txt)
+            except Exception:
+                logger.warning("consult-pad: page %d/%d transcription failed",
+                               idx + 1, len(page_images), exc_info=True)
+                failed_pages.append(idx + 1)
+                page_texts.append("")
 
-        recognized["page_warnings"] = page_warnings
+        full = "\n\n".join(t for t in page_texts if t).strip()
+        if not full:
+            if failed_pages:
+                return {"status": "failed", "recognized": dict(_EMPTY, _page_texts=cache_out),
+                        "error": "all pages unreadable"}
+            return {"status": "empty", "recognized": dict(_EMPTY, _page_texts=cache_out), "error": ""}
+        recognized = _structure_text(full, focus=focus)
+        # We transcribed real text off the page ourselves. A text-only
+        # structuring pass that then reports "not a clinical note" is overruled
+        # — worst case the doctor gets the raw transcription to read, which
+        # beats a false "pages look blank".
+        if len(full) >= _MIN_MEANINGFUL_CHARS:
+            recognized["is_clinical_note"] = True
+        if failed_pages:
+            page_warnings = (
+                f"{len(failed_pages)} of {len(page_images)} page(s) could not be read "
+                f"(page {', '.join(map(str, failed_pages))}) — load again or add them by hand."
+            )
+
+        recognized["_page_texts"] = cache_out
+        recognized["page_warnings"] = " ".join(p for p in (blank_note, page_warnings) if p)
         if sparse_ink:
             # Barely anything on the page — don't let a confident-sounding model
             # push it past the encounter page's low-confidence gate.
@@ -541,4 +603,8 @@ def recognise(page_images: list, *, focus: str = "all") -> dict:
         return {"status": "done", "recognized": recognized, "error": ""}
     except Exception as exc:  # noqa: BLE001 — must never propagate
         logger.exception("consult-pad recognition failed")
-        return {"status": "failed", "recognized": dict(_EMPTY), "error": str(exc)[:500]}
+        try:
+            keep = cache_out  # type: ignore[name-defined]
+        except NameError:
+            keep = {}
+        return {"status": "failed", "recognized": dict(_EMPTY, _page_texts=keep), "error": str(exc)[:500]}

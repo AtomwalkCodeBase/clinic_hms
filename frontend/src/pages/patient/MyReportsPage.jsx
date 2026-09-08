@@ -14,7 +14,7 @@
 import { useMemo, useRef, useState } from "react";
 import {
   FileText, Pill, FlaskConical, HelpCircle, ShieldCheck, X, Download,
-  Tag, Trash2, EyeOff, Camera, QrCode, Upload, FolderUp, Plus, Search, CheckSquare,
+  Tag, Trash2, PenLine, Camera, QrCode, Upload, FolderUp, Plus, Search, CheckSquare, SlidersHorizontal,
 } from "lucide-react";
 import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -27,6 +27,13 @@ import { openDataUrlInNewTab } from "../../utils/fileViewer";
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // matches the backend's single-upload guard
 const OK_EXT = /\.(pdf|jpe?g|png)$/i;
+// Folder upload uses the OS "pick a directory" dialog, which happily lets you
+// choose a whole drive. These bound what the modal will actually take on:
+// past HARD_PICK_LIMIT it's a drive, not a reports folder; the others cap one
+// Add session so the browser isn't asked to base64 hundreds of MB in a loop.
+const HARD_PICK_LIMIT = 1500;
+const MAX_UPLOAD_FILES = 200;
+const MAX_TOTAL_BYTES = 200 * 1024 * 1024;
 
 const TYPE_META = {
   prescription: { tag: "RX", label: "Prescription", Icon: Pill },
@@ -69,6 +76,23 @@ function fmtDate(iso) {
 function fmtShort(iso) {
   if (!iso) return "";
   return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}
+function monthOf(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return { key: "0000-00", label: "—" };
+  return {
+    key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+    label: d.toLocaleDateString("en-IN", { month: "long", year: "numeric" }),
+  };
+}
+function inRange(iso, from, to) {
+  if (!from && !to) return true;
+  const d = new Date(iso);
+  if (isNaN(d)) return true;
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  if (from && day < from) return false;
+  if (to && day > to) return false;
+  return true;
 }
 
 /* ─────────────────────────────────────────────────────────── one row */
@@ -143,14 +167,15 @@ function DetailModal({ doc, onClose, onChanged }) {
   const m = TYPE_META[doc.doc_type] || TYPE_META.other;
   const hospital = !!doc.source_tenant_id || doc.uploaded_by === "staff";
 
-  async function view(download) {
+  async function view(download, docId = doc.id) {
     const win = window.open("", "_blank");
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { params: download ? { download: 1 } : {} });
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(docId), { params: download ? { download: 1 } : {} });
       const fd = (res.data?.data || res.data)?.file_data;
       if (fd) openDataUrlInNewTab(win, fd); else win?.close();
     } catch (err) { win?.close(); toastApiError(err, "Could not open the file."); }
   }
+  const hasHandwritten = !!doc.handwritten_doc_id;
   async function move(type) {
     setBusy(true);
     try {
@@ -168,7 +193,7 @@ function DetailModal({ doc, onClose, onChanged }) {
     setBusy(true);
     try {
       await apiClient.delete(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id));
-      toastSuccess(hospital ? "Hidden from your reports." : "Deleted.");
+      toastSuccess("Deleted from your reports.");
       onChanged(); onClose();
     } catch (err) { toastApiError(err, "Could not remove."); } finally { setBusy(false); }
   }
@@ -205,11 +230,18 @@ function DetailModal({ doc, onClose, onChanged }) {
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn-primary" style={{ flex: 1 }} onClick={() => view(false)}><Download size={15} /> View / Download</button>
+            <button className="btn-primary" style={{ flex: 1 }} onClick={() => view(false)}>
+              <Download size={15} /> {hasHandwritten ? "View / Download prescription" : "View / Download"}
+            </button>
             {doc.verification_status !== "verified" && (
               <button className="btn-outline" style={{ flex: 1 }} disabled={busy} onClick={() => setRecat(v => !v)}><Tag size={15} /> Re-categorise</button>
             )}
           </div>
+          {hasHandwritten && (
+            <button className="btn-outline" onClick={() => view(false, doc.handwritten_doc_id)}>
+              <PenLine size={15} /> View / Download handwritten
+            </button>
+          )}
           {recat && (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: 10, background: "var(--color-bg)", borderRadius: 8 }}>
               <span style={{ width: "100%", fontSize: 12, color: "var(--color-text-muted)" }}>Move to</span>
@@ -218,11 +250,11 @@ function DetailModal({ doc, onClose, onChanged }) {
             </div>
           )}
           <button className="btn-outline" style={{ color: "var(--color-danger)", borderColor: "var(--color-danger)" }} disabled={busy} onClick={remove}>
-            {hospital ? <><EyeOff size={15} /> Hide from my reports</> : <><Trash2 size={15} /> Delete</>}
+            <Trash2 size={15} /> Delete from my reports
           </button>
           {hospital && (
             <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
-              Hiding removes it from your list only — the hospital's record is unchanged.
+              Your hospital keeps its own copy for its records. This removes it from your reports and from other hospitals that could otherwise see it.
             </div>
           )}
         </div>
@@ -244,11 +276,42 @@ function AddModal({ onClose, onDone, patientAwpid }) {
   const mob = isMobile();
 
   function stage(fileList) {
-    const arr = Array.from(fileList || []).map(f => ({
-      file: f, name: f.name || "photo.jpg", size: f.size,
-      skip: !(OK_EXT.test(f.name || "") || /^image\/(jpeg|png)$|^application\/pdf$/.test(f.type)),
-    }));
-    if (!arr.length) return;
+    const incoming = Array.from(fileList || []);
+    if (!incoming.length) return;
+
+    // Picking a whole drive (or a huge tree) dumps tens of thousands of files
+    // here — reject it before doing any per-file work.
+    if (incoming.length > HARD_PICK_LIMIT) {
+      toastError(`That selection has ${incoming.length.toLocaleString()} files — that's an entire drive, not a reports folder. Pick the folder that actually holds your prescriptions and reports.`);
+      return;
+    }
+
+    const arr = incoming.map(f => {
+      const badType = !(OK_EXT.test(f.name || "") || /^image\/(jpeg|png)$|^application\/pdf$/.test(f.type));
+      const tooBig = f.size > MAX_FILE_BYTES;
+      return {
+        file: f, name: f.name || "photo.jpg", size: f.size,
+        skip: badType || tooBig,
+        reason: badType ? "not a PDF/image" : tooBig ? "over 5 MB" : "",
+      };
+    });
+
+    const keptSoFar = items.filter(i => !i.skip);
+    const newKept = arr.filter(a => !a.skip);
+    if (!newKept.length) {
+      toastError("None of those are PDFs or images under 5 MB.");
+      return;
+    }
+    if (keptSoFar.length + newKept.length > MAX_UPLOAD_FILES) {
+      toastError(`Up to ${MAX_UPLOAD_FILES} reports at a time — this selection has ${keptSoFar.length + newKept.length}. Choose a smaller folder, or add them in batches.`);
+      return;
+    }
+    const totalBytes = [...keptSoFar, ...newKept].reduce((s, i) => s + (i.size || 0), 0);
+    if (totalBytes > MAX_TOTAL_BYTES) {
+      toastError(`That's ${Math.round(totalBytes / 1024 / 1024)} MB at once — keep it under ${MAX_TOTAL_BYTES / 1024 / 1024} MB and add the rest afterwards.`);
+      return;
+    }
+
     setItems(prev => [...prev, ...arr]);
     setPhase("stage");
   }
@@ -311,7 +374,7 @@ function AddModal({ onClose, onDone, patientAwpid }) {
         {phase === "stage" && (
           <>
             <h3 style={h3}>Review {ready.length} file{ready.length !== 1 ? "s" : ""}</h3>
-            <p style={sub}>{ready.length} ready{skipped ? ` · ${skipped} skipped (not a PDF or image)` : ""}</p>
+            <p style={sub}>{ready.length} ready{skipped ? ` · ${skipped} skipped (not a PDF/image, or over 5 MB)` : ""}</p>
             <div style={{ maxHeight: 300, overflowY: "auto", border: "1px solid var(--color-border)", borderRadius: 8, padding: 4, margin: "10px 0" }}>
               {items.map((it, idx) => (
                 <div key={idx} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", fontSize: 12.5, opacity: it.skip ? 0.5 : 1 }}>
@@ -319,7 +382,7 @@ function AddModal({ onClose, onDone, patientAwpid }) {
                   <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: it.skip ? "line-through" : "none" }}>{it.name}</span>
                   <span style={{ color: "var(--color-text-muted)", fontSize: 11 }}>{(it.size / 1024 / 1024).toFixed(1)} MB</span>
                   {it.skip
-                    ? <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>SKIPPED</span>
+                    ? <span style={{ fontSize: 10, color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>{it.reason ? it.reason.toUpperCase() : "SKIPPED"}</span>
                     : <button onClick={() => setItems(p => p.filter((_, i) => i !== idx))} style={iconBtn}><X size={14} /></button>}
                 </div>
               ))}
@@ -411,6 +474,10 @@ export default function MyReportsPage() {
   const [sel, setSel] = useState(() => new Set());
   const [addOpen, setAddOpen] = useState(false);
   const [detail, setDetail] = useState(null);
+  const [showFilter, setShowFilter] = useState(false);
+  const [dFrom, setDFrom] = useState("");
+  const [dTo, setDTo] = useState("");
+  const dateFilterOn = !!(dFrom || dTo);
 
   const counts = useMemo(() => {
     const c = { all: 0, prescription: 0, lab_report: 0, unsorted: 0 };
@@ -425,17 +492,18 @@ export default function MyReportsPage() {
     const needle = q.trim().toLowerCase();
     return docs
       .filter(d => (tab === "all" ? d.review_state !== "unsorted" : tab === "unsorted" ? d.review_state === "unsorted" : d.doc_type === tab && d.review_state !== "unsorted"))
-      .filter(d => !needle || [d.title, d.hospital_label, d.doctor_label, d.public_document_id].join(" ").toLowerCase().includes(needle));
-  }, [docs, tab, q]);
+      .filter(d => !needle || [d.title, d.hospital_label, d.doctor_label, d.public_document_id].join(" ").toLowerCase().includes(needle))
+      .filter(d => inRange(d.document_date || d.created_at, dFrom, dTo));
+  }, [docs, tab, q, dFrom, dTo]);
 
   const groups = useMemo(() => {
     const map = new Map();
     shown.forEach(d => {
-      const k = fmtDate(d.document_date || d.created_at) || "—";
-      if (!map.has(k)) map.set(k, []);
-      map.get(k).push(d);
+      const { key, label } = monthOf(d.document_date || d.created_at);
+      if (!map.has(key)) map.set(key, { label, list: [] });
+      map.get(key).list.push(d);
     });
-    return [...map.entries()];
+    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([, v]) => v);
   }, [shown]);
 
   function toggleSel(id) {
@@ -496,12 +564,35 @@ export default function MyReportsPage() {
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name, hospital, doctor, ID"
               style={{ border: "none", outline: "none", background: "none", width: "100%" }} />
           </label>
+          <button className="btn-outline" onClick={() => setShowFilter(v => !v)}
+            style={dateFilterOn ? { borderColor: "var(--color-primary)", color: "var(--color-primary)" } : undefined}>
+            <SlidersHorizontal size={14} /> Filter{dateFilterOn ? " ·1" : ""}
+          </button>
           {tab !== "unsorted" && (
             <button className="btn-outline" onClick={() => { setPicking(p => !p); setSel(new Set()); }}>
               <CheckSquare size={14} /> {picking ? "Cancel" : "Select"}
             </button>
           )}
         </div>
+
+        {showFilter && (
+          <div className="card" style={{ padding: "12px 14px", marginBottom: 12, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--color-text-muted)" }}>
+              Date from
+              <input type="date" className="form-input" value={dFrom} max={dTo || undefined}
+                onChange={e => setDFrom(e.target.value)} style={{ padding: "6px 10px" }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--color-text-muted)" }}>
+              Date to
+              <input type="date" className="form-input" value={dTo} min={dFrom || undefined}
+                onChange={e => setDTo(e.target.value)} style={{ padding: "6px 10px" }} />
+            </label>
+            {dateFilterOn && (
+              <button className="btn-outline" style={{ fontSize: 12, padding: "6px 12px" }}
+                onClick={() => { setDFrom(""); setDTo(""); }}>Clear dates</button>
+            )}
+          </div>
+        )}
 
         {picking && (
           <div className="card" style={{ padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -529,15 +620,15 @@ export default function MyReportsPage() {
           <div className="card" style={{ padding: 44, textAlign: "center" }}>
             <FileText size={30} style={{ color: "var(--color-border)", marginBottom: 12 }} />
             <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 16, marginBottom: 4 }}>
-              {q ? `Nothing matches “${q}”.` : tab === "unsorted" ? "Nothing to review." : "No reports yet."}
+              {q ? `Nothing matches “${q}”.` : dateFilterOn ? "Nothing in that date range." : tab === "unsorted" ? "Nothing to review." : "No reports yet."}
             </div>
-            {!q && tab !== "unsorted" && <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>Tap “Add” to upload a prescription or report.</div>}
+            {!q && !dateFilterOn && tab !== "unsorted" && <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>Tap “Add” to upload a prescription or report.</div>}
           </div>
         ) : (
           <>
-            {groups.map(([day, list]) => (
-              <div key={day} style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--color-text-muted)", marginBottom: 8 }}>{day}</div>
+            {groups.map(({ label, list }) => (
+              <div key={label} style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--color-text-muted)", marginBottom: 8 }}>{label}</div>
                 {list.map(d => (
                   <DocRow key={d.id} doc={d} picking={picking} selected={sel.has(d.id)}
                     onToggle={() => toggleSel(d.id)} onOpen={() => setDetail(d)}

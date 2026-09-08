@@ -2232,18 +2232,24 @@ export default function EncounterPage() {
     const lowConf = (t) => !!t && t.status === "done" &&
       typeof t.confidence === "number" && t.confidence < HW_LOW_CONFIDENCE;
     const noteLowConf = lowConf(note);
+    const rxLowConf = lowConf(rx);
     const noteOk = !!note && note.status === "done" && !noteLowConf;
-    const rxOk   = !!rx   && rx.status === "done"   && !lowConf(rx);
-    // The Internal-Note tab is the SOAP source. But doctors often write a bit
-    // of clinical context on the Prescription page too — pull those "soft"
-    // fields from the rx tab when the note tab didn't supply them. Assessment
-    // / Plan / diagnoses stay note-tab-only.
-    const SOFT = new Set(["subjective", "objective", "investigations", "advice"]);
-    const pick = (src) => {
-      const nv = noteOk ? (note[src] || "").trim() : "";
-      if (nv) return nv;
-      return (rxOk && SOFT.has(src)) ? (rx[src] || "").trim() : "";
+    const rxOk   = !!rx   && rx.status === "done"   && !rxLowConf;
+    const anyLowConf = noteLowConf || rxLowConf;
+
+    // ONE combined context. The doctor writes wherever they like — the
+    // Prescription pad, the Internal Note pad, or both — and every field is
+    // merged from both. No "this tab loads that field" rule to remember.
+    const merge = (a, b) => {
+      a = String(a || "").trim(); b = String(b || "").trim();
+      if (!a) return b;
+      if (!b || a === b) return a;
+      const la = a.toLowerCase(), lb = b.toLowerCase();
+      if (la.includes(lb)) return a;
+      if (lb.includes(la)) return b;
+      return `${a}\n${b}`;
     };
+    const val = (src) => merge(noteOk ? note[src] : "", rxOk ? rx[src] : "");
 
     if (noteOk || rxOk) {
       const map = [
@@ -2255,7 +2261,7 @@ export default function EncounterPage() {
         const m = { ...prev };
         const before = { set, changed };
         for (const [src, field] of map) {
-          const inc = pick(src);
+          const inc = val(src);
           if (!inc) continue;
           const cur = (prev[field] || "").trim();
           if (!cur || cur === (snap[field] || "")) { m[field] = inc; set++; }
@@ -2268,7 +2274,7 @@ export default function EncounterPage() {
         // screen for the doctor to re-file, instead of only living behind
         // "View text".
         if (set === before.set && changed === before.changed) {
-          const raw = ((noteOk && note.raw_text) || (rxOk && rx.raw_text) || "").trim();
+          const raw = merge(noteOk ? note.raw_text : "", rxOk ? rx.raw_text : "");
           const cur = (prev.subjective || "").trim();
           if (raw && (!cur || cur === (snap.subjective || ""))) {
             m.subjective = raw;
@@ -2289,8 +2295,11 @@ export default function EncounterPage() {
 
       // Diagnoses are staged for review (same as Rx) — a hallucinated
       // diagnosis or a wrong ICD code must not land on the record unseen.
-      // Note-tab only; the prescription page isn't a diagnosis source.
-      const dxIn = (noteOk && Array.isArray(note.diagnoses)) ? note.diagnoses : [];
+      // Merged from whichever pad(s) they were written on.
+      const dxIn = [
+        ...(noteOk && Array.isArray(note.diagnoses) ? note.diagnoses : []),
+        ...(rxOk && Array.isArray(rx.diagnoses) ? rx.diagnoses : []),
+      ];
       if (dxIn.length) {
         const haveDx = new Set([
           ...diagnoses.map(d => _normName(d.description)),
@@ -2300,6 +2309,7 @@ export default function EncounterPage() {
         for (const d of dxIn) {
           const desc = (d?.description || "").trim();
           if (!desc || haveDx.has(_normName(desc))) continue;
+          haveDx.add(_normName(desc));   // both pads may carry the same Dx
           const rawCode = (d?.code || "").trim().toUpperCase();
           const codeOk = !!rawCode && ICD10_CODE_SET.has(rawCode);
           const code = codeOk ? rawCode : icdCodeForDescription(desc);
@@ -2320,9 +2330,13 @@ export default function EncounterPage() {
     // and against lines the doctor already added or dismissed (`loadedRxRef`),
     // so re-loading the same pad is idempotent.
     let rxStaged = 0;
-    const rxIn = (Array.isArray(rx?.items) ? rx.items : Array.isArray(rx?.prescription) ? rx.prescription : [])
-      .filter(x => (x?.drug_name || "").trim());
-    if (rx && rx.status === "done" && rxIn.length) {
+    const drugsOf = (t) => Array.isArray(t?.items) ? t.items
+      : Array.isArray(t?.prescription) ? t.prescription : [];
+    const rxIn = [
+      ...(rxOk ? drugsOf(rx) : []),
+      ...(noteOk ? drugsOf(note) : []),
+    ].filter(x => (x?.drug_name || "").trim());
+    if ((rxOk || noteOk) && rxIn.length) {
       const normDrug = (s) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
       const have = new Set([
         ...rxItems.map(i => normDrug(i.drug_name)),
@@ -2330,14 +2344,16 @@ export default function EncounterPage() {
       ]);
       const staged = rxIn.filter(it => {
         const n = normDrug(it.drug_name);
-        return n && !have.has(n);
+        if (!n || have.has(n)) return false;
+        have.add(n);        // both pads may carry the same drug line
+        return true;
       });
       setPendingRx(staged);
       rxStaged = staged.length;
     }
 
     if (set || changed) setDirty(true);
-    return { set, changed, rxStaged, dxStaged, noteLowConf };
+    return { set, changed, rxStaged, dxStaged, noteLowConf: anyLowConf };
   }
 
   async function openConsultPadQR() {
@@ -2354,23 +2370,56 @@ export default function EncounterPage() {
     }
   }
 
-  // Pull the current handwriting session into the form. Re-runnable.
-  async function loadHandwrittenNote() {
-    if (!enc?.id || loadingNote) return;
-    setLoadingNote(true);
+  // ── Handwriting: one pull + an auto-watch ─────────────────────────────────
+  // The doctor can't know when transcription finishes (it runs on the phone's
+  // autosave and can take 30-120s), so a single "Load" click that comes back
+  // "still transcribing" is useless. Instead: pull once, and if it's not ready
+  // yet, poll every few seconds and fill the fields the moment it lands — with
+  // a small progress bar in place of the button meanwhile.
+  const HW_WATCH_MAX_MS = 150_000;
+  const HW_POLL_EVERY_TICKS = 3;   // 1s ticks → poll every 3s
+  const [hwWatch, setHwWatch] = useState(false);
+  const [hwElapsed, setHwElapsed] = useState(0);   // seconds since the watch began
+  const hwTimerRef = useRef(null);
+  const hwStartRef = useRef(0);
+  const hwPct = Math.min(95, Math.round((hwElapsed / (HW_WATCH_MAX_MS / 1000)) * 100));
+
+  const stopHwWatch = () => {
+    if (hwTimerRef.current) { clearInterval(hwTimerRef.current); hwTimerRef.current = null; }
+    setHwWatch(false);
+    setHwElapsed(0);
+  };
+  useEffect(() => () => { if (hwTimerRef.current) clearInterval(hwTimerRef.current); }, []);
+
+  // Fetch the session and either apply it or report why not.
+  //   "settled"  — applied, or there's nothing more coming (stop)
+  //   "waiting"  — recognition still running (keep polling)
+  //   "inactive" — no session started yet (stop)
+  // `quiet` suppresses the informational toasts ("no session", "nothing new")
+  // used by the poll loop; terminal errors and a real apply always toast.
+  async function pullHandwrittenNote({ quiet = false } = {}) {
+    if (!enc?.id) return "inactive";
     try {
       const { data: res } = await apiClient.get(API_ENDPOINTS.OPD.ENCOUNTER_CONSULT_SESSION(enc.id));
       const s = res?.data || res;
       if (!s?.active) {
-        toastError('No handwriting session yet — tap "Handwrite (QR)" and write on the phone first.');
-        return;
-      }
-      if (s.updated_at && s.updated_at === lastLoadedRef.current) {
-        toastSuccess("Already loaded — nothing new on the phone since the last pull.");
-        return;
+        if (!quiet) toastError('No handwriting session yet — tap "Handwrite (QR)" and write on the phone first.');
+        return "inactive";
       }
       const rxDone = s.rx && s.rx.status === "done";
       const noteDone = s.note && s.note.status === "done";
+      if (s.updated_at && s.updated_at === lastLoadedRef.current && !quiet) {
+        // Nothing new written since the last load. Re-apply the compiled
+        // result anyway (the doctor may have cleared a field and wants it
+        // back) — but don't re-run the model.
+        if (rxDone || noteDone) {
+          await applyRecognised({ note: s.note, rx: s.rx });
+          toastSuccess("Re-applied the handwritten note.");
+        } else {
+          toastSuccess("Already loaded — nothing new on the phone since the last pull.");
+        }
+        return "settled";
+      }
       const isStale = (t) => t && t.status === "pending" && t.at &&
         (Date.now() - new Date(t.at).getTime() > HW_PENDING_STALE_MS);
       const anyStale = isStale(s.rx) || isStale(s.note);
@@ -2378,14 +2427,16 @@ export default function EncounterPage() {
       const anyEmpty = (s.rx && s.rx.status === "empty") || (s.note && s.note.status === "empty");
       const noteFailed = s.note && s.note.status === "failed";
       const rxFailed = s.rx && s.rx.status === "failed";
+
       if (!rxDone && !noteDone) {
-        if (anyStale) toastError("Recognition looks stuck — write a little more on the phone to retry it, or type the note in.");
-        else if (anyPending) toastError("Still transcribing the handwriting — try again in a few seconds.");
+        if (anyPending) return "waiting";   // still transcribing — poll again, no toast
+        if (anyStale) toastError("Recognition timed out — write a little more on the phone to retry it, or type the note in.");
         else if (anyEmpty) toastError("The phone pages look blank or unreadable — write the note, then load again.");
         else if (noteFailed || rxFailed) toastError("Couldn't read the handwriting this time. Write a little clearer on the phone and load again, or type it in.");
-        else toastError("Nothing recognised yet — write on the phone, then load.");
-        return;
+        else if (!quiet) toastError("Nothing recognised yet — write on the phone, then load.");
+        return anyEmpty || anyStale || noteFailed || rxFailed ? "settled" : "waiting";
       }
+
       const { set, changed, rxStaged, dxStaged, noteLowConf } = await applyRecognised({ note: s.note, rx: s.rx });
       setRecognisedNote({ note: s.note || null, rx: s.rx || null, rxPages: s.rx_pages || [], notePages: s.note_pages || [] });
       lastLoadedRef.current = s.updated_at || null;
@@ -2400,15 +2451,49 @@ export default function EncounterPage() {
       const pageWarn = (s.note && s.note.page_warnings) || (s.rx && s.rx.page_warnings);
       if (pageWarn) msg += " " + pageWarn;
       if (changed) msg += ` ${changed} field${changed > 1 ? "s" : ""} changed on the phone — you'd edited them, so they were left as-is (see "View text").`;
-      if (anyPending) msg += " (The other tab is still transcribing — Load again shortly.)";
+      if (anyPending) msg += " (The other tab is still transcribing — it'll fill in automatically.)";
       if (noteDone && !rxDone && rxFailed) msg += " Couldn't read the Prescription tab — load again or add drugs manually.";
       if (rxDone && !noteDone && noteFailed) msg += " Couldn't read the Internal Note tab — load again or type it in.";
       toastSuccess(msg);
+      return anyPending ? "waiting" : "settled";
     } catch (err) {
-      toastApiError(err, "Could not load the handwriting session.");
+      if (!quiet) toastApiError(err, "Could not load the handwriting session.");
+      return "waiting";   // transient — let the poll retry
+    }
+  }
+
+  async function loadHandwrittenNote() {
+    if (!enc?.id || loadingNote || hwWatch) return;
+    setLoadingNote(true);
+    let verdict = "waiting";
+    try {
+      // Lazy compile: nothing is transcribed until this click. The server
+      // only runs the model over pages it hasn't seen before (a re-load after
+      // the patient adds more just picks up the new pages), then re-reads.
+      try {
+        await apiClient.post(API_ENDPOINTS.OPD.ENCOUNTER_CONSULT_SESSION(enc.id), { action: "recognise" });
+      } catch { /* the pull below reports if there's no session yet */ }
+      verdict = await pullHandwrittenNote({ quiet: false });
     } finally {
       setLoadingNote(false);
     }
+    if (verdict !== "waiting") return;
+    // Not ready — start watching. Fill the fields the moment it lands.
+    hwStartRef.current = Date.now();
+    setHwElapsed(0);
+    setHwWatch(true);
+    hwTimerRef.current = setInterval(async () => {
+      const secs = Math.round((Date.now() - hwStartRef.current) / 1000);
+      setHwElapsed(secs);
+      if (Date.now() - hwStartRef.current > HW_WATCH_MAX_MS) {
+        stopHwWatch();
+        toastError("Recognition is taking longer than usual — keep writing on the phone, or type the note in and load again later.");
+        return;
+      }
+      if (secs % HW_POLL_EVERY_TICKS !== 0) return;
+      const r = await pullHandwrittenNote({ quiet: true });
+      if (r !== "waiting") stopHwWatch();
+    }, 1000);
   }
 
   function openDictation(section, text) {
@@ -2784,15 +2869,40 @@ export default function EncounterPage() {
                 >
                   <QrCode size={13} /> {qrLoading ? "…" : "Handwrite (QR)"}
                 </button>
-                <button
-                  type="button"
-                  onClick={loadHandwrittenNote}
-                  disabled={isClosed || loadingNote || !enc.patient_pk}
-                  title="Pull the handwritten note you wrote on the phone into these fields"
-                  style={miniBtn("var(--color-primary)", "var(--color-primary)", "var(--color-primary-light)", isClosed)}
-                >
-                  <Sparkles size={13} /> {loadingNote ? "Loading…" : "Load handwritten note"}
-                </button>
+                {hwWatch ? (
+                  <span
+                    title="Reading your handwritten note — the fields fill in automatically when it's ready"
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 8, padding: "4px 10px",
+                      border: "1px solid var(--color-primary)", borderRadius: 6,
+                      background: "var(--color-primary-light)", fontSize: 12, fontWeight: 600,
+                      color: "var(--color-primary)",
+                    }}
+                  >
+                    <span style={{ width: 64, height: 4, borderRadius: 2, background: "var(--color-border)", overflow: "hidden", flexShrink: 0 }}>
+                      <span style={{ display: "block", height: "100%", width: `${hwPct}%`, background: "var(--color-primary)", transition: "width .6s linear" }} />
+                    </span>
+                    Reading your note…
+                    <button
+                      type="button"
+                      onClick={stopHwWatch}
+                      title="Stop waiting"
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-primary)", padding: 0, display: "inline-flex" }}
+                    >
+                      <XIcon size={13} />
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={loadHandwrittenNote}
+                    disabled={isClosed || loadingNote || !enc.patient_pk}
+                    title="Pull the handwritten note you wrote on the phone into these fields"
+                    style={miniBtn("var(--color-primary)", "var(--color-primary)", "var(--color-primary-light)", isClosed)}
+                  >
+                    <Sparkles size={13} /> {loadingNote ? "Loading…" : "Load handwritten note"}
+                  </button>
+                )}
                 {recognisedNote && (
                   <button
                     type="button"

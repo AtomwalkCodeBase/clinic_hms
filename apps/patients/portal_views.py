@@ -1520,9 +1520,35 @@ class PortalDocumentListCreateView(APIView):
         if err:
             return err
 
+        # The consult-pad's raw handwritten prescription is archived as its own
+        # SharedDocument (source_ref "encounter:<id>:handwritten:rx"). When the
+        # typeset prescription for the same encounter also exists, that
+        # handwriting is NOT a second entry in My Reports — it hangs off the
+        # typeset row as `handwritten_doc_id`, opened from the detail sheet.
+        # A handwriting row with NO typeset sibling (doctor wrote the script by
+        # hand and added no structured items) stays as its own row.
+        hw_rows = list(
+            SharedDocument.objects.using("default")
+            .filter(awpid=target_awpid, source_ref__endswith=":handwritten:rx")
+            .values_list("id", "source_ref")
+        )
+        base_refs = set(
+            SharedDocument.objects.using("default")
+            .filter(awpid=target_awpid, source_ref__startswith="encounter:")
+            .exclude(source_ref__contains=":handwritten:")
+            .values_list("source_ref", flat=True)
+        )
+        hw_by_base, linked_hw_ids = {}, []
+        for hid, ref in hw_rows:
+            base = ref.rsplit(":handwritten:rx", 1)[0]
+            if base in base_refs:
+                hw_by_base[base] = hid
+                linked_hw_ids.append(hid)
+
         qs = (SharedDocument.objects.using("default")
               .filter(awpid=target_awpid, hidden_at__isnull=True, deleted_at__isnull=True)
               .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
+              .exclude(id__in=linked_hw_ids)
               .order_by("-created_at"))
         page_items, meta = paginate_queryset(request, qs)
         results = [{
@@ -1540,6 +1566,7 @@ class PortalDocumentListCreateView(APIView):
             "hospital_label": d.hospital_label,
             "doctor_label": d.doctor_label,
             "source_tenant_id": d.source_tenant_id,
+            "handwritten_doc_id": hw_by_base.get(d.source_ref),
         } for d in page_items]
         return Response({"results": results, "pagination": meta})
 
@@ -1730,6 +1757,18 @@ class PortalDocumentDetailView(APIView):
             file_data = raw
         else:
             file_data = blob_storage.signed_url(raw, download_name=dl_name if want_download else None)
+        # A typeset prescription may have the doctor's raw handwriting archived
+        # as a sibling row — surfaced here so the detail sheet can offer
+        # "view / download handwritten" without it being a second My Reports entry.
+        handwritten_doc_id = None
+        if doc.doc_type == "prescription" and (doc.source_ref or "").startswith("encounter:") \
+                and ":handwritten:" not in doc.source_ref:
+            handwritten_doc_id = (
+                SharedDocument.objects.using("default")
+                .filter(awpid=doc.awpid, source_ref=f"{doc.source_ref}:handwritten:rx")
+                .values_list("id", flat=True).first()
+            )
+
         return success(data={
             "id": doc.id,
             "title": doc.title,
@@ -1744,6 +1783,7 @@ class PortalDocumentDetailView(APIView):
             "classification_method": doc.classification_method,
             "hospital_label": doc.hospital_label,
             "doctor_label": doc.doctor_label,
+            "handwritten_doc_id": handwritten_doc_id,
             "file_data": file_data,
             "download": want_download,
         })
@@ -1779,9 +1819,17 @@ class PortalDocumentDetailView(APIView):
 
     def delete(self, request, doc_id):
         """
-        Patient upload  -> soft-deleted (deleted_at), purged later.
-        Hospital-issued -> hidden from the patient's list only (hidden_at);
-                           the clinical record is untouched.
+        Remove a document from the patient's My Reports and from everything a
+        DIFFERENT hospital can pull (HIE history + emergency QR) — both the
+        hidden_at and deleted_at markers are filtered out of every such query.
+
+        Patient upload   -> deleted_at (soft-deleted, purged later).
+        Hospital-issued  -> hidden_at; the hospital that created it keeps its
+                            own copy in its own chart (medical-retention), but
+                            it is gone from the patient's reports and from
+                            other hospitals.
+
+        A typeset prescription and its handwritten sibling are removed together.
         """
         from apps.registry.models import SharedDocument
         from django.utils import timezone
@@ -1793,12 +1841,23 @@ class PortalDocumentDetailView(APIView):
         if not doc or doc.awpid != target_awpid or doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
             return error("Document not found.", status=404)
 
-        if doc.source_tenant_id:
-            doc.hidden_at = timezone.now()
-            doc.save(using="default", update_fields=["hidden_at"])
-            return success(data={"id": doc.id, "hidden": True})
-        doc.deleted_at = timezone.now()
-        doc.save(using="default", update_fields=["deleted_at"])
+        now = timezone.now()
+        targets = [doc]
+        if doc.doc_type == "prescription" and (doc.source_ref or "").startswith("encounter:") \
+                and ":handwritten:" not in doc.source_ref:
+            sib = (SharedDocument.objects.using("default")
+                   .filter(awpid=doc.awpid, source_ref=f"{doc.source_ref}:handwritten:rx")
+                   .first())
+            if sib:
+                targets.append(sib)
+
+        for t in targets:
+            if t.source_tenant_id:
+                t.hidden_at = now
+                t.save(using="default", update_fields=["hidden_at"])
+            else:
+                t.deleted_at = now
+                t.save(using="default", update_fields=["deleted_at"])
         return success(data={"id": doc.id, "deleted": True})
 
 

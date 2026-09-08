@@ -143,15 +143,25 @@ class InkChecksTests(SimpleTestCase):
     def test_decode_error_fails_open(self):
         self.assertEqual(R._ink_fraction(b"not-a-png"), 1.0)
 
-    def test_blankness_all_white(self):
-        all_blank, sparse = R._blankness([_png("white"), _png("white")])
-        self.assertTrue(all_blank)
-        self.assertTrue(sparse)
+    def test_partition_all_white(self):
+        written, blanks = R._partition_pages([_png("white"), _png("white")])
+        self.assertEqual(written, [])
+        self.assertEqual(blanks, [1, 2])
 
-    def test_blankness_heavy(self):
-        all_blank, sparse = R._blankness([_png("heavy")])
-        self.assertFalse(all_blank)
-        self.assertFalse(sparse)
+    def test_partition_drops_only_the_blank_page(self):
+        written, blanks = R._partition_pages([_png("heavy"), _png("white"), _png("heavy")])
+        self.assertEqual(len(written), 2)
+        self.assertEqual(blanks, [2])
+
+    def test_is_sparse_heavy_is_false(self):
+        self.assertFalse(R._is_sparse([_png("heavy")]))
+
+    def test_looks_blank_transcription(self):
+        for s in ["", "   ", "[blank]", "[ blank page ]", "This page is blank.",
+                  "no text", "nothing written here", "---", "[illegible]"]:
+            self.assertTrue(R._looks_blank_transcription(s), s)
+        for s in ["Fever x3 days", "BP 120/80", "Rx Dolo 650"]:
+            self.assertFalse(R._looks_blank_transcription(s), s)
 
 
 @override_settings(CONSULT_PAD_LLM_KEY="test-key", CONSULT_PAD_LLM_MODEL="m",
@@ -171,18 +181,51 @@ class RecogniseTests(SimpleTestCase):
         self.assertEqual(r["status"], "empty")
         p.assert_not_called()
 
-    def test_single_page_done_with_flags_and_confidence(self):
-        payload = '{"is_clinical_note": true, "confidence": 0.9, "subjective": "fever 2d", "raw_text": "fever 2d", "prescription": [{"drug_name": "Dolo", "dosage": "650 mg", "frequency": "bd", "duration_days": 3}]}'
-        with mock.patch.object(R, "_post_chat", return_value=payload):
+    def test_page_transcribe_then_structure_done(self):
+        # Every page is transcribed (image call), then one text-only structuring
+        # call turns the joined text into the SOAP/Rx JSON.
+        transcription = "fever 2d\nTab Dolo 650 mg BD x 3 days"
+        structured = ('{"is_clinical_note": true, "confidence": 0.9, "subjective": "fever 2d",'
+                      ' "raw_text": "fever 2d", "prescription": [{"drug_name": "Dolo",'
+                      ' "dosage": "650 mg", "frequency": "bd", "duration_days": 3}]}')
+        with mock.patch.object(R, "_post_chat", side_effect=[transcription, structured]):
             r = R.recognise([_png("heavy")], focus="all")
         self.assertEqual(r["status"], "done")
         self.assertEqual(r["recognized"]["confidence"], 0.9)
         self.assertEqual(r["recognized"]["prescription"][0]["frequency"], "bd")
 
-    def test_model_says_blank_returns_empty(self):
-        with mock.patch.object(R, "_post_chat", return_value='{"is_clinical_note": false, "confidence": 0.0}'):
+    def test_blank_transcription_returns_empty(self):
+        with mock.patch.object(R, "_transcribe_page", return_value="[blank]") as tp, \
+             mock.patch.object(R, "_structure_text", side_effect=AssertionError("must not structure")):
             r = R.recognise([_png("heavy")])
         self.assertEqual(r["status"], "empty")
+        tp.assert_called_once()
+
+    def test_blank_page_dropped_note_still_loads(self):
+        structured = dict(R._EMPTY, subjective="fever 3d", raw_text="fever 3d chills",
+                          is_clinical_note=True, confidence=0.8)
+        with mock.patch.object(R, "_transcribe_page", return_value="fever 3d chills") as tp, \
+             mock.patch.object(R, "_structure_text", return_value=structured):
+            r = R.recognise([_png("heavy"), _png("white")], focus="note")
+        self.assertEqual(r["status"], "done")
+        self.assertEqual(tp.call_count, 1)  # only the written page — the blank sheet was dropped
+        self.assertIn("blank and skipped", r["recognized"]["page_warnings"])
+
+    def test_cache_reuses_unchanged_pages(self):
+        p1, p2 = _png("heavy", size=(120, 160)), _png("inked", size=(120, 160))
+        structured = dict(R._EMPTY, subjective="x", raw_text="x", is_clinical_note=True, confidence=0.9)
+        with mock.patch.object(R, "_transcribe_page", side_effect=["page one", "page two"]) as tp, \
+             mock.patch.object(R, "_structure_text", return_value=structured):
+            r1 = R.recognise([p1, p2])
+        self.assertEqual(tp.call_count, 2)
+        cache = r1["recognized"]["_page_texts"]
+        self.assertEqual(len(cache), 2)
+
+        p3 = _png("heavy", size=(130, 170))   # a brand-new page
+        with mock.patch.object(R, "_transcribe_page", side_effect=["page three"]) as tp2, \
+             mock.patch.object(R, "_structure_text", return_value=structured):
+            R.recognise([p1, p3], page_text_cache=cache)
+        self.assertEqual(tp2.call_count, 1)   # p1 was reused from the cache
 
     def test_multipage_partial_failure_keeps_good_pages(self):
         calls = {"n": 0}
@@ -201,7 +244,7 @@ class RecogniseTests(SimpleTestCase):
 
     def test_sparse_ink_caps_confidence(self):
         payload = '{"is_clinical_note": true, "confidence": 0.95, "subjective": "x", "raw_text": "x here now"}'
-        with mock.patch.object(R, "_blankness", return_value=(False, True)), \
+        with mock.patch.object(R, "_is_sparse", return_value=True), \
              mock.patch.object(R, "_post_chat", return_value=payload):
             r = R.recognise([_png("heavy")])
         self.assertEqual(r["status"], "done")

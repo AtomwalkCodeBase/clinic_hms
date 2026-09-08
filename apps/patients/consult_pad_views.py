@@ -40,13 +40,6 @@ logger = logging.getLogger(__name__)
 _MAX_TAB_BASE64_CHARS = 9_000_000
 _TABS = {"rx", "note"}
 
-# A burst of autosaves (the phone saves every few strokes) each spawn a
-# recognition thread. Each thread waits this long, then bails if a newer
-# autosave has superseded it — so only the last save in a burst hits the
-# vision API.
-_RECOG_DEBOUNCE_SECONDS = 2.5
-
-
 def _age_years(dob):
     if not dob:
         return None
@@ -382,62 +375,135 @@ def _decode_pages(page_datauris):
     return out
 
 
+def _public_recog(blob):
+    """Strip the internal per-page transcription cache before a recognised
+    blob is returned to any client."""
+    if not blob:
+        return None
+    return {k: v for k, v in blob.items() if k != "_page_texts"}
+
+
+# One recognition at a time per (session, tab). The phone autosaves every few
+# strokes and each spawns a thread; without this they'd fire N concurrent
+# vision calls into the provider's small per-minute budget and all get 429'd.
+# Threads queue on the lock, and every one but the newest bails instantly once
+# it's their turn (their "at" token is stale) — so a burst collapses to a
+# single recognition on the freshest pages.
+_RECOG_LOCKS = {}
+_RECOG_LOCKS_GUARD = threading.Lock()
+_RECOG_LOCK_WAIT = 200  # seconds a queued thread will wait its turn before giving up
+
+# done is better than a bare empty, which is better than failed, which is
+# better than the pending placeholder. A completed recognition must be allowed
+# to replace a WORSE result a sibling thread landed while this one was still
+# retrying — otherwise a good transcription is thrown away behind a "failed".
+_RESULT_RANK = {"pending": 0, "failed": 1, "empty": 2, "done": 3}
+
+
+def _session_recog_lock(session_id, tab):
+    key = (session_id, tab)
+    with _RECOG_LOCKS_GUARD:
+        lk = _RECOG_LOCKS.get(key)
+        if lk is None:
+            lk = threading.Lock()
+            _RECOG_LOCKS[key] = lk
+        return lk
+
+
+def _land_recognition(session_id, field, blob, pending_token):
+    """Compare-and-swap the recognised blob onto the row: land it when it
+    outranks (or ties-newer) what's stored, or when we're still the exact
+    pending marker we came in on. Retries on a lost CAS."""
+    for _ in range(4):
+        cur = (ConsultSession.objects.using("default")
+               .filter(id=session_id).values(field).first())
+        if cur is None:
+            return False
+        curblob = cur[field] or {}
+        cur_at = curblob.get("at") or ""
+        my_rank = _RESULT_RANK.get(blob.get("status"), 0)
+        cur_rank = _RESULT_RANK.get(curblob.get("status"), 0)
+        may_land = (
+            curblob.get("at") == pending_token          # we're the newest autosave
+            or my_rank > cur_rank                        # we're a better result
+            or (my_rank == cur_rank and blob["at"] >= cur_at)  # same, but newer
+        )
+        if not may_land:
+            return False
+        updated = ConsultSession.objects.using("default").filter(
+            id=session_id, **{f"{field}__at": cur_at}
+        ).update(**{field: blob})
+        if updated:
+            return True
+    return False
+
+
 def _run_tab_recognition(session_id, tab: str, pending_token: str):
     """
     Background worker: recognise one tab's pages and write the structured
     result onto ConsultSession.<tab>_recognised. Runs in a plain thread
     (no task queue in this project). Never raises.
 
-    Debounced: `pending_token` is the "at" stamp written by the PUT that
-    spawned this thread. After a short wait the thread re-reads the row and
-    bails if the stamp changed — meaning a newer autosave has superseded it.
-    The final write is also conditional on the stamp, so a save that lands
-    while the model is running can't be clobbered by a stale result.
+    `pending_token` is the "at" stamp written by the recognise trigger that
+    spawned this thread. The thread bails if the stamp changed (the doctor
+    hit Load again), queues on a per-tab lock so a double-click can't run two
+    at once, and re-uses already-transcribed pages via the page-text cache so
+    only NEW pages hit the model. The write-back is rank-aware — a completed
+    result replaces a worse one landed meanwhile.
     """
     from apps.patients.consult_pad_recognition import recognise
     field = "rx_recognised" if tab == "rx" else "note_recognised"
     pages_attr = "rx_pages" if tab == "rx" else "note_pages"
     try:
-        time.sleep(_RECOG_DEBOUNCE_SECONDS)
-
         row = (ConsultSession.objects.using("default")
-               .filter(id=session_id).values(field, pages_attr, "tenant_id").first())
+               .filter(id=session_id).values(field).first())
         if not row:
             return
         if (row[field] or {}).get("at") != pending_token:
             logger.debug("consult-pad recognition superseded before start (session=%s tab=%s)", session_id, tab)
             return
 
-        pages = _decode_pages(row[pages_attr])
-        if not pages:
-            ConsultSession.objects.using("default").filter(id=session_id).update(
-                **{field: {"status": "empty", "error": "", "at": timezone.now().isoformat()}})
+        lock = _session_recog_lock(session_id, tab)
+        if not lock.acquire(timeout=_RECOG_LOCK_WAIT):
+            logger.warning("consult-pad recognition gave up waiting for the lock (session=%s tab=%s)", session_id, tab)
             return
+        try:
+            row = (ConsultSession.objects.using("default")
+                   .filter(id=session_id).values(field, pages_attr, "tenant_id").first())
+            if not row:
+                return
+            if (row[field] or {}).get("at") != pending_token:
+                logger.debug("consult-pad recognition superseded while queued (session=%s tab=%s)", session_id, tab)
+                return
 
-        result = recognise(pages, focus=tab)
-        blob = dict(result.get("recognized") or {})
-        if result.get("status") == "done":
-            if tab == "rx" and row["tenant_id"]:
-                _normalise_rx_against_catalog(blob, row["tenant_id"])
-            if tab != "rx":
-                # investigations live on the Note tab; the seed alias table
-                # works with or without a tenant lab catalog.
-                _normalise_investigations_against_catalog(blob, row["tenant_id"])
-        blob["status"] = result["status"]
-        blob["error"] = result.get("error", "")
-        blob["at"] = timezone.now().isoformat()
+            pages = _decode_pages(row[pages_attr])
+            if not pages:
+                _land_recognition(session_id, field,
+                                  {"status": "empty", "error": "", "at": timezone.now().isoformat()},
+                                  pending_token)
+                return
 
-        # Only land the result if no newer autosave arrived while we worked.
-        updated = ConsultSession.objects.using("default").filter(
-            id=session_id, **{f"{field}__at": pending_token}
-        ).update(**{field: blob})
-        if not updated:
-            logger.debug("consult-pad recognition result discarded — superseded (session=%s tab=%s)", session_id, tab)
+            prev_cache = (row[field] or {}).get("_page_texts") or {}
+            result = recognise(pages, focus=tab, page_text_cache=prev_cache)
+            blob = dict(result.get("recognized") or {})
+            if result.get("status") == "done":
+                if tab == "rx" and row["tenant_id"]:
+                    _normalise_rx_against_catalog(blob, row["tenant_id"])
+                if tab != "rx":
+                    _normalise_investigations_against_catalog(blob, row["tenant_id"])
+            blob["status"] = result["status"]
+            blob["error"] = result.get("error", "")
+            blob["at"] = timezone.now().isoformat()
+
+            if not _land_recognition(session_id, field, blob, pending_token):
+                logger.debug("consult-pad recognition result not landed — a better/newer one is stored (session=%s tab=%s)", session_id, tab)
+        finally:
+            lock.release()
     except Exception:
         logger.exception("consult-session recognition thread crashed: session=%s tab=%s", session_id, tab)
-        ConsultSession.objects.using("default").filter(
-            id=session_id, **{f"{field}__at": pending_token}
-        ).update(**{field: {"status": "failed", "error": "recognition crashed", "at": timezone.now().isoformat()}})
+        _land_recognition(session_id, field,
+                          {"status": "failed", "error": "recognition crashed", "at": timezone.now().isoformat()},
+                          pending_token)
     finally:
         connections.close_all()
 
@@ -497,8 +563,8 @@ class ConsultPadView(APIView):
             "gender": identity.gender,
             "updated_at": sess.updated_at,
             "tabs": {
-                "rx":   {"pages": sess.rx_pages or [],   "recognised": sess.rx_recognised or None},
-                "note": {"pages": sess.note_pages or [], "recognised": sess.note_recognised or None},
+                "rx":   {"pages": sess.rx_pages or [],   "recognised": _public_recog(sess.rx_recognised)},
+                "note": {"pages": sess.note_pages or [], "recognised": _public_recog(sess.note_recognised)},
             },
         })
 
@@ -529,16 +595,30 @@ class ConsultPadView(APIView):
 
         pages_field = "rx_pages" if tab == "rx" else "note_pages"
         recog_field = "rx_recognised" if tab == "rx" else "note_recognised"
-        # This stamp is the debounce/idempotency token: the recognition thread
-        # only acts (and only writes back) while it's still the latest one.
-        pending_token = timezone.now().isoformat()
+
+        # Autosave saves the strokes ONLY — it never triggers recognition.
+        # Transcription is lazy: it runs when the doctor presses "Load
+        # handwritten note" (EncounterConsultSessionView, action=recognise),
+        # re-using pages already transcribed so only new strokes hit the model.
+        # Here we just keep any prior compiled result and mark the tab "dirty"
+        # so the encounter screen knows there's un-loaded content.
+        prev = getattr(sess, recog_field) or {}
+        now = timezone.now()
+        marker = now.isoformat()
+        if pages:
+            new_recog = {**prev, "status": "dirty", "at": marker}
+        else:
+            new_recog = {"status": "idle", "at": marker}
         ConsultSession.objects.using("default").filter(id=sess.id).update(**{
             pages_field: pages,
-            recog_field: {"status": "pending", "at": pending_token},
-            "updated_at": timezone.now(),
+            recog_field: new_recog,
+            # Sliding expiry — an actively-used pad shouldn't lapse mid-write.
+            "expires_at": now + timedelta(hours=12),
+            "updated_at": now,
         })
-        if pages:
-            threading.Thread(target=_run_tab_recognition, args=(sess.id, tab, pending_token), daemon=True).start()
 
-        return success(data={"tab": tab, "saved_pages": len(pages), "recognise_status": "pending" if pages else "idle"},
-                       message="Saved.")
+        return success(
+            data={"tab": tab, "saved_pages": len(pages),
+                  "recognise_status": new_recog["status"]},
+            message="Saved.",
+        )

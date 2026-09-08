@@ -574,6 +574,37 @@ export default function ConsultPadPage() {
     setTimeout(() => canvases.current.get(id)?.el?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
   };
 
+  // Does this page carry any pen? Compares the live canvas against a fresh
+  // paint of the ruled paper — so a page that was written on then erased, or
+  // one restored from `src`, is both handled. Errs towards "yes" (→ prompt)
+  // on any failure.
+  const pageHasInk = (id) => {
+    try {
+      const rec = canvases.current.get(id);
+      if (!rec) return !!pages.find((p) => p.id === id)?.src;
+      const probe = document.createElement("canvas");
+      probe.width = rec.el.width;
+      probe.height = rec.el.height;
+      const pctx = probe.getContext("2d");
+      pctx.scale(dims.current.dpr, dims.current.dpr);
+      paintPaper(pctx, dims.current.w, dims.current.h);
+      return probe.toDataURL("image/png") !== rec.el.toDataURL("image/png");
+    } catch {
+      return true;
+    }
+  };
+
+  const deletePage = (id) => {
+    if (pages.length <= 1) return; // never remove the last page
+    if (pageHasInk(id) && !window.confirm("Delete this page? Anything written on it will be removed.")) return;
+    canvases.current.delete(id);
+    undo.current.delete(id);
+    if (lastPage.current === id) lastPage.current = null;
+    setTabsPages((p) => ({ ...p, [activeTab]: p[activeTab].filter((pg) => pg.id !== id) }));
+    markDirty();
+    scheduleAutosave();
+  };
+
   // ── Chrome ───────────────────────────────────────────────────────────
   const shell = (children) => (
     <div ref={rootRef} style={{ position: "fixed", inset: 0, background: "#eef2f7", display: "flex", flexDirection: "column",
@@ -729,6 +760,23 @@ export default function ConsultPadPage() {
               pointerEvents: "none", userSelect: "none" }}>
               {i === 0 ? tabMeta.hint : `Page ${i + 1}`}
             </div>
+            {pages.length > 1 && (
+              <button
+                type="button"
+                aria-label={`Delete page ${i + 1}`}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); deletePage(p.id); }}
+                style={{
+                  position: "absolute", top: 4, right: 4, zIndex: 3,
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                  padding: "4px 9px", fontSize: 11, fontWeight: 700, lineHeight: 1,
+                  color: "#b91c1c", background: "rgba(255,255,255,0.94)",
+                  border: "1px solid #fecaca", borderRadius: 7, cursor: "pointer",
+                }}
+              >
+                ✕ Delete page
+              </button>
+            )}
             <canvas
               ref={(el) => registerCanvas(p.id, el, p.src)}
               onPointerDown={onDown(p.id)}

@@ -1181,10 +1181,13 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
 
 class EncounterConsultSessionView(APIView):
     """
-    POST /api/v1/opd/encounters/<id>/consult-session/  — start / resume the
-         handwriting session for this encounter, returns the QR to show.
-    GET  same URL                                       — the session's current
-         recognised state, for the "Load handwritten note" button.
+    POST /api/v1/opd/encounters/<id>/consult-session/                 — start /
+         resume the handwriting session for this encounter, returns the QR.
+    POST same URL  {"action": "recognise"}                            — compile
+         the handwriting NOW (lazy transcription — runs only on demand, and
+         only over pages not already transcribed). Then poll GET for the result.
+    GET  same URL                                                     — the
+         session's current recognised state, for "Load handwritten note".
     """
     permission_classes = [IsDoctor]
 
@@ -1192,6 +1195,8 @@ class EncounterConsultSessionView(APIView):
         return OPDEncounter.objects.using(request.tenant_db).get(pk=pk)
 
     def post(self, request, pk):
+        if (request.data or {}).get("action") == "recognise":
+            return self._recognise(request, pk)
         import secrets
         from django.conf import settings
         from apps.registry.models import PatientIdentity, ConsultSession
@@ -1229,6 +1234,55 @@ class EncounterConsultSessionView(APIView):
             "pad_url": pad_url, "qr_image": render_qr_data_uri(pad_url),
         })
 
+    def _recognise(self, request, pk):
+        """Kick off transcription on demand. Only tabs with un-transcribed
+        pages (or a prior failure) actually run the model; a page whose bytes
+        are already in the tab's page-text cache is re-used for free. The
+        client then polls GET until status is done/empty/failed."""
+        import threading
+        from apps.registry.models import ConsultSession
+        from apps.patients.consult_pad_views import _run_tab_recognition, _decode_pages
+        from apps.patients.consult_pad_recognition import _page_key
+
+        try:
+            enc = self._enc(request, pk)
+        except OPDEncounter.DoesNotExist:
+            return api_not_found("Encounter not found.")
+        sess = _open_consult_session(enc.id, request.tenant_id)
+        if not sess:
+            return success(data={"active": False})
+
+        started, already = [], []
+        for tab, pages_attr, recog_attr in (
+            ("rx", "rx_pages", "rx_recognised"),
+            ("note", "note_pages", "note_recognised"),
+        ):
+            raw_pages = getattr(sess, pages_attr) or []
+            if not raw_pages:
+                continue
+            blob = getattr(sess, recog_attr) or {}
+            if blob.get("status") == "pending":
+                started.append(tab)          # a compile is already running
+                continue
+            covered = set((blob.get("_page_texts") or {}).keys())
+            page_hashes = [_page_key(p) for p in _decode_pages(raw_pages)]
+            needs_run = (
+                blob.get("status") in (None, "", "idle", "dirty", "failed")
+                or any(h not in covered for h in page_hashes)
+            )
+            if not needs_run:
+                already.append(tab)
+                continue
+            token = timezone.now().isoformat()
+            ConsultSession.objects.using("default").filter(id=sess.id).update(
+                **{recog_attr: {**blob, "status": "pending", "at": token}})
+            threading.Thread(
+                target=_run_tab_recognition, args=(sess.id, tab, token), daemon=True,
+            ).start()
+            started.append(tab)
+
+        return success(data={"active": True, "recognising": started, "already_done": already})
+
     def get(self, request, pk):
         try:
             enc = self._enc(request, pk)
@@ -1237,11 +1291,18 @@ class EncounterConsultSessionView(APIView):
         sess = _open_consult_session(enc.id, request.tenant_id)
         if not sess:
             return success(data={"active": False})
+
+        def _public(blob):
+            # Drop the internal page-text cache before it goes to the client.
+            if not blob:
+                return None
+            return {k: v for k, v in blob.items() if k != "_page_texts"}
+
         return success(data={
             "active": True,
             "updated_at": sess.updated_at,
-            "rx": sess.rx_recognised or None,
-            "note": sess.note_recognised or None,
+            "rx": _public(sess.rx_recognised),
+            "note": _public(sess.note_recognised),
             # Page images so the encounter screen can show the doctor the
             # actual handwriting next to what was read.
             "rx_pages": sess.rx_pages or [],
