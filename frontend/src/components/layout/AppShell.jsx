@@ -228,6 +228,7 @@ const NAV_BY_ROLE = {
     { type: "link",  label: "My Health Journey", iconKey: "records",  to: ROUTES.PATIENT.RECORDS },
     { type: "link",  label: "Prescriptions", iconKey: "prescription", to: ROUTES.PATIENT.PRESCRIPTIONS },
     { type: "link",  label: "Lab Reports",   iconKey: "lab",          to: ROUTES.PATIENT.LAB_REPORTS },
+    { type: "link",  label: "My Reports",    iconKey: "billing",      to: ROUTES.PATIENT.MY_REPORTS },
     { type: "link",  label: "Notifications", iconKey: "bell",         to: ROUTES.PATIENT.NOTIFICATIONS },
     { type: "link",  label: "Emergency QR",  iconKey: "qrcode",       to: ROUTES.PATIENT.EMERGENCY_QR },
     { type: "section", label: "Family Members" },

@@ -116,6 +116,7 @@ export const ROUTES = {
     RECORDS:            "/patient/records",
     PRESCRIPTIONS:      "/patient/prescriptions",
     LAB_REPORTS:        "/patient/lab-reports",
+    MY_REPORTS:         "/patient/my-reports",
     HEALTH_SUMMARY:     "/patient/health-summary",
     NOTIFICATIONS:      "/patient/notifications",
     MY_PROFILE:         "/patient/my-profile",

@@ -833,15 +833,15 @@ class PortalBookView(APIView):
                 awpid=target_awpid,
                 uhid=f"UHID-{max_num + 1:06d}",
                 branch=branch,
-                full_name=target_name,
-                gender=target_gender,
+                full_name=target_name or "",
+                gender=target_gender or "",
                 date_of_birth=target_dob,
                 # Patient.mobile/email are NOT NULL — a portal account that
                 # signed up by mobile has email=None, so coalesce to "".
                 mobile=(acct.mobile or "") if target_awpid == acct.awpid else "",
                 email=(acct.email or "") if target_awpid == acct.awpid else "",
                 is_dependent=target_awpid != acct.awpid,
-                guardian_name=acct.full_name if target_awpid != acct.awpid else "",
+                guardian_name=(acct.full_name or "") if target_awpid != acct.awpid else "",
                 guardian_mobile=(acct.mobile or "") if target_awpid != acct.awpid else "",
                 guardian_awpid=acct.awpid if target_awpid != acct.awpid else "",
                 hie_consent_given=True,
@@ -1733,9 +1733,69 @@ class PortalDocumentDetailView(APIView):
             "file_name": doc.file_name,
             "mime_type": doc.mime_type,
             "created_at": doc.created_at,
+            "document_date": doc.document_date,
+            "review_state": doc.review_state,
+            "verification_status": doc.verification_status,
+            "public_document_id": doc.public_document_id,
+            "classification_method": doc.classification_method,
+            "hospital_label": doc.hospital_label,
+            "doctor_label": doc.doctor_label,
             "file_data": file_data,
             "download": want_download,
         })
+
+    def patch(self, request, doc_id):
+        """
+        Re-categorise a document the patient uploaded (or one the classifier
+        parked in Unsorted). Body: { doc_type }. A QR-verified hospital
+        document cannot be re-typed — its type is authoritative.
+        """
+        from apps.registry.models import SharedDocument
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        doc = SharedDocument.objects.using("default").filter(pk=doc_id).first()
+        if not doc or doc.awpid != target_awpid or doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
+            return error("Document not found.", status=404)
+        if doc.verification_status == "verified":
+            return error("This document's type is set by the issuing hospital.", status=409)
+
+        new_type = (request.data.get("doc_type") or "").strip()
+        if new_type not in dict(SharedDocument.DOC_TYPE_CHOICES):
+            return error("Unknown document type.")
+        doc.doc_type = new_type
+        doc.review_state = "filed"
+        doc.verification_status = "unverified"
+        doc.classification_method = "patient_confirmed"
+        doc.save(using="default", update_fields=[
+            "doc_type", "review_state", "verification_status", "classification_method",
+        ])
+        return success(data={"id": doc.id, "doc_type": doc.doc_type, "review_state": doc.review_state})
+
+    def delete(self, request, doc_id):
+        """
+        Patient upload  -> soft-deleted (deleted_at), purged later.
+        Hospital-issued -> hidden from the patient's list only (hidden_at);
+                           the clinical record is untouched.
+        """
+        from apps.registry.models import SharedDocument
+        from django.utils import timezone
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        doc = SharedDocument.objects.using("default").filter(pk=doc_id).first()
+        if not doc or doc.awpid != target_awpid or doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
+            return error("Document not found.", status=404)
+
+        if doc.source_tenant_id:
+            doc.hidden_at = timezone.now()
+            doc.save(using="default", update_fields=["hidden_at"])
+            return success(data={"id": doc.id, "hidden": True})
+        doc.deleted_at = timezone.now()
+        doc.save(using="default", update_fields=["deleted_at"])
+        return success(data={"id": doc.id, "deleted": True})
 
 
 # ── My Reports: folder / multi-file upload (batch) ───────────────────────────
@@ -1867,6 +1927,70 @@ class PortalDocumentBatchProcessView(APIView):
             b.status = "processing"
             b.save(using="default", update_fields=["status"])
         return success(data={"batch_id": str(b.id), "status": b.status})
+
+
+class PortalDocumentZipView(APIView):
+    """
+    POST /api/v1/portal/documents/zip/   body: { ids: [<doc_id>, ...] }
+    Bundles the selected documents into a single ZIP. Every id must belong to
+    the caller (or a linked family member). Capped so a request can't pull an
+    unbounded amount from S3.
+    """
+    permission_classes = [IsPatient]
+    _MAX_IDS = 100
+
+    def post(self, request, *args, **kwargs):
+        import io
+        import zipfile
+        import base64 as _b64
+        from django.http import HttpResponse
+        from apps.registry.models import SharedDocument
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+
+        ids = request.data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return error("Select at least one document.")
+        if len(ids) > self._MAX_IDS:
+            return error(f"Select at most {self._MAX_IDS} documents.")
+
+        docs = list(
+            SharedDocument.objects.using("default")
+            .filter(pk__in=ids, awpid=target_awpid, deleted_at__isnull=True)
+            .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
+        )
+        if not docs:
+            return error("Nothing to download.", status=404)
+
+        buf = io.BytesIO()
+        used = set()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for d in docs:
+                raw = d.file_data or ""
+                try:
+                    if raw.startswith("data:"):
+                        content = _b64.b64decode(raw.split(",", 1)[1])
+                    else:
+                        content = blob_storage.get_bytes(raw)
+                except Exception:
+                    logger.warning("zip: could not read document %s", d.id, exc_info=True)
+                    continue
+                name = d.file_name or f"{(d.title or 'document')}-{d.id}.pdf"
+                if name in used:
+                    name = f"{d.id}-{name}"
+                used.add(name)
+                zf.writestr(name, content)
+
+        if not used:
+            return error("Could not read the selected documents.", status=502)
+
+        resp = HttpResponse(buf.getvalue(), content_type="application/zip")
+        resp["Content-Disposition"] = (
+            f'attachment; filename="my-reports-{timezone.now().date()}.zip"'
+        )
+        return resp
 
 
 # ── My lab orders ────────────────────────────────────────────────────────────
