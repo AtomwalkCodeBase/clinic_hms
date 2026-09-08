@@ -1077,56 +1077,17 @@ def _create_prescription_for(enc, db):
 
 
 def _store_prescription_pdf(enc, db, tenant_id):
-    """After sign: render the prescription to a PDF and store it as a
-    registry SharedDocument(doc_type='prescription') — available to both the
-    doctor (history) and the patient (portal). No-op if there's no Rx."""
+    """After sign: mirror the prescription to a registry
+    SharedDocument(doc_type='prescription') so it shows in the doctor's
+    history and the patient's My Reports. Delegates to
+    apps.opd.archive.store_prescription_document, which the
+    backfill_documents_from_records command reuses for existing rows."""
     rx = Prescription.objects.using(db).filter(encounter_id=enc.id).first()
     if rx is None:
         return
-    items = list(PrescriptionItem.objects.using(db).filter(prescription=rx))
-    if not items:
-        return
     try:
-        import base64, uuid as _uuid
-        from apps.opd.pdf import generate_prescription_pdf
-        from apps.org.models import StaffUser, Branch
-        from apps.tenants.models import Tenant
-        from apps.patients.models import Patient
-        from apps.registry.models import SharedDocument
-        from core import storage as blob_storage
-
-        appt = enc.appointment
-        patient = Patient.objects.using(db).filter(uuid=enc.patient_id).first()
-        branch = Branch.objects.using(db).filter(pk=appt.branch_id).first() if appt.branch_id else None
-        tenant = Tenant.objects.using("default").filter(pk=tenant_id).first()
-        hospital_name = tenant.name if tenant else "Hospital"
-        doctor_name = None
-        try:
-            raw = rx.doctor_user_id.int if isinstance(rx.doctor_user_id, _uuid.UUID) else rx.doctor_user_id
-            doctor_name = StaffUser.objects.using(db).get(pk=raw).get_full_name()
-        except Exception:
-            pass
-
-        pdf_bytes = generate_prescription_pdf(
-            prescription=rx, items=items, doctor_name=doctor_name, patient=patient,
-            branch=branch, hospital_name=hospital_name, visit_date=appt.scheduled_date,
-        )
-        pdf_uri = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
-        title = f"Prescription {rx.rx_number or str(rx.id)[:8]} — {appt.scheduled_date}"
-        slug = blob_storage.identity_slug(name=patient.full_name if patient else "", identifier=getattr(patient, "awpid", ""))
-        try:
-            file_ref = blob_storage.upload_data_uri(
-                pdf_uri, prefix="prescriptions", mime_type="application/pdf",
-                category="prescription", identity=slug,
-            )
-        except blob_storage.StorageError:
-            file_ref = pdf_uri  # local dev / no S3 — inline, same as consult notes
-        SharedDocument.objects.using("default").create(
-            awpid=getattr(patient, "awpid", ""), title=title, doc_type="prescription",
-            file_name=f"{title}.pdf", mime_type="application/pdf", file_data=file_ref,
-            uploaded_by="staff", source_tenant_id=tenant_id,
-            source_ref=f"encounter:{enc.id}",
-        )
+        from apps.opd.archive import store_prescription_document
+        store_prescription_document(rx, db, tenant_id)
     except Exception:
         logger.exception("prescription PDF store failed for encounter=%s", enc.id)
 

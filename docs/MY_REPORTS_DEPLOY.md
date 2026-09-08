@@ -47,11 +47,30 @@ Schema-only (every new column is nullable or defaulted). Existing rows get
 `review_state="filed"`, so nothing disappears from any patient's list.
 Reversible: `python manage.py migrate registry 0026`.
 
-## 4. Backfill existing documents (one-time)
+## 4. Backfill — one-time, two commands
 
-Hospital-issued prescriptions / lab reports are **already segregated** (their
-`doc_type` was set when the HMS created the row). Only old patient uploads
-filed as `other` / `scan` need re-typing:
+### 4a. Mirror existing prescriptions & lab reports into the vault
+
+Prescriptions live in `opd.Prescription` (tenant DBs) and lab reports in
+`lab.LabReport`; neither was ever copied into the `registry.SharedDocument`
+vault that My Reports reads. New ones now mirror automatically (prescriptions
+on encounter sign, lab reports on `deliver()`). This catches up everything
+that predates that:
+
+```bash
+python manage.py backfill_documents_from_records --dry-run           # preview counts
+python manage.py backfill_documents_from_records --limit 500          # in chunks
+python manage.py backfill_documents_from_records                      # finish
+```
+
+Idempotent (skips anything whose `source_ref` already exists). Each mirrored
+row is `verification_status="verified"`, `review_state="filed"` — the type is
+known, so no classification runs. `--kind prescription|lab_report` and
+`--tenant <db_name>` narrow it.
+
+### 4b. Re-classify old patient uploads
+
+Patient uploads previously filed as `other` / `scan`:
 
 ```bash
 python manage.py backfill_document_classification --dry-run          # preview counts

@@ -75,10 +75,13 @@ function fmtShort(iso) {
 function DocRow({ doc, picking, selected, onToggle, onOpen, onClassify }) {
   const m = TYPE_META[doc.doc_type] || TYPE_META.other;
   const unsorted = doc.review_state === "unsorted";
+  const rxWithDr = doc.doc_type === "prescription" && doc.doctor_label;
   const sub = unsorted
     ? "Not yet filed — tell us what this is"
-    : [doc.hospital_label || (doc.doctor_label ? "" : ""), doc.doctor_label].filter(Boolean).join(" · ")
-      || (doc.uploaded_by === "staff" ? "Issued by your hospital" : "Uploaded by you");
+    : rxWithDr
+      ? (doc.hospital_label || "Issued by your hospital")
+      : [doc.doctor_label, doc.hospital_label].filter(Boolean).join(" · ")
+        || (doc.uploaded_by === "staff" ? "Issued by your hospital" : "Uploaded by you");
 
   return (
     <div
@@ -138,7 +141,7 @@ function DetailModal({ doc, onClose, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [recat, setRecat] = useState(false);
   const m = TYPE_META[doc.doc_type] || TYPE_META.other;
-  const hospital = !!doc.source_tenant_id;
+  const hospital = !!doc.source_tenant_id || doc.uploaded_by === "staff";
 
   async function view(download) {
     const win = window.open("", "_blank");

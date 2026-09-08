@@ -78,9 +78,11 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
             _qr = qrcode.QRCode(box_size=4, border=1)
             _qr.add_data(_tok)
             _qr.make(fit=True)
-            _qr_img = _qr.make_image(fill_color="black", back_color="white")
+            _qr_buf = BytesIO()
+            _qr.make_image(fill_color="black", back_color="white").save(_qr_buf, format="PNG")
+            _qr_buf.seek(0)
             qr_size = 20 * mm
-            c.drawImage(ImageReader(_qr_img), right - qr_size, height - 20 * mm - qr_size + 4 * mm,
+            c.drawImage(ImageReader(_qr_buf), right - qr_size, height - 20 * mm - qr_size + 4 * mm,
                         width=qr_size, height=qr_size, preserveAspectRatio=True, mask="auto")
             c.setFont("Helvetica", 6)
             c.drawCentredString(right - qr_size / 2, height - 20 * mm - qr_size + 1 * mm,

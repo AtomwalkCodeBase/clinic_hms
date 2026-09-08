@@ -1536,6 +1536,10 @@ class PortalDocumentListCreateView(APIView):
             "review_state": d.review_state,
             "verification_status": d.verification_status,
             "document_date": d.document_date,
+            "public_document_id": d.public_document_id,
+            "hospital_label": d.hospital_label,
+            "doctor_label": d.doctor_label,
+            "source_tenant_id": d.source_tenant_id,
         } for d in page_items]
         return Response({"results": results, "pagination": meta})
 

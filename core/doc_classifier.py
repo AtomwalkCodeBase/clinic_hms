@@ -80,6 +80,40 @@ def _pdf_text(raw: bytes) -> str:
         return ""
 
 
+_TESSERACT_LOCATED = False
+
+
+def _locate_tesseract():
+    """Point pytesseract at the binary. Linux prod: it's on PATH (no-op).
+    Windows dev: probe the standard install path so no PATH edit is needed.
+    Override with settings.TESSERACT_CMD if it lives somewhere unusual."""
+    global _TESSERACT_LOCATED
+    if _TESSERACT_LOCATED:
+        return
+    _TESSERACT_LOCATED = True
+    try:
+        import shutil
+        import pytesseract
+        from django.conf import settings
+
+        override = getattr(settings, "TESSERACT_CMD", "") or ""
+        if override:
+            pytesseract.pytesseract.tesseract_cmd = override
+            return
+        if shutil.which("tesseract"):
+            return
+        for cand in (
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ):
+            import os
+            if os.path.exists(cand):
+                pytesseract.pytesseract.tesseract_cmd = cand
+                return
+    except Exception:
+        pass
+
+
 def _ocr_text(raw: bytes, mime_type: str) -> str:
     try:
         import pytesseract
@@ -87,6 +121,7 @@ def _ocr_text(raw: bytes, mime_type: str) -> str:
     except ImportError:
         logger.info("doc_classifier: pytesseract not installed — OCR skipped")
         return ""
+    _locate_tesseract()
     if mime_type == "application/pdf":
         # Rendering PDF pages to images needs poppler/pymupdf; a text-less PDF
         # just falls through to Unsorted for now.

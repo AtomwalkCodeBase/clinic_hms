@@ -381,6 +381,12 @@ PLATFORM_ADMIN_SECRET = config("PLATFORM_ADMIN_SECRET", default="change-this")
 # value — this feature is new, so there are no live QRs to invalidate yet.
 DOC_QR_SECRET = config("DOC_QR_SECRET", default="") or SECRET_KEY
 
+# Path to the tesseract binary for OCR classification of no-QR uploads.
+# Leave blank on Linux where `tesseract` is on PATH (apt install tesseract-ocr);
+# set it only if the binary lives somewhere non-standard (some Windows dev
+# machines) — core/doc_classifier.py also auto-probes the usual Windows paths.
+TESSERACT_CMD = config("TESSERACT_CMD", default="")
+
 # ── Handwriting recognition (consultation scratchpad) ───────────────────────
 # The consult-pad QR flow photographs a handwritten SOAP note; a vision model
 # transcribes it and splits it into S/O/A/P. Any OpenAI-compatible chat
