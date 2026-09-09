@@ -116,6 +116,8 @@ UPLOAD_CATEGORIES = {
     "patient-document":        "Patient Document",
     "vaccination-certificate": "Vaccination Certificate",
     "shared-lab-result":       "Lab Result",
+    "consult-note":            "Consultation Note",
+    "prescription":            "Prescription",
 }
 
 
@@ -254,7 +256,7 @@ def upload_data_uri(data_uri: str, *, prefix: str, mime_type: str, category: str
     return key
 
 
-def signed_url(key: str, *, expires_in: int = None) -> str:
+def signed_url(key: str, *, expires_in: int = None, download_name: str = None) -> str:
     """
     Generate a time-limited presigned GET URL for an S3 key.
 
@@ -265,6 +267,11 @@ def signed_url(key: str, *, expires_in: int = None) -> str:
     since a missing avatar/signature/report shouldn't 500 an entire profile
     or history page; it just renders as no-file, same as an empty field
     always has.
+
+    `download_name`: when given, the URL carries a `Content-Disposition:
+    attachment; filename="..."` override so the browser SAVES the file (with
+    that name) instead of rendering it inline. Used by the "Download" actions
+    on prescription / handwriting PDFs.
     """
     if not key:
         return ""
@@ -273,10 +280,14 @@ def signed_url(key: str, *, expires_in: int = None) -> str:
     except StorageError:
         return ""
     expires_in = expires_in or settings.AWS_S3_URL_EXPIRY
+    params = {"Bucket": settings.AWS_S3_BUCKET, "Key": key}
+    if download_name:
+        safe = download_name.replace('"', "").replace("\n", " ").strip() or "download"
+        params["ResponseContentDisposition"] = f'attachment; filename="{safe}"'
     try:
         return client.generate_presigned_url(
             "get_object",
-            Params={"Bucket": settings.AWS_S3_BUCKET, "Key": key},
+            Params=params,
             ExpiresIn=expires_in,
         )
     except Exception:
@@ -297,3 +308,58 @@ def delete(key: str) -> None:
         _client().delete_object(Bucket=settings.AWS_S3_BUCKET, Key=key)
     except Exception:
         logger.warning("S3 delete failed for key=%s", key, exc_info=True)
+
+
+# ── My Reports: direct-to-S3 upload (folder / multi-file flow) ──────────────
+# The bulk flow does NOT push bytes through Django. The client asks for a
+# presigned PUT per file, uploads straight to the `incoming/` staging prefix,
+# then the process_document_batches command reads each object back, validates,
+# classifies and copies it into `patients/…` (see that command).
+
+def presigned_put_url(key: str, *, mime_type: str, expires_in: int = None) -> str:
+    """
+    Short-lived presigned PUT URL. The client MUST send exactly these headers:
+    Content-Type: <mime_type>  and  x-amz-server-side-encryption: AES256.
+    Returns "" if storage isn't configured (callers treat that as 503).
+    """
+    if not key:
+        return ""
+    try:
+        client = _client()
+    except StorageError:
+        return ""
+    expires_in = expires_in or settings.AWS_S3_URL_EXPIRY
+    try:
+        return client.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": settings.AWS_S3_BUCKET,
+                "Key": key,
+                "ContentType": mime_type,
+                "ServerSideEncryption": "AES256",
+            },
+            ExpiresIn=expires_in,
+        )
+    except Exception:
+        logger.error("S3 presign PUT failed for key=%s", key, exc_info=True)
+        return ""
+
+
+def get_bytes(key: str) -> bytes:
+    """Read an object's full body. Raises StorageError if storage is unset."""
+    client = _client()
+    obj = client.get_object(Bucket=settings.AWS_S3_BUCKET, Key=key)
+    return obj["Body"].read()
+
+
+def put_bytes(key: str, data: bytes, *, mime_type: str) -> str:
+    """Write raw bytes to `key` with SSE-AES256. Returns the key."""
+    client = _client()
+    client.put_object(
+        Bucket=settings.AWS_S3_BUCKET,
+        Key=key,
+        Body=data,
+        ContentType=mime_type,
+        ServerSideEncryption="AES256",
+    )
+    return key

@@ -258,10 +258,24 @@ class PatientHistoryView(APIView):
             from core.audit import log_action
             log_action(request, request.tenant_db, action="patient.history.view_blocked_no_consent",
                         resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
+            # Documents THIS hospital captured for THIS visit — the consult
+            # note, the handwritten prescription, the typeset prescription PDF
+            # — are not cross-hospital sharing; they're this hospital's own
+            # record, just stored registry-side because that's where the file
+            # pipeline lives. So they stay visible even without HIE consent
+            # (source_tenant_id pins them to us; patient-uploaded docs have it
+            # null). Everything else stays gated.
+            from apps.registry.models import SharedDocument
+            own_notes = list(
+                SharedDocument.objects.using("default")
+                .filter(awpid=patient.awpid, source_tenant_id=request.tenant_id)
+                .values("id", "title", "doc_type", "file_name", "mime_type", "uploaded_by", "created_at")
+                .order_by("-created_at")[:50]
+            )
             return success(data={
                 "awpid": patient.awpid, "consent_given": False,
                 "diagnoses": [], "vitals": [], "allergies": [],
-                "lab_results": [], "prescriptions": [], "documents": [],
+                "lab_results": [], "prescriptions": [], "documents": own_notes,
             })
 
         history = PatientService.get_shared_history(awpid=patient.awpid)
@@ -296,7 +310,12 @@ class PatientDocumentDetailView(APIView):
         # doc_id obtained any other way (stale link, guessed id) must not
         # bypass consent just because the summary list itself is gated.
         owner = Patient.objects.using(request.tenant_db).filter(awpid=doc.awpid).first()
-        if not owner or not owner.hie_consent_given:
+        # A document this hospital captured for this visit (consult note,
+        # handwritten/typeset prescription) is exempt from the HIE gate — it's
+        # our own record, not cross-hospital sharing. Same carve-out as
+        # PatientHistoryView's no-consent branch.
+        own_hospital_doc = doc.source_tenant_id == request.tenant_id
+        if not own_hospital_doc and (not owner or not owner.hie_consent_given):
             from core.audit import log_action
             log_action(request, request.tenant_db, action="patient.document.view_blocked_no_consent",
                         resource_type="SharedDocument", resource_id=doc.id)
@@ -306,10 +325,25 @@ class PatientDocumentDetailView(APIView):
         log_action(request, request.tenant_db, action="patient.document.view",
                     resource_type="SharedDocument", resource_id=doc.id)
 
+        # Rows written before object storage (and the consult-pad's no-S3
+        # fallback) hold the file inline as a "data:" URI — hand those back
+        # as-is; only a real S3 object key gets a presigned URL.
+        # ?download=1 -> the caller wants a "Save As", not an inline view: an
+        # S3 URL gets a Content-Disposition override; a "data:" URI is saved
+        # client-side (utils/fileViewer.downloadFile).
+        want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
+        dl_name = doc.file_name or f"{doc.title or 'document'}.pdf"
+        raw = doc.file_data or ""
+        if raw.startswith("data:"):
+            file_data = raw
+        else:
+            file_data = blob_storage.signed_url(raw, download_name=dl_name if want_download else None)
+
         return success(data={
             "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,
             "file_name": doc.file_name, "mime_type": doc.mime_type,
-            "file_data": blob_storage.signed_url(doc.file_data), "created_at": doc.created_at,
+            "file_data": file_data, "created_at": doc.created_at,
+            "download": want_download,
         })
 
 

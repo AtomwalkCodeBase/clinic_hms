@@ -6,11 +6,13 @@ apps/billing/pdf.py's invoice PDF (see that module's docstring for why this
 returns raw bytes rather than a rendered template, and why the view layer
 wraps them as a base64 data URI instead of a raw application/pdf response).
 """
+import base64
 from io import BytesIO
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib import colors
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 FREQ_LABEL = {
@@ -57,14 +59,44 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
             c.drawString(left, y, f"Phone: {branch.phone}")
             y -= 5 * mm
 
-    c.setFont("Helvetica-Bold", 14)
-    c.drawRightString(right, height - 20 * mm, "PRESCRIPTION")
-    c.setFont("Helvetica", 9)
     rx_label = prescription.rx_number or str(prescription.id)[:8]
-    c.drawRightString(right, height - 26 * mm, f"Rx #: {rx_label}")
     when = visit_date or prescription.created_at
-    c.drawRightString(right, height - 31 * mm, f"Date: {when.strftime('%d %b %Y') if when else '—'}")
-    c.drawRightString(right, height - 36 * mm, f"Status: {prescription.status.replace('_', ' ').title()}")
+
+    # ── QR: "scan to save in My Reports" ────────────────────────────────
+    # Encodes an HMAC-signed token (core.qr_token) tying this Rx number to
+    # the patient's AWPID, so the portal can verify a re-uploaded photo of
+    # this sheet and file it under Prescriptions automatically. Best-effort:
+    # a missing rx_number / awpid, or any error, just omits the QR.
+    header_right = right
+    try:
+        awpid = getattr(patient, "awpid", "") if patient else ""
+        if prescription.rx_number and awpid:
+            import qrcode
+            from core.qr_token import issue as _qr_issue
+            _tok = _qr_issue(doc_type="prescription",
+                             public_document_id=prescription.rx_number, awpid=awpid)
+            _qr = qrcode.QRCode(box_size=4, border=1)
+            _qr.add_data(_tok)
+            _qr.make(fit=True)
+            _qr_buf = BytesIO()
+            _qr.make_image(fill_color="black", back_color="white").save(_qr_buf, format="PNG")
+            _qr_buf.seek(0)
+            qr_size = 20 * mm
+            c.drawImage(ImageReader(_qr_buf), right - qr_size, height - 20 * mm - qr_size + 4 * mm,
+                        width=qr_size, height=qr_size, preserveAspectRatio=True, mask="auto")
+            c.setFont("Helvetica", 6)
+            c.drawCentredString(right - qr_size / 2, height - 20 * mm - qr_size + 1 * mm,
+                                "Scan to save in My Reports")
+            header_right = right - qr_size - 4 * mm
+    except Exception:
+        header_right = right
+
+    c.setFont("Helvetica-Bold", 14)
+    c.drawRightString(header_right, height - 20 * mm, "PRESCRIPTION")
+    c.setFont("Helvetica", 9)
+    c.drawRightString(header_right, height - 26 * mm, f"Rx #: {rx_label}")
+    c.drawRightString(header_right, height - 31 * mm, f"Date: {when.strftime('%d %b %Y') if when else '—'}")
+    c.drawRightString(header_right, height - 36 * mm, f"Status: {prescription.status.replace('_', ' ').title()}")
 
     y -= 6 * mm
     c.setStrokeColor(colors.HexColor("#DDDDDD"))
@@ -343,5 +375,55 @@ def generate_encounter_summary_pdf(encounter, appointment, diagnoses, rx_items, 
     c.drawCentredString(width / 2, 15 * mm, "This is a system-generated consultation summary. Please consult your doctor before making any changes.")
 
     c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def images_to_pdf(page_data_uris, *, header=None):
+    """
+    Stitch a list of "data:image/...;base64,..." strings into one PDF, one
+    image per A4 page, scaled to fit with a margin and aspect ratio kept.
+
+    Used to archive the consult-pad's raw handwriting (ConsultSession
+    rx_pages / note_pages) as a permanent PDF on encounter sign — see
+    apps.opd.views._store_handwriting_pdfs.
+
+    Returns PDF bytes, or None if nothing decodable was passed.
+    """
+    imgs = []
+    for uri in page_data_uris or []:
+        if not isinstance(uri, str) or "," not in uri:
+            continue
+        try:
+            raw = base64.b64decode(uri.split(",", 1)[1])
+            imgs.append(ImageReader(BytesIO(raw)))
+        except Exception:
+            continue
+    if not imgs:
+        return None
+
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+    margin = 12 * mm
+    top_pad = 16 * mm if header else margin
+
+    for i, img in enumerate(imgs):
+        if header:
+            c.setFont("Helvetica-Oblique", 8)
+            c.setFillColor(colors.HexColor("#777777"))
+            c.drawString(margin, height - 11 * mm, f"{header}  ·  page {i + 1} of {len(imgs)}")
+            c.setFillColor(colors.black)
+
+        iw, ih = img.getSize()
+        avail_w = width - 2 * margin
+        avail_h = height - top_pad - margin
+        scale = min(avail_w / iw, avail_h / ih)
+        dw, dh = iw * scale, ih * scale
+        x = (width - dw) / 2
+        y = height - top_pad - dh
+        c.drawImage(img, x, y, width=dw, height=dh, preserveAspectRatio=True, mask="auto")
+        c.showPage()
+
     c.save()
     return buf.getvalue()

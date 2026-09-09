@@ -86,3 +86,21 @@ def validate_data_uri(data_uri: str, *, allowed_types=ALLOWED_MIME_TYPES) -> str
         )
 
     return declared_mime
+
+
+def validate_bytes(raw: bytes, *, allowed_types=ALLOWED_MIME_TYPES) -> str:
+    """
+    Same magic-byte check as validate_data_uri(), but for raw bytes already in
+    hand (used by the batch drain, which reads staged objects straight from
+    S3). Returns the detected mime type; raises FileValidationError if the
+    content matches none of the allowed signatures.
+    """
+    if not raw:
+        raise FileValidationError("Empty file.")
+    head = raw[:16]
+    for mime, sigs in _SIGNATURES.items():
+        if mime in allowed_types and any(head.startswith(s) for s in sigs):
+            return mime
+    raise FileValidationError(
+        f"Unsupported file type. Allowed: {', '.join(allowed_types)}."
+    )

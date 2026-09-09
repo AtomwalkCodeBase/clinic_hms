@@ -844,6 +844,8 @@ class PortalBookView(APIView):
                 full_name=target_name or "",
                 gender=target_gender or "",
                 date_of_birth=target_dob,
+                # Patient.mobile/email are NOT NULL — a portal account that
+                # signed up by mobile has email=None, so coalesce to "".
                 mobile=(acct.mobile or "") if target_awpid == acct.awpid else "",
                 email=(acct.email or "") if target_awpid == acct.awpid else "",
                 is_dependent=target_awpid != acct.awpid,
@@ -1526,8 +1528,35 @@ class PortalDocumentListCreateView(APIView):
         if err:
             return err
 
+        # The consult-pad's raw handwritten prescription is archived as its own
+        # SharedDocument (source_ref "encounter:<id>:handwritten:rx"). When the
+        # typeset prescription for the same encounter also exists, that
+        # handwriting is NOT a second entry in My Reports — it hangs off the
+        # typeset row as `handwritten_doc_id`, opened from the detail sheet.
+        # A handwriting row with NO typeset sibling (doctor wrote the script by
+        # hand and added no structured items) stays as its own row.
+        hw_rows = list(
+            SharedDocument.objects.using("default")
+            .filter(awpid=target_awpid, source_ref__endswith=":handwritten:rx")
+            .values_list("id", "source_ref")
+        )
+        base_refs = set(
+            SharedDocument.objects.using("default")
+            .filter(awpid=target_awpid, source_ref__startswith="encounter:")
+            .exclude(source_ref__contains=":handwritten:")
+            .values_list("source_ref", flat=True)
+        )
+        hw_by_base, linked_hw_ids = {}, []
+        for hid, ref in hw_rows:
+            base = ref.rsplit(":handwritten:rx", 1)[0]
+            if base in base_refs:
+                hw_by_base[base] = hid
+                linked_hw_ids.append(hid)
+
         qs = (SharedDocument.objects.using("default")
-              .filter(awpid=target_awpid)
+              .filter(awpid=target_awpid, hidden_at__isnull=True, deleted_at__isnull=True)
+              .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
+              .exclude(id__in=linked_hw_ids)
               .order_by("-created_at"))
         page_items, meta = paginate_queryset(request, qs)
         results = [{
@@ -1538,6 +1567,14 @@ class PortalDocumentListCreateView(APIView):
             "mime_type":  d.mime_type,
             "uploaded_by": d.uploaded_by,
             "created_at": d.created_at,
+            "review_state": d.review_state,
+            "verification_status": d.verification_status,
+            "document_date": d.document_date,
+            "public_document_id": d.public_document_id,
+            "hospital_label": d.hospital_label,
+            "doctor_label": d.doctor_label,
+            "source_tenant_id": d.source_tenant_id,
+            "handwritten_doc_id": hw_by_base.get(d.source_ref),
         } for d in page_items]
         return Response({"results": results, "pagination": meta})
 
@@ -1574,6 +1611,82 @@ class PortalDocumentListCreateView(APIView):
         source_ref = (d.get("source_ref") or "").strip()
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+
+        # ── My Reports pipeline: QR verify → dedup → classify → PDF ──────────
+        import base64, hashlib
+        from core import qr_token as _qt, doc_classifier as _dc, normalise as _nz
+
+        try:
+            raw = base64.b64decode(file_data.split(",", 1)[1]) if "," in file_data else b""
+        except Exception:
+            raw = b""
+        content_hash = hashlib.sha256(raw).hexdigest() if raw else ""
+
+        public_document_id = ""
+        verification_status = "unverified"
+        classification_method = ""
+        classification_confidence = None
+        document_date = None
+        review_state = "filed"
+
+        # 1. QR path — the phone decoded the hospital QR and posted the token.
+        qr_tok = (d.get("qr_token") or "").strip()
+        if qr_tok:
+            v = _qt.verify(qr_tok)
+            if v.ok and v.awpid and v.awpid != acct.awpid:
+                return error("This document belongs to another patient.", status=403)
+            if v.ok:
+                doc_type = v.doc_type
+                public_document_id = v.public_document_id
+                verification_status = "verified"
+                classification_method = "qr"
+
+        # 2. De-duplication — by hospital id (QR path) or exact content hash.
+        force = str(d.get("force") or "").strip().lower() in ("1", "true", "yes")
+        dup_qs = SharedDocument.objects.using("default").filter(
+            awpid=acct.awpid, deleted_at__isnull=True,
+        )
+        existing = None
+        if public_document_id:
+            existing = dup_qs.filter(public_document_id=public_document_id).first()
+        if existing is None and content_hash:
+            existing = dup_qs.filter(content_hash=content_hash).first()
+        if existing is not None and not force:
+            return Response({
+                "duplicate": True,
+                "existing_id": existing.id,
+                "existing_title": existing.title,
+                "existing_doc_type": existing.doc_type,
+            }, status=200)
+
+        # 3. No QR — classify from the page text (OCR when there's no text layer).
+        if classification_method != "qr":
+            try:
+                cr = _dc.classify(raw, mime_type)
+                classification_method = cr.method
+                classification_confidence = cr.confidence
+                document_date = cr.doc_date
+                if cr.confident:
+                    doc_type = cr.doc_type
+                    review_state = "filed"
+                else:
+                    doc_type = "other"
+                    review_state = "unsorted"
+                    verification_status = "needs_review"
+            except Exception:
+                logger.exception("doc classify failed; parking upload in Unsorted")
+                doc_type = "other"
+                review_state = "unsorted"
+                verification_status = "needs_review"
+                classification_method = "ocr_keyword"
+
+        # 4. Normalise every upload to a PDF (images become a single-page PDF).
+        try:
+            pdf_bytes, mime_type = _nz.to_pdf(raw, mime_type)
+            file_data = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
+        except Exception:
+            logger.exception("PDF normalise failed; storing the original file")
+
         identity = blob_storage.identity_slug(name=acct.full_name, identifier=acct.awpid)
         try:
             file_key = blob_storage.upload_data_uri(
@@ -1597,12 +1710,358 @@ class PortalDocumentListCreateView(APIView):
             awpid=acct.awpid, title=title, doc_type=doc_type,
             file_name=file_name, mime_type=mime_type, file_data=file_key,
             uploaded_by="patient", source_tenant_id=None, source_ref=source_ref,
+            public_document_id=public_document_id, content_hash=content_hash,
+            classification_method=classification_method,
+            classification_confidence=classification_confidence,
+            verification_status=verification_status, review_state=review_state,
+            document_date=document_date,
         )
         return Response({
             "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,
             "file_name": doc.file_name, "mime_type": doc.mime_type,
             "source_ref": doc.source_ref, "created_at": doc.created_at,
+            "review_state": doc.review_state,
+            "verification_status": doc.verification_status,
         }, status=201)
+
+
+class PortalDocumentDetailView(APIView):
+    """
+    GET /api/v1/portal/documents/<doc_id>/
+
+    Full content for one of the patient's own documents — the download path
+    for the list above (which is metadata-only). Returns `file_data` as a
+    short-lived signed URL when it's an object-storage key, or the inline
+    `data:` URI for older/local rows.
+
+    Gated three ways: the doc must belong to the caller's own AWPID (or a
+    linked family member), and its type must not be one of
+    SharedDocument.STAFF_ONLY_DOC_TYPES (the handwritten internal note never
+    leaves the clinician side).
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request, doc_id):
+        from apps.registry.models import SharedDocument
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+
+        doc = SharedDocument.objects.using("default").filter(pk=doc_id).first()
+        if not doc or doc.awpid != target_awpid:
+            return error("Document not found.", status=404)
+        if doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
+            # Not the patient's to see — 404, not 403, so its existence isn't
+            # even confirmed.
+            return error("Document not found.", status=404)
+
+        # ?download=1 -> "Save As" instead of inline view (S3 URL gets a
+        # Content-Disposition override; a "data:" URI is saved client-side).
+        want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
+        dl_name = doc.file_name or f"{doc.title or 'document'}.pdf"
+        raw = doc.file_data or ""
+        if raw.startswith("data:"):
+            file_data = raw
+        else:
+            file_data = blob_storage.signed_url(raw, download_name=dl_name if want_download else None)
+        # A typeset prescription may have the doctor's raw handwriting archived
+        # as a sibling row — surfaced here so the detail sheet can offer
+        # "view / download handwritten" without it being a second My Reports entry.
+        handwritten_doc_id = None
+        if doc.doc_type == "prescription" and (doc.source_ref or "").startswith("encounter:") \
+                and ":handwritten:" not in doc.source_ref:
+            handwritten_doc_id = (
+                SharedDocument.objects.using("default")
+                .filter(awpid=doc.awpid, source_ref=f"{doc.source_ref}:handwritten:rx")
+                .values_list("id", flat=True).first()
+            )
+
+        return success(data={
+            "id": doc.id,
+            "title": doc.title,
+            "doc_type": doc.doc_type,
+            "file_name": doc.file_name,
+            "mime_type": doc.mime_type,
+            "created_at": doc.created_at,
+            "document_date": doc.document_date,
+            "review_state": doc.review_state,
+            "verification_status": doc.verification_status,
+            "public_document_id": doc.public_document_id,
+            "classification_method": doc.classification_method,
+            "hospital_label": doc.hospital_label,
+            "doctor_label": doc.doctor_label,
+            "handwritten_doc_id": handwritten_doc_id,
+            "file_data": file_data,
+            "download": want_download,
+        })
+
+    def patch(self, request, doc_id):
+        """
+        Re-categorise a document the patient uploaded (or one the classifier
+        parked in Unsorted). Body: { doc_type }. A QR-verified hospital
+        document cannot be re-typed — its type is authoritative.
+        """
+        from apps.registry.models import SharedDocument
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        doc = SharedDocument.objects.using("default").filter(pk=doc_id).first()
+        if not doc or doc.awpid != target_awpid or doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
+            return error("Document not found.", status=404)
+        if doc.verification_status == "verified":
+            return error("This document's type is set by the issuing hospital.", status=409)
+
+        new_type = (request.data.get("doc_type") or "").strip()
+        if new_type not in dict(SharedDocument.DOC_TYPE_CHOICES):
+            return error("Unknown document type.")
+        doc.doc_type = new_type
+        doc.review_state = "filed"
+        doc.verification_status = "unverified"
+        doc.classification_method = "patient_confirmed"
+        doc.save(using="default", update_fields=[
+            "doc_type", "review_state", "verification_status", "classification_method",
+        ])
+        return success(data={"id": doc.id, "doc_type": doc.doc_type, "review_state": doc.review_state})
+
+    def delete(self, request, doc_id):
+        """
+        Remove a document from the patient's My Reports and from everything a
+        DIFFERENT hospital can pull (HIE history + emergency QR) — both the
+        hidden_at and deleted_at markers are filtered out of every such query.
+
+        Patient upload   -> deleted_at (soft-deleted, purged later).
+        Hospital-issued  -> hidden_at; the hospital that created it keeps its
+                            own copy in its own chart (medical-retention), but
+                            it is gone from the patient's reports and from
+                            other hospitals.
+
+        A typeset prescription and its handwritten sibling are removed together.
+        """
+        from apps.registry.models import SharedDocument
+        from django.utils import timezone
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        doc = SharedDocument.objects.using("default").filter(pk=doc_id).first()
+        if not doc or doc.awpid != target_awpid or doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
+            return error("Document not found.", status=404)
+
+        now = timezone.now()
+        targets = [doc]
+        if doc.doc_type == "prescription" and (doc.source_ref or "").startswith("encounter:") \
+                and ":handwritten:" not in doc.source_ref:
+            sib = (SharedDocument.objects.using("default")
+                   .filter(awpid=doc.awpid, source_ref=f"{doc.source_ref}:handwritten:rx")
+                   .first())
+            if sib:
+                targets.append(sib)
+
+        for t in targets:
+            if t.source_tenant_id:
+                t.hidden_at = now
+                t.save(using="default", update_fields=["hidden_at"])
+            else:
+                t.deleted_at = now
+                t.save(using="default", update_fields=["deleted_at"])
+        return success(data={"id": doc.id, "deleted": True})
+
+
+# ── My Reports: folder / multi-file upload (batch) ───────────────────────────
+
+_BATCH_MAX_FILES = 100
+_BATCH_MAX_BYTES = 300 * 1024 * 1024   # 300 MB
+_ITEM_MAX_BYTES = 20 * 1024 * 1024     # 20 MB per file
+_EXT_BY_MIME_NAME = {"pdf": "pdf", "jpg": "jpg", "jpeg": "jpg", "png": "png"}
+
+
+class PortalDocumentBatchView(APIView):
+    """
+    POST /api/v1/portal/documents/batch/
+        body: { method?, files: [ {name, size, sha256?}, ... ] }
+        -> creates a DocumentUploadBatch + one DocumentUploadItem per accepted
+           file and returns a presigned S3 PUT url for each. Non-document
+           extensions are dropped from the manifest (client should pre-filter
+           too). The client PUTs each file straight to S3, then calls
+           .../batch/<id>/process/. The process_document_batches command
+           (cron) does the actual validation + classification + filing.
+
+    GET  /api/v1/portal/documents/batch/?batch_id=<uuid>
+        -> { batch: {...counters, status}, items: [{id, filename, status, reason}] }
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request):
+        from apps.registry.models import DocumentUploadBatch
+
+        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        batch_id = (request.query_params.get("batch_id") or "").strip()
+        if not batch_id:
+            return error("batch_id is required.")
+        b = DocumentUploadBatch.objects.using("default").filter(pk=batch_id, awpid=acct.awpid).first()
+        if not b:
+            return error("Batch not found.", status=404)
+        items = list(b.items.values("id", "original_filename", "status", "reason",
+                                    "classified_as", "result_document_id"))
+        return success(data={
+            "batch": {
+                "id": str(b.id), "status": b.status, "method": b.method,
+                "total_files": b.total_files, "accepted": b.accepted,
+                "unsorted": b.unsorted, "ignored": b.ignored, "failed": b.failed,
+                "created_at": b.created_at, "finished_at": b.finished_at,
+            },
+            "items": [{**it, "id": str(it["id"]),
+                       "result_document_id": it["result_document_id"]} for it in items],
+        })
+
+    def post(self, request):
+        from apps.registry.models import DocumentUploadBatch, DocumentUploadItem
+
+        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        method = (request.data.get("method") or "files").strip()
+        if method not in ("folder", "files", "photo"):
+            method = "files"
+        files = request.data.get("files") or []
+        if not isinstance(files, list) or not files:
+            return error("files list is required.")
+
+        # one active batch per patient at a time
+        if (DocumentUploadBatch.objects.using("default")
+                .filter(awpid=acct.awpid, status__in=("pending", "processing")).exists()):
+            return error("You already have an upload in progress. Please wait for it to finish.")
+
+        accepted, ignored, total_bytes = [], 0, 0
+        for f in files:
+            name = str((f or {}).get("name") or "").strip()
+            size = int((f or {}).get("size") or 0)
+            ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+            if ext not in _EXT_BY_MIME_NAME:
+                ignored += 1
+                continue
+            if size and size > _ITEM_MAX_BYTES:
+                ignored += 1
+                continue
+            total_bytes += size
+            accepted.append({"name": name, "size": size,
+                             "sha256": str((f or {}).get("sha256") or ""),
+                             "ext": _EXT_BY_MIME_NAME[ext]})
+
+        if not accepted:
+            return error("None of the selected files are PDFs or images.")
+        if len(accepted) > _BATCH_MAX_FILES:
+            return error(f"Too many files. Upload at most {_BATCH_MAX_FILES} at a time.")
+        if total_bytes > _BATCH_MAX_BYTES:
+            return error("This folder is over the 300 MB per-upload limit. Split it into two.")
+
+        slug = blob_storage.identity_slug(name=acct.full_name, identifier=acct.awpid)
+        batch = DocumentUploadBatch.objects.using("default").create(
+            awpid=acct.awpid, initiated_by="patient", method=method,
+            total_files=len(accepted), ignored=ignored, status="pending",
+        )
+        out = []
+        for a in accepted:
+            item = DocumentUploadItem.objects.using("default").create(
+                batch=batch, original_filename=a["name"], declared_size=a["size"],
+                content_hash=a["sha256"], status="uploading",
+            )
+            key = f"incoming/{slug}/{batch.id}/{item.id}.{a['ext']}"
+            item.staging_key = key
+            item.save(using="default", update_fields=["staging_key"])
+            mime = {"pdf": "application/pdf", "jpg": "image/jpeg", "png": "image/png"}[a["ext"]]
+            out.append({
+                "item_id": str(item.id),
+                "filename": a["name"],
+                "put_url": blob_storage.presigned_put_url(key, mime_type=mime),
+                "content_type": mime,
+            })
+        return success(data={"batch_id": str(batch.id), "ignored": ignored, "items": out}, status=201)
+
+
+class PortalDocumentBatchProcessView(APIView):
+    """
+    POST /api/v1/portal/documents/batch/<batch_id>/process/
+    Marks the batch ready for the drain once the client has finished PUTting
+    every file to S3. The process_document_batches command picks it up.
+    """
+    permission_classes = [IsPatient]
+
+    def post(self, request, batch_id):
+        from apps.registry.models import DocumentUploadBatch
+
+        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        b = DocumentUploadBatch.objects.using("default").filter(pk=batch_id, awpid=acct.awpid).first()
+        if not b:
+            return error("Batch not found.", status=404)
+        if b.status == "pending":
+            b.status = "processing"
+            b.save(using="default", update_fields=["status"])
+        return success(data={"batch_id": str(b.id), "status": b.status})
+
+
+class PortalDocumentZipView(APIView):
+    """
+    POST /api/v1/portal/documents/zip/   body: { ids: [<doc_id>, ...] }
+    Bundles the selected documents into a single ZIP. Every id must belong to
+    the caller (or a linked family member). Capped so a request can't pull an
+    unbounded amount from S3.
+    """
+    permission_classes = [IsPatient]
+    _MAX_IDS = 100
+
+    def post(self, request, *args, **kwargs):
+        import io
+        import zipfile
+        import base64 as _b64
+        from django.http import HttpResponse
+        from apps.registry.models import SharedDocument
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+
+        ids = request.data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return error("Select at least one document.")
+        if len(ids) > self._MAX_IDS:
+            return error(f"Select at most {self._MAX_IDS} documents.")
+
+        docs = list(
+            SharedDocument.objects.using("default")
+            .filter(pk__in=ids, awpid=target_awpid, deleted_at__isnull=True)
+            .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
+        )
+        if not docs:
+            return error("Nothing to download.", status=404)
+
+        buf = io.BytesIO()
+        used = set()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for d in docs:
+                raw = d.file_data or ""
+                try:
+                    if raw.startswith("data:"):
+                        content = _b64.b64decode(raw.split(",", 1)[1])
+                    else:
+                        content = blob_storage.get_bytes(raw)
+                except Exception:
+                    logger.warning("zip: could not read document %s", d.id, exc_info=True)
+                    continue
+                name = d.file_name or f"{(d.title or 'document')}-{d.id}.pdf"
+                if name in used:
+                    name = f"{d.id}-{name}"
+                used.add(name)
+                zf.writestr(name, content)
+
+        if not used:
+            return error("Could not read the selected documents.", status=502)
+
+        resp = HttpResponse(buf.getvalue(), content_type="application/zip")
+        resp["Content-Disposition"] = (
+            f'attachment; filename="my-reports-{timezone.now().date()}.zip"'
+        )
+        return resp
 
 
 # ── My lab orders ────────────────────────────────────────────────────────────
@@ -1784,6 +2243,7 @@ class PortalPrescriptionListView(APIView):
         from apps.opd.models import Appointment, OPDEncounter, Prescription
         from apps.org.models import StaffUser
         from apps.patients.models import Patient
+        from apps.registry.models import SharedDocument
         import uuid as _uuid
 
         target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
@@ -1823,6 +2283,18 @@ class PortalPrescriptionListView(APIView):
                 rxs = (Prescription.objects.using(db)
                        .filter(encounter_id__in=list(enc_ids))
                        .order_by("-created_at")[:50])
+
+                # The doctor's handwritten prescription, archived as a PDF on
+                # sign (apps.opd.views._store_handwriting_pdfs). Keyed by
+                # encounter, doc_type "prescription" (patient-visible).
+                hw_by_enc = {
+                    d.source_ref.split(":")[1]: d.id
+                    for d in SharedDocument.objects.using("default").filter(
+                        awpid=target_awpid, doc_type="prescription",
+                        source_ref__endswith=":handwritten:rx",
+                    )
+                }
+
                 for rx in rxs:
                     doctor_name = None
                     try:
@@ -1843,6 +2315,9 @@ class PortalPrescriptionListView(APIView):
                         "payment_preference": rx.payment_preference,
                         "payment_status": rx.payment_status,
                         "created_at": rx.created_at,
+                        # id of the archived handwritten-Rx PDF, if the doctor
+                        # used the consult pad — fetch via portal/documents/<id>/
+                        "handwritten_document_id": hw_by_enc.get(str(rx.encounter_id)),
                         "items": [{
                             "drug_name": it.drug_name,
                             "dosage": it.dosage,
@@ -2847,6 +3322,7 @@ class PortalHealthTimelineView(APIView):
         try:
             docs = (SharedDocument.objects.using("default")
                     .filter(awpid=target_awpid)
+                    .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
                     .order_by("-created_at")[:limit])
             for d in docs:
                 entries.append({

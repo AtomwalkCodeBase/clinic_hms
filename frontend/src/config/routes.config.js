@@ -19,6 +19,11 @@ export const ROUTES = {
   // that isn't even on this platform has no Atomwalk login at all. See
   // apps/patients/emergency_views.py for the backend half.
   EMERGENCY_VIEW: (token) => `/emergency/${token}`,
+  // Consultation scratchpad — opened by scanning a patient's permanent
+  // handwriting-pad QR on a phone. Also outside every route guard: the
+  // doctor's phone browser has no Atomwalk session. See
+  // pages/public/ConsultPadPage.jsx + apps/patients/consult_pad_views.py.
+  CONSULT_PAD: (token) => `/consult-pad/${token}`,
 
   // Platform Admin
   PLATFORM: {
@@ -112,6 +117,7 @@ export const ROUTES = {
     RECORDS:            "/patient/records",
     PRESCRIPTIONS:      "/patient/prescriptions",
     LAB_REPORTS:        "/patient/lab-reports",
+    MY_REPORTS:         "/patient/my-reports",
     HEALTH_SUMMARY:     "/patient/health-summary",
     NOTIFICATIONS:      "/patient/notifications",
     MY_PROFILE:         "/patient/my-profile",

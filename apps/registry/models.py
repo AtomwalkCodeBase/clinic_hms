@@ -14,6 +14,8 @@ DPDP Act compliance:
   - AWPID is the platform's cross-provider patient identifier.
 """
 
+import uuid
+
 from django.db import models
 
 
@@ -97,6 +99,25 @@ class PatientIdentity(models.Model):
     email               = models.EmailField(blank=True)
     blood_group         = models.CharField(max_length=5, blank=True)
     preferred_language  = models.CharField(max_length=10, default="en")
+
+    # Permanent "consultation scratchpad" QR token — a doctor mid-consult
+    # shows this patient's QR, scans it on a phone, hand-writes a SOAP note
+    # with a finger, and it's filed back against this patient as a PDF (see
+    # apps/patients/consult_pad_views.py). Unlike the emergency token this
+    # one never expires and is the SAME code every visit — one QR per
+    # patient, so it can be printed on a card / stuck in a paper file.
+    # null until a doctor first opens the QR for this patient; rotate it
+    # (PatientConsultPadQRView ?rotate=1) to revoke a leaked code.
+    consult_pad_token   = models.CharField(max_length=64, unique=True, null=True, blank=True, db_index=True)
+    # The last hospital (Tenant.id) that opened this patient's pad QR. The
+    # pad submission itself is unauthenticated (it's reached by scanning a
+    # public QR), so it has no tenant context of its own — this is how a
+    # submitted note gets stamped with "which hospital captured it", which
+    # in turn is what lets that hospital always see its own consult notes in
+    # the patient history even before the patient has consented to
+    # cross-hospital record sharing.
+    consult_pad_owner_tenant_id = models.IntegerField(null=True, blank=True)
+
     created_at          = models.DateTimeField(auto_now_add=True)
     updated_at          = models.DateTimeField(auto_now=True)
 
@@ -247,8 +268,16 @@ class SharedDocument(models.Model):
         ("prescription",       "Prescription"),
         ("scan",               "Scan / Imaging"),
         ("discharge_summary",  "Discharge Summary"),
+        ("consult_note",       "Consultation Note"),
         ("other",              "Other"),
     ]
+    # Doc types that are the hospital's own internal record — surfaced to
+    # clinicians (patient-history sidebar) but NEVER in the patient portal.
+    # Every patient-facing SharedDocument query must exclude these; the
+    # handwritten internal note archived on encounter sign is the reason this
+    # exists (apps.opd.views._store_handwriting_pdfs).
+    STAFF_ONLY_DOC_TYPES = ("consult_note",)
+
     UPLOADED_BY_CHOICES = [
         ("patient", "Patient"),
         ("staff",   "Staff"),
@@ -259,7 +288,7 @@ class SharedDocument(models.Model):
     doc_type         = models.CharField(max_length=20, choices=DOC_TYPE_CHOICES, default="other")
     file_name        = models.CharField(max_length=255, blank=True)
     mime_type        = models.CharField(max_length=100, blank=True)
-    file_data        = models.TextField()   # base64 data URI
+    file_data        = models.TextField()   # S3 object key (older rows: base64 data URI)
     uploaded_by      = models.CharField(max_length=10, choices=UPLOADED_BY_CHOICES, default="patient")
     source_tenant_id = models.IntegerField(null=True, blank=True)  # null when patient-uploaded
     # Links an "outside" upload back to the LabRequest that prompted it, e.g.
@@ -268,12 +297,118 @@ class SharedDocument(models.Model):
     source_ref       = models.CharField(max_length=120, blank=True, db_index=True)
     created_at       = models.DateTimeField(auto_now_add=True)
 
+    # ── My Reports pipeline (HMS-DOC) ─────────────────────────────────────
+    # public_document_id: the quotable hospital id (rx_number / report_number)
+    #   this row corresponds to. Set on the QR-verified path; blank for
+    #   external uploads. Used together with content_hash for de-duplication.
+    public_document_id = models.CharField(max_length=40, blank=True, db_index=True)
+    # document_date: the date printed ON the document (extracted or entered),
+    #   distinct from created_at (when it entered the vault).
+    document_date      = models.DateField(null=True, blank=True)
+    # content_hash: SHA-256 of the ORIGINAL uploaded bytes — exact-duplicate
+    #   detection, stable across the PDF-normalisation step.
+    content_hash       = models.CharField(max_length=64, blank=True, db_index=True)
+    # how the doc_type was decided: qr | ocr_keyword | patient_confirmed | staff
+    classification_method     = models.CharField(max_length=20, blank=True)
+    classification_confidence = models.FloatField(null=True, blank=True)  # 0..1 for ocr_keyword
+    # verified | unverified | needs_review | rejected
+    verification_status = models.CharField(max_length=16, default="unverified")
+    # filed | unsorted — 'unsorted' rows are excluded from the patient list's
+    # normal view and from get_shared_history() until the patient confirms.
+    review_state       = models.CharField(max_length=12, default="filed", db_index=True)
+    batch              = models.ForeignKey(
+        "registry.DocumentUploadBatch", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="documents",
+    )
+    is_duplicate_of    = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+    )
+    # free-text lab/hospital and doctor for EXTERNAL uploads
+    hospital_label     = models.CharField(max_length=120, blank=True)
+    doctor_label       = models.CharField(max_length=120, blank=True)
+    # soft links into the tenant DBs so the detail view can open structured data
+    prescription_ref   = models.CharField(max_length=60, blank=True)  # "<tenant_db>:<uuid>"
+    lab_report_ref     = models.CharField(max_length=60, blank=True)  # "<tenant_db>:<id>"
+    # "hide from my documents" (hospital-generated rows) vs real delete (patient uploads)
+    hidden_at          = models.DateTimeField(null=True, blank=True)
+    deleted_at         = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         app_label = "registry"
         db_table  = "shared_document"
+        indexes = [
+            models.Index(fields=["awpid", "review_state"], name="shared_doc_awpid_review_idx"),
+            models.Index(fields=["awpid", "doc_type", "document_date"], name="shared_doc_awpid_type_date_idx"),
+            models.Index(fields=["awpid", "content_hash"], name="shared_doc_awpid_hash_idx"),
+        ]
 
     def __str__(self):
         return f"{self.awpid} — {self.title}"
+
+
+class DocumentUploadBatch(models.Model):
+    """
+    One folder / multi-file upload from the patient portal. The client uploads
+    every file straight to S3 (presigned PUT) and this row plus its
+    DocumentUploadItem children track progress; the
+    process_document_batches management command (cron) drains it.
+    """
+    STATUS_CHOICES = [
+        ("pending", "Pending"), ("processing", "Processing"),
+        ("done", "Done"), ("partial", "Partial"),
+    ]
+    METHOD_CHOICES = [
+        ("folder", "Folder"), ("files", "Files"), ("photo", "Photo"), ("qr", "QR"),
+    ]
+    id           = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    awpid        = models.CharField(max_length=30, db_index=True)
+    initiated_by = models.CharField(max_length=10, default="patient")  # patient | staff
+    method       = models.CharField(max_length=12, choices=METHOD_CHOICES, default="files")
+    total_files  = models.IntegerField(default=0)
+    accepted     = models.IntegerField(default=0)   # filed as prescription / lab report
+    unsorted     = models.IntegerField(default=0)   # parked for review
+    ignored      = models.IntegerField(default=0)   # not medical / rejected
+    failed       = models.IntegerField(default=0)   # validation / scan errors
+    status       = models.CharField(max_length=12, choices=STATUS_CHOICES, default="pending", db_index=True)
+    created_at   = models.DateTimeField(auto_now_add=True)
+    finished_at  = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "document_upload_batch"
+        indexes = [models.Index(fields=["awpid", "status"], name="doc_batch_awpid_status_idx")]
+
+    def __str__(self):
+        return f"batch {self.id} [{self.status}] {self.awpid}"
+
+
+class DocumentUploadItem(models.Model):
+    """One file within a DocumentUploadBatch."""
+    STATUS_CHOICES = [
+        ("uploading", "Uploading"), ("scanning", "Scanning"),
+        ("classified", "Classified"), ("filed", "Filed"), ("unsorted", "Unsorted"),
+        ("ignored", "Ignored"), ("failed", "Failed"), ("duplicate", "Duplicate"),
+    ]
+    id                = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    batch             = models.ForeignKey(DocumentUploadBatch, on_delete=models.CASCADE, related_name="items")
+    original_filename = models.CharField(max_length=255, blank=True)  # display only
+    declared_size     = models.IntegerField(default=0)               # bytes, from the manifest
+    content_hash      = models.CharField(max_length=64, blank=True)
+    staging_key       = models.CharField(max_length=255, blank=True)  # S3 key under incoming/
+    status            = models.CharField(max_length=14, choices=STATUS_CHOICES, default="uploading", db_index=True)
+    reason            = models.CharField(max_length=160, blank=True)
+    result_document   = models.ForeignKey(SharedDocument, null=True, blank=True,
+                                          on_delete=models.SET_NULL, related_name="+")
+    classified_as     = models.CharField(max_length=20, blank=True)  # prescription | lab_report | not_medical
+    processed_at      = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "document_upload_item"
+        indexes = [models.Index(fields=["batch", "status"], name="doc_item_batch_status_idx")]
+
+    def __str__(self):
+        return f"item {self.id} [{self.status}] {self.original_filename}"
 
 
 class SharedVital(models.Model):
@@ -703,3 +838,73 @@ class EmergencyAccessLog(models.Model):
 
     def __str__(self):
         return f"{self.awpid} — {self.event} @ {self.created_at}"
+
+
+class ConsultSession(models.Model):
+    """
+    A live handwriting session for ONE consultation. The doctor opens it from
+    an encounter (EncounterConsultSessionView), scans the patient's permanent
+    QR, and writes on a phone across two tabs — Prescription and Internal Note
+    — with every stroke autosaved here. It stays `open`, surviving the pad
+    being closed and re-scanned, until the encounter is signed.
+
+    Registry DB (like SharedDocument / the retired ConsultPadSubmission) so
+    the public, tenant-context-free phone endpoint can read/write it via a
+    plain `.using("default")`. Scoped by no-FK id fields, this codebase's
+    cross-DB convention:
+      encounter_id  → the tenant-DB OPDEncounter this belongs to
+      tenant_id     → which hospital (also how the phone endpoint routes,
+                      via PatientIdentity.consult_pad_owner_tenant_id)
+
+    `*_pages` hold the raw canvas as "data:image/png;base64,..." strings —
+    session scratch, discarded when status flips to signed/expired. The
+    permanent record is the encounter's SOAP fields + the Prescription (+ its
+    stored PDF). `*_recognised` hold the vision-LLM output the web pulls in
+    via "Load handwritten note".
+    """
+    STATUS_OPEN    = "open"
+    STATUS_SIGNED  = "signed"
+    STATUS_EXPIRED = "expired"
+    STATUS_CHOICES = [
+        (STATUS_OPEN,    "Open"),
+        (STATUS_SIGNED,  "Signed"),
+        (STATUS_EXPIRED, "Expired"),
+    ]
+
+    awpid           = models.CharField(max_length=30, db_index=True)
+    tenant_id       = models.IntegerField(db_index=True)
+    encounter_id    = models.UUIDField(db_index=True)
+    doctor_user_id  = models.UUIDField(null=True, blank=True)
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES,
+                              default=STATUS_OPEN, db_index=True)
+
+    # Prescription tab
+    rx_pages      = models.JSONField(default=list, blank=True)
+    # { items:[{drug_name,dosage,frequency,route,duration_days,instructions}],
+    #   raw_text, status: idle|pending|done|failed, error, at }
+    rx_recognised = models.JSONField(null=True, blank=True)
+
+    # Internal Note tab
+    note_pages      = models.JSONField(default=list, blank=True)
+    # { subjective,objective,assessment,plan, diagnoses:[{code,description}],
+    #   investigations, advice, follow_up_days, raw_text,
+    #   status: idle|pending|done|failed, error, at }
+    note_recognised = models.JSONField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    signed_at  = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "consult_session"
+        ordering  = ["-created_at"]
+        indexes = [
+            models.Index(fields=["encounter_id", "status"]),
+            models.Index(fields=["awpid", "tenant_id", "status"]),
+        ]
+
+    def __str__(self):
+        return f"ConsultSession {self.id} enc={self.encounter_id} [{self.status}]"

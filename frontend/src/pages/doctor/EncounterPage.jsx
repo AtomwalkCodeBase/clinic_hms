@@ -26,7 +26,7 @@ import { openDataUrlInNewTab } from "../../utils/fileViewer";
 import {
   AlertTriangle, Stethoscope, Pill, FlaskConical, Activity, Clock, Paperclip,
   Sparkles, Printer, Download, CalendarClock, Cake, User, Upload,
-  TrendingUp, Syringe, Check, X as XIcon, Mic, Square,
+  TrendingUp, Syringe, Check, X as XIcon, Mic, Square, QrCode,
 } from "lucide-react";
 
 // ─── Common ICD-10 codes (expandable; backend search in Phase 2) ─────────────
@@ -176,6 +176,30 @@ const ICD10_CODES = [
 
 const FREQ_LABELS = { od:"OD", bd:"BD", td:"TD", qid:"QID", sos:"SOS", stat:"Stat", nocte:"Nocte", mane:"Mane" };
 const ROUTE_LABELS = { oral:"Oral", iv:"IV", im:"IM", sc:"SC", topical:"Topical", inhaled:"Inhaled", rectal:"Rectal", sublingual:"SL" };
+
+// Below this, the handwriting model's self-reported confidence is treated as
+// "don't trust this": note fields are not auto-filled and Rx lines are flagged
+// in the review panel rather than added silently.
+const HW_LOW_CONFIDENCE = 0.35;
+// A recognition that has sat "pending" longer than this is treated as stuck
+// (the worker thread died, or a deploy restarted mid-run).
+const HW_PENDING_STALE_MS = 90_000;
+
+const ICD10_CODE_SET = new Set(ICD10_CODES.map(c => c.code.toUpperCase()));
+
+// Best-effort ICD-10 code for a free-text diagnosis description, using the
+// same starter table the manual picker uses. "" when nothing matches.
+function icdCodeForDescription(desc) {
+  const d = (desc || "").trim().toLowerCase();
+  if (!d) return "";
+  const exact = ICD10_CODES.find(c => c.desc.toLowerCase() === d);
+  if (exact) return exact.code;
+  const part = ICD10_CODES.find(c => {
+    const cd = c.desc.toLowerCase();
+    return cd.includes(d) || d.includes(cd) || (c.keywords || []).some(k => d.includes(k));
+  });
+  return part ? part.code : "";
+}
 
 // ─── Tiny helpers ─────────────────────────────────────────────────────────────
 function SectionCard({ title, badge, extra, children }) {
@@ -1296,7 +1320,7 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
           </HistorySection>
 
           <HistorySection title="Attachments" icon={<Paperclip size={13} />} count={documents.length} defaultOpen>
-            {documents.length === 0 ? <EmptyNote>No reports attached by the patient.</EmptyNote> : (
+            {documents.length === 0 ? <EmptyNote>No documents or handwritten notes on file yet.</EmptyNote> : (
               <div style={{ display: "grid", gap: 6 }}>
                 {documents.map(d => (
                   <button
@@ -1312,9 +1336,10 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.title}</div>
                       <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
-                        {d.doc_type?.replace("_", " ")}
+                        {d.doc_type === "consult_note" ? "handwritten note" : d.doc_type?.replace("_", " ")}
                         {d.created_at && ` · ${new Date(d.created_at).toLocaleDateString("en-IN")}`}
                         {d.uploaded_by === "patient" && " · uploaded by patient"}
+                        {d.doc_type === "consult_note" && d.uploaded_by === "staff" && " · written by doctor"}
                       </div>
                     </span>
                   </button>
@@ -1868,6 +1893,37 @@ function DiagnosisSearch({ onAdd, disabled, chiefComplaint, existingCodes = [] }
 
 // ─── Drug entry form ──────────────────────────────────────────────────────────
 const EMPTY_DRUG = { drug: null, drug_name: "", dosage: "", frequency: "od", route: "oral", duration_days: "", instructions: "" };
+
+// Normalise a free-text / abbreviation frequency or route (e.g. from the
+// handwriting recogniser) to the codes PrescriptionItem accepts.
+const _FREQ_CODES = new Set(["od", "bd", "td", "qid", "sos", "stat", "nocte", "mane"]);
+const _ROUTE_CODES = new Set(["oral", "iv", "im", "sc", "topical", "inhaled", "rectal", "sublingual"]);
+function mapFreq(v) {
+  const s = String(v || "").trim().toLowerCase();
+  if (_FREQ_CODES.has(s)) return s;
+  if (/\b(qd|once|1-0-0|daily|hs\s*morning|om)\b/.test(s)) return "od";
+  if (/\b(bid|bd|twice|1-0-1|bis)\b/.test(s)) return "bd";
+  if (/\b(tid|tds|thrice|three times|1-1-1)\b/.test(s)) return "td";
+  if (/\b(qid|qds|four times)\b/.test(s)) return "qid";
+  if (/\b(prn|sos|as needed|as required|if needed)\b/.test(s)) return "sos";
+  if (/\b(stat|immediately|at once|now)\b/.test(s)) return "stat";
+  if (/\b(hs|nocte|night|bedtime|bed time)\b/.test(s)) return "nocte";
+  if (/\b(mane|morning)\b/.test(s)) return "mane";
+  return "od";
+}
+function mapRoute(v) {
+  const s = String(v || "").trim().toLowerCase();
+  if (_ROUTE_CODES.has(s)) return s;
+  if (/\b(po|by mouth|per oral|orally)\b/.test(s)) return "oral";
+  if (/\b(i\.?v\.?|intravenous)\b/.test(s)) return "iv";
+  if (/\b(i\.?m\.?|intramuscular)\b/.test(s)) return "im";
+  if (/\b(s\.?c\.?|subcut|subcutaneous)\b/.test(s)) return "sc";
+  if (/\b(topical|local|apply)\b/.test(s)) return "topical";
+  if (/\b(inhal|neb|puff)\b/.test(s)) return "inhaled";
+  if (/\b(pr|rectal|per rectum)\b/.test(s)) return "rectal";
+  if (/\b(sl|sublingual|under tongue)\b/.test(s)) return "sublingual";
+  return "oral";
+}
 
 // Searchable dropdown over the pharmacist-maintained drug catalog (see
 // pages/pharmacist/CatalogPage.jsx) — same load-once-then-client-filter
@@ -2570,6 +2626,334 @@ export default function EncounterPage() {
   const [admissionModalOpen, setAdmissionModalOpen] = useState(false); // Recommend Admission is a button + modal, not a tab — see AdmissionReferralModal
   const [followUpModalOpen, setFollowUpModalOpen] = useState(false); // Book Follow-up is a button + modal too — see FollowUpModal
 
+  // Handwriting session — the doctor starts it from this encounter
+  // (POST .../consult-session/), shows the patient's QR, and writes on a
+  // phone across two tabs. "Load handwritten note" pulls the current session
+  // into the form; it's re-runnable and says "nothing new" when the session
+  // hasn't changed since the last pull. See pages/public/ConsultPadPage.jsx.
+  const [qrData, setQrData] = useState(null); // { qr_image, pad_url, session_id }
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [recognisedNote, setRecognisedNote] = useState(null); // { note, rx } from the session
+  const [textViewOpen, setTextViewOpen] = useState(false);
+  const [loadingNote, setLoadingNote] = useState(false);
+  const lastLoadedRef = useRef(null);       // session.updated_at at the last pull
+  const loadedSnapshotRef = useRef({});     // field -> value as last loaded (to spot hand-edits)
+
+  // Per-encounter sessionStorage so a page refresh doesn't lose the doctor's
+  // "added" / "skipped" decisions or the still-to-review queue.
+  const _ssKey = (k) => `hwpad:${id}:${k}`;
+  const _ssGet = (k, fb) => { try { const v = sessionStorage.getItem(_ssKey(k)); return v ? JSON.parse(v) : fb; } catch { return fb; } };
+  const _ssSet = (k, v) => { try { sessionStorage.setItem(_ssKey(k), JSON.stringify(v)); } catch { /* private mode / quota */ } };
+
+  const loadedRxRef = useRef(new Set(_ssGet("dismissRx", []))); // norm drug names already added or skipped
+  const loadedDxRef = useRef(new Set(_ssGet("dismissDx", []))); // norm diagnosis descs already added or skipped
+  const [pendingRx, setPendingRx] = useState(() => _ssGet("pendingRx", [])); // Rx lines staged for review
+  const [pendingDx, setPendingDx] = useState(() => _ssGet("pendingDx", [])); // diagnoses staged for review
+
+  useEffect(() => { _ssSet("pendingRx", pendingRx); }, [pendingRx]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { _ssSet("pendingDx", pendingDx); }, [pendingDx]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const _normName = (s) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const rememberDismissedRx = (n) => { loadedRxRef.current.add(n); _ssSet("dismissRx", [...loadedRxRef.current]); };
+  const rememberDismissedDx = (n) => { loadedDxRef.current.add(n); _ssSet("dismissDx", [...loadedDxRef.current]); };
+  const editPendingRx = (idx, patch) => setPendingRx(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
+  const editPendingDx = (idx, patch) => setPendingDx(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
+
+  // Drop staged items that are already on the record (e.g. after a refresh, or
+  // if the doctor added one manually in the meantime).
+  useEffect(() => {
+    if (!pendingRx.length || !rxItems.length) return;
+    const have = new Set(rxItems.map(i => _normName(i.drug_name)));
+    setPendingRx(prev => prev.filter(it => !have.has(_normName(it.drug_name))));
+  }, [rxItems]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!pendingDx.length || !diagnoses.length) return;
+    const have = new Set(diagnoses.map(d => _normName(d.description)));
+    setPendingDx(prev => prev.filter(d => !have.has(_normName(d.description))));
+  }, [diagnoses]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Merge a session's recognised content into the encounter draft. SOAP-ish
+  // text fields are replaced only where the doctor hasn't hand-edited since
+  // the last load. Prescription lines AND diagnoses are NOT written to the
+  // record here — they are staged into `pendingRx` / `pendingDx` for the
+  // doctor to add one by one. Returns { set, changed, rxStaged, dxStaged, noteLowConf }.
+  async function applyRecognised({ note, rx }) {
+    setRecognisedNote({ note: note || null, rx: rx || null });
+    const snap = loadedSnapshotRef.current;
+    let set = 0, changed = 0, dxStaged = 0;
+
+    // The model reports how confident it is that this was a legible clinical
+    // note. Below the threshold we do NOT auto-fill the SOAP fields — the
+    // doctor is pointed at "View text" to read it and copy anything useful by
+    // hand, rather than have low-trust text land silently in the record.
+    const lowConf = (t) => !!t && t.status === "done" &&
+      typeof t.confidence === "number" && t.confidence < HW_LOW_CONFIDENCE;
+    const noteLowConf = lowConf(note);
+    const rxLowConf = lowConf(rx);
+    const noteOk = !!note && note.status === "done" && !noteLowConf;
+    const rxOk   = !!rx   && rx.status === "done"   && !rxLowConf;
+    const anyLowConf = noteLowConf || rxLowConf;
+
+    // ONE combined context. The doctor writes wherever they like — the
+    // Prescription pad, the Internal Note pad, or both — and every field is
+    // merged from both. No "this tab loads that field" rule to remember.
+    const merge = (a, b) => {
+      a = String(a || "").trim(); b = String(b || "").trim();
+      if (!a) return b;
+      if (!b || a === b) return a;
+      const la = a.toLowerCase(), lb = b.toLowerCase();
+      if (la.includes(lb)) return a;
+      if (lb.includes(la)) return b;
+      return `${a}\n${b}`;
+    };
+    const val = (src) => merge(noteOk ? note[src] : "", rxOk ? rx[src] : "");
+
+    if (noteOk || rxOk) {
+      const map = [
+        ["subjective", "subjective"], ["objective", "objective"],
+        ["assessment", "assessment"], ["plan", "plan"],
+        ["investigations", "investigations"], ["advice", "advice_to_patient"],
+      ];
+      setForm(prev => {
+        const m = { ...prev };
+        const before = { set, changed };
+        for (const [src, field] of map) {
+          const inc = val(src);
+          if (!inc) continue;
+          const cur = (prev[field] || "").trim();
+          if (!cur || cur === (snap[field] || "")) { m[field] = inc; set++; }
+          else if (cur !== inc) { changed++; }
+          snap[field] = inc;
+        }
+        // The model transcribed the note but didn't split it into SOAP
+        // sections (common for a short free-form note) — don't silently drop
+        // it. Drop the verbatim transcription into Subjective so it's on
+        // screen for the doctor to re-file, instead of only living behind
+        // "View text".
+        if (set === before.set && changed === before.changed) {
+          const raw = merge(noteOk ? note.raw_text : "", rxOk ? rx.raw_text : "");
+          const cur = (prev.subjective || "").trim();
+          if (raw && (!cur || cur === (snap.subjective || ""))) {
+            m.subjective = raw;
+            snap.subjective = raw;
+            set++;
+          }
+        }
+        const fu = (noteOk && note.follow_up_days != null && note.follow_up_days !== "")
+          ? note.follow_up_days
+          : (rxOk ? rx.follow_up_days : null);
+        if (fu != null && fu !== "") {
+          const cur = String(prev.follow_up_in_days || "").trim();
+          if (!cur || cur === (snap.follow_up_in_days || "")) { m.follow_up_in_days = String(fu); set++; }
+          snap.follow_up_in_days = String(fu);
+        }
+        return m;
+      });
+
+      // Diagnoses are staged for review (same as Rx) — a hallucinated
+      // diagnosis or a wrong ICD code must not land on the record unseen.
+      // Merged from whichever pad(s) they were written on.
+      const dxIn = [
+        ...(noteOk && Array.isArray(note.diagnoses) ? note.diagnoses : []),
+        ...(rxOk && Array.isArray(rx.diagnoses) ? rx.diagnoses : []),
+      ];
+      if (dxIn.length) {
+        const haveDx = new Set([
+          ...diagnoses.map(d => _normName(d.description)),
+          ...loadedDxRef.current,
+        ]);
+        const stagedDx = [];
+        for (const d of dxIn) {
+          const desc = (d?.description || "").trim();
+          if (!desc || haveDx.has(_normName(desc))) continue;
+          haveDx.add(_normName(desc));   // both pads may carry the same Dx
+          const rawCode = (d?.code || "").trim().toUpperCase();
+          const codeOk = !!rawCode && ICD10_CODE_SET.has(rawCode);
+          const code = codeOk ? rawCode : icdCodeForDescription(desc);
+          const flags = [];
+          if (rawCode && !codeOk) flags.push(`read code ${rawCode} is not a known ICD-10 — replaced with a suggestion`);
+          if (!code) flags.push("no ICD-10 code — add one before signing");
+          stagedDx.push({ description: desc, code, raw_code: rawCode, code_verified: codeOk, flags });
+        }
+        setPendingDx(stagedDx);
+        dxStaged = stagedDx.length;
+      }
+    }
+
+    // Prescription lines are never written straight to the record — a mis-read
+    // or hallucinated drug would land as a real order. Stage them into
+    // `pendingRx`; the doctor adds each one explicitly from the review panel
+    // under the Prescription card. De-dupe against what's already prescribed
+    // and against lines the doctor already added or dismissed (`loadedRxRef`),
+    // so re-loading the same pad is idempotent.
+    let rxStaged = 0;
+    const drugsOf = (t) => Array.isArray(t?.items) ? t.items
+      : Array.isArray(t?.prescription) ? t.prescription : [];
+    const rxIn = [
+      ...(rxOk ? drugsOf(rx) : []),
+      ...(noteOk ? drugsOf(note) : []),
+    ].filter(x => (x?.drug_name || "").trim());
+    if ((rxOk || noteOk) && rxIn.length) {
+      const normDrug = (s) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
+      const have = new Set([
+        ...rxItems.map(i => normDrug(i.drug_name)),
+        ...loadedRxRef.current,
+      ]);
+      const staged = rxIn.filter(it => {
+        const n = normDrug(it.drug_name);
+        if (!n || have.has(n)) return false;
+        have.add(n);        // both pads may carry the same drug line
+        return true;
+      });
+      setPendingRx(staged);
+      rxStaged = staged.length;
+    }
+
+    if (set || changed) setDirty(true);
+    return { set, changed, rxStaged, dxStaged, noteLowConf: anyLowConf };
+  }
+
+  async function openConsultPadQR() {
+    if (!enc?.id) return;
+    setQrLoading(true);
+    try {
+      const { data } = await apiClient.post(API_ENDPOINTS.OPD.ENCOUNTER_CONSULT_SESSION(enc.id));
+      setQrData(data?.data || data);
+      setQrOpen(true);
+    } catch (err) {
+      toastApiError(err, "Could not start the handwriting session.");
+    } finally {
+      setQrLoading(false);
+    }
+  }
+
+  // ── Handwriting: one pull + an auto-watch ─────────────────────────────────
+  // The doctor can't know when transcription finishes (it runs on the phone's
+  // autosave and can take 30-120s), so a single "Load" click that comes back
+  // "still transcribing" is useless. Instead: pull once, and if it's not ready
+  // yet, poll every few seconds and fill the fields the moment it lands — with
+  // a small progress bar in place of the button meanwhile.
+  const HW_WATCH_MAX_MS = 150_000;
+  const HW_POLL_EVERY_TICKS = 3;   // 1s ticks → poll every 3s
+  const [hwWatch, setHwWatch] = useState(false);
+  const [hwElapsed, setHwElapsed] = useState(0);   // seconds since the watch began
+  const hwTimerRef = useRef(null);
+  const hwStartRef = useRef(0);
+  const hwPct = Math.min(95, Math.round((hwElapsed / (HW_WATCH_MAX_MS / 1000)) * 100));
+
+  const stopHwWatch = () => {
+    if (hwTimerRef.current) { clearInterval(hwTimerRef.current); hwTimerRef.current = null; }
+    setHwWatch(false);
+    setHwElapsed(0);
+  };
+  useEffect(() => () => { if (hwTimerRef.current) clearInterval(hwTimerRef.current); }, []);
+
+  // Fetch the session and either apply it or report why not.
+  //   "settled"  — applied, or there's nothing more coming (stop)
+  //   "waiting"  — recognition still running (keep polling)
+  //   "inactive" — no session started yet (stop)
+  // `quiet` suppresses the informational toasts ("no session", "nothing new")
+  // used by the poll loop; terminal errors and a real apply always toast.
+  async function pullHandwrittenNote({ quiet = false } = {}) {
+    if (!enc?.id) return "inactive";
+    try {
+      const { data: res } = await apiClient.get(API_ENDPOINTS.OPD.ENCOUNTER_CONSULT_SESSION(enc.id));
+      const s = res?.data || res;
+      if (!s?.active) {
+        if (!quiet) toastError('No handwriting session yet — tap "Handwrite (QR)" and write on the phone first.');
+        return "inactive";
+      }
+      const rxDone = s.rx && s.rx.status === "done";
+      const noteDone = s.note && s.note.status === "done";
+      if (s.updated_at && s.updated_at === lastLoadedRef.current && !quiet) {
+        // Nothing new written since the last load. Re-apply the compiled
+        // result anyway (the doctor may have cleared a field and wants it
+        // back) — but don't re-run the model.
+        if (rxDone || noteDone) {
+          await applyRecognised({ note: s.note, rx: s.rx });
+          toastSuccess("Re-applied the handwritten note.");
+        } else {
+          toastSuccess("Already loaded — nothing new on the phone since the last pull.");
+        }
+        return "settled";
+      }
+      const isStale = (t) => t && t.status === "pending" && t.at &&
+        (Date.now() - new Date(t.at).getTime() > HW_PENDING_STALE_MS);
+      const anyStale = isStale(s.rx) || isStale(s.note);
+      const anyPending = !anyStale && ((s.rx && s.rx.status === "pending") || (s.note && s.note.status === "pending"));
+      const anyEmpty = (s.rx && s.rx.status === "empty") || (s.note && s.note.status === "empty");
+      const noteFailed = s.note && s.note.status === "failed";
+      const rxFailed = s.rx && s.rx.status === "failed";
+
+      if (!rxDone && !noteDone) {
+        if (anyPending) return "waiting";   // still transcribing — poll again, no toast
+        if (anyStale) toastError("Recognition timed out — write a little more on the phone to retry it, or type the note in.");
+        else if (anyEmpty) toastError("The phone pages look blank or unreadable — write the note, then load again.");
+        else if (noteFailed || rxFailed) toastError("Couldn't read the handwriting this time. Write a little clearer on the phone and load again, or type it in.");
+        else if (!quiet) toastError("Nothing recognised yet — write on the phone, then load.");
+        return anyEmpty || anyStale || noteFailed || rxFailed ? "settled" : "waiting";
+      }
+
+      const { set, changed, rxStaged, dxStaged, noteLowConf } = await applyRecognised({ note: s.note, rx: s.rx });
+      setRecognisedNote({ note: s.note || null, rx: s.rx || null, rxPages: s.rx_pages || [], notePages: s.note_pages || [] });
+      lastLoadedRef.current = s.updated_at || null;
+      const bits = [];
+      if (set) bits.push(`${set} field${set > 1 ? "s" : ""} filled`);
+      if (rxStaged) bits.push(`${rxStaged} medication${rxStaged > 1 ? "s" : ""} to review`);
+      if (dxStaged) bits.push(`${dxStaged} diagnos${dxStaged > 1 ? "es" : "is"} to review`);
+      let msg = bits.length ? `Loaded — ${bits.join(", ")}.` : "Loaded — no new content.";
+      if (noteLowConf) msg += ' The note came back low-confidence — open "View text" and check it before relying on it.';
+      const lowInk = (s.note && s.note.low_ink) || (s.rx && s.rx.low_ink);
+      if (lowInk) msg += " Very little was written on the page — check what was read.";
+      const pageWarn = (s.note && s.note.page_warnings) || (s.rx && s.rx.page_warnings);
+      if (pageWarn) msg += " " + pageWarn;
+      if (changed) msg += ` ${changed} field${changed > 1 ? "s" : ""} changed on the phone — you'd edited them, so they were left as-is (see "View text").`;
+      if (anyPending) msg += " (The other tab is still transcribing — it'll fill in automatically.)";
+      if (noteDone && !rxDone && rxFailed) msg += " Couldn't read the Prescription tab — load again or add drugs manually.";
+      if (rxDone && !noteDone && noteFailed) msg += " Couldn't read the Internal Note tab — load again or type it in.";
+      toastSuccess(msg);
+      return anyPending ? "waiting" : "settled";
+    } catch (err) {
+      if (!quiet) toastApiError(err, "Could not load the handwriting session.");
+      return "waiting";   // transient — let the poll retry
+    }
+  }
+
+  async function loadHandwrittenNote() {
+    if (!enc?.id || loadingNote || hwWatch) return;
+    setLoadingNote(true);
+    let verdict = "waiting";
+    try {
+      // Lazy compile: nothing is transcribed until this click. The server
+      // only runs the model over pages it hasn't seen before (a re-load after
+      // the patient adds more just picks up the new pages), then re-reads.
+      try {
+        await apiClient.post(API_ENDPOINTS.OPD.ENCOUNTER_CONSULT_SESSION(enc.id), { action: "recognise" });
+      } catch { /* the pull below reports if there's no session yet */ }
+      verdict = await pullHandwrittenNote({ quiet: false });
+    } finally {
+      setLoadingNote(false);
+    }
+    if (verdict !== "waiting") return;
+    // Not ready — start watching. Fill the fields the moment it lands.
+    hwStartRef.current = Date.now();
+    setHwElapsed(0);
+    setHwWatch(true);
+    hwTimerRef.current = setInterval(async () => {
+      const secs = Math.round((Date.now() - hwStartRef.current) / 1000);
+      setHwElapsed(secs);
+      if (Date.now() - hwStartRef.current > HW_WATCH_MAX_MS) {
+        stopHwWatch();
+        toastError("Recognition is taking longer than usual — keep writing on the phone, or type the note in and load again later.");
+        return;
+      }
+      if (secs % HW_POLL_EVERY_TICKS !== 0) return;
+      const r = await pullHandwrittenNote({ quiet: true });
+      if (r !== "waiting") stopHwWatch();
+    }, 1000);
+  }
+
   function openDictation(section, text) {
     const base = { section, text };
     if (section === "soap")         base.target = "subjective";
@@ -2712,6 +3096,117 @@ export default function EncounterPage() {
     } finally {
       setRemovingItem(null);
     }
+  }
+
+  // ── Handwriting: staged Rx / Dx review ───────────────────────────────────
+  // Recognised prescription lines and diagnoses wait in `pendingRx` /
+  // `pendingDx` until the doctor adds them here — nothing from handwriting is
+  // written to the record on its own. Doctors can edit a staged row first;
+  // that edit is what gets saved.
+  function _rxPayload(it) {
+    return {
+      drug_name: (it.drug_name || "").trim(),
+      dosage: (it.dosage || "").trim() || "as directed",
+      frequency: mapFreq(it.frequency),
+      route: mapRoute(it.route),
+      duration_days: Number.isFinite(+it.duration_days) && +it.duration_days > 0 ? parseInt(it.duration_days, 10) : null,
+      instructions: (it.instructions || "").trim(),
+    };
+  }
+  async function addPendingRx(idx) {
+    const it = pendingRx[idx];
+    if (!it || addingRx || !(it.drug_name || "").trim()) return;
+    setAddingRx(true);
+    try {
+      const pid = await ensureRx();
+      const res = await apiClient.post(API_ENDPOINTS.OPD.PRESCRIPTION_ITEMS(pid), _rxPayload(it));
+      setRxItems(prev => [...prev, res.data?.data || res.data]);
+      rememberDismissedRx(_normName(it.drug_name));
+      setPendingRx(prev => prev.filter((_, i) => i !== idx));
+      setDirty(true);
+      toastSuccess("Added to prescription.");
+    } catch (err) {
+      toastApiError(err, "Could not add this drug.");
+    } finally {
+      setAddingRx(false);
+    }
+  }
+  function skipPendingRx(idx) {
+    const it = pendingRx[idx];
+    if (it) rememberDismissedRx(_normName(it.drug_name));
+    setPendingRx(prev => prev.filter((_, i) => i !== idx));
+  }
+  async function addAllPendingRx() {
+    if (!pendingRx.length || addingRx) return;
+    setAddingRx(true);
+    try {
+      const pid = await ensureRx();
+      const added = [], names = [];
+      for (const it of pendingRx) {
+        if (!(it.drug_name || "").trim()) continue;
+        try {
+          const res = await apiClient.post(API_ENDPOINTS.OPD.PRESCRIPTION_ITEMS(pid), _rxPayload(it));
+          added.push(res.data?.data || res.data);
+          names.push(_normName(it.drug_name));
+        } catch { /* skip the ones that fail, keep going */ }
+      }
+      if (added.length) {
+        setRxItems(prev => [...prev, ...added]);
+        names.forEach(rememberDismissedRx);
+        setDirty(true);
+      }
+      setPendingRx([]);
+      toastSuccess(`${added.length} medication${added.length === 1 ? "" : "s"} added.`);
+    } catch (err) {
+      toastApiError(err, "Could not add the medications.");
+    } finally {
+      setAddingRx(false);
+    }
+  }
+  function dismissAllPendingRx() {
+    pendingRx.forEach(it => rememberDismissedRx(_normName(it.drug_name)));
+    setPendingRx([]);
+  }
+
+  function addPendingDx(idx) {
+    const d = pendingDx[idx];
+    if (!d || !(d.description || "").trim()) return;
+    setDiagnoses(prev => {
+      if (prev.some(x => _normName(x.description) === _normName(d.description))) return prev;
+      return [...prev, {
+        code: (d.code || "").trim(),
+        description: d.description.trim(),
+        clinical_status: "active",
+        is_primary: prev.length === 0,
+      }];
+    });
+    rememberDismissedDx(_normName(d.description));
+    setPendingDx(prev => prev.filter((_, i) => i !== idx));
+    setDirty(true);
+  }
+  function skipPendingDx(idx) {
+    const d = pendingDx[idx];
+    if (d) rememberDismissedDx(_normName(d.description));
+    setPendingDx(prev => prev.filter((_, i) => i !== idx));
+  }
+  function addAllPendingDx() {
+    if (!pendingDx.length) return;
+    setDiagnoses(prev => {
+      const out = [...prev];
+      for (const d of pendingDx) {
+        const desc = (d.description || "").trim();
+        if (!desc || out.some(x => _normName(x.description) === _normName(desc))) continue;
+        out.push({ code: (d.code || "").trim(), description: desc, clinical_status: "active", is_primary: out.length === 0 });
+      }
+      return out;
+    });
+    pendingDx.forEach(d => rememberDismissedDx(_normName(d.description)));
+    setPendingDx([]);
+    setDirty(true);
+  }
+  function dismissAllPendingDx() {
+    pendingDx.forEach(d => rememberDismissedDx(_normName(d.description)));
+    setPendingDx([]);
   }
 
   // ── Sign & close ────────────────────────────────────────────────────────────
@@ -2863,7 +3358,64 @@ export default function EncounterPage() {
           {/* ── SOAP Notes + Diagnoses side by side ────────────────────────── */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
           <SectionCard title="SOAP Notes"
-            extra={<DictateButton disabled={isClosed} onTranscript={t => openDictation("soap", t)} />}>
+            extra={
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={() => openConsultPadQR()}
+                  disabled={isClosed || qrLoading || !enc.patient_pk}
+                  title="Show a QR to hand-write this note on a phone"
+                  style={miniBtn("var(--color-border)", "var(--color-text)", "var(--color-surface)", isClosed)}
+                >
+                  <QrCode size={13} /> {qrLoading ? "…" : "Handwrite (QR)"}
+                </button>
+                {hwWatch ? (
+                  <span
+                    title="Reading your handwritten note — the fields fill in automatically when it's ready"
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 8, padding: "4px 10px",
+                      border: "1px solid var(--color-primary)", borderRadius: 6,
+                      background: "var(--color-primary-light)", fontSize: 12, fontWeight: 600,
+                      color: "var(--color-primary)",
+                    }}
+                  >
+                    <span style={{ width: 64, height: 4, borderRadius: 2, background: "var(--color-border)", overflow: "hidden", flexShrink: 0 }}>
+                      <span style={{ display: "block", height: "100%", width: `${hwPct}%`, background: "var(--color-primary)", transition: "width .6s linear" }} />
+                    </span>
+                    Reading your note…
+                    <button
+                      type="button"
+                      onClick={stopHwWatch}
+                      title="Stop waiting"
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-primary)", padding: 0, display: "inline-flex" }}
+                    >
+                      <XIcon size={13} />
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={loadHandwrittenNote}
+                    disabled={isClosed || loadingNote || !enc.patient_pk}
+                    title="Pull the handwritten note you wrote on the phone into these fields"
+                    style={miniBtn("var(--color-primary)", "var(--color-primary)", "var(--color-primary-light)", isClosed)}
+                  >
+                    <Sparkles size={13} /> {loadingNote ? "Loading…" : "Load handwritten note"}
+                  </button>
+                )}
+                {recognisedNote && (
+                  <button
+                    type="button"
+                    onClick={() => setTextViewOpen(true)}
+                    title="View the transcribed handwritten note"
+                    style={miniBtn("var(--color-primary)", "var(--color-primary)", "var(--color-primary-light)", false)}
+                  >
+                    View text
+                  </button>
+                )}
+                <DictateButton disabled={isClosed} onTranscript={t => openDictation("soap", t)} />
+              </div>
+            }>
             <Field label="S — Subjective (history & chief complaint in patient's words)">
               <Textarea
                 value={form.subjective}
@@ -2931,6 +3483,45 @@ export default function EncounterPage() {
                 <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 4 }}>
                   Type ICD-10 code or description to search. First diagnosis is automatically marked Primary.
                 </div>
+              </div>
+            )}
+            {!isClosed && pendingDx.length > 0 && (
+              <div style={{ border: "1px solid var(--color-border)", borderRadius: 8, padding: 10, margin: "0 0 12px", background: "var(--color-bg-subtle, #f8fafc)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--color-text-muted)" }}>
+                    From handwriting — review before adding
+                  </span>
+                  <span style={{ display: "flex", gap: 6 }}>
+                    <button onClick={addAllPendingDx} style={miniBtn("var(--color-primary)", "#fff", "var(--color-primary)", false)}>Add all</button>
+                    <button onClick={dismissAllPendingDx} style={miniBtn("var(--color-border)", "var(--color-text-muted)", "transparent", false)}>Dismiss all</button>
+                  </span>
+                </div>
+                {pendingDx.map((d, idx) => {
+                  const inp = { fontSize: 12, padding: "3px 5px", border: "1px solid var(--color-border)", borderRadius: 4, background: "var(--color-surface, #fff)", color: "var(--color-text)" };
+                  const codeKnown = (d.code || "").trim() && ICD10_CODE_SET.has((d.code || "").trim().toUpperCase());
+                  return (
+                    <div key={idx} style={{ padding: "7px 0", borderTop: idx ? "1px solid var(--color-border)" : "none" }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 6, flexWrap: "wrap" }}>
+                        <input aria-label="Diagnosis" value={d.description || ""} onChange={e => editPendingDx(idx, { description: e.target.value })}
+                          placeholder="diagnosis" style={{ ...inp, flex: "3 1 150px", fontWeight: 600 }} />
+                        <input aria-label="ICD-10 code" value={d.code || ""} onChange={e => editPendingDx(idx, { code: e.target.value.toUpperCase() })}
+                          placeholder="ICD-10" style={{ ...inp, flex: "0 1 84px", borderColor: codeKnown ? "var(--color-border)" : "#F59E0B" }} />
+                        <span style={{ display: "flex", gap: 4, flexShrink: 0, marginLeft: "auto" }}>
+                          <button onClick={() => addPendingDx(idx)} disabled={!(d.description || "").trim()} style={miniBtn("var(--color-primary)", "var(--color-primary)", "transparent", !(d.description || "").trim())}>Add</button>
+                          <button onClick={() => skipPendingDx(idx)} style={miniBtn("var(--color-border)", "var(--color-text-muted)", "transparent", false)}>Skip</button>
+                        </span>
+                      </div>
+                      {!codeKnown && (
+                        <div style={{ marginTop: 3 }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 5px", borderRadius: 4, background: "#FEF3C7", color: "#92400E" }}>unverified code</span>
+                        </div>
+                      )}
+                      {Array.isArray(d.flags) && d.flags.length > 0 && (
+                        <div style={{ marginTop: 3, fontSize: 10.5, color: "var(--color-text-muted)" }}>{d.flags.join(" · ")}</div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
             {diagnoses.length === 0 ? (
@@ -3002,6 +3593,67 @@ export default function EncounterPage() {
           <SectionCard title="Prescription" badge={rxItems.length}
             extra={<DictateButton disabled={isClosed} onTranscript={t => openDictation("prescription", t)} />}>
             {!isClosed && <DrugForm onSave={addDrug} disabled={addingRx} />}
+            {!isClosed && pendingRx.length > 0 && (
+              <div style={{ border: "1px solid var(--color-border)", borderRadius: 8, padding: 10, margin: "6px 0 12px", background: "var(--color-bg-subtle, #f8fafc)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--color-text-muted)" }}>
+                    From handwriting — review before adding
+                  </span>
+                  <span style={{ display: "flex", gap: 6 }}>
+                    <button onClick={addAllPendingRx} disabled={addingRx} style={miniBtn("var(--color-primary)", "#fff", "var(--color-primary)", addingRx)}>Add all</button>
+                    <button onClick={dismissAllPendingRx} disabled={addingRx} style={miniBtn("var(--color-border)", "var(--color-text-muted)", "transparent", addingRx)}>Dismiss all</button>
+                  </span>
+                </div>
+                {pendingRx.map((it, idx) => {
+                  const raw = (it.drug_name_raw || "").trim();
+                  const nm = (it.drug_name || "").trim();
+                  const renamed = raw && raw.toLowerCase() !== nm.toLowerCase();
+                  const lowConf = typeof it.confidence === "number" && it.confidence < HW_LOW_CONFIDENCE;
+                  const chips = [];
+                  if (!(it.dosage || "").trim()) chips.push("no dose");
+                  if (!it.duration_days) chips.push("no duration");
+                  if (it.frequency_defaulted) chips.push("assumed OD");
+                  if (it.name_source === "catalog_fuzzy") chips.push("confirm match");
+                  if (lowConf) chips.push("low confidence");
+                  const inp = { fontSize: 12, padding: "3px 5px", border: "1px solid var(--color-border)", borderRadius: 4, background: "var(--color-surface, #fff)", color: "var(--color-text)" };
+                  return (
+                    <div key={idx} style={{ padding: "7px 0", borderTop: idx ? "1px solid var(--color-border)" : "none" }}>
+                      {renamed && (
+                        <div style={{ fontSize: 10.5, color: "var(--color-text-muted)", marginBottom: 3 }}>
+                          read “{raw}” → matched “{nm}”
+                        </div>
+                      )}
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 6, flexWrap: "wrap" }}>
+                        <input aria-label="Drug name" value={it.drug_name || ""} onChange={e => editPendingRx(idx, { drug_name: e.target.value })}
+                          placeholder="drug" style={{ ...inp, flex: "2 1 130px", fontWeight: 600 }} />
+                        <input aria-label="Dose" value={it.dosage || ""} onChange={e => editPendingRx(idx, { dosage: e.target.value })}
+                          placeholder="dose" style={{ ...inp, flex: "1 1 70px" }} />
+                        <select aria-label="Frequency" value={mapFreq(it.frequency)} onChange={e => editPendingRx(idx, { frequency: e.target.value, frequency_defaulted: false })}
+                          style={{ ...inp, flex: "0 1 68px" }}>
+                          {Object.entries(FREQ_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                        </select>
+                        <input aria-label="Duration in days" type="number" min="0" value={it.duration_days ?? ""} onChange={e => editPendingRx(idx, { duration_days: e.target.value === "" ? null : Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                          placeholder="days" style={{ ...inp, flex: "0 1 56px" }} />
+                        <span style={{ display: "flex", gap: 4, flexShrink: 0, marginLeft: "auto" }}>
+                          <button onClick={() => addPendingRx(idx)} disabled={addingRx || !(it.drug_name || "").trim()} style={miniBtn("var(--color-primary)", "var(--color-primary)", "transparent", addingRx || !(it.drug_name || "").trim())}>Add</button>
+                          <button onClick={() => skipPendingRx(idx)} disabled={addingRx} style={miniBtn("var(--color-border)", "var(--color-text-muted)", "transparent", addingRx)}>Skip</button>
+                        </span>
+                      </div>
+                      {chips.length > 0 && (
+                        <div style={{ marginTop: 4, display: "flex", flexWrap: "wrap", gap: 4 }}>
+                          {chips.map(c => (
+                            <span key={c} style={{ fontSize: 10, fontWeight: 700, padding: "1px 5px", borderRadius: 4, background: c === "low confidence" ? "#FEE2E2" : "#FEF3C7", color: c === "low confidence" ? "#B91C1C" : "#92400E" }}>{c}</span>
+                          ))}
+                        </div>
+                      )}
+                      {Array.isArray(it.flags) && it.flags.length > 0 && (
+                        <div style={{ marginTop: 3, fontSize: 10.5, color: "var(--color-text-muted)" }}>{it.flags.join(" · ")}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {rxItems.length === 0 ? (
               <p style={{ color: "var(--color-text-muted)", fontSize: 13, margin: 0 }}>No drugs added yet.</p>
             ) : (
@@ -3304,6 +3956,166 @@ export default function EncounterPage() {
         />
       )}
       <DocumentViewerDrawer doc={viewerDoc} onClose={() => setViewerDoc(null)} />
+      {qrOpen && qrData && (
+        <ConsultPadQRModal
+          data={qrData}
+          patientName={enc.patient_name}
+          onClose={() => setQrOpen(false)}
+        />
+      )}
+      {textViewOpen && recognisedNote && (
+        <RecognisedTextModal data={recognisedNote} onClose={() => setTextViewOpen(false)} />
+      )}
     </AppShell>
+  );
+}
+
+/**
+ * Read-only view of the handwriting session's recognised content — the
+ * Prescription tab's extracted drugs and the Internal Note tab's SOAP split
+ * + verbatim transcription. The form on the left is already populated; this
+ * is the "what was actually read" reference.
+ */
+function RecognisedTextModal({ data, onClose }) {
+  const note = data?.note || {};
+  const rx = data?.rx || {};
+  const rxPages = Array.isArray(data?.rxPages) ? data.rxPages : [];
+  const notePages = Array.isArray(data?.notePages) ? data.notePages : [];
+  const rxItems = Array.isArray(rx.items) ? rx.items : Array.isArray(rx.prescription) ? rx.prescription : [];
+  const Section = ({ label, text }) => (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--color-text-muted)", marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 12, whiteSpace: "pre-wrap", color: "var(--color-text)" }}>{text?.trim?.() || text || <span style={{ color: "var(--color-text-muted)" }}>—</span>}</div>
+    </div>
+  );
+  const Pages = ({ label, pages }) => (
+    pages.length ? (
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--color-text-muted)", marginBottom: 3 }}>{label}</div>
+        <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 }}>
+          {pages.map((src, i) => (
+            <img key={i} src={src} alt={`${label} page ${i + 1}`}
+              onClick={() => openDataUrlInNewTab(src)}
+              style={{ height: 150, width: "auto", flexShrink: 0, cursor: "zoom-in", border: "1px solid var(--color-border)", borderRadius: 6, background: "#fff" }} />
+          ))}
+        </div>
+      </div>
+    ) : null
+  );
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "var(--color-surface, #fff)", borderRadius: 12, padding: 20, maxWidth: 560, width: "100%", maxHeight: "85vh", overflow: "auto", boxShadow: "0 12px 40px rgba(0,0,0,0.25)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <strong style={{ fontSize: 14 }}>Handwriting — what was read</strong>
+          <button onClick={onClose} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
+        </div>
+        <p style={{ fontSize: 11, color: "var(--color-text-muted)", margin: "0 0 12px" }}>
+          Auto-transcribed from the phone. Note text on the left was filled from this; prescription lines and diagnoses are staged under their cards for you to review, edit and add.
+        </p>
+
+        <div style={{ fontSize: 11, fontWeight: 800, color: "var(--color-primary)", margin: "0 0 6px" }}>PRESCRIPTION TAB</div>
+        <Pages label="Prescription — handwriting" pages={rxPages} />
+        {rxItems.length ? (
+          <Section label="Medications extracted" text={rxItems.map(m => {
+            const corrected = (m.name_source === "catalog" || m.name_source === "catalog_fuzzy") &&
+              (m.drug_name_raw || "").trim() &&
+              (m.drug_name_raw || "").trim().toLowerCase() !== (m.drug_name || "").trim().toLowerCase();
+            const tag = m.name_source === "catalog_fuzzy" ? " (best-guess)" : corrected ? " (catalog)" : "";
+            const name = corrected ? `${m.drug_name_raw} → ${m.drug_name}${tag}` : m.drug_name;
+            return [name, m.dosage, m.frequency, m.route && m.route !== "oral" ? m.route : "", m.duration_days ? `x ${m.duration_days}d` : "", m.instructions]
+              .filter(Boolean).join(" · ");
+          }).join("\n")} />
+        ) : <Section label="Medications extracted" text="" />}
+        {rx.raw_text?.trim() && <Section label="Prescription — verbatim" text={rx.raw_text} />}
+
+        <div style={{ borderTop: "1px solid var(--color-border)", margin: "12px 0" }} />
+        <div style={{ fontSize: 11, fontWeight: 800, color: "var(--color-primary)", margin: "0 0 6px" }}>INTERNAL NOTE TAB</div>
+        <Pages label="Internal note — handwriting" pages={notePages} />
+        <Section label="S — Subjective" text={note.subjective} />
+        <Section label="O — Objective" text={note.objective} />
+        <Section label="A — Assessment" text={note.assessment} />
+        <Section label="P — Plan" text={note.plan} />
+        {(note.diagnoses?.length > 0) && (
+          <Section label="Diagnoses extracted" text={note.diagnoses.map(d => d.code ? `${d.description} (${d.code})` : d.description).join("\n")} />
+        )}
+        {note.investigations?.trim() && (
+          <Section label="Investigations" text={
+            Array.isArray(note.investigations_resolved) && note.investigations_resolved.length
+              ? note.investigations_resolved.map(r => {
+                  const raw = (r.raw || "").trim();
+                  const name = (r.name || "").trim();
+                  const corrected = raw && name && raw.toLowerCase() !== name.toLowerCase();
+                  const tag = r.source === "catalog_fuzzy" ? " (best-guess)" : corrected ? " (standardised)" : "";
+                  const line = corrected ? `${raw} → ${name}${tag}` : (name || raw);
+                  return Array.isArray(r.flags) && r.flags.length ? `${line}  —  ${r.flags.join(" · ")}` : line;
+                }).join("\n")
+              : note.investigations
+          } />
+        )}
+        {note.advice?.trim() && <Section label="Advice" text={note.advice} />}
+        {note.follow_up_days != null && note.follow_up_days !== "" && (
+          <Section label="Follow-up" text={`in ${note.follow_up_days} day(s)`} />
+        )}
+        {note.raw_text?.trim() && <Section label="Note — verbatim" text={note.raw_text} />}
+      </div>
+    </div>
+  );
+}
+
+// Small pill button used in the SOAP card header row.
+function miniBtn(border, color, bg, disabled) {
+  return {
+    display: "inline-flex", alignItems: "center", gap: 4,
+    fontSize: 11, fontWeight: 600, padding: "4px 8px", borderRadius: 6,
+    border: `1px solid ${border}`, background: bg, color,
+    cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1,
+  };
+}
+
+/**
+ * Modal shown when the doctor clicks "Handwrite (QR)" on the SOAP card.
+ * Shows the patient's QR for this consultation's handwriting session — scan
+ * it, write across the Prescription and Internal Note tabs (it autosaves and
+ * survives closing the tab), then back here press "Load handwritten note".
+ */
+function ConsultPadQRModal({ data, patientName, onClose }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)",
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: "var(--color-surface, #fff)", borderRadius: 12, padding: 20,
+          maxWidth: 360, width: "100%", textAlign: "center", boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <strong style={{ fontSize: 14 }}>Handwrite on phone</strong>
+          <button onClick={onClose} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
+        </div>
+        <p style={{ fontSize: 12, color: "var(--color-text-secondary)", margin: "0 0 12px" }}>
+          Scan to write for <b>{patientName || "this patient"}</b> — two tabs, <b>Prescription</b> and
+          <b> Internal Note</b>. It autosaves as you write. Back here, press <b>Load handwritten note</b>
+          to pull it in; you can load again after writing more.
+        </p>
+        <img
+          src={data.qr_image}
+          alt="Handwriting pad QR"
+          style={{ width: 220, height: 220, border: "1px solid var(--color-border)", borderRadius: 8 }}
+        />
+        <div style={{ fontSize: 10, color: "var(--color-text-secondary)", wordBreak: "break-all", margin: "8px 0 12px" }}>
+          {data.pad_url}
+        </div>
+        <button className="btn-primary" style={{ width: "100%" }} onClick={onClose}>Done</button>
+        <p style={{ fontSize: 10, color: "var(--color-text-secondary)", margin: "10px 0 0" }}>
+          The session stays open until you sign this encounter.
+        </p>
+      </div>
+    </div>
   );
 }

@@ -42,3 +42,13 @@ def on_report_delivered(sender, instance, **kwargs):
         )
     except Exception as exc:
         logger.error("HIE SharedLabResult write failed for report=%s: %s", instance.id, exc)
+
+    # Mirror into the My Reports document vault (SharedDocument) — same as
+    # prescriptions get on sign, so a delivered lab report shows in the
+    # patient's My Reports alongside them. Best-effort; a failure here must
+    # not roll back the deliver.
+    try:
+        from apps.lab.archive import store_lab_report_document
+        store_lab_report_document(instance, instance._state.db, _get_source_tenant_id())
+    except Exception as exc:
+        logger.error("My Reports vault mirror failed for report=%s: %s", instance.id, exc)

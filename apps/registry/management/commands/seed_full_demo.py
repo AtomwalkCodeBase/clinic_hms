@@ -43,7 +43,7 @@ from apps.tenants.models import Tenant, Subscription
 from apps.tenants.utils import create_tenant_database, run_tenant_migrations, _make_db_config
 from apps.tenants.management.commands.provision_tenant import TIER_FEATURE_DEFAULTS
 from apps.org.models import Branch, StaffUser, DoctorProfile, NextNumber
-from apps.registry.models import PatientAccount, PortalBooking, SharedDocument
+from apps.registry.models import StaffMobileIndex, PatientAccount, PortalBooking, SharedDocument
 from apps.patients.models import Patient, Allergy
 from apps.patients.services import PatientService
 from apps.opd.models import Appointment, Vitals, OPDEncounter, Prescription, PrescriptionItem
@@ -148,10 +148,15 @@ DRUGS = [
 ]
 
 _mobile_counter = itertools.count(7000000000)
+_staff_mobile_counter = itertools.count(9600000001)
 
 
 def _next_mobile():
     return str(next(_mobile_counter))
+
+
+def _next_staff_mobile():
+    return str(next(_staff_mobile_counter))
 
 
 def _register_db(db_name):
@@ -468,13 +473,22 @@ class Command(BaseCommand):
 
     # ── helpers ──────────────────────────────────────────────────────────
     def _make_staff(self, db, tenant, role, first, last, email, branch):
-        staff = StaffUser(email=email, first_name=first, last_name=last, role=role, branch=branch)
+        # StaffUser.phone is unique=True with no null=True — leaving it unset
+        # defaults every row to "" and the second staff member in a tenant DB
+        # collides on the unique constraint. And staff login (StaffLoginView)
+        # resolves the tenant DB through StaffMobileIndex, so without that row
+        # a real StaffUser still can't authenticate. Give everyone a generated
+        # mobile and write both indexes.
+        phone = _next_staff_mobile()
+        staff = StaffUser(email=email, first_name=first, last_name=last, role=role,
+                          branch=branch, phone=phone)
         staff.set_password(STAFF_PASSWORD)
         staff.save(using=db)
-        # (v7: staff_email_index was retired -- this command predates the
-        # mobile-based login index and never wrote StaffMobileIndex either,
-        # so staff it creates still can't log in through the live flow;
-        # pre-existing gap, unrelated to today's cut.)
+        # (v7: StaffEmailIndex was retired; this command now only maintains
+        # StaffMobileIndex, the live login-routing index.)
+        StaffMobileIndex.objects.using("default").update_or_create(
+            mobile=phone, defaults={"tenant_id": tenant.id, "db_name": db, "email": email or None},
+        )
         return staff
 
     def _next_token(self, db, doctor_id, appt_date):

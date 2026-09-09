@@ -624,9 +624,15 @@ class PatientService:
         # Lightweight only — no file_data here, so this history payload stays
         # small. Full content is fetched separately (by id) only when a
         # doctor actually opens a document.
+        # 'unsorted' / 'needs_review' rows are unconfirmed patient uploads —
+        # they must not reach another hospital over the HIE until a QR
+        # verifies them or the patient confirms the type. Hidden / deleted
+        # rows are excluded too.
         documents = list(
             SharedDocument.objects.using("default")
-            .filter(awpid=awpid)
+            .filter(awpid=awpid, hidden_at__isnull=True, deleted_at__isnull=True)
+            .exclude(review_state="unsorted")
+            .exclude(verification_status="needs_review")
             .values("id", "title", "doc_type", "file_name", "mime_type", "uploaded_by", "created_at")
             .order_by("-created_at")[:50]
         )

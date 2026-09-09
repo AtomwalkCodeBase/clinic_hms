@@ -19,13 +19,18 @@ import API_ENDPOINTS from "../../config/api.config";
 import { usePatientContext } from "../../context/PatientContext";
 import { openDataUrlInNewTab } from "../../utils/fileViewer";
 
+// Prescriptions are intentionally NOT offered here — they live on My Reports /
+// the Prescriptions page. This page is lab work: reports, scans, summaries.
 const DOC_TYPES = [
   { value: "lab_report",        label: "Lab Report" },
-  { value: "prescription",      label: "Prescription" },
   { value: "scan",              label: "Scan / Imaging" },
   { value: "discharge_summary", label: "Discharge Summary" },
   { value: "other",             label: "Other" },
 ];
+// Types shown in "Your attached reports" on this page. A prescription filed
+// elsewhere (or the consult-pad handwriting) is not a lab report and must not
+// appear here — see MyReportsPage for the full vault.
+const LAB_PAGE_DOC_TYPES = new Set(["lab_report", "scan", "discharge_summary", "other"]);
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5MB — matches the backend's base64 guard
 
@@ -369,7 +374,7 @@ function UploadReportCard({ onUploaded }) {
         Attach something else
       </div>
       <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 14 }}>
-        For anything not listed above — an old report, scan, or prescription from elsewhere.
+        For anything not listed above — an old lab report, scan, or discharge summary. Prescriptions go under My Reports.
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1.4fr auto", gap: 10, alignItems: "end" }}>
         <div>
@@ -396,14 +401,19 @@ function UploadReportCard({ onUploaded }) {
 }
 
 function MyDocumentsList({ docs, isLoading }) {
-  if (isLoading || docs.length === 0) return null;
+  // Lab work only — a prescription (or an unsorted upload still awaiting the
+  // patient's confirmation) is not a lab report and belongs on My Reports.
+  const shown = docs.filter(
+    d => LAB_PAGE_DOC_TYPES.has(d.doc_type) && d.review_state !== "unsorted",
+  );
+  if (isLoading || shown.length === 0) return null;
   return (
     <div className="card" style={{ padding: "16px 20px", marginBottom: 18 }}>
       <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 15, marginBottom: 10 }}>
         Your attached reports
       </div>
       <div style={{ display: "grid", gap: 8 }}>
-        {docs.map(d => (
+        {shown.map(d => (
           <div key={d.id} style={{
             display: "flex", alignItems: "center", justifyContent: "space-between",
             padding: "8px 12px", background: "var(--color-bg)", borderRadius: 8, fontSize: 13,
