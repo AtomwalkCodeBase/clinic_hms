@@ -771,6 +771,18 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
   const vitals       = history?.vitals        || [];
   const allergies    = history?.allergies     || [];
   const labResults   = history?.lab_results   || [];
+  // Grouped by calendar date (already newest-first from the API) so nine
+  // near-identical rows read as "two visits' worth of tests" at a glance,
+  // instead of a flat wall of repeated dates and "No summary" text.
+  const labGroups = [];
+  for (const l of labResults) {
+    const dateLabel = l.delivered_at
+      ? new Date(l.delivered_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+      : "Date unknown";
+    const lastGroup = labGroups[labGroups.length - 1];
+    if (lastGroup && lastGroup.dateLabel === dateLabel) lastGroup.items.push(l);
+    else labGroups.push({ dateLabel, items: [l] });
+  }
   const prescriptions = history?.prescriptions || [];
   const documents    = history?.documents     || [];
 
@@ -895,34 +907,45 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
 
           <HistorySection title="Latest Labs" icon={<FlaskConical size={13} />} count={labResults.length}>
             {labResults.length === 0 ? <EmptyNote>No prior lab results on record.</EmptyNote> : (
-              <div style={{ display: "grid", gap: 6 }}>
-                {labResults.map((l, i) => {
-                  const clickable = !!l.has_file;
-                  const Wrapper = clickable ? "button" : "div";
-                  return (
-                    <Wrapper
-                      key={i}
-                      onClick={clickable ? () => onOpenDocument?.({
-                        id: l.id, title: l.test_name, doc_type: "lab_report",
-                        created_at: l.delivered_at,
-                        fetchUrl: API_ENDPOINTS.PATIENTS.LAB_RESULT(l.id),
-                      }) : undefined}
-                      style={{
-                        display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", fontSize: 12,
-                        background: "var(--color-bg)", border: "1px solid var(--color-border)", borderRadius: 8,
-                        padding: "8px 10px", cursor: clickable ? "pointer" : "default",
-                      }}
-                    >
-                      <span style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700 }}>{l.test_name}</div>
-                        <div style={{ color: "var(--color-text-muted)", fontSize: 11 }}>
-                          {l.result_summary || "No summary"} · {l.delivered_at ? new Date(l.delivered_at).toLocaleDateString("en-IN") : ""}
-                        </div>
-                      </span>
-                      {clickable && <Paperclip size={13} style={{ color: "var(--color-primary)", flexShrink: 0 }} />}
-                    </Wrapper>
-                  );
-                })}
+              <div style={{ display: "grid", gap: 12 }}>
+                {labGroups.map((group, gi) => (
+                  <div key={gi}>
+                    <div style={{
+                      fontSize: 10, fontWeight: 800, color: "var(--color-text-muted)",
+                      textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6,
+                    }}>
+                      {group.dateLabel} · {group.items.length} test{group.items.length > 1 ? "s" : ""}
+                    </div>
+                    <div style={{ display: "grid", gap: 5 }}>
+                      {group.items.map((l, i) => {
+                        const clickable = !!l.has_file;
+                        const Wrapper = clickable ? "button" : "div";
+                        const subtitle = l.result_summary || (clickable ? "Report attached" : "Awaiting report");
+                        return (
+                          <Wrapper
+                            key={l.id ?? i}
+                            onClick={clickable ? () => onOpenDocument?.({
+                              id: l.id, title: l.test_name, doc_type: "lab_report",
+                              created_at: l.delivered_at,
+                              fetchUrl: API_ENDPOINTS.PATIENTS.LAB_RESULT(l.id),
+                            }) : undefined}
+                            style={{
+                              display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", fontSize: 12,
+                              background: "var(--color-bg)", border: "1px solid var(--color-border)", borderRadius: 8,
+                              padding: "7px 10px", cursor: clickable ? "pointer" : "default",
+                            }}
+                          >
+                            <span style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 700 }}>{l.test_name}</div>
+                              <div style={{ color: "var(--color-text-muted)", fontSize: 11 }}>{subtitle}</div>
+                            </span>
+                            {clickable && <Paperclip size={13} style={{ color: "var(--color-primary)", flexShrink: 0 }} />}
+                          </Wrapper>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </HistorySection>
@@ -2071,6 +2094,438 @@ function ClinicalSummaryHeader({ enc, history, allergies, activeProblems, vitals
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
+// ─── Admission Referral tab ─── embedded IPD referral, Phase 1 ─────────────────────
+// Lives inside the consultation workspace so a doctor never has to leave a
+// consultation and re-search for the patient. Creates an AdmissionReferral
+// (RecommendAdmissionView, apps/ipd/views.py, IsDoctor-gated) ─ the only
+// artifact that lets an admission exist; front desk cannot originate one.
+// source_encounter_id links this referral straight back to this consultation.
+const EXTERNAL_ADMISSION_SOURCES = new Set(["external_referral", "transfer_in", "ambulance_ems", "medical_tourism"]);
+
+function AdmissionReferralModal({ patientId, patientName, patientUhid, encounterId, onClose }) {
+  const { toastSuccess, toastApiError } = useToast();
+  const { data: departments } = useApi(API_ENDPOINTS.ORG.DEPARTMENTS);
+  const { data: admissionTypes } = useApi(API_ENDPOINTS.IPD.ADMISSION_TYPES);
+  const { data: admissionSources } = useApi(API_ENDPOINTS.IPD.ADMISSION_SOURCES);
+
+  const [form, setForm] = useState({
+    department: "", admission_type: "", admission_source: "",
+    reason_for_admission: "",
+    external_referring_doctor_name: "", external_referring_facility: "",
+    is_mlc: false, guardian_consent_by: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+
+  const activeTypes = (admissionTypes || []).filter((t) => t.is_active !== false);
+  const activeSources = (admissionSources || []).filter((s) => s.is_active !== false);
+  const isExternal = EXTERNAL_ADMISSION_SOURCES.has(form.admission_source);
+  const canSubmit = patientId && form.department && form.admission_type && form.admission_source && form.reason_for_admission.trim().length > 0;
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setSaving(true);
+    try {
+      await apiClient.post(API_ENDPOINTS.IPD.REFERRAL_RECOMMEND, {
+        patient_id: patientId,
+        department_id: form.department,
+        admission_type: form.admission_type,
+        admission_source: form.admission_source,
+        reason_for_admission: form.reason_for_admission,
+        source_encounter_id: encounterId,
+        external_referring_doctor_name: form.external_referring_doctor_name,
+        external_referring_facility: form.external_referring_facility,
+        is_mlc: form.is_mlc,
+        guardian_consent_by: form.guardian_consent_by,
+      });
+      toastSuccess(`Admission recommended for ${patientName}. Front desk can now complete registration.`);
+      setSubmitted(true);
+    } catch (err) {
+      toastApiError(err, "Could not create the admission referral.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (submitted) {
+    return (
+      <div style={{ position: "fixed", inset: 0, background: "rgba(12,42,31,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 40 }}>
+        <div className="card" style={{ width: 480, borderLeft: "3px solid var(--color-success, #1a7f37)" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Referral submitted for {patientName}</div>
+          <div style={{ fontSize: 12.5, color: "var(--color-text-muted)" }}>
+            It's on front desk's Admissions worklist now{isExternal ? " — it will need a doctor's countersign before they can register it" : ""}.
+          </div>
+          <button className="btn-primary" style={{ marginTop: 12 }} onClick={onClose}>Done</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(12,42,31,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 40 }}>
+      <div className="card" style={{ width: 640, maxHeight: "88vh", overflowY: "auto" }}>
+        <div className="page-header" style={{ marginBottom: 14 }}>
+          <div className="page-title" style={{ fontSize: 20 }}>Recommend Admission</div>
+          <button className="btn-outline" onClick={onClose}>Cancel</button>
+        </div>
+        <div style={{ display: "grid", gap: 16 }}>
+      <div className="callout">
+        <div>
+          <div className="callout-title">This creates the referral that gates admission</div>
+          <div className="callout-body">
+            Front desk cannot register an inpatient admission without a referral from here. It links
+            back to this consultation automatically.
+          </div>
+        </div>
+      </div>
+
+      <form className="card" onSubmit={submit} style={{ maxWidth: 720, display: "flex", flexDirection: "column", gap: 16 }}>
+        <div className="form-field" style={{ background: "var(--color-table-header)", border: "1px solid var(--color-border)", borderRadius: "var(--radius-input)", padding: "12px 14px" }}>
+          <div style={{ fontWeight: 700, fontSize: 13.5 }}>{patientName}</div>
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>UHID {patientUhid || "—"}</div>
+        </div>
+
+        <div className="form-grid-2">
+          <div className="form-field">
+            <label className="form-label">Department</label>
+            <select className="form-input" value={form.department} onChange={set("department")}>
+              <option value="">Select department…</option>
+              {(departments || []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </div>
+          <div className="form-field">
+            <label className="form-label">Admission Type</label>
+            <select className="form-input" value={form.admission_type} onChange={set("admission_type")}>
+              <option value="">Select type…</option>
+              {activeTypes.map((t) => <option key={t.id ?? t.value} value={t.value}>{t.label}</option>)}
+            </select>
+            <div className="hint">Urgency — configurable in hospital admin settings</div>
+          </div>
+        </div>
+
+        <div className="form-field">
+          <label className="form-label">Admission Source</label>
+          <select className="form-input" value={form.admission_source} onChange={set("admission_source")}>
+            <option value="">Select source…</option>
+            {activeSources.map((s) => <option key={s.id ?? s.value} value={s.value}>{s.label}</option>)}
+          </select>
+          <div className="hint">How the patient is arriving — configurable in hospital admin settings</div>
+        </div>
+
+        {isExternal && (
+          <div style={{ background: "var(--color-table-header)", border: "1px dashed var(--color-border)", borderRadius: "var(--radius-card)", padding: 14 }}>
+            <div className="dot-label" style={{ marginBottom: 10 }}>External source — needs a countersign</div>
+            <div className="form-grid-2">
+              <div className="form-field">
+                <label className="form-label">Referring Doctor (external)</label>
+                <input className="form-input" value={form.external_referring_doctor_name} onChange={set("external_referring_doctor_name")} />
+              </div>
+              <div className="form-field">
+                <label className="form-label">Referring Facility</label>
+                <input className="form-input" value={form.external_referring_facility} onChange={set("external_referring_facility")} />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="form-field">
+          <label className="form-label">Reason for Admission</label>
+          <textarea className="form-input" rows={3} value={form.reason_for_admission} onChange={set("reason_for_admission")} placeholder="Clinical justification for inpatient admission…" />
+        </div>
+
+        <div className="form-grid-2">
+          <div className="form-field" style={{ background: "var(--color-bg)", border: "1px solid var(--color-border)", borderRadius: "var(--radius-input)", padding: "10px 14px" }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <input type="checkbox" checked={form.is_mlc} onChange={set("is_mlc")} />
+              <label style={{ fontSize: 12.5 }}>Medico-Legal Case (MLC)</label>
+            </div>
+          </div>
+          <div className="form-field">
+            <label className="form-label">Guardian Consent By (if minor / unconscious)</label>
+            <input className="form-input" value={form.guardian_consent_by} onChange={set("guardian_consent_by")} />
+          </div>
+        </div>
+
+        <button className="btn-primary" disabled={!canSubmit || saving} type="submit">
+          {saving ? "Submitting…" : "Recommend Admission"}
+        </button>
+      </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Past Consultation tab ─── read-only view of the prior signed encounter,
+// shown only when today's own appointment is itself a follow-up visit.
+function PastConsultationTab({ encounterId }) {
+  const { data: prev, isLoading } = useApi(API_ENDPOINTS.OPD.ENCOUNTER_PREVIOUS(encounterId));
+  const previous = prev?.data;
+
+  if (isLoading) {
+    return <div style={{ padding: 40, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>;
+  }
+  const sharedRef = prev?.shared_reference;
+
+  if (!previous && sharedRef) {
+    // No local encounter here at all — but "follow-up" doesn't mean "has a
+    // prior visit at THIS hospital"; the patient can be following up on
+    // care from elsewhere. We DO have their shared cross-hospital record
+    // (same data the Patient History sidebar draws from), so show the most
+    // recent documented visit from that instead of a dead end — clearly
+    // labeled as a shared-record summary, not a full local SOAP note.
+    const rxItems = (sharedRef.prescriptions || []).flatMap(rx => rx.items || []);
+    return (
+      <div style={{ display: "grid", gap: 16 }}>
+        <div className="callout">
+          <div>
+            <div className="callout-title">
+              No visit on record at this hospital — showing shared history from {new Date(sharedRef.visit_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+            </div>
+            <div className="callout-body">
+              This patient hasn't had a consultation here before — "Follow-up" refers to care they had
+              elsewhere. This is a summary from shared cross-hospital records, not a full local
+              consultation note.
+            </div>
+          </div>
+        </div>
+        <div className="card" style={{ display: "grid", gap: 14 }}>
+          {(sharedRef.diagnoses || []).length > 0 && (
+            <div>
+              <div className="stat-label" style={{ marginBottom: 6 }}>Diagnoses</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {sharedRef.diagnoses.map((d, i) => (
+                  <span key={i} className="badge badge--neutral">{d.icd10_code} — {d.description}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {(sharedRef.lab_results || []).length > 0 && (
+            <div>
+              <div className="stat-label" style={{ marginBottom: 6 }}>Lab Results</div>
+              <div style={{ display: "grid", gap: 6 }}>
+                {sharedRef.lab_results.map((l, i) => (
+                  <div key={i} style={{ fontSize: 13 }}>
+                    <strong>{l.test_name}</strong>
+                    {l.result_summary ? ` — ${l.result_summary}` : ""}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {rxItems.length > 0 && (
+            <div>
+              <div className="stat-label" style={{ marginBottom: 6 }}>Prescribed</div>
+              <div style={{ display: "grid", gap: 4 }}>
+                {rxItems.map((it, i) => (
+                  <div key={i} style={{ fontSize: 13 }}>
+                    <strong>{it.drug_name}</strong> {it.dose}{it.unit} — {it.frequency} · {it.route}
+                    {it.duration_days ? ` × ${it.duration_days}d` : ""}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (!previous) {
+    // Only SIGNED encounters are citable here — a draft could still change.
+    // unsigned_pending tells us whether that's actually why nothing showed
+    // up (an earlier visit exists but isn't signed & closed yet) versus
+    // this genuinely being the first visit for this patient anywhere on
+    // file — two very different situations that read identically without
+    // this distinction.
+    return (
+      <div className="card" style={{ padding: 30, textAlign: "center", color: "var(--color-text-muted)" }}>
+        {prev?.unsigned_pending ? (
+          <>
+            <div style={{ fontWeight: 700, color: "var(--color-text)", marginBottom: 4 }}>
+              An earlier visit exists but hasn't been signed &amp; closed yet
+            </div>
+            <div style={{ fontSize: 12.5 }}>
+              Only signed consultations can be shown here for reference. Ask the doctor who saw this
+              patient last to complete and sign that visit — it'll then appear here.
+            </div>
+          </>
+        ) : (
+          "No prior consultation on record for this patient — this appears to be their first documented visit anywhere on this platform."
+        )}
+        {prev?.debug && (
+          <div style={{ marginTop: 20, textAlign: "left", background: "#fff3cd", border: "1px solid #e0a800", borderRadius: 8, padding: 12 }}>
+            <div style={{ fontWeight: 700, color: "#7a5b00", marginBottom: 6 }}>
+              TEMP DEBUG — remove after diagnosing (screenshot this box)
+            </div>
+            <pre style={{ fontSize: 11, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0, color: "#3a2e00" }}>
+              {JSON.stringify(prev.debug, null, 2)}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const rows = [
+    ["S — Subjective", previous.subjective],
+    ["O — Objective", previous.objective],
+    ["A — Assessment", previous.assessment],
+    ["P — Plan", previous.plan],
+    ["Investigations", previous.investigations],
+    ["Advice", previous.advice_to_patient],
+  ].filter(([, v]) => v);
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <div className="callout">
+        <div>
+          <div className="callout-title">Read-only — from {previous.encounter_date || "a previous visit"}</div>
+          <div className="callout-body">This is the patient's most recent signed consultation at this hospital, for reference while seeing them today.</div>
+        </div>
+      </div>
+      <div className="card" style={{ display: "grid", gap: 14 }}>
+        {(previous.diagnoses || []).length > 0 && (
+          <div>
+            <div className="stat-label" style={{ marginBottom: 6 }}>Diagnoses</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {previous.diagnoses.map((d, i) => (
+                <span key={i} className="badge badge--neutral">{d.code} — {d.description}</span>
+              ))}
+            </div>
+          </div>
+        )}
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <div className="stat-label" style={{ marginBottom: 4 }}>{label}</div>
+            <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Book Follow-up modal ─── doctor picks exactly one path for the NEXT
+// visit: hand it to a nurse to actually book, or just send the patient a
+// reminder and let them / front desk book it later (existing behaviour).
+// Available even after Sign & Close — see FollowUpActionView's docstring on
+// why this is a separate endpoint from the general SOAP-notes PATCH.
+// A button + modal (mirrors AdmissionReferralModal) — NOT a tab. The
+// "Follow-up" heading on the consultation itself is handled separately by
+// isFollowUp further down; this modal is only for planning the NEXT visit.
+function FollowUpModal({ enc, encounterId, refetch, onClose }) {
+  const { toastSuccess, toastApiError } = useToast();
+  const [mode, setMode] = useState(enc.followup_ask_nurse ? "nurse" : "reminder");
+  const [note, setNote] = useState(enc.followup_nurse_note || "");
+  const [days, setDays] = useState(enc.follow_up_in_days ? String(enc.follow_up_in_days) : "");
+  const [saving, setSaving] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
+  async function submit() {
+    setSaving(true);
+    try {
+      await apiClient.post(API_ENDPOINTS.OPD.ENCOUNTER_FOLLOWUP(encounterId), {
+        mode,
+        note: mode === "nurse" ? note : "",
+        follow_up_in_days: mode === "reminder" ? (days ? parseInt(days) : null) : null,
+      });
+      toastSuccess(mode === "nurse" ? "A nurse will book this patient's next visit." : "Reminder set — the patient/front desk can book it later.");
+      refetch();
+      setSubmitted(true);
+    } catch (err) {
+      toastApiError(err, "Could not save the follow-up plan.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const alreadySet = enc.followup_ask_nurse || enc.follow_up_in_days;
+
+  if (submitted) {
+    return (
+      <div style={{ position: "fixed", inset: 0, background: "rgba(12,42,31,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 40 }}>
+        <div className="card" style={{ width: 480, borderLeft: "3px solid var(--color-success, #1a7f37)" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Follow-up plan saved</div>
+          <div style={{ fontSize: 12.5, color: "var(--color-text-muted)" }}>
+            {mode === "nurse" ? "A nurse will see this on their worklist and book the next visit." : "The patient/front desk will get a reminder to book when it's due."}
+          </div>
+          <button className="btn-primary" style={{ marginTop: 12 }} onClick={onClose}>Done</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(12,42,31,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 40 }}>
+      <div className="card" style={{ width: 640, maxHeight: "88vh", overflowY: "auto" }}>
+        <div className="page-header" style={{ marginBottom: 14 }}>
+          <div className="page-title" style={{ fontSize: 20 }}>Book Follow-up</div>
+          <button className="btn-outline" onClick={onClose}>Cancel</button>
+        </div>
+        <div style={{ display: "grid", gap: 16 }}>
+          {alreadySet && (
+            <div className="card" style={{ borderLeft: "3px solid var(--color-primary)" }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>
+                {enc.followup_ask_nurse
+                  ? (enc.followup_nurse_booked ? "Nurse has booked the next visit." : "Waiting on a nurse to book the next visit.")
+                  : `Reminder set for ${enc.follow_up_in_days} day(s) out.`}
+              </div>
+            </div>
+          )}
+
+          <div className="card" style={{ display: "grid", gap: 14 }}>
+            <div
+              onClick={() => setMode("nurse")}
+              style={{
+                border: `1.5px solid ${mode === "nurse" ? "var(--color-primary)" : "var(--color-border)"}`,
+                borderRadius: "var(--radius-input)", padding: 14, cursor: "pointer",
+                background: mode === "nurse" ? "var(--color-table-header)" : "transparent",
+              }}
+            >
+              <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 4 }}>Patient wants a follow-up — ask a nurse to book it</div>
+              <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>A nurse will see this on their worklist and coordinate the actual appointment with the patient/front desk.</div>
+              {mode === "nurse" && (
+                <input
+                  className="form-input" style={{ marginTop: 10 }}
+                  placeholder="Optional note for the nurse (e.g. 'in 2 weeks, after repeat labs')"
+                  value={note} onChange={(e) => setNote(e.target.value)}
+                />
+              )}
+            </div>
+
+            <div
+              onClick={() => setMode("reminder")}
+              style={{
+                border: `1.5px solid ${mode === "reminder" ? "var(--color-primary)" : "var(--color-border)"}`,
+                borderRadius: "var(--radius-input)", padding: 14, cursor: "pointer",
+                background: mode === "reminder" ? "var(--color-table-header)" : "transparent",
+              }}
+            >
+              <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 4 }}>Not sure yet — just send a reminder</div>
+              <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>The patient gets a reminder to book when it's due; they or front desk book it later.</div>
+              {mode === "reminder" && (
+                <input
+                  className="form-input" type="number" min="1" style={{ marginTop: 10, maxWidth: 160 }}
+                  placeholder="Days from now"
+                  value={days} onChange={(e) => setDays(e.target.value)}
+                />
+              )}
+            </div>
+
+            <button className="btn-primary" disabled={saving || (mode === "reminder" && !days)} onClick={submit}>
+              {saving ? "Saving…" : "Save Follow-up Plan"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function EncounterPage() {
   const { id }   = useParams();
   const navigate = useNavigate();
@@ -2111,6 +2566,9 @@ export default function EncounterPage() {
   // consultation workspace on first load; doctor opens it when needed.
   const [historyOpen, setHistoryOpen] = useState(false);
   const [viewerDoc, setViewerDoc] = useState(null); // document currently open in the resizable viewer
+  const [activeTab, setActiveTab] = useState("consultation"); // "past" | "consultation"
+  const [admissionModalOpen, setAdmissionModalOpen] = useState(false); // Recommend Admission is a button + modal, not a tab — see AdmissionReferralModal
+  const [followUpModalOpen, setFollowUpModalOpen] = useState(false); // Book Follow-up is a button + modal too — see FollowUpModal
 
   function openDictation(section, text) {
     const base = { section, text };
@@ -2168,6 +2626,11 @@ export default function EncounterPage() {
   }, [enc]);
 
   const isClosed = enc?.status === "signed";
+  // appointment_type is unreliable in real data — the live booking flow
+  // (PortalBookView.post) hardcodes "opd" even for "Book follow-up" links,
+  // so it's only ever "followup" for demo-seeded encounters. Fall back to
+  // the chief complaint text, which is what's actually set in practice.
+  const isFollowUp = enc?.appointment_type === "followup" || /^\s*follow[\s-]?up/i.test(enc?.chief_complaint || "");
 
   function upd(k, v) { setForm(p => ({ ...p, [k]: v })); setDirty(true); }
 
@@ -2309,6 +2772,12 @@ export default function EncounterPage() {
         title={enc.patient_name || "Consultation"}
         action={
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <button className="btn-outline" onClick={() => setAdmissionModalOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+              Recommend Admission
+            </button>
+            <button className="btn-outline" onClick={() => setFollowUpModalOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+              Book Follow-up
+            </button>
             {isClosed ? (
               <>
                 <button className="btn-outline" onClick={() => window.print()} title="Print this consultation" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
@@ -2336,6 +2805,37 @@ export default function EncounterPage() {
           </div>
         }
       >
+        <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--color-border)", marginBottom: 4 }}>
+          {isFollowUp && (
+            <button
+              type="button"
+              onClick={() => setActiveTab("past")}
+              style={{
+                padding: "10px 16px", fontSize: 13, fontWeight: 600, border: "none", background: "none", cursor: "pointer",
+                color: activeTab === "past" ? "var(--color-primary)" : "var(--color-text-muted)",
+                borderBottom: activeTab === "past" ? "2px solid var(--color-primary)" : "2px solid transparent",
+                marginBottom: -1,
+              }}
+            >
+              Past Consultation
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setActiveTab("consultation")}
+            style={{
+              padding: "10px 16px", fontSize: 13, fontWeight: 600, border: "none", background: "none", cursor: "pointer",
+              color: activeTab === "consultation" ? "var(--color-primary)" : "var(--color-text-muted)",
+              borderBottom: activeTab === "consultation" ? "2px solid var(--color-primary)" : "2px solid transparent",
+              marginBottom: -1,
+            }}
+          >
+            {isFollowUp ? "Follow-up" : "Consultation"}
+          </button>
+        </div>
+
+        {activeTab === "consultation" && (
+        <>
         <div style={{ display: "grid", gap: 16 }}>
 
           {/* ── Compact clinical summary — understand the patient in 5 seconds ── */}
@@ -2771,6 +3271,9 @@ export default function EncounterPage() {
             </div>
           </div>
         )}
+        </>
+        )}
+        {activeTab === "past" && <PastConsultationTab encounterId={id} />}
       </PageShell>
         </div>
         <HistorySidebar
@@ -2783,6 +3286,23 @@ export default function EncounterPage() {
           onOpenDocument={setViewerDoc}
         />
       </div>
+      {admissionModalOpen && (
+        <AdmissionReferralModal
+          patientId={enc.patient_pk}
+          patientName={enc.patient_name}
+          patientUhid={enc.patient_uhid}
+          encounterId={id}
+          onClose={() => setAdmissionModalOpen(false)}
+        />
+      )}
+      {followUpModalOpen && (
+        <FollowUpModal
+          enc={enc}
+          encounterId={id}
+          refetch={refetch}
+          onClose={() => setFollowUpModalOpen(false)}
+        />
+      )}
       <DocumentViewerDrawer doc={viewerDoc} onClose={() => setViewerDoc(null)} />
     </AppShell>
   );

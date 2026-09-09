@@ -1,56 +1,25 @@
 """
 apps/notifications/models.py
 -----------------------------
-Tables: NotificationTemplate, NotificationLog, DeviceToken
+Tables: NotificationLog
 
 feat_whatsapp gate enforced at API view level for WhatsApp channel.
-Templates are tenant-configurable (no hardcoded message text).
+
+NotificationTemplate and DeviceToken were retired in the v7 table-count
+redesign — verified against the real codebase first: zero call sites for
+either, anywhere outside this file (no urls.py mount for this app at all,
+and grep across the repo turns up nothing but their own class definitions).
+NotificationLog is NOT dead scaffolding, despite living in the same app —
+it's written by generate_reminders (see services.py) and read/written by
+apps.patients.portal_views.PortalNotificationsView /
+PortalNotificationMarkReadView, a real endpoint mounted at
+/api/v1/portal/notifications/. Kept as-is, minus the `template` FK (which
+only ever pointed at the now-removed NotificationTemplate and was never
+actually set by any real write path).
 """
 
 from django.db import models
-from apps.org.models import StaffUser
 from apps.patients.models import Patient
-
-
-class NotificationTemplate(models.Model):
-    """
-    Tenant-configured notification template.
-    Variables in body use {{variable_name}} placeholders.
-    """
-    CHANNEL_CHOICES = [
-        ("sms",       "SMS"),
-        ("whatsapp",  "WhatsApp"),    # feat_whatsapp required
-        ("email",     "Email"),
-        ("push",      "Push"),
-    ]
-
-    EVENT_CHOICES = [
-        ("appointment_booked",    "Appointment Booked"),
-        ("appointment_reminder",  "Appointment Reminder"),
-        ("appointment_cancelled", "Appointment Cancelled"),
-        ("report_ready",          "Lab Report Ready"),
-        ("prescription_ready",    "Prescription Ready"),
-        ("invoice_issued",        "Invoice Issued"),
-        ("payment_received",      "Payment Received"),
-        ("queue_called",          "Queue Token Called"),
-        ("custom",                "Custom"),
-    ]
-
-    event       = models.CharField(max_length=50, choices=EVENT_CHOICES)
-    channel     = models.CharField(max_length=20, choices=CHANNEL_CHOICES)
-    subject     = models.CharField(max_length=200, blank=True)  # for email
-    body        = models.TextField()
-    is_active   = models.BooleanField(default=True)
-    created_at  = models.DateTimeField(auto_now_add=True)
-    updated_at  = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        app_label = "notifications"
-        db_table  = "notification_template"
-        unique_together = [("event", "channel")]
-
-    def __str__(self):
-        return f"{self.event} via {self.channel}"
 
 
 class NotificationLog(models.Model):
@@ -65,8 +34,6 @@ class NotificationLog(models.Model):
         ("failed",    "Failed"),
     ]
 
-    template    = models.ForeignKey(NotificationTemplate, on_delete=models.SET_NULL,
-                                    null=True, blank=True)
     patient     = models.ForeignKey(Patient, on_delete=models.SET_NULL,
                                     null=True, blank=True, related_name="notifications")
     recipient   = models.CharField(max_length=200)  # phone or email
@@ -94,22 +61,3 @@ class NotificationLog(models.Model):
         app_label = "notifications"
         db_table  = "notification_log"
         ordering  = ["-created_at"]
-
-
-class DeviceToken(models.Model):
-    """
-    Push notification device token per patient.
-    platform: fcm (Android/web) or apns (iOS).
-    """
-    PLATFORM_CHOICES = [("fcm", "FCM"), ("apns", "APNS")]
-
-    patient     = models.ForeignKey(Patient, on_delete=models.CASCADE,
-                                    related_name="device_tokens")
-    token       = models.TextField(unique=True)
-    platform    = models.CharField(max_length=10, choices=PLATFORM_CHOICES)
-    is_active   = models.BooleanField(default=True)
-    registered_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        app_label = "notifications"
-        db_table  = "device_token"

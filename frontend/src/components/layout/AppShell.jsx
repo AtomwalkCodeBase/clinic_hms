@@ -65,6 +65,8 @@ const ICONS = {
   bell:       "M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0",
   compliance: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
   qrcode:     "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM19 14h2v2h-2zM14 19h2v2h-2zM19 19h2v2h-2z",
+  // apps.ipd (Phase 1) — a stylized bed, matching the 24x24 stroke=currentColor convention above.
+  admission:  "M3 10V6a2 2 0 012-2h3a2 2 0 012 2v4M3 10h18v7M3 10v7M3 17h18M9 14h6",
 };
 
 // ── Hospital monogram (fallback logo) ────────────────────────────────────────
@@ -191,6 +193,8 @@ const NAV_BY_ROLE = {
     { type: "link",    label: "Appointments",     iconKey: "appointments", to: ROUTES.FRONT_DESK.APPOINTMENTS },
     { type: "link",    label: "OPD Queue",        iconKey: "queue",        to: ROUTES.FRONT_DESK.QUEUE },
     { type: "link",    label: "History",          iconKey: "history",      to: ROUTES.FRONT_DESK.HISTORY },
+    { type: "section", label: "Inpatient (IPD)" },
+    { type: "link",    label: "Admissions",       iconKey: "admission",    to: ROUTES.FRONT_DESK.ADMISSIONS },
     { type: "section", label: "Finance" },
     { type: "link",    label: "Billing",          iconKey: "billing",      to: ROUTES.FRONT_DESK.BILLING },
     { type: "section", label: "Account" },

@@ -556,14 +556,17 @@ class PortalDoctorDetailView(APIView):
         }
 
         # Which payment modes this hospital currently accepts (hospital admin
-        # toggles these in Billing Setup — see apps.billing.PaymentModeOption)
+        # toggles these in Billing Setup — see apps.billing.OptionList,
+        # list_type="payment_mode"; v7 merged the old standalone
+        # PaymentModeOption table into this shared dropdown table)
         # so the booking screen's "How will you pay?" step reflects the real
         # choice instead of a hardcoded pair of buttons.
-        from apps.billing.models import PaymentModeOption
+        from apps.billing.models import OptionList
         data["payment_methods"] = list(
-            PaymentModeOption.objects.using(tenant.db_name)
-            .filter(is_active=True).order_by("sort_order", "name")
-            .values_list("name", flat=True)
+            OptionList.objects.using(tenant.db_name)
+            .filter(list_type=OptionList.LIST_PAYMENT_MODE, is_active=True)
+            .order_by("sort_order", "label")
+            .values_list("label", flat=True)
         )
 
         # Real count, not a marketing number — signed (finalized) consultations
@@ -829,18 +832,23 @@ class PortalBookView(APIView):
                     max_num = max(max_num, int(uhid.split("-")[-1]))
                 except (ValueError, IndexError):
                     pass
+            # These Patient columns are all NOT NULL (blank=True, no null=True) —
+            # a mobile-only portal signup has acct.email = None (and a
+            # PatientIdentity can carry a null gender), so every value sourced
+            # from the account must be coalesced to "" or the INSERT hits a
+            # NotNullViolation on the first booking at a hospital.
             patient = Patient.objects.using(db).create(
                 awpid=target_awpid,
                 uhid=f"UHID-{max_num + 1:06d}",
                 branch=branch,
-                full_name=target_name,
-                gender=target_gender,
+                full_name=target_name or "",
+                gender=target_gender or "",
                 date_of_birth=target_dob,
-                mobile=acct.mobile if target_awpid == acct.awpid else "",
-                email=acct.email if target_awpid == acct.awpid else "",
+                mobile=(acct.mobile or "") if target_awpid == acct.awpid else "",
+                email=(acct.email or "") if target_awpid == acct.awpid else "",
                 is_dependent=target_awpid != acct.awpid,
-                guardian_name=acct.full_name if target_awpid != acct.awpid else "",
-                guardian_mobile=acct.mobile if target_awpid != acct.awpid else "",
+                guardian_name=(acct.full_name or "") if target_awpid != acct.awpid else "",
+                guardian_mobile=(acct.mobile or "") if target_awpid != acct.awpid else "",
                 guardian_awpid=acct.awpid if target_awpid != acct.awpid else "",
                 hie_consent_given=True,
                 hie_consent_at=timezone.now(),

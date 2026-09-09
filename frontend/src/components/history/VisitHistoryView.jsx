@@ -34,6 +34,86 @@ const BADGE = {
   no_show:     "badge--neutral",
 };
 
+// Today / Upcoming / Past — the flat, date-descending list this used to be
+// made it impossible to tell a scheduled visit next week from one that
+// already happened, since both just sort by date. Bucketing by
+// scheduled_date vs. today fixes that without touching how the backend
+// paginates (each page's rows just get sorted into these three groups).
+function bucketByDate(rows) {
+  const today = new Date().toISOString().slice(0, 10);
+  const buckets = { today: [], upcoming: [], past: [] };
+  for (const r of rows) {
+    if (!r.scheduled_date) { buckets.past.push(r); continue; }
+    if (r.scheduled_date === today) buckets.today.push(r);
+    else if (r.scheduled_date > today) buckets.upcoming.push(r);
+    else buckets.past.push(r);
+  }
+  return buckets;
+}
+
+function HistoryTable({ rows, role, navigate }) {
+  return (
+    <table className="data-table">
+      <thead>
+        <tr>
+          <th style={{ width: 70 }}>Token</th>
+          <th>Patient</th>
+          <th>Date</th>
+          <th>Time</th>
+          {role !== "doctor" && <th>Doctor</th>}
+          <th>Complaint</th>
+          <th>Status</th>
+          {role === "doctor" && <th style={{ width: 110 }}>Action</th>}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(r => (
+          <tr key={r.id}>
+            <td>
+              <span style={{
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                width: 30, height: 30, borderRadius: 8,
+                background: "var(--color-primary-light)", color: "var(--color-primary)",
+                fontWeight: 800, fontSize: 12,
+              }}>{r.token_number ?? "—"}</span>
+            </td>
+            <td>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>{r.patient_name || "—"}</div>
+                <DependentBadge patient={r} />
+              </div>
+              <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{r.patient_uhid || ""}</div>
+            </td>
+            <td style={{ fontSize: 12 }}>{r.scheduled_date}</td>
+            <td style={{ fontSize: 12 }}>{r.scheduled_time ? r.scheduled_time.slice(0, 5) : "—"}</td>
+            {role !== "doctor" && <td style={{ fontSize: 12 }}>{r.doctor_name || "—"}</td>}
+            <td style={{ fontSize: 12, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {r.chief_complaint || <span style={{ color: "var(--color-text-muted)" }}>—</span>}
+            </td>
+            <td>
+              <span className={`badge ${BADGE[r.status] || "badge--neutral"}`}>
+                {r.status?.replace("_", " ")}
+              </span>
+            </td>
+            {role === "doctor" && (
+              <td>
+                {r.has_encounter ? (
+                  <button className="btn-outline" style={{ fontSize: 11, padding: "5px 12px" }}
+                    onClick={() => navigate(ROUTES.DOCTOR.ENCOUNTER(r.encounter.id))}>
+                    View notes
+                  </button>
+                ) : (
+                  <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>—</span>
+                )}
+              </td>
+            )}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 export default function VisitHistoryView({ role, initialPatient = "" }) {
   const navigate = useNavigate();
   const [patient,   setPatient]   = useState(initialPatient);
@@ -159,68 +239,26 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
           </div>
         </div>
       ) : (
-        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th style={{ width: 70 }}>Token</th>
-                <th>Patient</th>
-                <th>Date</th>
-                <th>Time</th>
-                {role !== "doctor" && <th>Doctor</th>}
-                <th>Complaint</th>
-                <th>Status</th>
-                {role === "doctor" && <th style={{ width: 110 }}>Action</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(r => (
-                <tr key={r.id}>
-                  <td>
-                    <span style={{
-                      display: "inline-flex", alignItems: "center", justifyContent: "center",
-                      width: 30, height: 30, borderRadius: 8,
-                      background: "var(--color-primary-light)", color: "var(--color-primary)",
-                      fontWeight: 800, fontSize: 12,
-                    }}>{r.token_number ?? "—"}</span>
-                  </td>
-                  <td>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>{r.patient_name || "—"}</div>
-                      <DependentBadge patient={r} />
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{r.patient_uhid || ""}</div>
-                  </td>
-                  <td style={{ fontSize: 12 }}>{r.scheduled_date}</td>
-                  <td style={{ fontSize: 12 }}>{r.scheduled_time ? r.scheduled_time.slice(0, 5) : "—"}</td>
-                  {role !== "doctor" && <td style={{ fontSize: 12 }}>{r.doctor_name || "—"}</td>}
-                  <td style={{ fontSize: 12, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {r.chief_complaint || <span style={{ color: "var(--color-text-muted)" }}>—</span>}
-                  </td>
-                  <td>
-                    <span className={`badge ${BADGE[r.status] || "badge--neutral"}`}>
-                      {r.status?.replace("_", " ")}
-                    </span>
-                  </td>
-                  {role === "doctor" && (
-                    <td>
-                      {r.has_encounter ? (
-                        <button className="btn-outline" style={{ fontSize: 11, padding: "5px 12px" }}
-                          onClick={() => navigate(ROUTES.DOCTOR.ENCOUNTER(r.encounter.id))}>
-                          View notes
-                        </button>
-                      ) : (
-                        <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>—</span>
-                      )}
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div style={{ display: "grid", gap: 20 }}>
+          {(() => {
+            const { today, upcoming, past } = bucketByDate(rows);
+            const sections = [
+              { key: "today",    label: "Today",    dot: "dot-label--green", rows: today },
+              { key: "upcoming", label: "Upcoming",  dot: "dot-label--blue",  rows: upcoming },
+              { key: "past",     label: "Past",      dot: "dot-label--muted", rows: past },
+            ].filter(s => s.rows.length > 0);
+            return sections.map(s => (
+              <div key={s.key}>
+                <div className={`dot-label ${s.dot}`} style={{ marginBottom: 8 }}>{s.label} ({s.rows.length})</div>
+                <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                  <HistoryTable rows={s.rows} role={role} navigate={navigate} />
+                </div>
+              </div>
+            ));
+          })()}
 
           {pagination && pagination.total_pages > 1 && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, padding: "16px 20px", borderTop: "1px solid var(--color-border)" }}>
+            <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, padding: "16px 20px" }}>
               <button className="btn-outline" style={{ fontSize: 12, padding: "6px 14px" }}
                 disabled={!pagination.has_previous}
                 onClick={() => setPage(p => Math.max(1, p - 1))}>

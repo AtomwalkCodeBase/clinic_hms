@@ -79,9 +79,14 @@ class ConsentRecord(models.Model):
     """
     CONSENT_DPDP_PROCESSING = "dpdp_data_processing"
     CONSENT_HIE_SHARING     = "hie_data_sharing"
+    # Added for apps.ipd (Phase 1 admission intake) — recorded the same way
+    # as the two consent types above (append-only, front-desk-attested),
+    # not a new consent mechanism. See apps/ipd/views.py::CompleteAdmissionView.
+    CONSENT_ADMISSION_TREATMENT = "admission_treatment"
     CONSENT_TYPE_CHOICES = [
         (CONSENT_DPDP_PROCESSING, "DPDP — Personal Data Processing"),
         (CONSENT_HIE_SHARING,     "HIE — Cross-Hospital Data Sharing"),
+        (CONSENT_ADMISSION_TREATMENT, "Admission — Consent to Inpatient Treatment"),
     ]
 
     SOURCE_FRONT_DESK = "front_desk"

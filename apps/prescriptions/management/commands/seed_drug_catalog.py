@@ -28,7 +28,8 @@ from django.conf import settings
 from apps.tenants.models import Tenant
 from apps.tenants.utils import _make_db_config
 from apps.org.models import Branch, NextNumber
-from apps.prescriptions.models import Drug, DrugFormType
+from apps.billing.models import OptionList
+from apps.prescriptions.models import Drug
 from core.utils.nntm import get_next_number
 
 # Every form used by at least one drug below.
@@ -171,13 +172,19 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING(f"  {tenant.name} ({db}): no branch found — skipped."))
                 continue
 
-            # 1. Drug forms.
-            existing_forms = {n.lower() for n in DrugFormType.objects.using(db).values_list("name", flat=True)}
+            # 1. Drug forms. (v7: DrugFormType merged into apps.billing.OptionList
+            # with list_type="drug_form" — see that model's docstring.)
+            existing_forms = {
+                n.lower() for n in OptionList.objects.using(db)
+                .filter(list_type=OptionList.LIST_DRUG_FORM).values_list("label", flat=True)
+            }
             form_count = 0
             for form_name in DRUG_FORMS:
                 if form_name.lower() in existing_forms:
                     continue
-                DrugFormType.objects.using(db).create(name=form_name, is_active=True)
+                OptionList.objects.using(db).create(
+                    list_type=OptionList.LIST_DRUG_FORM, value=form_name, label=form_name, is_active=True,
+                )
                 form_count += 1
 
             # 2. Drug catalog (NNTM code assignment, same as the Add Drug form).

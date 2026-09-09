@@ -45,6 +45,7 @@ from .serializers import (
     OPDEncounterSerializer, OPDEncounterCreateSerializer,
     PrescriptionSerializer, PrescriptionItemSerializer,
     PrescriptionFavouriteSerializer, VitalsSerializer,
+    FollowUpActionSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -954,6 +955,342 @@ class EncounterSignView(APIView):
 
         from core.audit import log_action
         log_action(request, db, action="encounter.sign", resource_type="OPDEncounter",
+                    resource_id=enc.id, patient_id=enc.patient_id)
+
+        return Response(OPDEncounterSerializer(enc, context={"db": db}).data)
+
+
+class FollowUpActionView(APIView):
+    """
+    POST /api/v1/opd/encounters/<id>/follow-up/
+    body: {"mode": "nurse", "note": "..."} or {"mode": "reminder", "follow_up_in_days": 7}
+
+    Deliberately its OWN endpoint, separate from EncounterDetailView.patch —
+    that PATCH refuses to touch a signed encounter at all, but a doctor
+    needs to be able to decide the follow-up plan even AFTER sign & close
+    (that's the whole point: signing locks the clinical record, not the
+    doctor's ability to say what happens next for this patient).
+
+    mode="nurse" hands the actual booking to a nurse (see
+    FollowupNurseWorklistView / FollowupMarkBookedView below) instead of the
+    doctor booking it themselves — there's no in-app doctor-booking flow for
+    this and the nurse already coordinates with the patient/front desk.
+    mode="reminder" is the pre-existing, unchanged path: just sets
+    follow_up_in_days, and apps.notifications generates the patient-facing
+    reminder as before.
+    """
+    permission_classes = [IsDoctor]
+
+    def post(self, request, pk):
+        db = request.tenant_db
+        try:
+            enc = OPDEncounter.objects.using(db).get(pk=pk)
+        except OPDEncounter.DoesNotExist:
+            return api_not_found("Encounter not found.")
+
+        s = FollowUpActionSerializer(data=request.data)
+        if not s.is_valid():
+            return api_error("Validation error.", errors=s.errors)
+        v = s.validated_data
+
+        if v["mode"] == "nurse":
+            enc.followup_ask_nurse = True
+            enc.followup_nurse_note = v.get("note", "")
+            enc.followup_nurse_requested_at = timezone.now()
+            enc.followup_nurse_booked = False
+            enc.followup_nurse_booked_at = None
+        else:  # "reminder"
+            enc.follow_up_in_days = v["follow_up_in_days"]
+            enc.followup_ask_nurse = False
+            enc.followup_nurse_note = ""
+            enc.followup_nurse_requested_at = None
+            enc.followup_nurse_booked = False
+            enc.followup_nurse_booked_at = None
+
+        enc.save(using=db)
+
+        from core.audit import log_action
+        log_action(request, db, action=f"encounter.followup.{v['mode']}", resource_type="OPDEncounter",
+                    resource_id=enc.id, patient_id=enc.patient_id)
+
+        return Response(OPDEncounterSerializer(enc, context={"db": db}).data)
+
+
+def _reconstruct_shared_reference(enc, db):
+    """
+    Best-effort "most recent documented visit" summary built from the
+    cross-hospital HIE shared tables, for when this hospital has no local
+    encounter for the patient at all. Only used as a fallback by
+    PreviousEncounterView — see its docstring.
+    """
+    from apps.patients.models import Patient
+    from apps.patients.services import PatientService
+
+    try:
+        patient = Patient.objects.using(db).get(uuid=enc.patient_id)
+    except Patient.DoesNotExist:
+        return None
+    if not patient.hie_consent_given:
+        return None
+
+    history = PatientService.get_shared_history(awpid=patient.awpid)
+
+    # Don't reference this same visit's own not-yet-signed data — only
+    # records strictly before today's appointment count as "past".
+    cutoff = enc.appointment.scheduled_date if getattr(enc, "appointment", None) else date.today()
+
+    def before_cutoff(items, date_field):
+        out = []
+        for item in items:
+            d = item.get(date_field)
+            if d is None:
+                continue
+            d = d.date() if hasattr(d, "date") else d
+            if d < cutoff:
+                out.append(item)
+        return out
+
+    diagnoses    = before_cutoff(history.get("diagnoses", []), "created_at")
+    lab_results  = before_cutoff(history.get("lab_results", []), "delivered_at")
+    prescriptions = before_cutoff(history.get("prescriptions", []), "prescribed_on")
+
+    # Find the single most recent date among what's left, then keep only
+    # what happened on that date — "the last documented visit", not a
+    # jumble of every past record at once.
+    candidate_dates = []
+    for item in diagnoses:
+        d = item["created_at"]
+        candidate_dates.append(d.date() if hasattr(d, "date") else d)
+    for item in lab_results:
+        d = item["delivered_at"]
+        candidate_dates.append(d.date() if hasattr(d, "date") else d)
+    for item in prescriptions:
+        candidate_dates.append(item["prescribed_on"])
+
+    if not candidate_dates:
+        return None
+    last_date = max(candidate_dates)
+
+    def on_date(items, date_field):
+        result = []
+        for item in items:
+            d = item[date_field]
+            d = d.date() if hasattr(d, "date") else d
+            if d == last_date:
+                result.append(item)
+        return result
+
+    return {
+        "visit_date": last_date.isoformat(),
+        "diagnoses": [
+            {"icd10_code": d["icd10_code"], "description": d["description"]}
+            for d in on_date(diagnoses, "created_at")
+        ],
+        "lab_results": [
+            {"test_name": l["test_name"], "result_summary": l["result_summary"]}
+            for l in on_date(lab_results, "delivered_at")
+        ],
+        "prescriptions": on_date(prescriptions, "prescribed_on"),
+    }
+
+
+class PreviousEncounterView(APIView):
+    """
+    GET /api/v1/opd/encounters/<id>/previous/
+    Most recent OTHER signed encounter for the same patient at this
+    hospital — powers the "Past Consultation" tab on a follow-up visit.
+
+    Only signed encounters qualify as a citable "past consultation" — a
+    draft could still change. When none is found we still check for an
+    unsigned prior encounter so the frontend can tell the doctor WHY
+    ("nothing signed yet" vs "genuinely no visit here at this hospital"),
+    rather than a flat, unexplained "not found" on what the doctor knows
+    is a follow-up.
+
+    "Follow-up" as an appointment type does NOT mean "has a prior visit at
+    THIS hospital" — a patient can be following up on care from elsewhere
+    (another hospital in the network, or outside it entirely). So when
+    there's no local encounter at all (signed or draft) but the patient has
+    consented to cross-hospital sharing and DOES have shared history on
+    file, we reconstruct the most recent documented visit from that shared
+    data (diagnoses/labs/prescriptions dated strictly before this visit)
+    and return it as `shared_reference` — a real, useful answer instead of
+    a dead end, clearly labeled as coming from shared records rather than
+    a full local SOAP note.
+
+    Returns {"data": <local encounter or null>, "unsigned_pending": bool,
+    "shared_reference": <reconstructed cross-hospital visit summary or null>}.
+    """
+    permission_classes = [IsDoctorOrNurse]
+
+    def get(self, request, pk):
+        db = request.tenant_db
+        try:
+            enc = OPDEncounter.objects.using(db).select_related("appointment").get(pk=pk)
+        except OPDEncounter.DoesNotExist:
+            return api_not_found("Encounter not found.")
+
+        # Match on patient_id OR the appointment's own patient_awpid.
+        # patient_id is a plain UUID field set independently at encounter
+        # creation time (OPDEncounterCreateSerializer takes it straight from
+        # the frontend, not derived from the appointment) — so two
+        # encounters for the very same patient can end up with different
+        # patient_id values if anything upstream (booking flow, a stale
+        # cached lookup) resolved the patient differently. patient_awpid is
+        # the same stable person-identifier used for cross-hospital
+        # matching, stored redundantly on every Appointment, so OR-ing it in
+        # catches the same person even when patient_id alone would miss it.
+        awpid = getattr(enc.appointment, "patient_awpid", "") if getattr(enc, "appointment", None) else ""
+        match = Q(patient_id=enc.patient_id)
+        if awpid:
+            match |= Q(appointment__patient_awpid=awpid)
+
+        earlier = (OPDEncounter.objects.using(db)
+                   .filter(match)
+                   .exclude(pk=enc.pk))
+
+        previous = (earlier.filter(status=OPDEncounter.STATUS_SIGNED)
+                    .order_by("-signed_at")
+                    .first())
+
+        if previous:
+            return Response({
+                "data": OPDEncounterSerializer(previous, context={"db": db}).data,
+                "unsigned_pending": False,
+                "shared_reference": None,
+            })
+
+        unsigned_pending = earlier.exclude(status=OPDEncounter.STATUS_SIGNED).exists()
+        shared_reference = None if unsigned_pending else _reconstruct_shared_reference(enc, db)
+
+        # TEMPORARY diagnostic — this "not found" result has been wrong
+        # before despite the query logic looking correct, so rather than
+        # patch blind again, surface exactly what's actually in this tenant
+        # db to compare against. NOT filtered by `match` — deliberately
+        # broader than the query above — so a genuine mismatch between two
+        # encounters' patient_id/awpid is directly visible side by side,
+        # instead of silently vanishing from a filtered debug list too.
+        from apps.patients.models import Patient as _DebugPatient
+
+        recent = list(
+            OPDEncounter.objects.using(db)
+            .exclude(pk=enc.pk)
+            .select_related("appointment")
+            .order_by("-created_at")[:15]
+            .values(
+                "id", "status", "signed_at", "created_at", "patient_id", "subjective",
+                "appointment__patient_awpid", "appointment__scheduled_date", "appointment__patient_id",
+            )
+        )
+        for row in recent:
+            row["id"] = str(row["id"])
+            row["patient_id"] = str(row["patient_id"])
+            row["appointment__patient_id"] = str(row["appointment__patient_id"])
+            row["subjective"] = (row["subjective"] or "")[:60]
+            row["signed_at"] = row["signed_at"].isoformat() if row["signed_at"] else None
+            row["created_at"] = row["created_at"].isoformat() if row["created_at"] else None
+            row["appointment__scheduled_date"] = (
+                row["appointment__scheduled_date"].isoformat() if row["appointment__scheduled_date"] else None
+            )
+
+        # Pull in the real Patient identity (uhid/full_name) behind both
+        # patient_id fields on every row, plus this encounter's own, so a
+        # UHID match with a different patient_id/awpid — a duplicate-
+        # identity bug — is directly visible instead of just raw UUIDs.
+        id_pool = {enc.patient_id}
+        for row in recent:
+            id_pool.add(row["patient_id"])
+            id_pool.add(row["appointment__patient_id"])
+        id_pool.discard(None)
+        patients_by_id = {
+            str(p.uuid): {"uhid": p.uhid, "name": p.full_name, "awpid": p.awpid}
+            for p in _DebugPatient.objects.using(db).filter(uuid__in=id_pool)
+        }
+        for row in recent:
+            row["patient_identity"] = patients_by_id.get(row["patient_id"])
+            row["appointment_patient_identity"] = patients_by_id.get(row["appointment__patient_id"])
+
+        debug = {
+            "this_encounter_id": str(enc.pk),
+            "this_patient_id": str(enc.patient_id),
+            "this_patient_identity": patients_by_id.get(str(enc.patient_id)),
+            "this_appointment_patient_id": str(getattr(enc.appointment, "patient_id", "")),
+            "this_appointment_awpid": awpid,
+            "recent_encounters_this_tenant": recent,
+        }
+
+        return Response({
+            "data": None, "unsigned_pending": unsigned_pending,
+            "shared_reference": shared_reference, "debug": debug,
+        })
+
+
+class FollowupNurseWorklistView(APIView):
+    """
+    GET /api/v1/opd/followups/nurse-worklist/
+    Every encounter where a doctor asked a nurse to book the patient's next
+    visit and it hasn't been marked booked yet. Same nurse-to-doctor
+    assignment scoping as MonitoringListView.
+    """
+    permission_classes = [IsTenantStaff]
+
+    def get(self, request):
+        from apps.patients.models import Patient
+        from apps.org.models import StaffUser
+
+        db = request.tenant_db
+        encounters = (OPDEncounter.objects.using(db)
+                      .filter(followup_ask_nurse=True, followup_nurse_booked=False)
+                      .order_by("-followup_nurse_requested_at"))
+
+        nurse_doctor_ids = _nurse_assigned_doctor_ids(request, db)
+        if nurse_doctor_ids is not None:
+            encounters = encounters.filter(doctor_user_id__in=nurse_doctor_ids)
+
+        patients_by_uuid = {
+            p.uuid: p for p in Patient.objects.using(db).filter(
+                uuid__in=[e.patient_id for e in encounters]
+            )
+        }
+        doctors_by_id = {
+            d.id: d for d in StaffUser.objects.using(db).filter(
+                pk__in=[e.doctor_user_id for e in encounters]
+            )
+        }
+
+        results = []
+        for enc in encounters:
+            patient = patients_by_uuid.get(enc.patient_id)
+            doctor = doctors_by_id.get(enc.doctor_user_id)
+            results.append({
+                "encounter_id": str(enc.id),
+                "patient_name": patient.full_name if patient else "",
+                "patient_uhid": patient.uhid if patient else "",
+                "doctor_name": doctor.get_full_name() if doctor else "",
+                "note": enc.followup_nurse_note or "",
+                "requested_at": enc.followup_nurse_requested_at,
+            })
+        return Response({"results": results})
+
+
+class FollowupMarkBookedView(APIView):
+    """POST /api/v1/opd/followups/<id>/mark-booked/ — nurse confirms they've
+    coordinated the patient's next appointment; drops it off the worklist."""
+    permission_classes = [IsTenantStaff]
+
+    def post(self, request, pk):
+        db = request.tenant_db
+        try:
+            enc = OPDEncounter.objects.using(db).get(pk=pk)
+        except OPDEncounter.DoesNotExist:
+            return api_not_found("Encounter not found.")
+
+        enc.followup_nurse_booked = True
+        enc.followup_nurse_booked_at = timezone.now()
+        enc.save(using=db)
+
+        from core.audit import log_action
+        log_action(request, db, action="encounter.followup.marked_booked", resource_type="OPDEncounter",
                     resource_id=enc.id, patient_id=enc.patient_id)
 
         return Response(OPDEncounterSerializer(enc, context={"db": db}).data)

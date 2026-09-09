@@ -73,6 +73,7 @@ const FrontDeskAppointments   = lazy(() => import("./pages/front-desk/Appointmen
 const FrontDeskQueue          = lazy(() => import("./pages/front-desk/QueuePage"));
 const FrontDeskBilling        = lazy(() => import("./pages/front-desk/BillingPage"));
 const FrontDeskHistory        = lazy(() => import("./pages/front-desk/HistoryPage"));
+const FrontDeskAdmissions     = lazy(() => import("./pages/front-desk/AdmissionsPage"));  // IPD Phase 1
 
 // Lab
 const LabDashboard = lazy(() => import("./pages/lab/DashboardPage"));
@@ -283,6 +284,8 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskBilling /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.HISTORY}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskHistory /></ProtectedRoute>} />
+          <Route path={ROUTES.FRONT_DESK.ADMISSIONS}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskAdmissions /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.MY_PROFILE}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><SharedMyProfile /></ProtectedRoute>} />
 

@@ -43,7 +43,7 @@ from apps.tenants.models import Tenant, Subscription
 from apps.tenants.utils import create_tenant_database, run_tenant_migrations, _make_db_config
 from apps.tenants.management.commands.provision_tenant import TIER_FEATURE_DEFAULTS
 from apps.org.models import Branch, StaffUser, DoctorProfile, NextNumber
-from apps.registry.models import StaffEmailIndex, PatientAccount, PortalBooking, SharedDocument
+from apps.registry.models import PatientAccount, PortalBooking, SharedDocument
 from apps.patients.models import Patient, Allergy
 from apps.patients.services import PatientService
 from apps.opd.models import Appointment, Vitals, OPDEncounter, Prescription, PrescriptionItem
@@ -471,9 +471,10 @@ class Command(BaseCommand):
         staff = StaffUser(email=email, first_name=first, last_name=last, role=role, branch=branch)
         staff.set_password(STAFF_PASSWORD)
         staff.save(using=db)
-        StaffEmailIndex.objects.using("default").update_or_create(
-            email=email, defaults={"tenant_id": tenant.id, "db_name": db},
-        )
+        # (v7: staff_email_index was retired -- this command predates the
+        # mobile-based login index and never wrote StaffMobileIndex either,
+        # so staff it creates still can't log in through the live flow;
+        # pre-existing gap, unrelated to today's cut.)
         return staff
 
     def _next_token(self, db, doctor_id, appt_date):

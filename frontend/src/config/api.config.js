@@ -121,6 +121,10 @@ export const API_ENDPOINTS = {
     ENCOUNTER:  (id) => `${API_V1}/opd/encounters/${id}/`,
     ENCOUNTER_SIGN:(id) => `${API_V1}/opd/encounters/${id}/sign/`,
     ENCOUNTER_PDF:(id) => `${API_V1}/opd/encounters/${id}/pdf/`,
+    ENCOUNTER_FOLLOWUP:(id) => `${API_V1}/opd/encounters/${id}/follow-up/`,
+    ENCOUNTER_PREVIOUS:(id) => `${API_V1}/opd/encounters/${id}/previous/`,
+    FOLLOWUP_NURSE_WORKLIST: `${API_V1}/opd/followups/nurse-worklist/`,
+    FOLLOWUP_MARK_BOOKED:(id) => `${API_V1}/opd/followups/${id}/mark-booked/`,
     PRESCRIPTIONS:              `${API_V1}/opd/prescriptions/`,
     PRESCRIPTION:        (id) => `${API_V1}/opd/prescriptions/${id}/`,
     PRESCRIPTION_ITEMS:  (id) => `${API_V1}/opd/prescriptions/${id}/items/`,
@@ -235,12 +239,10 @@ export const API_ENDPOINTS = {
   // mounted even before that, so this AI.JOBS/JOB block was already dead
   // (confirmed unreferenced anywhere in frontend/src).
 
-  TASKS: {
-    LIST:             `${API_V1}/tasks/`,
-    DETAIL:     (id) => `${API_V1}/tasks/${id}/`,
-    ASSIGN:     (id) => `${API_V1}/tasks/${id}/assign/`,
-    COMPLETE:   (id) => `${API_V1}/tasks/${id}/complete/`,
-  },
+  // apps.tasks (Task/TaskAssignment) was retired (v7 table-count redesign)
+  // — this TASKS block had zero real consumer anywhere in this file's own
+  // codebase (confirmed by grep before removal), so it's gone along with
+  // the backend route. See apps/tasks/models.py for the full removal note.
 
   COMPLIANCE: {
     AUDIT_LOG:            `${API_V1}/compliance/audit-log/`,
@@ -248,6 +250,20 @@ export const API_ENDPOINTS = {
     AMENDMENT_RESOLVE: (id) => `${API_V1}/compliance/amendments/${id}/resolve/`,
     CONSENTS:             `${API_V1}/compliance/consents/`,
     PORTAL_AMENDMENTS:    `${API_V1}/compliance/portal/amendments/`,
+  },
+
+  // IPD module — Phase 1 (admission intake) only. Bed/ward allocation and
+  // everything after it is not built yet — see apps/ipd/models.py.
+  IPD: {
+    REFERRALS:                `${API_V1}/ipd/referrals/`,
+    REFERRAL_RECOMMEND:       `${API_V1}/ipd/referrals/recommend/`,
+    REFERRAL_ACCEPT:   (id) => `${API_V1}/ipd/referrals/${id}/accept/`,
+    ADMISSIONS:                `${API_V1}/ipd/admissions/`,
+    ADMISSION_REGISTER:        `${API_V1}/ipd/admissions/register/`,
+    ADMISSION:         (id) => `${API_V1}/ipd/admissions/${id}/`,
+    ADMISSION_DEPOSIT: (id) => `${API_V1}/ipd/admissions/${id}/deposit/`,
+    ADMISSION_TYPES:           `${API_V1}/ipd/admission-types/`,
+    ADMISSION_SOURCES:         `${API_V1}/ipd/admission-sources/`,
   },
 };
 

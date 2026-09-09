@@ -136,6 +136,7 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
     patient_name = serializers.SerializerMethodField()
     patient_uhid = serializers.SerializerMethodField()
     patient_pk   = serializers.SerializerMethodField()
+    appointment_type = serializers.SerializerMethodField()
     patient_age  = serializers.SerializerMethodField()
     patient_gender = serializers.SerializerMethodField()
     is_dependent = serializers.SerializerMethodField()
@@ -149,11 +150,13 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
         model = OPDEncounter
         fields = [
             "id", "appointment_id", "patient_id", "doctor_user_id",
-            "patient_name", "patient_uhid", "patient_pk", "patient_age", "patient_gender",
+            "patient_name", "patient_uhid", "patient_pk", "appointment_type", "patient_age", "patient_gender",
             "is_dependent", "guardian_name", "guardian_relation",
             "patient_last_visit", "encounter_date", "chief_complaint",
             "status", "subjective", "objective", "assessment", "plan",
             "investigations", "advice_to_patient", "follow_up_in_days",
+            "followup_ask_nurse", "followup_nurse_note", "followup_nurse_requested_at",
+            "followup_nurse_booked", "followup_nurse_booked_at",
             "diagnoses", "referred_to", "referral_notes",
             "ai_transcript_job_id", "ai_transcript_text",
             "signed_at", "prescription", "vitals", "created_at", "updated_at",
@@ -183,6 +186,12 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
         # pk) — the frontend needs this to call /patients/{pk}/history/.
         p = self._patient(obj)
         return p.id if p else None
+
+    def get_appointment_type(self, obj):
+        try:
+            return obj.appointment.appointment_type
+        except Exception:
+            return ""
 
     def get_patient_age(self, obj):
         p = self._patient(obj)
@@ -286,3 +295,33 @@ class PrescriptionFavouriteSerializer(serializers.ModelSerializer):
         model = PrescriptionFavourite
         fields = "__all__"
         read_only_fields = ["id", "created_at"]
+
+
+class FollowUpActionSerializer(serializers.Serializer):
+    """POST body for FollowUpActionView. A doctor picks exactly one path per
+    consultation — hand it to a nurse to book now, or send the patient a
+    reminder to book later (see OPDEncounter model docstring fields)."""
+    mode = serializers.ChoiceField(choices=["nurse", "reminder"])
+    note = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    follow_up_in_days = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        if attrs["mode"] == "reminder":
+            days = attrs.get("follow_up_in_days")
+            if not days or days < 1:
+                raise serializers.ValidationError(
+                    {"follow_up_in_days": "Enter at least 1 day out for a reminder."}
+                )
+        return attrs
+
+
+class FollowupNurseWorklistItemSerializer(serializers.Serializer):
+    """Read-only row shape for the nurse's 'Follow-ups to Book' worklist —
+    plain Serializer (not a ModelSerializer) since it's assembled from a
+    joined dict in the view, same convention as MonitoringListView."""
+    encounter_id = serializers.CharField()
+    patient_name = serializers.CharField()
+    patient_uhid = serializers.CharField()
+    doctor_name = serializers.CharField()
+    note = serializers.CharField(allow_blank=True)
+    requested_at = serializers.DateTimeField()

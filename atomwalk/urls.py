@@ -36,6 +36,7 @@ urlpatterns = [
     path("api/v1/auth/",         include("apps.auth_app.urls")),
     path("api/v1/platform/",     include("apps.platform_admin.urls")),
     path("api/v1/opd/",          include("apps.opd.urls")),
+    path("api/v1/ipd/",          include("apps.ipd.urls")),  # Phase 1 — admission intake only
     path("api/v1/patients/",     include("apps.patients.urls")),
     path("api/v1/portal/",       include("apps.patients.portal_urls")),
     # Deliberately its own top-level prefix, not nested under /portal/ — that
@@ -54,7 +55,10 @@ urlpatterns = [
     path("api/v1/billing/",      include("apps.billing.urls")),
     path("api/v1/pharmacy/",     include("apps.pharmacy.urls")),
     path("api/v1/org/",          include("apps.org.urls")),
-    path("api/v1/tasks/",        include("apps.tasks.urls")),
+    # apps.tasks (Task/TaskAssignment) was retired (v7 table-count
+    # redesign) — a complete, working API with zero frontend consumer
+    # anywhere (confirmed by grep), so its URL route is gone too. See
+    # apps/tasks/models.py for the full removal note.
     path("api/v1/compliance/",   include("apps.compliance.urls")),
 ]
 

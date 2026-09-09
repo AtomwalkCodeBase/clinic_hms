@@ -165,6 +165,7 @@ def _client():
             "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the environment."
         )
     import boto3
+    from botocore.config import Config
     return boto3.client(
         "s3",
         region_name=settings.AWS_S3_REGION,
@@ -179,6 +180,17 @@ def _client():
         # host and the signature's credential scope in agreement for any
         # bucket region, not just us-east-1.
         endpoint_url=f"https://s3.{settings.AWS_S3_REGION}.amazonaws.com",
+        # Explicit, short timeouts — botocore's defaults (60s connect, 60s
+        # read, "legacy" retries) mean a genuinely unreachable S3 endpoint
+        # (blocked network, wrong region/bucket, bad credentials) hangs the
+        # whole Django request for minutes. The frontend's own axios
+        # timeout (api.client.js, 15s) fires long before that, so the user
+        # sees a generic "Could not reach the server" toast instead of the
+        # real StorageError message below — and the upload "hangs" for a
+        # long time before ever surfacing that. Failing fast here (well
+        # under 15s total, even with one retry) means a real network/config
+        # problem shows up as a clear, immediate error instead of a stall.
+        config=Config(connect_timeout=4, read_timeout=6, retries={"max_attempts": 1}),
     )
 
 

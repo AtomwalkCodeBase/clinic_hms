@@ -5,6 +5,7 @@ from .views import (
     AppointmentHistoryView, AppointmentUpcomingView,
     TranscribeView, MonitoringListView,
     EncounterCreateView, EncounterDetailView, EncounterSignView, EncounterSummaryPDFView,
+    FollowUpActionView, PreviousEncounterView, FollowupNurseWorklistView, FollowupMarkBookedView,
     PrescriptionCreateView, PrescriptionDetailView, PrescriptionItemView,
     FavouriteListCreateView, FavouriteDeleteView,
 )
@@ -37,6 +38,12 @@ urlpatterns = [
     path("encounters/<uuid:pk>/", EncounterDetailView.as_view(), name="encounter-detail"),
     path("encounters/<uuid:pk>/sign/", EncounterSignView.as_view(), name="encounter-sign"),
     path("encounters/<uuid:pk>/pdf/", EncounterSummaryPDFView.as_view(), name="encounter-summary-pdf"),
+    path("encounters/<uuid:pk>/follow-up/", FollowUpActionView.as_view(), name="encounter-follow-up"),
+    path("encounters/<uuid:pk>/previous/", PreviousEncounterView.as_view(), name="encounter-previous"),
+
+    # Nurse follow-up-booking worklist (Phase 1 of the doctor->nurse handoff)
+    path("followups/nurse-worklist/", FollowupNurseWorklistView.as_view(), name="followup-nurse-worklist"),
+    path("followups/<uuid:pk>/mark-booked/", FollowupMarkBookedView.as_view(), name="followup-mark-booked"),
 
     # Prescriptions
     path("prescriptions/", PrescriptionCreateView.as_view(), name="prescription-create"),

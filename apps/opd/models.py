@@ -173,6 +173,18 @@ class OPDEncounter(models.Model):
     advice_to_patient = models.TextField(blank=True)  # Discharge instructions
     follow_up_in_days = models.IntegerField(null=True, blank=True)  # Days until next visit
 
+    # Nurse-mediated follow-up booking — a doctor deciding "book this
+    # patient's next visit now" hands it to a nurse rather than booking it
+    # themselves (see apps/opd/views.py FollowUpActionView). This is
+    # independent of follow_up_in_days above (the "send a reminder, let
+    # the patient/front-desk book later" path) — a doctor picks ONE of
+    # the two per consultation, never both at once.
+    followup_ask_nurse = models.BooleanField(default=False)
+    followup_nurse_note = models.CharField(max_length=255, blank=True)
+    followup_nurse_requested_at = models.DateTimeField(null=True, blank=True)
+    followup_nurse_booked = models.BooleanField(default=False)
+    followup_nurse_booked_at = models.DateTimeField(null=True, blank=True)
+
     # Referrals
     referred_to = models.CharField(max_length=255, blank=True)
     referral_notes = models.TextField(blank=True)

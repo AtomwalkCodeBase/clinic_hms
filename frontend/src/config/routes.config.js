@@ -77,6 +77,7 @@ export const ROUTES = {
     QUEUE:              "/front-desk/queue",
     BILLING:            "/front-desk/billing",
     HISTORY:            "/front-desk/history",
+    ADMISSIONS:         "/front-desk/admissions",
     MY_PROFILE:         "/front-desk/my-profile",
   },
 

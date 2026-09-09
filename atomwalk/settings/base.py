@@ -102,6 +102,7 @@ LOCAL_APPS = [
     "apps.org",
     "apps.patients",
     "apps.opd",
+    "apps.ipd",  # Phase 1 — admission intake only. See apps/ipd/models.py module docstring.
     # apps.scheduling removed — duplicate of apps.opd's Appointment/queue models,
     # confirmed zero external references before deletion.
     "apps.clinical",

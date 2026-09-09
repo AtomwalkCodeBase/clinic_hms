@@ -167,8 +167,16 @@ function RequestLookupModal({ order, onClose, onUpload }) {
             This patient chose to get the test done elsewhere — nothing to process here.
           </div>
         ) : order.status === "completed" ? (
-          <div style={{ fontSize: 12, color: "var(--color-success)" }}>
-            Report already delivered.
+          <div>
+            <div style={{ fontSize: 12, color: "var(--color-success)", marginBottom: 8 }}>
+              Report already delivered.
+            </div>
+            {order.report?.file_data && (
+              <button className="btn-outline" style={{ fontSize: 12, padding: "7px 16px" }}
+                onClick={() => window.open(order.report.file_data, "_blank", "noopener")}>
+                View Report
+              </button>
+            )}
           </div>
         ) : (order.status === "processing" || order.status === "collected") ? (
           <button className="btn-primary" style={{ fontSize: 12, padding: "7px 16px" }} onClick={() => onUpload(order)}>
@@ -191,9 +199,11 @@ export default function RequestsPage() {
   const [busy, setBusy] = useState(null);
 
   const { data, isLoading, refetch } = useApi(API_ENDPOINTS.LAB.REQUESTS, { params: { page_size: 100 }, pollMs: 20000 });
-  const orders = (data?.results || []).filter(o =>
-    o.patient_choice === "in_house" && o.status !== "cancelled"
-  );
+  const orders = (data?.results || [])
+    .filter(o => o.patient_choice === "in_house" && o.status !== "cancelled")
+    // FIFO — oldest ordered first, so the queue is worked in the order
+    // samples actually came in rather than newest-on-top.
+    .sort((a, b) => new Date(a.ordered_at) - new Date(b.ordered_at));
 
   const [showFilters, setShowFilters] = useState(false);
   const [search, setSearch] = useState("");
@@ -327,6 +337,12 @@ export default function RequestsPage() {
                             <button className="btn-primary" style={{ fontSize: 11, padding: "5px 10px" }}
                               onClick={() => setUploadOrder(o)}>
                               Upload Result
+                            </button>
+                          )}
+                          {o.status === "completed" && o.report?.file_data && (
+                            <button className="btn-outline" style={{ fontSize: 11, padding: "5px 10px" }}
+                              onClick={() => window.open(o.report.file_data, "_blank", "noopener")}>
+                              View Report
                             </button>
                           )}
                         </div>

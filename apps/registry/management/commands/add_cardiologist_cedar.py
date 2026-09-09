@@ -29,7 +29,6 @@ from django.utils import timezone
 from apps.tenants.models import Tenant
 from apps.tenants.utils import _make_db_config
 from apps.org.models import Branch, StaffUser, DoctorProfile
-from apps.registry.models import StaffEmailIndex
 from apps.patients.services import PatientService
 from apps.opd.models import Appointment, Vitals, OPDEncounter
 from core.utils.nntm import get_next_number
@@ -83,9 +82,10 @@ class Command(BaseCommand):
                                role="doctor", branch=branch)
             staff.set_password(STAFF_PASSWORD)
             staff.save(using=db)
-            StaffEmailIndex.objects.using("default").update_or_create(
-                email=DOCTOR_EMAIL, defaults={"tenant_id": tenant.id, "db_name": db},
-            )
+            # (v7: staff_email_index was retired -- this command predates
+            # the mobile-based login index and never wrote StaffMobileIndex
+            # either, so staff it creates still can't log in through the
+            # live flow; pre-existing gap, unrelated to today's cut.)
 
             # Profile photo — downloaded here (works when run on a machine with
             # real internet access; this sandbox cannot reach images.unsplash.com,

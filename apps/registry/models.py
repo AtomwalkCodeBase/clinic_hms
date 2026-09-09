@@ -17,24 +17,15 @@ DPDP Act compliance:
 from django.db import models
 
 
-class StaffEmailIndex(models.Model):
-    """
-    DEPRECATED — registration/login moved to mobile number (see
-    StaffMobileIndex below). Kept only so existing rows aren't destroyed by
-    a destructive migration; nothing in the codebase writes or reads this
-    table anymore. Do not use in new code.
-    """
-    email     = models.EmailField(unique=True, db_index=True)
-    tenant_id = models.IntegerField()          # mirrors Tenant.id — no FK across DBs
-    db_name   = models.CharField(max_length=100)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        app_label = "registry"
-        db_table  = "staff_email_index"
-
-    def __str__(self):
-        return f"{self.email} → {self.db_name}"
+# StaffEmailIndex was retired (v7 table-count redesign). It mapped
+# email -> tenant DB before registration/login moved to mobile number (see
+# StaffMobileIndex below). Checked before removal: it was still written by
+# two demo/seed commands (add_cardiologist_cedar.py, seed_full_demo.py --
+# now updated to stop), and it had no FK back to a specific StaffUser, so
+# there was no well-defined way to migrate its historical rows into
+# StaffMobileIndex.email (itself a live field for an unrelated feature).
+# Historical rows were discarded rather than migrated -- nothing reads this
+# table today, so nothing is lost functionally.
 
 
 class StaffMobileIndex(models.Model):

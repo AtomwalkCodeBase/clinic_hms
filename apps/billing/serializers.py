@@ -1,27 +1,33 @@
 from rest_framework import serializers
 from .models import (
-    BillingService, Invoice, InvoiceItem, Payment,
-    ServiceCategory, PaymentModeOption, InvoiceStatusOption,
+    BillingService, Invoice, InvoiceItem, Payment, OptionList,
 )
 
 
 class ServiceCategorySerializer(serializers.ModelSerializer):
+    # `name` is kept as the external field name (source="label") so the
+    # /billing/service-categories/ response shape is byte-for-byte
+    # unchanged from the pre-merge ServiceCategory table.
+    name = serializers.CharField(source="label")
+
     class Meta:
-        model  = ServiceCategory
+        model  = OptionList
         fields = ["id", "name", "is_active", "is_system", "sort_order"]
         read_only_fields = ["id", "is_system"]
 
 
 class PaymentModeOptionSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(source="label")
+
     class Meta:
-        model  = PaymentModeOption
+        model  = OptionList
         fields = ["id", "name", "is_active", "is_system", "sort_order"]
         read_only_fields = ["id", "is_system"]
 
 
 class InvoiceStatusOptionSerializer(serializers.ModelSerializer):
     class Meta:
-        model  = InvoiceStatusOption
+        model  = OptionList
         fields = ["id", "value", "label", "is_active", "is_system", "sort_order"]
         read_only_fields = ["id", "is_system"]
 

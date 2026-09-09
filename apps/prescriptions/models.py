@@ -1,7 +1,7 @@
 """
 apps/prescriptions/models.py
 ----------------------------
-Tables: Drug (catalog), DrugFormType (configurable form list)
+Tables: Drug (catalog)
 
 Prescription/PrescriptionItem used to live here too, but the live
 doctor-consultation flow has only ever written prescriptions to
@@ -12,35 +12,15 @@ pharmacy dispensing-queue bug fixed earlier this session was caused by
 pharmacy code pointing at these instead of the live opd models). Retired
 as part of HMS-07c-1; see apps.clinical's module docstring for the sibling
 Encounter/Vital/Diagnosis/FollowUp/ClinicalDocument retirement.
+
+DrugFormType (configurable drug-form list) was retired in the v7 table-
+count redesign — merged into apps.billing.OptionList(list_type="drug_form")
+alongside billing's own three configurable dropdown tables. Drug.form
+still stores the plain form name as a CharField, validated against that
+merged table at the view/serializer layer, same as before the merge.
 """
 
 from django.db import models
-
-
-class DrugFormType(models.Model):
-    """
-    Configurable list of drug forms (Tablet, Capsule, Syrup, ...) — was
-    previously a hardcoded Python FORM_CHOICES list on Drug itself, which
-    meant a hospital could never add a form the original list didn't happen
-    to include. Tenant-managed via the pharmacist's "Drug Form Setup"
-    screen, same pattern as the Drug catalog itself.
-
-    Drug.form stays a plain CharField (not a ForeignKey here) storing this
-    row's `name` directly — avoids a data migration on existing Drug rows
-    and keeps PrescriptionItem/serializers untouched; this table exists to
-    drive the pick-list, not to enforce referential integrity on it.
-    """
-    name        = models.CharField(max_length=50, unique=True)
-    is_active   = models.BooleanField(default=True)
-    created_at  = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        app_label = "prescriptions"
-        db_table  = "drug_form_type"
-        ordering  = ["name"]
-
-    def __str__(self):
-        return self.name
 
 
 class Drug(models.Model):
@@ -48,9 +28,9 @@ class Drug(models.Model):
     Hospital drug catalog. Tenant-managed.
     drug_code is the internal code (not a standard code — optional).
 
-    form is free text (validated against DrugFormType's configurable list
-    in the frontend/serializer layer, not a DB-level choices= constraint —
-    see DrugFormType's docstring for why).
+    form is free text (validated against apps.billing.OptionList's
+    list_type="drug_form" rows in the frontend/serializer layer, not a
+    DB-level choices= constraint — see OptionList's docstring for why).
     """
     name        = models.CharField(max_length=200)
     generic_name= models.CharField(max_length=200, blank=True)

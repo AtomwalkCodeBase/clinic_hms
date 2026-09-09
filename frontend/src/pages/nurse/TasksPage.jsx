@@ -382,11 +382,31 @@ function VaccinationsForPatient({ patientPk }) {
 }
 
 export default function NurseTasksPage() {
+  const { toastSuccess, toastApiError } = useToast();
   const [page, setPage] = useState(1);
   const { data, isLoading, refetch } = useApi(API_ENDPOINTS.OPD.MONITORING, {
     params: { date: TODAY, page, page_size: 20 },
     pollMs: 15000,
   });
+
+  // Follow-ups a doctor asked a nurse to book — see FollowUpTab in
+  // EncounterPage.jsx (doctor side) and FollowupNurseWorklistView (backend).
+  const { data: followupData, refetch: refetchFollowups } = useApi(API_ENDPOINTS.OPD.FOLLOWUP_NURSE_WORKLIST, { pollMs: 30000 });
+  const followups = followupData?.results || [];
+  const [markingBooked, setMarkingBooked] = useState(null);
+
+  async function markFollowupBooked(encounterId) {
+    setMarkingBooked(encounterId);
+    try {
+      await apiClient.post(API_ENDPOINTS.OPD.FOLLOWUP_MARK_BOOKED(encounterId));
+      toastSuccess("Marked as booked.");
+      refetchFollowups();
+    } catch (err) {
+      toastApiError(err, "Could not update this follow-up.");
+    } finally {
+      setMarkingBooked(null);
+    }
+  }
   const tasks = data?.results || [];
   const pagination = data?.pagination || null;
   // Server-computed totals for the whole day (not just the current page).
@@ -401,6 +421,35 @@ export default function NurseTasksPage() {
         title="Patient Monitoring"
         action={<button className="btn-outline" style={{ fontSize: 12 }} onClick={refetch}>Refresh</button>}
       >
+        {/* Follow-ups to book — doctor asked a nurse to handle the next visit */}
+        {followups.length > 0 && (
+          <div className="card" style={{ padding: 16, marginBottom: 22 }}>
+            <div className="dot-label dot-label--gold" style={{ marginBottom: 10 }}>Follow-ups to Book ({followups.length})</div>
+            <div style={{ display: "grid", gap: 10 }}>
+              {followups.map(f => (
+                <div key={f.encounter_id} style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                  padding: "10px 14px", background: "var(--color-table-header)", borderRadius: "var(--radius-input)",
+                }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>{f.patient_name} <span style={{ fontWeight: 400, color: "var(--color-text-muted)", fontSize: 11.5 }}>UHID {f.patient_uhid}</span></div>
+                    <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                      Dr. {f.doctor_name}{f.note ? ` — ${f.note}` : ""}
+                    </div>
+                  </div>
+                  <button
+                    className="btn-outline" style={{ fontSize: 11, padding: "6px 12px", whiteSpace: "nowrap" }}
+                    disabled={markingBooked === f.encounter_id}
+                    onClick={() => markFollowupBooked(f.encounter_id)}
+                  >
+                    {markingBooked === f.encounter_id ? "Saving…" : "Mark as Booked"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Summary strip */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 22 }}>
           {[

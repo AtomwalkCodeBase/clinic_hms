@@ -5,8 +5,9 @@ from core.response import success, created, error, not_found
 from core.permissions import IsPharmacist, IsHospitalStaff, RequireFeature
 from core.utils.nntm import get_next_number
 from core.pagination import paginate_queryset
+from apps.billing.models import OptionList
 from .serializers import DrugSerializer, DrugFormTypeSerializer
-from .models import Drug, DrugFormType
+from .models import Drug
 
 
 class DrugSearchView(APIView):
@@ -110,6 +111,11 @@ class DrugFormTypeListCreateView(APIView):
                                                deactivated ones.
     POST /api/v1/prescriptions/drug-forms/  — pharmacist adds a new drug
                                                form (e.g. "Suppository").
+
+    Backed by apps.billing.OptionList(list_type="drug_form") since the v7
+    table-count redesign merged DrugFormType into billing's shared
+    configurable-dropdown table — this view's request/response shape is
+    unchanged.
     """
     def get_permissions(self):
         if self.request.method == "POST":
@@ -117,7 +123,7 @@ class DrugFormTypeListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalStaff(), RequireFeature("feat_pharmacy")()]
 
     def get(self, request):
-        forms = DrugFormType.objects.using(request.tenant_db)
+        forms = OptionList.objects.using(request.tenant_db).filter(list_type=OptionList.LIST_DRUG_FORM)
         if request.query_params.get("include_inactive") != "1":
             forms = forms.filter(is_active=True)
         return success(data=DrugFormTypeSerializer(forms, many=True).data)
@@ -126,7 +132,11 @@ class DrugFormTypeListCreateView(APIView):
         s = DrugFormTypeSerializer(data=request.data)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
-        form = DrugFormType.objects.using(request.tenant_db).create(**s.validated_data)
+        data = dict(s.validated_data)
+        data["value"] = data.get("label", "")
+        form = OptionList.objects.using(request.tenant_db).create(
+            list_type=OptionList.LIST_DRUG_FORM, is_system=False, **data
+        )
         return created(data=DrugFormTypeSerializer(form).data, message="Drug form added.")
 
 
@@ -136,13 +146,17 @@ class DrugFormTypeDetailView(APIView):
 
     def patch(self, request, pk):
         try:
-            form = DrugFormType.objects.using(request.tenant_db).get(pk=pk)
-        except DrugFormType.DoesNotExist:
+            form = OptionList.objects.using(request.tenant_db).get(pk=pk, list_type=OptionList.LIST_DRUG_FORM)
+        except OptionList.DoesNotExist:
             return not_found("Drug form not found.")
         s = DrugFormTypeSerializer(form, data=request.data, partial=True)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
-        s.save()
+        for attr, val in s.validated_data.items():
+            setattr(form, attr, val)
+        if "label" in s.validated_data:
+            form.value = s.validated_data["label"]
+        form.save(using=request.tenant_db)
         return success(data=DrugFormTypeSerializer(form).data, message="Drug form updated.")
 
 
