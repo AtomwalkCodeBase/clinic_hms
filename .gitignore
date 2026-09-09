@@ -37,3 +37,13 @@ Thumbs.db
 # Misc
 *.bak
 *.tmp
+
+# Internal planning docs (not meant for the repo)
+/Atomwalk_HMS_Knowledge_Map.docx
+/Atomwalk_HMS_Knowledge_Map.md
+/Clinical_HMS_External_System_Comparison.docx
+/HMS_OPD_IPD_HowItConnects_updated_v2.pptx
+/HMS_OPD_IPD_HowItConnects_updated.pptx
+/IPD_Admission_Feature_Documentation_v2.docx
+/IPD_Admission_Feature_Documentation.docx
+/IPD_Full_Cycle.pptx
