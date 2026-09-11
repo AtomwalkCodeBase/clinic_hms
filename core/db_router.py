@@ -55,8 +55,14 @@ class TenantDatabaseRouter:
         DATABASE_ROUTERS = ["core.db_router.TenantDatabaseRouter"]
     """
 
+    # Tables that must always live on "default" even though their model's app
+    # isn't a registry app — e.g. the DatabaseCache backend's dynamic model.
+    _DEFAULT_ONLY_TABLES = frozenset({"doc_classify_cache"})
+
     def _is_registry_model(self, model) -> bool:
-        return model._meta.app_label in REGISTRY_APPS
+        if model._meta.app_label in REGISTRY_APPS:
+            return True
+        return getattr(model._meta, "db_table", "") in self._DEFAULT_ONLY_TABLES
 
     def db_for_read(self, model, **hints):
         if self._is_registry_model(model):
@@ -82,7 +88,13 @@ class TenantDatabaseRouter:
         """
         Registry apps only migrate on "default".
         Tenant apps only migrate on non-default aliases.
+        The DatabaseCache table (createcachetable) lives on "default".
         """
+        model = hints.get("model")
+        if (app_label == "django_cache"
+                or (model is not None
+                    and getattr(model._meta, "db_table", "") in self._DEFAULT_ONLY_TABLES)):
+            return db == "default"
         if app_label in REGISTRY_APPS:
             return db == "default"
         return db != "default"

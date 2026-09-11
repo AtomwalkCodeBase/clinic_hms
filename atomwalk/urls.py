@@ -48,6 +48,11 @@ urlpatterns = [
     # the phone side of the consultation-scratchpad QR. Same reasoning as
     # /emergency/ above: reached by scanning a QR, no login.
     path("api/v1/consult-pad/",  include("apps.patients.consult_pad_urls")),
+    # "Records Access" break-glass sharing — the doctor-has-a-laptop flow.
+    # Public create/status/records/download endpoints gated by a random
+    # token; the approve/end endpoints are patient-authenticated. Same
+    # "reached without an account here" reasoning as /emergency/ above.
+    path("api/v1/records-share/", include("apps.patients.records_share_urls")),
     # apps.clinical's Encounter/Vital/Diagnosis/FollowUp/ClinicalDocument were
     # retired (HMS-07c-1, confirmed dead — the live flow writes through
     # apps.opd, see apps/opd/views.py::_sync_to_hie for the actual HIE write

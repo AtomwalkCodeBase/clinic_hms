@@ -67,6 +67,7 @@ const ICONS = {
   qrcode:     "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM19 14h2v2h-2zM14 19h2v2h-2zM19 19h2v2h-2z",
   // apps.ipd (Phase 1) — a stylized bed, matching the 24x24 stroke=currentColor convention above.
   admission:  "M3 10V6a2 2 0 012-2h3a2 2 0 012 2v4M3 10h18v7M3 10v7M3 17h18M9 14h6",
+  lock:       "M19 11H5a2 2 0 00-2 2v7a2 2 0 002 2h14a2 2 0 002-2v-7a2 2 0 00-2-2zM7 11V7a5 5 0 0110 0v4",
 };
 
 // ── Hospital monogram (fallback logo) ────────────────────────────────────────
@@ -239,6 +240,7 @@ const NAV_BY_ROLE = {
     { type: "family-list" },
     { type: "section", label: "Account" },
     { type: "link",  label: "My Profile",    iconKey: "settings",     to: ROUTES.PATIENT.MY_PROFILE },
+    { type: "link",  label: "Shared Records Privacy", iconKey: "lock", to: ROUTES.PATIENT.SHARED_RECORDS_PRIVACY },
     { type: "link",  label: "Request a Correction", iconKey: "compliance", to: ROUTES.PATIENT.CORRECTION_REQUESTS },
   ],
 };

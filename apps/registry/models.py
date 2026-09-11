@@ -15,8 +15,10 @@ DPDP Act compliance:
 """
 
 import uuid
+from datetime import timedelta
 
 from django.db import models
+from django.utils import timezone
 
 
 # StaffEmailIndex was retired (v7 table-count redesign). It mapped
@@ -308,14 +310,45 @@ class SharedDocument(models.Model):
     # content_hash: SHA-256 of the ORIGINAL uploaded bytes — exact-duplicate
     #   detection, stable across the PDF-normalisation step.
     content_hash       = models.CharField(max_length=64, blank=True, db_index=True)
-    # how the doc_type was decided: qr | ocr_keyword | patient_confirmed | staff
+    # how the doc_type was decided: qr | ocr_keyword | llm | patient_confirmed
+    #   | staff | unreadable   ('unreadable' = the photo failed the quality
+    #   gate; the file is kept but nothing was classified — the review tray
+    #   offers Retake / Enter details.)
     classification_method     = models.CharField(max_length=20, blank=True)
     classification_confidence = models.FloatField(null=True, blank=True)  # 0..1 for ocr_keyword
+    # ── report category (lab reports only) ───────────────────────────────
+    # Which panel(s) an outside lab report is: ["cbc"], or ["cbc","lipid",...]
+    # for a health-package PDF (one file, shown under every listed folder).
+    # Empty for prescriptions, imaging, hospital-issued rows, and anything the
+    # classifier wasn't sure of (those wait in the review tray). Slugs come
+    # from core.report_types.
+    report_categories    = models.JSONField(default=list, blank=True)
+    category_method      = models.CharField(max_length=20, blank=True)   # qr | keyword | llm | patient_confirmed
+    category_confidence  = models.FloatField(null=True, blank=True)
+    # The sample-collection date, kept separately when the report prints both
+    # a collection and a (later) report date; document_date stays the primary
+    # the vault sorts by. date_source records which label document_date came
+    # from: collection | report | received | issue | consult | bare | patient.
+    collection_date      = models.DateField(null=True, blank=True)
+    date_source          = models.CharField(max_length=12, blank=True)
     # verified | unverified | needs_review | rejected
     verification_status = models.CharField(max_length=16, default="unverified")
     # filed | unsorted — 'unsorted' rows are excluded from the patient list's
     # normal view and from get_shared_history() until the patient confirms.
     review_state       = models.CharField(max_length=12, default="filed", db_index=True)
+    # Patient-facing note for a row parked in the review tray — the SPECIFIC
+    # reason it couldn't be filed ("This PDF is password-protected…", "too
+    # blurry to read…"). Blank for a normal confident file.
+    review_notes       = models.TextField(blank=True)
+    # Which specific field(s) the classifier couldn't resolve, a subset of
+    # ["kind", "category", "date", "file"] ("file" = unreadable — retake).
+    # Empty for a normal confident file or a QR-verified one. Drives the
+    # review tray's per-reason messaging and lets the review form ask for
+    # only what's actually missing, instead of assuming "type unknown" for
+    # every unsorted row. Cleared field-by-field as PortalDocumentDetailView
+    # .patch() receives each piece, so a partial submission re-prompts for
+    # whatever's still open instead of prematurely filing.
+    review_needs       = models.JSONField(default=list, blank=True)
     batch              = models.ForeignKey(
         "registry.DocumentUploadBatch", null=True, blank=True,
         on_delete=models.SET_NULL, related_name="documents",
@@ -812,13 +845,19 @@ class EmergencyAccessLog(models.Model):
     """
     EVENT_GENERATED = "generated"
     EVENT_VIEWED    = "viewed"
+    # Reused by Share Records for a breadcrumb whenever the patient changes
+    # their shared-records privacy or reveals a private record for one visit
+    # (see apps/patients/records_share_views.py). Kept here rather than a new
+    # table so a patient's "who has looked at what" view stays one query.
+    EVENT_PRIVACY   = "privacy"
     EVENT_CHOICES = [
         (EVENT_GENERATED, "QR code generated"),
         (EVENT_VIEWED,     "Summary viewed"),
+        (EVENT_PRIVACY,    "Shared-records privacy changed"),
     ]
 
     awpid      = models.CharField(max_length=30, db_index=True)
-    event      = models.CharField(max_length=10, choices=EVENT_CHOICES)
+    event      = models.CharField(max_length=24, choices=EVENT_CHOICES)
     # Which account actually triggered generation — blank for "viewed" rows,
     # since a scan is by definition someone without an account here.
     generated_by_account_id = models.IntegerField(null=True, blank=True)
@@ -908,3 +947,200 @@ class ConsultSession(models.Model):
 
     def __str__(self):
         return f"ConsultSession {self.id} enc={self.encounter_id} [{self.status}]"
+
+
+class RecordsShareRequest(models.Model):
+    """
+    "Records Access" — the doctor-has-a-laptop half of break-glass record
+    sharing. Distinct from the "Emergency QR" flow (EmergencyAccessLog /
+    core.emergency_access), which is stateless: there the *patient's* phone
+    shows a signed-JWT QR and any camera opens a read-only page.
+
+    This flow is the inverse and therefore stateful:
+      1. A doctor opens the public /records-access page on a laptop. A row is
+         created here (status=pending) with a random `token` (in the QR/URL)
+         and a short numeric `code` fallback.
+      2. The patient scans the QR with their phone, sees who is asking, and
+         approves — binding their `awpid` and starting a 2-hour window
+         (`expires_at`). Until then the token grants nothing.
+      3. The laptop polls `token` and, once approved, renders the patient's
+         navigable shared history + Rx & Reports vault, read-only.
+      4. The patient can end it early (status=ended); it otherwise lapses at
+         `expires_at` (status flips lazily on the next read).
+
+    Downloads are gated one file at a time: the doctor asking to download a
+    document sets `pending_download_id`; the patient allows it on their phone,
+    moving that id into `download_unlocked_ids`.
+
+    Registry DB, like SharedDocument / ConsultSession — the public endpoints
+    read/write it with a plain `.using("default")`, no tenant context.
+    """
+    STATUS_PENDING  = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_DENIED   = "denied"
+    STATUS_ENDED    = "ended"
+    STATUS_EXPIRED  = "expired"
+    STATUS_CHOICES = [
+        (STATUS_PENDING,  "Waiting for patient"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_DENIED,   "Denied by patient"),
+        (STATUS_ENDED,    "Ended by patient"),
+        (STATUS_EXPIRED,  "Expired"),
+    ]
+
+    WINDOW_HOURS = 2
+
+    token       = models.CharField(max_length=32, unique=True, db_index=True)
+    # The 6-digit "front door" the patient reads out to the doctor. The doctor
+    # types it at clinic.atomwalk.com/s to load this pending session on their
+    # laptop. It only ever resolves a still-pending grant — it locates the
+    # session, it is not the approval check (see `pairing`).
+    code        = models.CharField(max_length=8, db_index=True)
+    # What the doctor typed on the start screen — "Dr. Rao, City Clinic".
+    # Free text, shown to the patient in the approval prompt. Optional.
+    requester_label = models.CharField(max_length=120, blank=True)
+
+    # ── laptop binding ────────────────────────────────────────────────────
+    # Set the first time a browser "claims" this session (RecordsShareClaimView)
+    # — either by typing `code` at /s or by opening a full link directly.
+    opened_at   = models.DateTimeField(null=True, blank=True)
+    # sha256 of the random device token handed to the claiming browser. Once
+    # set, every public /records-share/<token>/… read must carry that token in
+    # the X-Share-Device header — so a leaked link/QR alone reads nothing.
+    device_hash = models.CharField(max_length=64, blank=True)
+    # 6-char code minted at claim time, shown on the doctor's screen (inside
+    # the QR as ?p=… and as text beneath it). The patient's app lifts it off
+    # that screen — by scanning, or the patient types it — and sends it with
+    # the approval, proving they are looking at the doctor's screen. Replaces
+    # the old "type the numeric code" step.
+    pairing     = models.CharField(max_length=12, blank=True)
+
+    # Empty until a patient approves; then it's the awpid whose records this
+    # grant exposes. A grant only ever covers the approving patient (no
+    # family-member targeting in v1).
+    awpid       = models.CharField(max_length=30, blank=True, db_index=True)
+    status      = models.CharField(max_length=12, choices=STATUS_CHOICES,
+                                   default=STATUS_PENDING, db_index=True)
+
+    created_at  = models.DateTimeField(auto_now_add=True)
+    decided_at  = models.DateTimeField(null=True, blank=True)
+    expires_at  = models.DateTimeField(null=True, blank=True)
+    # Doctor-side poll heartbeat — lets the patient's "who has access" view
+    # show whether the doctor is actively looking right now.
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    created_ip  = models.GenericIPAddressField(null=True, blank=True)
+
+    # SharedDocument ids the patient has released for download on this grant.
+    download_unlocked_ids = models.JSONField(default=list, blank=True)
+    # SharedDocument ids the patient has revealed for THIS visit only — a
+    # per-session override of their standing RecordsPrivacy. Cleared when the
+    # grant ends, so the next share starts from full standing privacy again.
+    shown_private_ids = models.JSONField(default=list, blank=True)
+    # A single SharedDocument id the doctor has asked to download, awaiting
+    # the patient's decision. Cleared once decided.
+    pending_download_id = models.IntegerField(null=True, blank=True)
+    # Wrong-`code` tries at approval time. The patient reads the 6-digit code
+    # off the doctor's screen after scanning; too many misses locks the
+    # session (someone guessing without seeing that screen).
+    code_attempts = models.PositiveSmallIntegerField(default=0)
+
+    MAX_CODE_ATTEMPTS = 5
+    # A pending session the doctor never opens is only useful for a few
+    # minutes — after this it can't be claimed, which keeps the 6-digit
+    # front-door code from being worth guessing and sweeps up abandoned rows.
+    PENDING_TTL_MINUTES = 20
+
+    @property
+    def pending_stale(self):
+        return (
+            self.status == self.STATUS_PENDING
+            and timezone.now() - self.created_at
+            > timedelta(minutes=self.PENDING_TTL_MINUTES)
+        )
+
+    def device_matches(self, raw_token):
+        """True when `raw_token` is the device token this session was claimed
+        with. Vacuously true until the session has been claimed at all."""
+        if not self.device_hash:
+            return True
+        if not raw_token:
+            return False
+        import hashlib
+        return hashlib.sha256(raw_token.encode()).hexdigest() == self.device_hash
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "records_share_request"
+        ordering  = ["-created_at"]
+        indexes = [
+            models.Index(fields=["awpid", "status"]),
+        ]
+
+    def __str__(self):
+        return f"RecordsShareRequest {self.code} [{self.status}] awpid={self.awpid or '—'}"
+
+    @property
+    def is_live(self):
+        """Approved and still inside the 2-hour window."""
+        return (
+            self.status == self.STATUS_APPROVED
+            and self.expires_at is not None
+            and timezone.now() < self.expires_at
+        )
+
+    def lapse_if_due(self):
+        """Flip an approved-but-past-window grant to expired. Returns True if it changed."""
+        if (
+            self.status == self.STATUS_APPROVED
+            and self.expires_at is not None
+            and timezone.now() >= self.expires_at
+        ):
+            self.status = self.STATUS_EXPIRED
+            self.save(using="default", update_fields=["status"])
+            return True
+        return False
+
+    def seconds_left(self):
+        if not self.expires_at:
+            return 0
+        return max(0, int((self.expires_at - timezone.now()).total_seconds()))
+
+
+class RecordsPrivacy(models.Model):
+    """
+    Patient-controlled privacy over what a doctor sees when records are shared
+    (Share Records / RecordsShareRequest). One lazily-created row per awpid,
+    read by every share session.
+
+    "Private" is sticky: once hidden here, a record or a whole category stays
+    hidden in *every* future share until the patient un-hides it. The only way
+    a private record reaches a doctor is a per-visit reveal on the live grant
+    (RecordsShareRequest.shown_private_ids), which clears when that visit ends.
+
+    hidden_categories / hidden_kinds are LIVE rules — a matching document that
+    arrives next month is hidden too, automatically.
+
+    Registry DB, keyed by awpid, like the Shared* HIE tables.
+    """
+    SECTIONS = ("summary", "vitals", "diagnoses", "vaccinations")
+
+    awpid             = models.CharField(max_length=30, unique=True, db_index=True)
+    hide_all          = models.BooleanField(default=False)
+    hidden_doc_ids    = models.JSONField(default=list, blank=True)   # SharedDocument ids
+    hidden_categories = models.JSONField(default=list, blank=True)   # report_categories slugs
+    hidden_kinds      = models.JSONField(default=list, blank=True)   # SharedDocument.doc_type values
+    hidden_sections   = models.JSONField(default=list, blank=True)   # subset of SECTIONS
+    updated_at        = models.DateTimeField(auto_now=True)
+    created_at        = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "records_privacy"
+
+    def __str__(self):
+        return f"RecordsPrivacy awpid={self.awpid} hide_all={self.hide_all}"
+
+    @classmethod
+    def for_awpid(cls, awpid):
+        obj, _ = cls.objects.using("default").get_or_create(awpid=awpid)
+        return obj

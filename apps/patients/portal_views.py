@@ -1507,7 +1507,10 @@ class PortalRescheduleBookingView(APIView):
 
 # ── My documents ─────────────────────────────────────────────────────────────
 
-_MAX_DOC_BASE64_CHARS = 7_000_000  # ≈5MB raw file, comfortable for a scanned PDF/photo
+_MAX_DOC_BASE64_CHARS = 15_500_000  # ≈11MB raw file — a modern phone photo runs ~8-11MB;
+#                                     base64 inflates ~4/3, so ~15.4M chars. Keep the request
+#                                     under DATA_UPLOAD_MAX_MEMORY_SIZE (settings) and the
+#                                     proxy's client_max_body_size.
 
 class PortalDocumentListCreateView(APIView):
     """
@@ -1569,7 +1572,14 @@ class PortalDocumentListCreateView(APIView):
             "created_at": d.created_at,
             "review_state": d.review_state,
             "verification_status": d.verification_status,
+            "classification_method": d.classification_method,
+            "review_notes": d.review_notes,
+            "review_needs": d.review_needs or [],
             "document_date": d.document_date,
+            "collection_date": d.collection_date,
+            "date_source": d.date_source,
+            "report_categories": d.report_categories or [],
+            "category_confidence": d.category_confidence,
             "public_document_id": d.public_document_id,
             "hospital_label": d.hospital_label,
             "doctor_label": d.doctor_label,
@@ -1593,7 +1603,7 @@ class PortalDocumentListCreateView(APIView):
         if not file_data:
             return error("No file provided.", errors={"file_data": "Required."})
         if len(file_data) > _MAX_DOC_BASE64_CHARS:
-            return error("File is too large. Please upload a smaller file (under ~5MB).")
+            return error("File is too large. Please upload a smaller file (under ~11MB).")
         # Verify the payload's real magic bytes match an allowed type instead
         # of trusting the client-supplied mime_type — this file gets shared
         # across every hospital the patient consents to via the HIE flow, so
@@ -1628,6 +1638,13 @@ class PortalDocumentListCreateView(APIView):
         classification_confidence = None
         document_date = None
         review_state = "filed"
+        report_categories = []
+        category_method = ""
+        category_confidence = None
+        collection_date = None
+        date_source = ""
+        cr = None
+        review_needs = []           # subset of kind|category|date|file — see SharedDocument.review_needs
 
         # 1. QR path — the phone decoded the hospital QR and posted the token.
         qr_tok = (d.get("qr_token") or "").strip()
@@ -1659,26 +1676,61 @@ class PortalDocumentListCreateView(APIView):
                 "existing_doc_type": existing.doc_type,
             }, status=200)
 
-        # 3. No QR — classify from the page text (OCR when there's no text layer).
+        # 3. No QR — quality gate, then classify kind + panel + date from the
+        #    page text (OCR when there's no text layer). Anything the
+        #    classifier isn't sure of lands in the review tray, which asks the
+        #    patient only for the field(s) that failed.
+        quality_reason = ""
+        quality_message = ""
         if classification_method != "qr":
             try:
                 cr = _dc.classify(raw, mime_type)
+                # Clearly not a medical document — don't save it at all.
+                if getattr(cr, "non_medical", False):
+                    return Response({
+                        "skipped": True,
+                        "kind": "not_medical",
+                        "reason": "This doesn't look like a medical document, so it "
+                                  "wasn't saved. My Reports is for prescriptions, lab "
+                                  "reports and scans.",
+                    }, status=200)
                 classification_method = cr.method
                 classification_confidence = cr.confidence
                 document_date = cr.doc_date
-                if cr.confident:
+                collection_date = cr.collection_date
+                date_source = cr.date_source
+                if cr.unreadable:
+                    # keep the file, classify nothing — Retake / Enter details.
+                    # Carry the SPECIFIC reason (password-protected / blurry /
+                    # dark / low-res) through to the patient, not a generic one.
+                    doc_type = "other"
+                    review_state = "unsorted"
+                    verification_status = "needs_review"
+                    quality_reason = cr.quality_reason
+                    quality_message = cr.quality_message
+                    review_needs = ["file"]
+                elif cr.confident:
                     doc_type = cr.doc_type
-                    review_state = "filed"
+                    review_state = "filed" if not cr.needs else "unsorted"
+                    if cr.needs:
+                        verification_status = "needs_review"
+                        review_needs = list(cr.needs)
+                    if cr.doc_type == "lab_report":
+                        report_categories = list(cr.categories)
+                        category_confidence = cr.category_confidence
+                        category_method = "keyword" if cr.method == "ocr_keyword" else cr.method
                 else:
                     doc_type = "other"
                     review_state = "unsorted"
                     verification_status = "needs_review"
+                    review_needs = list(cr.needs) or ["kind"]
             except Exception:
                 logger.exception("doc classify failed; parking upload in Unsorted")
                 doc_type = "other"
                 review_state = "unsorted"
                 verification_status = "needs_review"
                 classification_method = "ocr_keyword"
+                review_needs = ["kind"]
 
         # 4. Normalise every upload to a PDF (images become a single-page PDF).
         try:
@@ -1714,7 +1766,10 @@ class PortalDocumentListCreateView(APIView):
             classification_method=classification_method,
             classification_confidence=classification_confidence,
             verification_status=verification_status, review_state=review_state,
-            document_date=document_date,
+            document_date=document_date, collection_date=collection_date,
+            date_source=date_source, report_categories=report_categories,
+            category_method=category_method, category_confidence=category_confidence,
+            review_notes=quality_message, review_needs=review_needs,
         )
         return Response({
             "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,
@@ -1722,6 +1777,14 @@ class PortalDocumentListCreateView(APIView):
             "source_ref": doc.source_ref, "created_at": doc.created_at,
             "review_state": doc.review_state,
             "verification_status": doc.verification_status,
+            "classification_method": doc.classification_method,
+            "report_categories": doc.report_categories,
+            "document_date": doc.document_date,
+            "needs": review_needs,
+            "review_needs": review_needs,
+            "unreadable": bool(quality_reason),
+            "quality_reason": quality_reason,
+            "quality_message": quality_message,
         }, status=201)
 
 
@@ -1785,7 +1848,9 @@ class PortalDocumentDetailView(APIView):
             "mime_type": doc.mime_type,
             "created_at": doc.created_at,
             "document_date": doc.document_date,
+            "report_categories": doc.report_categories or [],
             "review_state": doc.review_state,
+            "review_needs": doc.review_needs or [],
             "verification_status": doc.verification_status,
             "public_document_id": doc.public_document_id,
             "classification_method": doc.classification_method,
@@ -1798,11 +1863,18 @@ class PortalDocumentDetailView(APIView):
 
     def patch(self, request, doc_id):
         """
-        Re-categorise a document the patient uploaded (or one the classifier
-        parked in Unsorted). Body: { doc_type }. A QR-verified hospital
-        document cannot be re-typed — its type is authoritative.
+        The review-tray confirmation. Body (all optional — send what the
+        classifier asked for):
+          { "doc_type": "lab_report",
+            "report_categories": ["lipid"],      # lab reports only
+            "document_date": "2026-09-02" }
+        Files an Unsorted / unreadable row. A QR-verified hospital document is
+        authoritative and cannot be re-typed.
         """
+        from datetime import date as _date
+
         from apps.registry.models import SharedDocument
+        from core import report_types as _rt
 
         target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
         if err:
@@ -1813,17 +1885,68 @@ class PortalDocumentDetailView(APIView):
         if doc.verification_status == "verified":
             return error("This document's type is set by the issuing hospital.", status=409)
 
-        new_type = (request.data.get("doc_type") or "").strip()
-        if new_type not in dict(SharedDocument.DOC_TYPE_CHOICES):
-            return error("Unknown document type.")
-        doc.doc_type = new_type
-        doc.review_state = "filed"
-        doc.verification_status = "unverified"
+        d = request.data
+        fields = ["review_state", "verification_status", "classification_method"]
+
+        new_type = (d.get("doc_type") or "").strip()
+        if new_type:
+            if new_type not in dict(SharedDocument.DOC_TYPE_CHOICES):
+                return error("Unknown document type.", errors={"doc_type": "Unknown."})
+            doc.doc_type = new_type
+            fields.append("doc_type")
+
+        if "report_categories" in d:
+            cats = d.get("report_categories") or []
+            if not isinstance(cats, list):
+                return error("report_categories must be a list of category slugs.")
+            cats = [c for c in cats if c in _rt.PANELS_BY_SLUG]
+            doc.report_categories = cats if doc.doc_type == "lab_report" else []
+            doc.category_method = "patient_confirmed"
+            doc.category_confidence = 1.0
+            fields += ["report_categories", "category_method", "category_confidence"]
+        elif doc.doc_type != "lab_report" and doc.report_categories:
+            doc.report_categories = []
+            fields.append("report_categories")
+
+        if d.get("document_date"):
+            try:
+                y, m, day = (int(x) for x in str(d["document_date"])[:10].split("-"))
+                dt = _date(y, m, day)
+            except Exception:
+                return error("document_date must be YYYY-MM-DD.", errors={"document_date": "Invalid."})
+            if dt > _date.today():
+                return error("That date is in the future.", errors={"document_date": "Future date."})
+            doc.document_date = dt
+            doc.date_source = "patient"
+            fields += ["document_date", "date_source"]
+
+        # Recompute what's still open rather than assuming this one PATCH
+        # settled everything — a client may send fields one at a time (pick a
+        # type now, get asked for the panel next) as well as all at once.
+        still_needs = list(doc.review_needs or [])
+        if new_type:
+            # picking a type (even for a previously-unreadable row) settles both.
+            still_needs = [n for n in still_needs if n not in ("kind", "file")]
+        if d.get("document_date"):
+            still_needs = [n for n in still_needs if n != "date"]
+        if doc.doc_type == "lab_report" and not doc.report_categories:
+            if "category" not in still_needs:
+                still_needs.append("category")
+        else:
+            still_needs = [n for n in still_needs if n != "category"]
+
+        doc.review_needs = still_needs
+        doc.review_state = "filed" if not still_needs else "unsorted"
+        doc.verification_status = "unverified" if not still_needs else "needs_review"
         doc.classification_method = "patient_confirmed"
-        doc.save(using="default", update_fields=[
-            "doc_type", "review_state", "verification_status", "classification_method",
-        ])
-        return success(data={"id": doc.id, "doc_type": doc.doc_type, "review_state": doc.review_state})
+        fields += ["review_needs"]
+        doc.save(using="default", update_fields=list(dict.fromkeys(fields)))
+        return success(data={
+            "id": doc.id, "doc_type": doc.doc_type,
+            "report_categories": doc.report_categories,
+            "document_date": doc.document_date, "review_state": doc.review_state,
+            "review_needs": doc.review_needs,
+        })
 
     def delete(self, request, doc_id):
         """
@@ -2903,7 +3026,7 @@ class PortalGrowthView(APIView):
 
 # ── Vaccinations ─────────────────────────────────────────────────────────────
 
-_MAX_VAX_BASE64_CHARS = 7_000_000  # ≈5MB, same cap as document uploads
+_MAX_VAX_BASE64_CHARS = 15_500_000  # ≈11MB, same cap as document uploads
 
 
 def _parse_portal_date(value, field_label):
@@ -3072,7 +3195,7 @@ class PortalVaccinationUploadView(APIView):
 
         if file_data:
             if len(file_data) > _MAX_VAX_BASE64_CHARS:
-                return error("File is too large. Please upload a smaller file (under ~5MB).")
+                return error("File is too large. Please upload a smaller file (under ~11MB).")
             try:
                 mime_type = validate_data_uri(file_data)
             except FileValidationError as exc:

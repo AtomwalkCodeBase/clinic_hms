@@ -24,6 +24,19 @@ export const ROUTES = {
   // doctor's phone browser has no Atomwalk session. See
   // pages/public/ConsultPadPage.jsx + apps/patients/consult_pad_views.py.
   CONSULT_PAD: (token) => `/consult-pad/${token}`,
+  // "Share Records" break-glass — the doctor-has-a-laptop flow. The
+  // clinician opens the base path on their laptop (or a shared /:token
+  // link); a QR is shown; the patient scans it and approves (opening the
+  // /:token path with their patient session), and the clinician's page then
+  // renders the records read-only for 2 hours. Outside every route guard —
+  // a clinician here has no Atomwalk login. See
+  // pages/public/ShareRecordsPage.jsx + apps/patients/records_share_views.py.
+  SHARE_RECORDS:          "/share-records",
+  SHARE_RECORDS_TOKEN: (token) => `/share-records/${token}`,
+  // Front door the patient reads out: the doctor opens this and types the
+  // 6-digit code from the patient's phone. `/s` kept as a short alias.
+  SHARE_RECORDS_ENTRY:    "/share",
+  SHARE_RECORDS_ENTRY_ALT: "/s",
 
   // Platform Admin
   PLATFORM: {
@@ -118,6 +131,7 @@ export const ROUTES = {
     PRESCRIPTIONS:      "/patient/prescriptions",
     LAB_REPORTS:        "/patient/lab-reports",
     MY_REPORTS:         "/patient/my-reports",
+    SHARED_RECORDS_PRIVACY: "/patient/shared-records-privacy",
     HEALTH_SUMMARY:     "/patient/health-summary",
     NOTIFICATIONS:      "/patient/notifications",
     MY_PROFILE:         "/patient/my-profile",

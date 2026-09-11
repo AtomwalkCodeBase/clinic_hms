@@ -179,6 +179,32 @@ export const API_ENDPOINTS = {
     NOTIFICATIONS:          `${API_V1}/portal/notifications/`,
     NOTIFICATION_READ: (tenantDb, id) => `${API_V1}/portal/notifications/${tenantDb}/${id}/read/`,
     EMERGENCY_TOKEN:        `${API_V1}/portal/emergency/token/`,
+    // "Share Records" — patient-authenticated half: the patient CREATES the
+    // session here, then approves / ends / releases downloads / lists access.
+    RECORDS_SHARE_CREATE:           `${API_V1}/portal/records-share/`,
+    RECORDS_SHARE_MINE:             `${API_V1}/portal/records-share/mine/`,
+    RECORDS_SHARE_DECISION: (token) => `${API_V1}/portal/records-share/${token}/decision/`,
+    RECORDS_SHARE_END:      (token) => `${API_V1}/portal/records-share/${token}/end/`,
+    RECORDS_SHARE_DOWNLOAD_DECISION: (token) => `${API_V1}/portal/records-share/${token}/downloads/decision/`,
+    // Shared-records privacy — the standing "what a doctor sees" config, the
+    // single-record lock used from My Reports, and the per-visit reveal on a
+    // live grant (scope: visit | always | conceal).
+    RECORDS_PRIVACY:                `${API_V1}/portal/records-privacy/`,
+    RECORDS_PRIVACY_TOGGLE:         `${API_V1}/portal/records-privacy/toggle/`,
+    RECORDS_SHARE_REVEAL:  (token) => `${API_V1}/portal/records-share/${token}/reveal/`,
+  },
+
+  // "Share Records" — public, token-gated half the doctor's laptop reads
+  // (see apps/patients/records_share_views.py). publicClient: no login.
+  RECORDS_SHARE: {
+    // The doctor's laptop binds itself to a session — by the patient's
+    // 6-digit code (typed at /s) or by the link's own token.
+    CLAIM:   `${API_V1}/records-share/claim/`,
+    STATUS:  (token) => `${API_V1}/records-share/${token}/`,
+    RECORDS: (token) => `${API_V1}/records-share/${token}/records/`,
+    DOC_VIEW: (token, docId) => `${API_V1}/records-share/${token}/documents/${docId}/view/`,
+    DOWNLOADS: (token) => `${API_V1}/records-share/${token}/downloads/`,
+    CLOSE:   (token) => `${API_V1}/records-share/${token}/close/`,
   },
 
   // Emergency QR summary — public, no auth (see apps/patients/emergency_views.py).

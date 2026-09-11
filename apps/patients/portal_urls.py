@@ -17,6 +17,11 @@ from .portal_views import (
     PortalHealthTimelineView, PortalNotificationsView, PortalNotificationMarkReadView,
     PortalEmergencyTokenView,
 )
+from .records_share_views import (
+    RecordsShareCreateView, RecordsShareDecisionView, RecordsShareEndView,
+    RecordsShareDownloadDecisionView, RecordsShareMineView,
+    RecordsPrivacyView, RecordsPrivacyToggleView, RecordsShareRevealView,
+)
 
 urlpatterns = [
     path("register/",                       PortalRegisterView.as_view(),     name="portal-register"),
@@ -60,4 +65,20 @@ urlpatterns = [
     path("notifications/",                  PortalNotificationsView.as_view(), name="portal-notifications"),
     path("notifications/<str:tenant_db>/<int:pk>/read/", PortalNotificationMarkReadView.as_view(), name="portal-notifications-read"),
     path("emergency/token/",                PortalEmergencyTokenView.as_view(), name="portal-emergency-token"),
+
+    # "Share Records" — patient-authenticated half: create the session, then
+    # approve / deny / end / release a download / list who currently has
+    # access. The public, token-gated half the doctor's laptop reads is at
+    # /api/v1/records-share/ (records_share_urls.py).
+    path("records-share/",                            RecordsShareCreateView.as_view(),           name="portal-records-share-create"),
+    path("records-share/mine/",                       RecordsShareMineView.as_view(),             name="portal-records-share-mine"),
+    # Shared-records privacy — the standing "what a doctor sees" config, the
+    # single-record lock used from My Reports, and the per-visit reveal on a
+    # live grant.
+    path("records-privacy/",                          RecordsPrivacyView.as_view(),               name="portal-records-privacy"),
+    path("records-privacy/toggle/",                   RecordsPrivacyToggleView.as_view(),         name="portal-records-privacy-toggle"),
+    path("records-share/<str:token>/reveal/",         RecordsShareRevealView.as_view(),           name="portal-records-share-reveal"),
+    path("records-share/<str:token>/decision/",       RecordsShareDecisionView.as_view(),         name="portal-records-share-decision"),
+    path("records-share/<str:token>/end/",            RecordsShareEndView.as_view(),              name="portal-records-share-end"),
+    path("records-share/<str:token>/downloads/decision/", RecordsShareDownloadDecisionView.as_view(), name="portal-records-share-download-decision"),
 ]

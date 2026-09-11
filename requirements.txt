@@ -22,4 +22,7 @@ requests==2.32.3
 boto3==1.34.144
 rapidfuzz==3.9.7
 pypdf==6.15.0
-pytesseract==0.3.13  # OCR for no-QR document classification; needs the tesseract-ocr system package
+# ── OCR for no-QR document classification (core/ocr.py) ──
+rapidocr-onnxruntime==1.3.24  # primary engine: PaddleOCR's PP-OCR models on ONNX Runtime — pip-only, CPU, no system package (pulls opencv-python-headless, numpy, onnxruntime)
+pymupdf==1.24.10              # rasterise image-only / scanned PDFs so they can be OCR'd
+pytesseract==0.3.13           # fallback engine; only used if rapidocr is absent. needs the tesseract-ocr system package

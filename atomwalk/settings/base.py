@@ -46,7 +46,7 @@ else:
 # binary). Raised to comfortably fit a few-MB PDF/photo; the view layer adds
 # its own explicit size guard on top of this so oversized uploads still get
 # a clean validation error instead of a hard 400 from Django itself.
-DATA_UPLOAD_MAX_MEMORY_SIZE = config("DATA_UPLOAD_MAX_MEMORY_SIZE", default=10 * 1024 * 1024, cast=int)
+DATA_UPLOAD_MAX_MEMORY_SIZE = config("DATA_UPLOAD_MAX_MEMORY_SIZE", default=20 * 1024 * 1024, cast=int)
 
 # ── Object storage (S3) ──────────────────────────────────────────────────────
 # Every user-uploaded file — staff/patient profile photos, hospital logos,
@@ -275,6 +275,12 @@ REST_FRAMEWORK = {
         # QR. The 43-char random token is the real gate; this is a per-IP
         # backstop against someone scripting note spam against a leaked code.
         "consult_pad": "20/min",
+        # "Records Access" break-glass sharing (apps/patients/records_share_views.py)
+        # — public, unauthenticated, token-gated. Higher than the others
+        # because the doctor's laptop polls the status endpoint every few
+        # seconds while it waits for the patient to approve. The 32-char
+        # random token is the real gate; this is a per-IP backstop.
+        "records_share": "90/min",
     },
 }
 
@@ -295,11 +301,16 @@ SIMPLE_JWT = {
 }
 
 # ── CORS ─────────────────────────────────────────────────────────────────────
+from corsheaders.defaults import default_headers as _cors_default_headers
+
 CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",
     default="http://localhost:3000,http://localhost:5173",
 ).split(",")
 CORS_ALLOW_CREDENTIALS = True
+# "Share Records" doctor pages send the per-browser session token as a custom
+# header — must be allow-listed or the browser blocks the request post-preflight.
+CORS_ALLOW_HEADERS = (*_cors_default_headers, "x-share-device")
 
 # ── API Docs (drf-spectacular) ───────────────────────────────────────────────
 SPECTACULAR_SETTINGS = {
@@ -382,10 +393,16 @@ PLATFORM_ADMIN_SECRET = config("PLATFORM_ADMIN_SECRET", default="change-this")
 # value — this feature is new, so there are no live QRs to invalidate yet.
 DOC_QR_SECRET = config("DOC_QR_SECRET", default="") or SECRET_KEY
 
-# Path to the tesseract binary for OCR classification of no-QR uploads.
-# Leave blank on Linux where `tesseract` is on PATH (apt install tesseract-ocr);
-# set it only if the binary lives somewhere non-standard (some Windows dev
-# machines) — core/doc_classifier.py also auto-probes the usual Windows paths.
+# OCR engine for no-QR document classification (core/ocr.py):
+#   "auto" (default) — RapidOCR (PaddleOCR's PP-OCR models on ONNX Runtime;
+#     pip-only, CPU, no system package) when installed, else Tesseract.
+#   "rapidocr" | "paddleocr" | "tesseract" — force one.  "none" — disable OCR.
+DOC_OCR_ENGINE = config("DOC_OCR_ENGINE", default="auto")
+
+# Path to the tesseract binary — only used when DOC_OCR_ENGINE falls back to
+# Tesseract. Leave blank on Linux where `tesseract` is on PATH (apt install
+# tesseract-ocr); set it only if the binary lives somewhere non-standard
+# (some Windows dev machines) — core/ocr.py also auto-probes the usual paths.
 TESSERACT_CMD = config("TESSERACT_CMD", default="")
 
 # ── Handwriting recognition (consultation scratchpad) ───────────────────────
@@ -401,6 +418,44 @@ CONSULT_PAD_LLM_BASE  = config("CONSULT_PAD_LLM_BASE", default="https://api.groq
 CONSULT_PAD_LLM_MODEL = config("CONSULT_PAD_LLM_MODEL", default="qwen/qwen3.8-27b")
 # Falls back to GROQ_API_KEY so an existing Groq key already in .env just works.
 CONSULT_PAD_LLM_KEY   = config("CONSULT_PAD_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
+
+# ── Document classifier — LLM / vision fallback for the uncertain tail ──────
+# The pipeline (core.doc_classifier) runs three layers, cheapest first:
+#   1. deterministic keyword pass       — free, instant, handles the bulk
+#   2. TEXT LLM on the OCR text          — resolves garbled / sparse text
+#   3. VISION LLM on the page image      — resolves bad OCR / odd layouts / disagreement
+# Each layer only runs on what the previous one wasn't sure about. Every layer
+# is a labeller: kind / panel / date only, NEVER test values. Any layer with a
+# blank KEY (and no GROQ_API_KEY) is skipped and the deterministic result +
+# review tray stand. A confident keyword verdict is never overridden by an LLM;
+# genuine cross-layer disagreement goes to the patient.
+DOC_CLASSIFIER_LLM       = config("DOC_CLASSIFIER_LLM", default="core.doc_classifier_llm.classify")
+DOC_CLASSIFIER_LLM_BASE  = config("DOC_CLASSIFIER_LLM_BASE", default="https://api.groq.com/openai/v1")
+DOC_CLASSIFIER_LLM_MODEL = config("DOC_CLASSIFIER_LLM_MODEL", default="openai/gpt-oss-20b")
+DOC_CLASSIFIER_LLM_KEY   = config("DOC_CLASSIFIER_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
+
+# Vision layer — OFF unless a MODEL is set (Groq currently has no VLM; point
+# this at a local vLLM/Ollama VLM, or OpenRouter gemini-2.0-flash / gpt-4o).
+DOC_CLASSIFIER_VISION_BASE  = config("DOC_CLASSIFIER_VISION_BASE", default="https://api.groq.com/openai/v1")
+DOC_CLASSIFIER_VISION_MODEL = config("DOC_CLASSIFIER_VISION_MODEL", default="")
+DOC_CLASSIFIER_VISION_KEY   = (config("DOC_CLASSIFIER_VISION_KEY", default="")
+                               or config("DOC_CLASSIFIER_LLM_KEY", default="")
+                               or config("GROQ_API_KEY", default=""))
+
+# Persistent, worker-shared cache for the classifier's LLM/vision answers —
+# a given OCR text (or image) always classifies the same, so we store it once
+# and never pay Groq / the VLM again for a re-upload, a backfill, or a retry.
+# Needs `manage.py createcachetable` (migration 0032 runs it). The app's other
+# uses of the cache framework keep the default local-memory backend.
+CACHES = {
+    "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
+    "doc_classify": {
+        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+        "LOCATION": "doc_classify_cache",
+        "TIMEOUT": 60 * 60 * 24 * 60,   # 60 days
+        "OPTIONS": {"MAX_ENTRIES": 100_000, "CULL_FREQUENCY": 4},
+    },
+}
 
 # ── License tier constants ───────────────────────────────────────────────────
 class LicenseTier:
