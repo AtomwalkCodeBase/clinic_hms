@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FileText, Pill, FlaskConical, HelpCircle, ShieldCheck, X, Download,
   Tag, Trash2, PenLine, Camera, QrCode, Upload, FolderUp, Plus, Search, CheckSquare, SlidersHorizontal,
-  Lock, Unlock, Clock,
+  Lock, Unlock, Clock, BarChart3, TrendingUp, TrendingDown,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { AppShell } from "../../components/layout/AppShell";
@@ -27,6 +27,7 @@ import API_ENDPOINTS from "../../config/api.config";
 import ROUTES from "../../config/routes.config";
 import { usePatientContext } from "../../context/PatientContext";
 import { openDataUrlInNewTab } from "../../utils/fileViewer";
+import HealthInsightsPanel from "../../components/patient/HealthInsightsPanel";
 
 const MAX_FILE_BYTES = 11 * 1024 * 1024; // matches the backend's single-upload guard (a modern phone photo runs ~8-11 MB)
 const OK_EXT = /\.(pdf|jpe?g|png)$/i;
@@ -316,7 +317,7 @@ function ReviewRow({ doc, onFile, onRemove }) {
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--color-border)", display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <span style={{ fontSize: 12, color: "var(--color-text-muted)", width: 70 }}>Type</span>
-            {[["prescription", "Prescription"], ["lab_report", "Lab report"], ["scan", "Imaging"], ["other", "Other"]].map(([v, l]) => (
+            {[["prescription", "Prescription"], ["lab_report", "Lab report"], ["scan", "Imaging"], ["discharge_summary", "Discharge summary"], ["other", "Other"]].map(([v, l]) => (
               <button key={v} onClick={() => setKind(v)} className={kind === v ? "btn-primary" : "btn-outline"}
                 style={{ fontSize: 12, padding: "4px 11px" }}>{l}</button>
             ))}
@@ -344,6 +345,100 @@ function ReviewRow({ doc, onFile, onRemove }) {
             <button style={{ fontSize: 12, padding: "6px 12px", background: "none", border: "1px solid var(--color-border)", borderRadius: 6, color: "var(--color-text-muted)", cursor: "pointer" }} onClick={() => onRemove(doc)}>Not medical — remove</button>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+const LAB_STATUS_COLOR = { high: "var(--color-error)", low: "var(--color-error)", normal: "var(--color-success, #1F8F6E)" };
+const LAB_STATUS_LABEL = { high: "High", low: "Low", normal: "Normal" };
+
+function fmtLabDate(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+/** Key Parameters + Comparison with Previous Report — the per-document
+ * drill-down for the extraction pipeline's stored values (core.lab_value_
+ * extractor -> ExtractedLabValue), fetched from
+ * PortalDocumentLabValuesView. Read-only, lab_report documents only; a
+ * document with nothing confidently extracted renders nothing (it already
+ * surfaces in Health Insights' "Reports Needing Review" instead). */
+function LabValuesSection({ docId }) {
+  const [values, setValues] = useState(null); // null = loading, [] = none
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setValues(null); setFailed(false);
+    apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT_LAB_VALUES(docId))
+      .then(res => { if (!cancelled) setValues((res.data?.data || res.data)?.values || []); })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => { cancelled = true; };
+  }, [docId]);
+
+  if (failed || (values && values.length === 0)) return null;
+  if (values === null) {
+    return <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 16 }}>Loading key parameters…</div>;
+  }
+
+  const withPrevious = values.filter(v => v.previous);
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div className="dot-label dot-label--blue" style={{ marginBottom: 10 }}>Key Parameters</div>
+      <div style={{ overflowX: "auto", marginBottom: withPrevious.length ? 16 : 0 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead>
+            <tr style={{ textAlign: "left", color: "var(--color-text-muted)" }}>
+              <th style={{ padding: "5px 7px", fontWeight: 600 }}>Parameter</th>
+              <th style={{ padding: "5px 7px", fontWeight: 600 }}>Value</th>
+              <th style={{ padding: "5px 7px", fontWeight: 600 }}>Reference Range</th>
+              <th style={{ padding: "5px 7px", fontWeight: 600 }}>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {values.map(v => (
+              <tr key={v.parameter_slug} style={{ borderTop: "1px solid var(--color-border)" }}>
+                <td style={{ padding: "7px" }}>{v.parameter_label}</td>
+                <td style={{ padding: "7px", fontWeight: 700 }}>{v.value}{v.unit}</td>
+                <td style={{ padding: "7px", color: "var(--color-text-muted)" }}>{v.reference_range_text || "—"}</td>
+                <td style={{ padding: "7px" }}>
+                  {v.status
+                    ? <span style={{ fontSize: 11, fontWeight: 700, color: LAB_STATUS_COLOR[v.status] }}>{LAB_STATUS_LABEL[v.status]}</span>
+                    : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {withPrevious.length > 0 && (
+        <>
+          <div className="dot-label dot-label--gold" style={{ marginBottom: 10 }}>Comparison with Previous Report</div>
+          <div style={{ display: "grid", gap: 6 }}>
+            {withPrevious.map(v => {
+              const Icon = v.previous.direction === "up" ? TrendingUp : v.previous.direction === "down" ? TrendingDown : null;
+              const concerning = (v.concern === "higher_is_concern" && v.previous.direction === "up")
+                || (v.concern === "lower_is_concern" && v.previous.direction === "down");
+              return (
+                <div key={v.parameter_slug} style={{
+                  display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
+                  padding: "8px 10px", borderRadius: 8, border: "1px solid var(--color-border)", fontSize: 12.5,
+                }}>
+                  <span style={{ fontWeight: 600 }}>{v.parameter_label}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6, color: concerning ? "var(--color-error)" : "var(--color-text-secondary)" }}>
+                    {v.previous.value}{v.unit} <span style={{ color: "var(--color-text-muted)" }}>→</span> {v.value}{v.unit}
+                    {Icon && <Icon size={14} />}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
     </div>
   );
@@ -417,6 +512,8 @@ function DetailModal({ doc, onClose, onChanged }) {
             </div>
           ))}
         </div>
+
+        {doc.doc_type === "lab_report" && <LabValuesSection docId={doc.id} />}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ display: "flex", gap: 8 }}>
@@ -1016,7 +1113,26 @@ export default function MyReportsPage() {
     ["all", "All", counts.all],
     ["prescription", "Prescriptions", counts.prescription],
     ["lab_report", "Lab reports", counts.lab_report],
+    ["insights", "Insights", null],
   ];
+
+  function openInsightDoc(doc) {
+    const full = docs.find(d => d.id === doc.id);
+    if (full) { setDetail(full); return; }
+    // Not in the currently-loaded page (rare — recent-by-document-date can
+    // differ from recent-by-upload-date) — fall back to finding it in the list.
+    setTab("all"); setQ(doc.title || "");
+  }
+
+  // Health Insights' "Your Health Documents" quick-summary rows drill into
+  // My Documents pre-filtered to that category — `kind` is a report-panel
+  // slug (lab_report tab + that category checked), "prescription" (its own
+  // tab), or omitted ("View all reports", unfiltered).
+  function openInsightCategory(kind) {
+    if (kind === "prescription") { setTab("prescription"); return; }
+    setTab(kind ? "lab_report" : "all");
+    setCatSel(kind ? new Set([kind]) : new Set());
+  }
 
   return (
     <AppShell>
@@ -1024,7 +1140,7 @@ export default function MyReportsPage() {
         title={selectedPatient?.isSelf ? "My Reports" : `${selectedPatient?.name || "Family member"}'s Reports`}
         action={<button className="btn-primary" onClick={() => setAddOpen(true)}><Plus size={16} /> Add</button>}
       >
-        {privEnabled && privSession && (
+        {tab !== "insights" && privEnabled && privSession && (
           <div className="card" style={{ padding: "10px 13px", marginBottom: 12, display: "flex", gap: 9, alignItems: "flex-start", borderColor: "var(--color-warning, #b45309)", background: "var(--color-warning-light, #fbf3e6)" }}>
             <Clock size={13} style={{ marginTop: 2, flexShrink: 0, color: "var(--color-warning, #b45309)" }} />
             <span style={{ fontSize: 12, lineHeight: 1.5 }}>
@@ -1033,7 +1149,7 @@ export default function MyReportsPage() {
             </span>
           </div>
         )}
-        {privEnabled && (
+        {tab !== "insights" && privEnabled && (
           <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
             <Lock size={12} />
             <span><b>{privateCount}</b> of {privMap.size || docs.length} report{privMap.size === 1 ? "" : "s"} private — hidden from doctors you share with.</span>
@@ -1044,56 +1160,73 @@ export default function MyReportsPage() {
         )}
         {/* toolbar */}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
-          <div style={{ display: "inline-flex", border: "1px solid var(--color-border)", borderRadius: 9, overflow: "hidden" }}>
+          <div style={{
+            display: "flex", border: "1px solid var(--color-border)", borderRadius: 9,
+            overflowX: "auto", WebkitOverflowScrolling: "touch", maxWidth: "100%",
+          }}>
             {TABS.map(([id, label, n]) => (
               <button key={id} onClick={() => setTab(id)}
-                style={{ padding: "7px 13px", fontSize: 13, border: "none", cursor: "pointer",
+                style={{ padding: "7px 13px", fontSize: 13, border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5,
+                  flexShrink: 0, whiteSpace: "nowrap",
                   background: tab === id ? "var(--color-primary)" : "transparent",
                   color: tab === id ? "#fff" : "var(--color-text-secondary)", fontWeight: tab === id ? 600 : 400 }}>
-                {label} <span style={{ opacity: 0.7, fontFamily: "monospace", fontSize: 11 }}>{n}</span>
+                {id === "insights" && <BarChart3 size={13} />}
+                {label} {n !== null && <span style={{ opacity: 0.7, fontFamily: "monospace", fontSize: 11 }}>{n}</span>}
               </button>
             ))}
           </div>
-          <label className="form-input" style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 180, padding: "6px 10px" }}>
-            <Search size={15} style={{ color: "var(--color-text-muted)" }} />
-            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name, hospital, doctor, ID"
-              style={{ border: "none", outline: "none", background: "none", width: "100%" }} />
-          </label>
-          <button className="btn-outline" onClick={() => setShowFilter(v => !v)}
-            style={filtered ? { borderColor: "var(--color-primary)", color: "var(--color-primary)" } : undefined}>
-            <SlidersHorizontal size={14} /> {filtered ? filterSummary : "Date"}
-          </button>
-          {catMode && (
-            <div style={{ position: "relative" }}>
-              <button className="btn-outline" onClick={() => setShowCatMenu(v => !v)}
-                style={catSel.size ? { borderColor: "var(--color-primary)", color: "var(--color-primary)" } : undefined}>
-                <Tag size={14} /> {catSel.size ? (catSel.size === 1 ? catLabel([...catSel][0]) : `${catSel.size} categories`) : "All categories"}
+          {tab !== "insights" && (
+            <>
+              <label className="form-input" style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 180, padding: "6px 10px" }}>
+                <Search size={15} style={{ color: "var(--color-text-muted)" }} />
+                <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name, hospital, doctor, ID"
+                  style={{ border: "none", outline: "none", background: "none", width: "100%" }} />
+              </label>
+              <button className="btn-outline" onClick={() => setShowFilter(v => !v)}
+                style={filtered ? { borderColor: "var(--color-primary)", color: "var(--color-primary)" } : undefined}>
+                <SlidersHorizontal size={14} /> {filtered ? filterSummary : "Date"}
               </button>
-              {showCatMenu && (
-                <div className="card" style={{ position: "absolute", zIndex: 20, top: "calc(100% + 6px)", left: 0, minWidth: 240, padding: 6, maxHeight: 340, overflowY: "auto" }}>
-                  <button onClick={() => { setCatSel(new Set()); }}
-                    style={{ display: "flex", width: "100%", gap: 9, alignItems: "center", padding: "8px 9px", fontSize: 12.5, background: catSel.size ? "transparent" : "var(--color-primary-light)", border: "none", borderRadius: 7, cursor: "pointer", fontWeight: 600 }}>
-                    All categories
+              {catMode && (
+                <div style={{ position: "relative" }}>
+                  <button className="btn-outline" onClick={() => setShowCatMenu(v => !v)}
+                    style={catSel.size ? { borderColor: "var(--color-primary)", color: "var(--color-primary)" } : undefined}>
+                    <Tag size={14} /> {catSel.size ? (catSel.size === 1 ? catLabel([...catSel][0]) : `${catSel.size} categories`) : "All categories"}
                   </button>
-                  <div style={{ height: 1, background: "var(--color-border)", margin: "5px 2px" }} />
-                  {CATEGORY_ORDER.map(s => (
-                    <label key={s} style={{ display: "flex", gap: 9, alignItems: "center", padding: "7px 9px", fontSize: 12.5, borderRadius: 7, cursor: "pointer" }}>
-                      <input type="checkbox" checked={catSel.has(s)}
-                        onChange={() => setCatSel(prev => { const n = new Set(prev); n.has(s) ? n.delete(s) : n.add(s); return n; })} />
-                      {CATEGORY_LABELS[s]}
-                    </label>
-                  ))}
+                  {showCatMenu && (
+                    <div className="card" style={{ position: "absolute", zIndex: 20, top: "calc(100% + 6px)", left: 0, minWidth: 240, padding: 6, maxHeight: 340, overflowY: "auto" }}>
+                      <button onClick={() => { setCatSel(new Set()); }}
+                        style={{ display: "flex", width: "100%", gap: 9, alignItems: "center", padding: "8px 9px", fontSize: 12.5, background: catSel.size ? "transparent" : "var(--color-primary-light)", border: "none", borderRadius: 7, cursor: "pointer", fontWeight: 600 }}>
+                        All categories
+                      </button>
+                      <div style={{ height: 1, background: "var(--color-border)", margin: "5px 2px" }} />
+                      {CATEGORY_ORDER.map(s => (
+                        <label key={s} style={{ display: "flex", gap: 9, alignItems: "center", padding: "7px 9px", fontSize: 12.5, borderRadius: 7, cursor: "pointer" }}>
+                          <input type="checkbox" checked={catSel.has(s)}
+                            onChange={() => setCatSel(prev => { const n = new Set(prev); n.has(s) ? n.delete(s) : n.add(s); return n; })} />
+                          {CATEGORY_LABELS[s]}
+                        </label>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          )}
-          {tab !== "unsorted" && (
-            <button className="btn-outline" onClick={() => { setPicking(p => !p); setSel(new Set()); }}>
-              <CheckSquare size={14} /> {picking ? "Cancel" : "Select"}
-            </button>
+              {tab !== "unsorted" && (
+                <button className="btn-outline" onClick={() => { setPicking(p => !p); setSel(new Set()); }}>
+                  <CheckSquare size={14} /> {picking ? "Cancel" : "Select"}
+                </button>
+              )}
+            </>
           )}
         </div>
 
+        {tab === "insights" ? (
+          <HealthInsightsPanel
+            patientAwpid={patientAwpid}
+            onViewAll={openInsightCategory}
+            onOpenDocument={openInsightDoc}
+          />
+        ) : (
+        <>
         {showFilter && (
           <div className="card" style={{ padding: "12px 14px", marginBottom: 12, display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ display: "inline-flex", border: "1px solid var(--color-border)", borderRadius: 8, overflow: "hidden", alignSelf: "flex-start" }}>
@@ -1238,6 +1371,8 @@ export default function MyReportsPage() {
               <button className="btn-outline" style={{ width: "100%" }} onClick={loadMore}>Load more</button>
             )}
           </>
+        )}
+        </>
         )}
       </PageShell>
 

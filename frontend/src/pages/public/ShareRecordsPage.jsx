@@ -28,7 +28,7 @@ import {
   ShieldCheck, ShieldAlert, Clock, QrCode, FileText, Pill, FlaskConical,
   Stethoscope, Activity, AlertTriangle, Download, Hourglass, Eye,
   Search, RotateCw, SlidersHorizontal, LayoutGrid, Syringe, HeartPulse, Lock,
-  X, ChevronLeft, ChevronRight,
+  X, ChevronLeft, ChevronRight, Tag,
 } from "lucide-react";
 import { publicClient } from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
@@ -103,11 +103,11 @@ const fmtLong = (iso) => {
 };
 
 const DOC_META = {
-  prescription: { tag: "RX", label: "Prescription", Icon: Pill },
-  lab_report:   { tag: "LAB", label: "Lab report", Icon: FlaskConical },
-  scan:         { tag: "SCAN", label: "Scan", Icon: FileText },
-  discharge_summary: { tag: "DISCH", label: "Discharge summary", Icon: FileText },
-  other:        { tag: "DOC", label: "Document", Icon: FileText },
+  prescription: { tag: "RX", label: "Prescription", Icon: Pill, tint: "#E7F1EB", ink: "#12503A" },
+  lab_report:   { tag: "LAB", label: "Lab report", Icon: FlaskConical, tint: "#F8EAC8", ink: "#8A5A12" },
+  scan:         { tag: "SCAN", label: "Scan", Icon: FileText, tint: "#E4EAF1", ink: "#3B4A5A" },
+  discharge_summary: { tag: "DISCH", label: "Discharge summary", Icon: FileText, tint: "#E4EAF1", ink: "#3B4A5A" },
+  other:        { tag: "DOC", label: "Document", Icon: FileText, tint: "#E4EAF1", ink: "#3B4A5A" },
 };
 const metaFor = (t) => DOC_META[t] || DOC_META.other;
 
@@ -399,7 +399,7 @@ function DocRow({ d, token, onChanged }) {
   return (
     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px 12px", padding: "12px 4px", borderTop: `1px solid ${ui.border}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flex: "1 1 220px", minWidth: 0 }}>
-        <div style={{ width: 30, height: 30, borderRadius: 8, flexShrink: 0, background: ui.surface2, color: ui.muted, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ width: 30, height: 30, borderRadius: 8, flexShrink: 0, background: meta.tint, color: meta.ink, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <meta.Icon size={15} />
         </div>
         <div style={{ minWidth: 0, flex: 1 }}>
@@ -413,7 +413,7 @@ function DocRow({ d, token, onChanged }) {
             <ShieldCheck size={12} /> Verified
           </span>
         )}
-        <span style={{ fontFamily: "monospace", fontSize: 9.5, fontWeight: 600, letterSpacing: ".06em", color: ui.muted, border: `1px solid ${ui.borderStrong}`, borderRadius: 5, padding: "2px 6px" }}>
+        <span style={{ fontFamily: "monospace", fontSize: 9.5, fontWeight: 600, letterSpacing: ".06em", color: meta.ink, background: meta.tint, borderRadius: 5, padding: "2px 6px" }}>
           {meta.tag}
         </span>
         <button style={{ ...sBtn, fontSize: 11.5, padding: "5px 10px" }} disabled={busy === "view"} onClick={onView}>
@@ -526,6 +526,8 @@ function RecordsView({ token }) {
   const [filterYear, setFilterYear] = useState("");
   const [dFrom, setDFrom] = useState("");
   const [dTo, setDTo] = useState("");
+  const [catSel, setCatSel] = useState(() => new Set());
+  const [showCatMenu, setShowCatMenu] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const timer = useRef(null);
   const wide = useIsWide();
@@ -591,10 +593,23 @@ function RecordsView({ token }) {
     || (filterMode === "year" && !!filterYear)
     || (filterMode === "dates" && (!!dFrom || !!dTo));
 
+  // Panel filter only makes sense while looking at lab reports (or "all",
+  // which includes them) — prescriptions/documents have no panel.
+  const catMode = tab === "all" || tab === "lab";
+  const catOptions = useMemo(() => {
+    const c = new Map();
+    docs.forEach((d) => {
+      if (d.doc_type !== "lab_report") return;
+      (d.report_categories || []).forEach((slug) => c.set(slug, (c.get(slug) || 0) + 1));
+    });
+    return PANEL_ORDER.filter((slug) => c.has(slug)).map((slug) => ({ slug, label: PANEL_LABELS[slug], count: c.get(slug) }));
+  }, [docs]);
+
   const groups = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const list = docs
       .filter((d) => tab === "all" || catOf(d.doc_type) === tab)
+      .filter((d) => !catMode || !catSel.size || (d.report_categories || []).some((c) => catSel.has(c)))
       .filter((d) => !needle || [d.title, d.hospital_label, d.doctor_label, d.public_document_id].filter(Boolean).join(" ").toLowerCase().includes(needle))
       .filter((d) => {
         const day = (d.document_date || d.created_at || "").slice(0, 10);
@@ -626,7 +641,7 @@ function RecordsView({ token }) {
       map.get(k).push(d);
     });
     return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([k, l]) => ({ key: k, label: ymLabel(k), list: l }));
-  }, [docs, tab, q, filterMode, filterMonth, filterYear, dFrom, dTo]);
+  }, [docs, tab, q, filterMode, filterMonth, filterYear, dFrom, dTo, catSel, catMode]);
 
   if (ended) {
     return (
@@ -821,6 +836,39 @@ function RecordsView({ token }) {
                       </div>
                     )}
                   </div>
+                  {catMode && catOptions.length > 0 && (
+                    <div style={{ position: "relative" }}>
+                      <button
+                        style={{ ...sBtn, ...(catSel.size ? { borderColor: ui.primary, color: ui.primary } : null) }}
+                        onClick={() => setShowCatMenu((v) => !v)}
+                      >
+                        <Tag size={13} style={{ verticalAlign: "-2px" }} />{" "}
+                        {catSel.size === 0 ? "All categories" : catSel.size === 1 ? PANEL_LABELS[[...catSel][0]] : `${catSel.size} categories`}
+                      </button>
+                      {showCatMenu && (
+                        <div style={{ position: "absolute", zIndex: 20, top: "calc(100% + 6px)", left: 0, minWidth: 240, background: "#fff", border: `1px solid ${ui.border}`, borderRadius: 10, padding: 6, maxHeight: 340, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,.08)" }}>
+                          <button
+                            onClick={() => setCatSel(new Set())}
+                            style={{ display: "flex", width: "100%", gap: 9, alignItems: "center", padding: "8px 9px", fontSize: 12.5, background: catSel.size ? "transparent" : ui.tint, border: "none", borderRadius: 7, cursor: "pointer", fontWeight: 600, color: ui.ink }}
+                          >
+                            All categories
+                          </button>
+                          <div style={{ height: 1, background: ui.border, margin: "5px 2px" }} />
+                          {catOptions.map((o) => (
+                            <label key={o.slug} style={{ display: "flex", gap: 9, alignItems: "center", padding: "7px 9px", fontSize: 12.5, borderRadius: 7, cursor: "pointer" }}>
+                              <input
+                                type="checkbox"
+                                checked={catSel.has(o.slug)}
+                                onChange={() => setCatSel((prev) => { const n = new Set(prev); n.has(o.slug) ? n.delete(o.slug) : n.add(o.slug); return n; })}
+                              />
+                              {o.label}
+                              <span style={{ marginLeft: "auto", fontSize: 11, color: ui.faint }}>{o.count}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <button style={{ ...sBtn, borderColor: "transparent", color: ui.muted }} onClick={onRefresh} disabled={refreshing}>
                     <RotateCw size={13} style={{ verticalAlign: "-2px", ...(refreshing ? { animation: "share-spin 0.8s linear infinite" } : null) }} /> {refreshing ? "Refreshing…" : "Refresh"}
                   </button>

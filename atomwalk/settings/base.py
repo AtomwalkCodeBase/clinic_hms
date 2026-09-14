@@ -442,16 +442,40 @@ DOC_CLASSIFIER_VISION_KEY   = (config("DOC_CLASSIFIER_VISION_KEY", default="")
                                or config("DOC_CLASSIFIER_LLM_KEY", default="")
                                or config("GROQ_API_KEY", default=""))
 
+# Lab value extraction (HMS-INSIGHTS) — a separate pipeline stage from
+# classification above, run async via `manage.py extract_lab_values`, never
+# inline with an upload. A labeller too (reads what's printed; never
+# computes), just extracting numbers instead of kind/panel/date. Falls back
+# to the classifier's own LLM/vision config so a zero-config deployment
+# "just works" against the same provider/key; set the LAB_EXTRACTOR_* vars
+# explicitly to point extraction at a different model independently later.
+LAB_EXTRACTOR_LLM_BASE    = config("LAB_EXTRACTOR_LLM_BASE", default="") or DOC_CLASSIFIER_LLM_BASE
+LAB_EXTRACTOR_LLM_MODEL   = config("LAB_EXTRACTOR_LLM_MODEL", default="") or DOC_CLASSIFIER_LLM_MODEL
+LAB_EXTRACTOR_LLM_KEY     = config("LAB_EXTRACTOR_LLM_KEY", default="") or DOC_CLASSIFIER_LLM_KEY
+LAB_EXTRACTOR_VISION_BASE  = config("LAB_EXTRACTOR_VISION_BASE", default="") or DOC_CLASSIFIER_VISION_BASE
+LAB_EXTRACTOR_VISION_MODEL = config("LAB_EXTRACTOR_VISION_MODEL", default="") or DOC_CLASSIFIER_VISION_MODEL
+LAB_EXTRACTOR_VISION_KEY   = config("LAB_EXTRACTOR_VISION_KEY", default="") or DOC_CLASSIFIER_VISION_KEY
+
 # Persistent, worker-shared cache for the classifier's LLM/vision answers —
 # a given OCR text (or image) always classifies the same, so we store it once
 # and never pay Groq / the VLM again for a re-upload, a backfill, or a retry.
 # Needs `manage.py createcachetable` (migration 0032 runs it). The app's other
 # uses of the cache framework keep the default local-memory backend.
+# "lab_extract" is the same idea for lab_value_extractor's answers (migration
+# 0038) — a separate alias/table from doc_classify since the two pipelines'
+# cache keys, TTLs and payloads (a category label vs. a list of values) don't
+# overlap and shouldn't compete for the same table's CULL_FREQUENCY eviction.
 CACHES = {
     "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
     "doc_classify": {
         "BACKEND": "django.core.cache.backends.db.DatabaseCache",
         "LOCATION": "doc_classify_cache",
+        "TIMEOUT": 60 * 60 * 24 * 60,   # 60 days
+        "OPTIONS": {"MAX_ENTRIES": 100_000, "CULL_FREQUENCY": 4},
+    },
+    "lab_extract": {
+        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+        "LOCATION": "lab_extract_cache",
         "TIMEOUT": 60 * 60 * 24 * 60,   # 60 days
         "OPTIONS": {"MAX_ENTRIES": 100_000, "CULL_FREQUENCY": 4},
     },

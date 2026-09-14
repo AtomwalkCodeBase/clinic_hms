@@ -2974,6 +2974,408 @@ class PortalHealthSummaryView(APIView):
         })
 
 
+def _months_ago(n):
+    """Exact calendar month subtraction (not a *30/*31 approximation) —
+    clamps the day-of-month for a target month shorter than today's day
+    (e.g. Aug 31 minus 6 months -> Feb 28/29, not an invalid Feb 31)."""
+    import calendar
+    today = date.today()
+    total = today.month - 1 - n
+    year = today.year + total // 12
+    month = total % 12 + 1
+    day = min(today.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+class PortalHealthInsightsView(APIView):
+    """
+    GET /api/v1/portal/health-insights/?patient_awpid=&range=3m|6m|12m|all
+
+    Most of this is aggregated counts/dates from SharedDocument alone — but
+    flagged_variations and reports_needing_review below DO read actual
+    extracted test values, via core.lab_variation.compute_flags() over
+    core.lab_value_extractor's stored ExtractedLabValue rows (a separate
+    pipeline stage from classification, run async by
+    `manage.py extract_lab_values`, never inline with an upload). A
+    confidence gate (core.lab_variation.CONFIDENCE_GATE) applies before any
+    value is ever compared or shown — see that module's docstring for the
+    full design (both-directions flagging, reference-range-aware when the
+    report printed one else a flat % delta, a unit-mismatch guard, and
+    direction-aware wording for common analytes).
+
+    Powers the patient portal's Health Insights dashboard (embedded in My
+    Reports): summary counts, the report-type distribution, an
+    upload-activity-by-month series, recent-reports / recent-prescriptions
+    lists, flagged value changes, a review-needed list, checkup reminders,
+    and pattern insights. `range` filters by document_date (falling back to
+    created_at for the handful of rows with no printed date) so the numbers
+    describe the document's own timeframe, not just when it was added to
+    the vault — reports_needing_review and checkup_reminders are the two
+    exceptions, deliberately NOT range-scoped: one's a persistent backlog to
+    clear, the other needs the patient's full history to know when their
+    last routine screening of a given type actually was.
+    """
+    permission_classes = [IsPatient]
+    RANGE_MONTHS = {"3m": 3, "6m": 6, "12m": 12}
+
+    def get(self, request):
+        from apps.registry.models import SharedDocument
+        from core import lab_variation
+        from core import report_types
+        from core.report_types import label_for
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+
+        range_key = (request.query_params.get("range") or "12m").strip().lower()
+        months = self.RANGE_MONTHS.get(range_key)
+        effective_range = range_key if months is not None else "all"
+        range_cutoff = _months_ago(months) if months is not None else None
+
+        rows = list(
+            SharedDocument.objects.using("default")
+            .filter(awpid=target_awpid, review_state="filed", hidden_at__isnull=True, deleted_at__isnull=True)
+            .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
+            .values("id", "doc_type", "title", "document_date", "created_at",
+                     "report_categories", "hospital_label", "doctor_label")
+        )
+
+        def eff_date(row):
+            if row["document_date"]:
+                return row["document_date"]
+            return row["created_at"].date() if row["created_at"] else None
+
+        # Checkup reminders read the patient's FULL history, deliberately
+        # computed before the range filter below reassigns `rows` — "it's
+        # been 8 months since your last Lipid Profile" shouldn't disappear
+        # just because the tab happens to be showing "Last 3 Months" right
+        # now. Same reasoning as reports_needing_review's range exemption.
+        panel_last_seen = {}
+        for r in rows:
+            d = eff_date(r)
+            if not d or r["doc_type"] != "lab_report":
+                continue
+            for slug in (r["report_categories"] or []):
+                if slug not in report_types.ROUTINE_SCREENING_PANELS:
+                    continue
+                if slug not in panel_last_seen or d > panel_last_seen[slug]:
+                    panel_last_seen[slug] = d
+
+        if months is not None:
+            cutoff = _months_ago(months)
+            rows = [r for r in rows if (eff_date(r) or date.min) >= cutoff]
+
+        total_documents = len(rows)
+        total_reports = sum(1 for r in rows if r["doc_type"] == "lab_report")
+        total_prescriptions = sum(1 for r in rows if r["doc_type"] == "prescription")
+
+        panel_counts = {}
+        for r in rows:
+            for slug in (r["report_categories"] or []):
+                panel_counts[slug] = panel_counts.get(slug, 0) + 1
+        report_distribution = sorted(
+            ({"slug": slug, "label": label_for(slug), "count": n} for slug, n in panel_counts.items()),
+            key=lambda p: (-p["count"], p["label"]),
+        )
+        most_common_panel = report_distribution[0]["label"] if report_distribution else None
+
+        month_counts = {}
+        for r in rows:
+            d = eff_date(r)
+            if not d:
+                continue
+            key = f"{d.year:04d}-{d.month:02d}"
+            month_counts[key] = month_counts.get(key, 0) + 1
+        upload_activity = [{"month": k, "count": v} for k, v in sorted(month_counts.items())]
+
+        dated_rows = [r for r in rows if eff_date(r)]
+        latest_date = max((eff_date(r) for r in dated_rows), default=None)
+
+        def _recent(doc_type, extra=None):
+            top = sorted(
+                (r for r in rows if r["doc_type"] == doc_type),
+                key=lambda r: eff_date(r) or date.min, reverse=True,
+            )[:5]
+            return [{
+                "id": r["id"],
+                "title": r["title"],
+                "date": eff_date(r),
+                "hospital_label": r["hospital_label"],
+                "doctor_label": r["doctor_label"],
+                **({k: fn(r) for k, fn in (extra or {}).items()}),
+            } for r in top]
+
+        flagged_variations = lab_variation.compute_flags(target_awpid, range_cutoff)
+
+        reports_needing_review = list(
+            SharedDocument.objects.using("default")
+            .filter(awpid=target_awpid, doc_type="lab_report", review_state="filed",
+                     hidden_at__isnull=True, deleted_at__isnull=True,
+                     extraction_status__in=["needs_review", "failed"])
+            .order_by("-document_date", "-created_at")
+            .values("id", "title", "document_date", "extraction_status",
+                     "extraction_values_total", "extraction_values_confident")[:10]
+        )
+        for r in reports_needing_review:
+            if r["extraction_status"] == "failed":
+                r["reason"] = "Couldn't read this report automatically."
+            elif r["extraction_values_total"] == 0:
+                r["reason"] = "No test values found in this report."
+            else:
+                shaky = r["extraction_values_total"] - r["extraction_values_confident"]
+                r["reason"] = f"{shaky} of {r['extraction_values_total']} result{'s' if r['extraction_values_total'] != 1 else ''} need checking."
+
+        # Checkup reminders — "it's been N months since your last X", not
+        # range-scoped (see panel_last_seen above). General wellness
+        # framing only (report_types.ROUTINE_CHECKUP_INTERVAL_MONTHS's own
+        # docstring explains why this is one uniform number, not a
+        # differentiated per-panel guideline table this app has no source
+        # to back up) — never phrased as a specific clinical directive.
+        today = date.today()
+        checkup_reminders = []
+        for slug, last_date in panel_last_seen.items():
+            months_since = (today.year - last_date.year) * 12 + (today.month - last_date.month)
+            if months_since < report_types.ROUTINE_CHECKUP_INTERVAL_MONTHS:
+                continue
+            label = label_for(slug)
+            checkup_reminders.append({
+                "panel_slug": slug,
+                "panel_label": label,
+                "last_date": last_date,
+                "months_since": months_since,
+                "message": (
+                    f"It's been about {months_since} months since your last {label} — "
+                    "many people repeat this roughly once a year as part of general "
+                    "health monitoring. Worth asking your doctor if you're due for one."
+                ),
+            })
+        checkup_reminders.sort(key=lambda r: -r["months_since"])
+
+        # Pattern insights — plain facts about THIS range's own distribution
+        # (report_distribution above), phrased as a sentence rather than a
+        # bar. Deliberately just describes what's there; a raised count on
+        # its own isn't evidence of anything, so this never speculates about
+        # why a panel was repeated — only a real extracted-value change
+        # (flagged_variations above) gets an opinion attached to it.
+        pattern_insights = [
+            f"You've had {p['count']} {p['label']} report{'s' if p['count'] != 1 else ''} on file"
+            + (" in this period." if effective_range != "all" else ".")
+            for p in report_distribution[:3] if p["count"] >= 2
+        ]
+
+        return success(data={
+            "range": effective_range,
+            "total_documents": total_documents,
+            "total_reports": total_reports,
+            "total_prescriptions": total_prescriptions,
+            "most_common_panel": most_common_panel,
+            "latest_report_date": latest_date,
+            "report_distribution": report_distribution,
+            "upload_activity": upload_activity,
+            "recent_prescriptions": _recent("prescription"),
+            "recent_reports": _recent("lab_report", extra={
+                "report_categories": lambda r: [{"slug": s, "label": label_for(s)} for s in (r["report_categories"] or [])],
+            }),
+            "flagged_variations": flagged_variations,
+            "reports_needing_review": reports_needing_review,
+            "checkup_reminders": checkup_reminders,
+            "pattern_insights": pattern_insights,
+        })
+
+
+class PortalLabTrendsView(APIView):
+    """
+    GET /api/v1/portal/health-insights/trends/?patient_awpid=&range=3m|6m|12m|all
+
+    Per-analyte time series over the patient's own ExtractedLabValue history
+    — the "Detailed Trend View" that Health Insights' overview tab
+    deliberately doesn't try to cram in (see HealthInsightsPanel.jsx's
+    module docstring). Reuses core.lab_variation's confidence gate and
+    unit-normalization table so a trend line never mixes a shaky extraction
+    or silently jumps because two labs printed the same analyte in
+    different units. A parameter only appears once it has at least 2
+    confident, same-unit points within the selected range — a single
+    reading has nothing to trend against.
+    """
+    permission_classes = [IsPatient]
+    RANGE_MONTHS = {"3m": 3, "6m": 6, "12m": 12}
+
+    def get(self, request):
+        from apps.registry.models import ExtractedLabValue
+        from core import lab_variation
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+
+        range_key = (request.query_params.get("range") or "12m").strip().lower()
+        months = self.RANGE_MONTHS.get(range_key)
+        effective_range = range_key if months is not None else "all"
+        cutoff = _months_ago(months) if months is not None else None
+
+        rows = list(
+            ExtractedLabValue.objects.using("default")
+            .filter(awpid=target_awpid, confidence__gte=lab_variation.CONFIDENCE_GATE)
+            .order_by("parameter_slug", "document_date")
+            .values("document_id", "parameter_slug", "parameter_label", "value_numeric",
+                     "unit", "reference_low", "reference_high", "document_date")
+        )
+
+        by_param: dict[str, list[dict]] = {}
+        for r in rows:
+            by_param.setdefault(r["parameter_slug"], []).append(r)
+
+        parameters = []
+        for slug, series in by_param.items():
+            series.sort(key=lambda r: r["document_date"] or date.min)
+            if cutoff is not None:
+                series = [r for r in series if r["document_date"] and r["document_date"] >= cutoff]
+            if len(series) < 2:
+                continue
+
+            points = []
+            common_unit = None
+            for r in series:
+                conv = lab_variation.to_common_unit(slug, r["value_numeric"], r["unit"])
+                if conv is None:
+                    continue
+                value, unit = conv
+                if common_unit is None:
+                    common_unit = unit
+                elif unit != common_unit:
+                    continue  # a differently-unitted reading we can't reconcile — skip, never guess
+                points.append({
+                    "document_id": r["document_id"],
+                    "date": r["document_date"],
+                    "value": value,
+                    "reference_low": r["reference_low"],
+                    "reference_high": r["reference_high"],
+                    "status": lab_variation.status_for(value, r["reference_low"], r["reference_high"]),
+                })
+            if len(points) < 2:
+                continue
+
+            parameters.append({
+                "slug": slug,
+                "label": series[-1]["parameter_label"],
+                "unit": common_unit or "",
+                "latest_value": points[-1]["value"],
+                "latest_status": points[-1]["status"],
+                "concern": lab_variation.PARAMETER_DIRECTION.get(slug, "neutral"),
+                "points": points,
+            })
+
+        # Most-tracked analyte first — the one with the longest history is
+        # the most useful default tab, same reasoning as report_distribution
+        # sorting by count in the overview endpoint above.
+        parameters.sort(key=lambda p: (-len(p["points"]), p["label"]))
+
+        return success(data={"range": effective_range, "parameters": parameters})
+
+
+class PortalDocumentLabValuesView(APIView):
+    """
+    GET /api/v1/portal/documents/<int:doc_id>/lab-values/
+
+    "Key Parameters" for one lab report — the extracted values behind this
+    document, each checked against its own printed reference range and
+    against the most recent EARLIER confident reading of the same analyte
+    (any document, not just one sharing this document's panel) so opening a
+    single report still shows it in context.
+
+    Deliberately doesn't reuse core.lab_variation.compute_flags(): that
+    function only returns pairs that already cleared its "worth flagging"
+    threshold, whereas this table shows every confident value's prior
+    comparison, flagged-worthy or not. Same confidence gate and
+    unit-normalization table either way, so the two views never disagree
+    about what counts as a usable reading.
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request, doc_id):
+        from apps.registry.models import SharedDocument, ExtractedLabValue
+        from core import lab_variation
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+
+        doc = SharedDocument.objects.using("default").filter(pk=doc_id).first()
+        if not doc or doc.awpid != target_awpid:
+            return error("Document not found.", status=404)
+        if doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
+            return error("Document not found.", status=404)
+
+        current_rows = list(
+            ExtractedLabValue.objects.using("default")
+            .filter(document_id=doc_id, confidence__gte=lab_variation.CONFIDENCE_GATE)
+            .order_by("parameter_label")
+            .values("parameter_slug", "parameter_label", "value_numeric", "unit",
+                     "reference_range_text", "reference_low", "reference_high")
+        )
+        if not current_rows:
+            return success(data={"document_id": doc.id, "title": doc.title,
+                                  "document_date": doc.document_date, "values": []})
+
+        # One query for every analyte's most recent EARLIER confident
+        # reading, rather than N — matched to the current rows in Python.
+        prior_rows = list(
+            ExtractedLabValue.objects.using("default")
+            .filter(awpid=target_awpid, confidence__gte=lab_variation.CONFIDENCE_GATE,
+                     parameter_slug__in=[r["parameter_slug"] for r in current_rows])
+            .exclude(document_id=doc_id)
+            .order_by("parameter_slug", "-document_date")
+            .values("parameter_slug", "document_id", "document_date", "value_numeric", "unit")
+        )
+        prior_by_slug = {}
+        this_date = doc.document_date
+        for r in prior_rows:
+            if r["parameter_slug"] in prior_by_slug:
+                continue  # first hit per slug, thanks to -document_date ordering, is the most recent
+            if this_date and r["document_date"] and r["document_date"] >= this_date:
+                continue  # not strictly earlier than this document — never compare sideways/backwards
+            prior_by_slug[r["parameter_slug"]] = r
+
+        values = []
+        for row in current_rows:
+            slug = row["parameter_slug"]
+            status = lab_variation.status_for(row["value_numeric"], row["reference_low"], row["reference_high"])
+
+            previous = None
+            prior = prior_by_slug.get(slug)
+            if prior:
+                conv_cur = lab_variation.to_common_unit(slug, row["value_numeric"], row["unit"])
+                conv_prev = lab_variation.to_common_unit(slug, prior["value_numeric"], prior["unit"])
+                if conv_cur and conv_prev and conv_cur[1] == conv_prev[1] and conv_prev[0] != 0:
+                    pct_delta = (conv_cur[0] - conv_prev[0]) / abs(conv_prev[0]) * 100.0
+                    previous = {
+                        "document_id": prior["document_id"],
+                        "document_date": prior["document_date"],
+                        "value": conv_prev[0],
+                        "direction": "up" if conv_cur[0] > conv_prev[0] else ("down" if conv_cur[0] < conv_prev[0] else "same"),
+                        "pct_delta": round(pct_delta, 1),
+                    }
+
+            values.append({
+                "parameter_slug": slug,
+                "parameter_label": row["parameter_label"],
+                "value": row["value_numeric"],
+                "unit": row["unit"],
+                "reference_range_text": row["reference_range_text"],
+                "status": status,
+                "concern": lab_variation.PARAMETER_DIRECTION.get(slug, "neutral"),
+                "previous": previous,
+            })
+
+        return success(data={
+            "document_id": doc.id,
+            "title": doc.title,
+            "document_date": doc.document_date,
+            "values": values,
+        })
+
+
 # ── Growth ───────────────────────────────────────────────────────────────────
 
 class PortalGrowthView(APIView):

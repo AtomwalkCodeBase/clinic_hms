@@ -366,6 +366,32 @@ class SharedDocument(models.Model):
     hidden_at          = models.DateTimeField(null=True, blank=True)
     deleted_at         = models.DateTimeField(null=True, blank=True)
 
+    # ── Lab value extraction (HMS-INSIGHTS) ────────────────────────────────
+    # A second, separate pipeline stage from classification above — reads the
+    # actual numbers out of an already-filed lab_report (core.doc_classifier
+    # deliberately never does this; see its docstring). Runs asynchronously
+    # via `manage.py extract_lab_values` (no per-request hook), so a document
+    # sits at extraction_status="not_attempted" for a little while after
+    # filing, not synchronously.
+    #
+    # Deliberately NOT a single confidence number like classification_
+    # confidence/category_confidence above — confidence here is per VALUE
+    # (see ExtractedLabValue.confidence below), since one report can have
+    # some clean results and some shaky ones. extraction_values_total/
+    # _confident are just a cheap denormalized summary for list views.
+    extraction_status = models.CharField(max_length=16, default="not_attempted", db_index=True)
+    # not_attempted | done | needs_review | failed
+    #   done          — every extracted value cleared the 0.7 confidence gate
+    #   needs_review  — extraction ran but produced 0 values, or at least one
+    #                   sub-threshold value (the row is still stored, just
+    #                   not trusted as fact — see ExtractedLabValue.confidence)
+    #   failed        — both the text and vision extraction layers were
+    #                   unavailable or errored; nothing could be attempted
+    extraction_method   = models.CharField(max_length=20, blank=True)  # text_llm | vision_llm
+    extraction_values_total     = models.PositiveSmallIntegerField(default=0)
+    extraction_values_confident = models.PositiveSmallIntegerField(default=0)
+    extracted_at        = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         app_label = "registry"
         db_table  = "shared_document"
@@ -373,10 +399,57 @@ class SharedDocument(models.Model):
             models.Index(fields=["awpid", "review_state"], name="shared_doc_awpid_review_idx"),
             models.Index(fields=["awpid", "doc_type", "document_date"], name="shared_doc_awpid_type_date_idx"),
             models.Index(fields=["awpid", "content_hash"], name="shared_doc_awpid_hash_idx"),
+            models.Index(fields=["awpid", "extraction_status"], name="shared_doc_awpid_extract_idx"),
         ]
 
     def __str__(self):
         return f"{self.awpid} — {self.title}"
+
+
+class ExtractedLabValue(models.Model):
+    """
+    One row per analyte read out of a SharedDocument (doc_type="lab_report")
+    by core.lab_value_extractor, via `manage.py extract_lab_values`.
+
+    v1 scope: only analytes whose result parses as a plain number are stored
+    — qualitative/descriptive results (colour, "Negative"/"Positive", 1+/2+,
+    organism names) are skipped by the extractor, never hallucinated into a
+    number here. reference_range_text is copied verbatim as printed on the
+    report; reference_low/high are only populated when that text was an
+    unambiguous single clause ("13.0 - 17.0", "<5", ">40") — a multi-clause
+    range ("Male: 13-17, Female: 12-15") is left unparsed rather than guessed.
+    """
+    document       = models.ForeignKey(SharedDocument, on_delete=models.CASCADE, related_name="lab_values")
+    # Denormalized from document.awpid/document_date — SharedDocument has no
+    # Patient FK to join through at this layer, and the "most recent prior
+    # value for this parameter" query (Phase 2) needs to sort/filter by date
+    # without a join back to SharedDocument for every row.
+    awpid          = models.CharField(max_length=30, db_index=True)
+    document_date  = models.DateField(null=True, blank=True)
+    # Canonical key for matching the same test across different reports/labs
+    # ("Hb", "Haemoglobin", "HEMOGLOBIN" all -> "hemoglobin") — see
+    # core.lab_variation (Phase 2). parameter_label is the as-printed/
+    # as-extracted text, kept for display even where the slug is unmapped.
+    parameter_slug  = models.CharField(max_length=60, db_index=True)
+    parameter_label = models.CharField(max_length=120)
+    value_numeric  = models.FloatField()
+    unit           = models.CharField(max_length=30, blank=True)
+    reference_range_text = models.CharField(max_length=80, blank=True)
+    reference_low  = models.FloatField(null=True, blank=True)
+    reference_high = models.FloatField(null=True, blank=True)
+    confidence     = models.FloatField()  # 0..1 — the 0.7 gate is applied at read time, not by omitting rows here
+    extraction_method = models.CharField(max_length=20, blank=True)  # text_llm | vision_llm
+    extracted_at   = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table = "extracted_lab_value"
+        indexes = [
+            models.Index(fields=["awpid", "parameter_slug", "document_date"], name="lab_value_awpid_param_date_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.awpid} — {self.parameter_label} = {self.value_numeric}{self.unit}"
 
 
 class DocumentUploadBatch(models.Model):

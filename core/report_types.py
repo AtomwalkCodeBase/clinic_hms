@@ -170,6 +170,30 @@ def label_for(slug: str) -> str:
     return p.label if p else (slug or "").replace("_", " ").title()
 
 
+# ── routine screening cadence (Health Insights "checkup reminder") ─────────
+# A deliberately small, GENERAL-population subset — the panels people
+# commonly repeat on a routine schedule as part of general health
+# monitoring (CBC, lipid, thyroid, etc). Explicitly excludes anything
+# ordered for a specific acute/diagnostic reason (infection, culture,
+# cardiac markers, coagulation, hormone panels) — there's no sane "you're
+# overdue" rhythm for a dengue panel or a culture & sensitivity test; those
+# get ordered when there's a reason, not on a calendar.
+#
+# ROUTINE_CHECKUP_INTERVAL_MONTHS is ONE uniform number, not a per-panel
+# table with different intervals — deliberately. This module has no
+# authoritative clinical-guideline source to cite for "LDL specifically
+# needs retesting every N months for THIS patient" (that varies by age,
+# sex, existing conditions, risk factors — none of which this app knows).
+# Inventing differentiated numbers to look more precise would be a false
+# precision, not a real one. This is framed everywhere it's surfaced as
+# general wellness rhythm ("many people repeat this roughly annually"),
+# never as a specific clinical recommendation for the reader.
+ROUTINE_SCREENING_PANELS = frozenset({
+    "cbc", "lipid", "lft", "kft", "thyroid", "diabetes", "urine", "electrolytes", "vitamin",
+})
+ROUTINE_CHECKUP_INTERVAL_MONTHS = 12
+
+
 # ── scoring ──────────────────────────────────────────────────────────────
 CONFIDENT = 0.72         # a single-panel result at/above this auto-files
 MULTI_KEEP = 0.55        # secondary panels at/above this join a health-package
