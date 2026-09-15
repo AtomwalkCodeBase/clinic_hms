@@ -172,8 +172,6 @@ export const API_ENDPOINTS = {
     FAMILY:                 `${API_V1}/portal/family/`,
     FAMILY_DETAIL:  (awpid) => `${API_V1}/portal/family/${awpid}/`,
     HEALTH_SUMMARY:         `${API_V1}/portal/health-summary/`,
-    HEALTH_INSIGHTS:        `${API_V1}/portal/health-insights/`,
-    HEALTH_INSIGHTS_TRENDS: `${API_V1}/portal/health-insights/trends/`,
     VACCINATIONS:           `${API_V1}/portal/vaccinations/`,
     VACCINATION_UPLOAD:     `${API_V1}/portal/vaccinations/upload/`,
     VACCINATION_FILE: (recordId) => `${API_V1}/portal/vaccinations/${recordId}/file/`,

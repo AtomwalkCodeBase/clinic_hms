@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FileText, Pill, FlaskConical, HelpCircle, ShieldCheck, X, Download,
   Tag, Trash2, PenLine, Camera, QrCode, Upload, FolderUp, Plus, Search, CheckSquare, SlidersHorizontal,
-  Lock, Unlock, Clock, BarChart3, TrendingUp, TrendingDown,
+  Lock, Unlock, Clock, TrendingUp, TrendingDown,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { AppShell } from "../../components/layout/AppShell";
@@ -27,7 +27,6 @@ import API_ENDPOINTS from "../../config/api.config";
 import ROUTES from "../../config/routes.config";
 import { usePatientContext } from "../../context/PatientContext";
 import { openDataUrlInNewTab } from "../../utils/fileViewer";
-import HealthInsightsPanel from "../../components/patient/HealthInsightsPanel";
 
 const MAX_FILE_BYTES = 11 * 1024 * 1024; // matches the backend's single-upload guard (a modern phone photo runs ~8-11 MB)
 const OK_EXT = /\.(pdf|jpe?g|png)$/i;
@@ -1113,26 +1112,7 @@ export default function MyReportsPage() {
     ["all", "All", counts.all],
     ["prescription", "Prescriptions", counts.prescription],
     ["lab_report", "Lab reports", counts.lab_report],
-    ["insights", "Insights", null],
   ];
-
-  function openInsightDoc(doc) {
-    const full = docs.find(d => d.id === doc.id);
-    if (full) { setDetail(full); return; }
-    // Not in the currently-loaded page (rare — recent-by-document-date can
-    // differ from recent-by-upload-date) — fall back to finding it in the list.
-    setTab("all"); setQ(doc.title || "");
-  }
-
-  // Health Insights' "Your Health Documents" quick-summary rows drill into
-  // My Documents pre-filtered to that category — `kind` is a report-panel
-  // slug (lab_report tab + that category checked), "prescription" (its own
-  // tab), or omitted ("View all reports", unfiltered).
-  function openInsightCategory(kind) {
-    if (kind === "prescription") { setTab("prescription"); return; }
-    setTab(kind ? "lab_report" : "all");
-    setCatSel(kind ? new Set([kind]) : new Set());
-  }
 
   return (
     <AppShell>
@@ -1140,7 +1120,7 @@ export default function MyReportsPage() {
         title={selectedPatient?.isSelf ? "My Reports" : `${selectedPatient?.name || "Family member"}'s Reports`}
         action={<button className="btn-primary" onClick={() => setAddOpen(true)}><Plus size={16} /> Add</button>}
       >
-        {tab !== "insights" && privEnabled && privSession && (
+        {privEnabled && privSession && (
           <div className="card" style={{ padding: "10px 13px", marginBottom: 12, display: "flex", gap: 9, alignItems: "flex-start", borderColor: "var(--color-warning, #b45309)", background: "var(--color-warning-light, #fbf3e6)" }}>
             <Clock size={13} style={{ marginTop: 2, flexShrink: 0, color: "var(--color-warning, #b45309)" }} />
             <span style={{ fontSize: 12, lineHeight: 1.5 }}>
@@ -1149,7 +1129,7 @@ export default function MyReportsPage() {
             </span>
           </div>
         )}
-        {tab !== "insights" && privEnabled && (
+        {privEnabled && (
           <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
             <Lock size={12} />
             <span><b>{privateCount}</b> of {privMap.size || docs.length} report{privMap.size === 1 ? "" : "s"} private — hidden from doctors you share with.</span>
@@ -1170,13 +1150,11 @@ export default function MyReportsPage() {
                   flexShrink: 0, whiteSpace: "nowrap",
                   background: tab === id ? "var(--color-primary)" : "transparent",
                   color: tab === id ? "#fff" : "var(--color-text-secondary)", fontWeight: tab === id ? 600 : 400 }}>
-                {id === "insights" && <BarChart3 size={13} />}
                 {label} {n !== null && <span style={{ opacity: 0.7, fontFamily: "monospace", fontSize: 11 }}>{n}</span>}
               </button>
             ))}
           </div>
-          {tab !== "insights" && (
-            <>
+          <>
               <label className="form-input" style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 180, padding: "6px 10px" }}>
                 <Search size={15} style={{ color: "var(--color-text-muted)" }} />
                 <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name, hospital, doctor, ID"
@@ -1216,16 +1194,8 @@ export default function MyReportsPage() {
                 </button>
               )}
             </>
-          )}
         </div>
 
-        {tab === "insights" ? (
-          <HealthInsightsPanel
-            patientAwpid={patientAwpid}
-            onViewAll={openInsightCategory}
-            onOpenDocument={openInsightDoc}
-          />
-        ) : (
         <>
         {showFilter && (
           <div className="card" style={{ padding: "12px 14px", marginBottom: 12, display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1373,7 +1343,6 @@ export default function MyReportsPage() {
           </>
         )}
         </>
-        )}
       </PageShell>
 
       {addOpen && (
