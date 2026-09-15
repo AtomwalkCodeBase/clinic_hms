@@ -456,6 +456,15 @@ LAB_EXTRACTOR_VISION_BASE  = config("LAB_EXTRACTOR_VISION_BASE", default="") or 
 LAB_EXTRACTOR_VISION_MODEL = config("LAB_EXTRACTOR_VISION_MODEL", default="") or DOC_CLASSIFIER_VISION_MODEL
 LAB_EXTRACTOR_VISION_KEY   = config("LAB_EXTRACTOR_VISION_KEY", default="") or DOC_CLASSIFIER_VISION_KEY
 
+# "AI Trends" narrative (core/health_insight.py) — a third, on-demand stage,
+# gated behind an explicit patient tap (never auto-run on page load, unlike
+# the two above). Writes a short paragraph over already-extracted
+# ExtractedLabValue points; never re-reads a document or touches an LLM to
+# extract numbers itself. Same zero-config fallback pattern as extraction.
+HEALTH_INSIGHT_LLM_BASE  = config("HEALTH_INSIGHT_LLM_BASE", default="") or DOC_CLASSIFIER_LLM_BASE
+HEALTH_INSIGHT_LLM_MODEL = config("HEALTH_INSIGHT_LLM_MODEL", default="") or DOC_CLASSIFIER_LLM_MODEL
+HEALTH_INSIGHT_LLM_KEY   = config("HEALTH_INSIGHT_LLM_KEY", default="") or DOC_CLASSIFIER_LLM_KEY
+
 # Persistent, worker-shared cache for the classifier's LLM/vision answers —
 # a given OCR text (or image) always classifies the same, so we store it once
 # and never pay Groq / the VLM again for a re-upload, a backfill, or a retry.

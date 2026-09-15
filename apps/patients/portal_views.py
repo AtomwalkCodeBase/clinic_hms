@@ -3194,15 +3194,17 @@ class PortalLabTrendsView(APIView):
     module docstring). Reuses core.lab_variation's confidence gate and
     unit-normalization table so a trend line never mixes a shaky extraction
     or silently jumps because two labs printed the same analyte in
-    different units. A parameter only appears once it has at least 2
-    confident, same-unit points within the selected range — a single
-    reading has nothing to trend against.
+    different units. A parameter only appears once it has at least
+    `min_points` confident, same-unit points within the selected range
+    (default 2 — a single reading has nothing to trend against; the mobile
+    app's parameter picker passes min_points=1 instead, so a test the
+    patient has only had once still shows up as selectable with a "needs
+    one more reading" state rather than not appearing at all).
     """
     permission_classes = [IsPatient]
     RANGE_MONTHS = {"3m": 3, "6m": 6, "12m": 12}
 
     def get(self, request):
-        from apps.registry.models import ExtractedLabValue
         from core import lab_variation
 
         target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
@@ -3214,64 +3216,69 @@ class PortalLabTrendsView(APIView):
         effective_range = range_key if months is not None else "all"
         cutoff = _months_ago(months) if months is not None else None
 
-        rows = list(
-            ExtractedLabValue.objects.using("default")
-            .filter(awpid=target_awpid, confidence__gte=lab_variation.CONFIDENCE_GATE)
-            .order_by("parameter_slug", "document_date")
-            .values("document_id", "parameter_slug", "parameter_label", "value_numeric",
-                     "unit", "reference_low", "reference_high", "document_date")
-        )
+        try:
+            min_points = max(1, int(request.query_params.get("min_points") or 2))
+        except (TypeError, ValueError):
+            min_points = 2
 
-        by_param: dict[str, list[dict]] = {}
-        for r in rows:
-            by_param.setdefault(r["parameter_slug"], []).append(r)
-
-        parameters = []
-        for slug, series in by_param.items():
-            series.sort(key=lambda r: r["document_date"] or date.min)
-            if cutoff is not None:
-                series = [r for r in series if r["document_date"] and r["document_date"] >= cutoff]
-            if len(series) < 2:
-                continue
-
-            points = []
-            common_unit = None
-            for r in series:
-                conv = lab_variation.to_common_unit(slug, r["value_numeric"], r["unit"])
-                if conv is None:
-                    continue
-                value, unit = conv
-                if common_unit is None:
-                    common_unit = unit
-                elif unit != common_unit:
-                    continue  # a differently-unitted reading we can't reconcile — skip, never guess
-                points.append({
-                    "document_id": r["document_id"],
-                    "date": r["document_date"],
-                    "value": value,
-                    "reference_low": r["reference_low"],
-                    "reference_high": r["reference_high"],
-                    "status": lab_variation.status_for(value, r["reference_low"], r["reference_high"]),
-                })
-            if len(points) < 2:
-                continue
-
-            parameters.append({
-                "slug": slug,
-                "label": series[-1]["parameter_label"],
-                "unit": common_unit or "",
-                "latest_value": points[-1]["value"],
-                "latest_status": points[-1]["status"],
-                "concern": lab_variation.PARAMETER_DIRECTION.get(slug, "neutral"),
-                "points": points,
-            })
-
-        # Most-tracked analyte first — the one with the longest history is
-        # the most useful default tab, same reasoning as report_distribution
-        # sorting by count in the overview endpoint above.
-        parameters.sort(key=lambda p: (-len(p["points"]), p["label"]))
+        parameters = lab_variation.build_trend_parameters(target_awpid, cutoff, min_points=min_points)
 
         return success(data={"range": effective_range, "parameters": parameters})
+
+
+class PortalHealthInsightNarrativeView(APIView):
+    """
+    POST /api/v1/portal/health-insights/narrate/
+    Body: {"parameter_slug": "hemoglobin", "range": "12m"}  — both optional;
+    omitted parameter_slug picks the same "most-tracked analyte" default
+    PortalLabTrendsView's own ordering would show first.
+
+    The "AI trends" gadget — explicitly patient-triggered (POST, never a
+    passive GET/page-load), gated behind a confirm step in the app ("see
+    what your previous records have to say?"). Writes a short narrative
+    paragraph over the same already-extracted, already confidence-gated
+    points PortalLabTrendsView draws its chart from (core.health_insight —
+    never re-reads a document, never extracts a new number).
+
+    A trend with fewer than 2 confident points, or a disabled/failing LLM
+    layer, returns success with narrative=null rather than an error — the
+    app shows "not enough data yet" / "couldn't generate this right now"
+    either way, and a flaky provider shouldn't 500 an otherwise-working
+    screen (core.health_insight itself never raises).
+    """
+    permission_classes = [IsPatient]
+    RANGE_MONTHS = {"3m": 3, "6m": 6, "12m": 12}
+
+    def post(self, request):
+        from core import lab_variation, health_insight
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+
+        range_key = (request.data.get("range") or "12m").strip().lower()
+        months = self.RANGE_MONTHS.get(range_key)
+        cutoff = _months_ago(months) if months is not None else None
+
+        parameters = lab_variation.build_trend_parameters(target_awpid, cutoff)
+        if not parameters:
+            return success(data={"parameter": None, "narrative": None})
+
+        wanted_slug = (request.data.get("parameter_slug") or "").strip()
+        param = next((p for p in parameters if p["slug"] == wanted_slug), None) if wanted_slug else parameters[0]
+        if param is None:
+            return error("No trend data for that parameter.", status=404)
+
+        narrative = health_insight.generate_trend_narrative(
+            parameter_label=param["label"], unit=param["unit"],
+            points=[{"date": str(p["date"]), "value": p["value"], "status": p["status"]} for p in param["points"]],
+            concern=param["concern"],
+        )
+
+        return success(data={
+            "parameter": {k: v for k, v in param.items()},
+            "narrative": narrative,
+        })
 
 
 class PortalDocumentLabValuesView(APIView):

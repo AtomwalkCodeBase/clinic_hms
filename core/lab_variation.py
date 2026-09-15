@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 
 CONFIDENCE_GATE = 0.7
 PERCENT_THRESHOLD = 20.0  # flat delta fallback, in percent
@@ -105,6 +106,15 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "tsh":               ("tsh", "thyroid stimulating hormone"),
     "free_t4":           ("free t4", "ft4"),
     "free_t3":           ("free t3", "ft3"),
+    "lh":                ("lh", "luteinizing hormone"),
+
+    "troponin_i":        ("troponin i", "troponin-i", "troponinl", "cardiac troponin i"),
+    # "troponinl" is a real, repeated OCR misread — the Roman numeral "I"
+    # merges with no space into a trailing lowercase "l" ("Troponin I" ->
+    # "Troponinl"). Mapping it here rather than "fixing" the OCR: this
+    # module only canonicalizes what core.lab_value_extractor already
+    # extracted, it never re-reads the document.
+    "ck_mb":             ("ck-mb", "ck mb", "creatine kinase mb", "creatine kinase-mb"),
 
     "hba1c":             ("hba1c", "glycated haemoglobin", "glycated hemoglobin",
                            "glycosylated haemoglobin"),
@@ -268,6 +278,99 @@ def _message(label: str, current: float, previous: float, unit: str,
             or (concern == "lower_is_concern" and direction == "up"):
         return base + " Worth mentioning at your next visit."
     return base + " This may be worth discussing with your doctor."
+
+
+def build_trend_parameters(awpid: str, cutoff, min_points: int = 2) -> list[dict]:
+    """Per-analyte time series over `awpid`'s ExtractedLabValue history —
+    shared by PortalLabTrendsView (GET, every parameter) and
+    PortalHealthInsightNarrativeView (POST, one parameter's narrative) so
+    the confidence gate / unit-normalization / status logic lives in
+    exactly one place rather than being copied into each view.
+
+    cutoff: a date, or None for "all time" — points older than this are
+    dropped before the "does this parameter even have >=min_points points"
+    check, same as compute_flags' range handling.
+
+    min_points: the default (2) is "a single reading has nothing to trend
+    against" — the right threshold for anything that's about to draw a
+    chart. Callers building a browsable catalogue of every analyte the
+    patient has ANY confident reading for (e.g. the mobile app's parameter
+    picker, so a test with only one reading so far still shows up as
+    selectable with a "needs one more reading" state) pass min_points=1
+    instead — same gate/normalization logic either way, just a different
+    "is this worth listing" bar.
+
+    Returns a list of {"slug", "label", "unit", "latest_value",
+    "latest_status", "concern", "points": [...]} dicts, sorted by most
+    points first (the one with the longest history is the most useful
+    default to show). Each parameter also carries "panels" — the report
+    panel(s) (slug + label) of its most recent contributing document, e.g.
+    [{"slug": "cbc", "label": "Complete Blood Count"}] — for a mobile/web
+    picker that wants to filter "everything I'm tracking" by category
+    instead of only searching by name. Sourced straight from
+    SharedDocument.report_categories (already set by classification), never
+    guessed from the parameter name itself.
+    """
+    from apps.registry.models import ExtractedLabValue
+    from core.report_types import label_for
+
+    rows = list(
+        ExtractedLabValue.objects.using("default")
+        .filter(awpid=awpid, confidence__gte=CONFIDENCE_GATE)
+        .order_by("parameter_slug", "document_date")
+        .values("document_id", "parameter_slug", "parameter_label", "value_numeric",
+                 "unit", "reference_low", "reference_high", "document_date",
+                 "document__report_categories")
+    )
+
+    by_param: dict[str, list[dict]] = {}
+    for r in rows:
+        by_param.setdefault(r["parameter_slug"], []).append(r)
+
+    parameters = []
+    for slug, series in by_param.items():
+        series.sort(key=lambda r: r["document_date"] or date.min)
+        if cutoff is not None:
+            series = [r for r in series if r["document_date"] and r["document_date"] >= cutoff]
+        if len(series) < min_points:
+            continue
+
+        points = []
+        common_unit = None
+        for r in series:
+            conv = to_common_unit(slug, r["value_numeric"], r["unit"])
+            if conv is None:
+                continue
+            value, unit = conv
+            if common_unit is None:
+                common_unit = unit
+            elif unit != common_unit:
+                continue  # a differently-unitted reading we can't reconcile — skip, never guess
+            points.append({
+                "document_id": r["document_id"],
+                "date": r["document_date"],
+                "value": value,
+                "reference_low": r["reference_low"],
+                "reference_high": r["reference_high"],
+                "status": status_for(value, r["reference_low"], r["reference_high"]),
+            })
+        if len(points) < min_points:
+            continue
+
+        latest_panel_slugs = series[-1]["document__report_categories"] or []
+        parameters.append({
+            "slug": slug,
+            "label": series[-1]["parameter_label"],
+            "unit": common_unit or "",
+            "latest_value": points[-1]["value"],
+            "latest_status": points[-1]["status"],
+            "concern": PARAMETER_DIRECTION.get(slug, "neutral"),
+            "panels": [{"slug": s, "label": label_for(s)} for s in latest_panel_slugs],
+            "points": points,
+        })
+
+    parameters.sort(key=lambda p: (-len(p["points"]), p["label"]))
+    return parameters
 
 
 def compute_flags(awpid: str, range_cutoff) -> list[dict]:
