@@ -9,11 +9,16 @@ from .views import (
     EncounterConsultSessionView,
     PrescriptionCreateView, PrescriptionDetailView, PrescriptionItemView,
     FavouriteListCreateView, FavouriteDeleteView,
+    AppointmentTypeListCreateView, AppointmentTypeDetailView,
 )
 
 urlpatterns = [
     # Stats
     path("stats/", OPDStatsView.as_view(), name="opd-stats"),
+
+    # Hospital-admin-configurable catalog ("make it configurable")
+    path("appointment-types/", AppointmentTypeListCreateView.as_view(), name="appointment-type-list"),
+    path("appointment-types/<int:pk>/", AppointmentTypeDetailView.as_view(), name="appointment-type-detail"),
 
     # Voice dictation (Whisper)
     path("transcribe/", TranscribeView.as_view(), name="opd-transcribe"),

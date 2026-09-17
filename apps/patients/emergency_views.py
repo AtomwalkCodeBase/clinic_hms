@@ -58,11 +58,7 @@ from apps.registry.models import (
 logger = logging.getLogger(__name__)
 
 
-def _age_years(dob):
-    if not dob:
-        return None
-    today = date.today()
-    return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+from .age_utils import age_years_months as _age_years_months
 
 
 def _resolve_emergency_contact(awpid):
@@ -193,7 +189,8 @@ class EmergencySummaryView(APIView):
 
         return success(data={
             "full_name": identity.full_name,
-            "age_years": _age_years(identity.date_of_birth),
+            "age_years": (_age_years_months(identity.date_of_birth) or (None,))[0],
+            "age_months": (_age_years_months(identity.date_of_birth) or (None, None))[1],
             "date_of_birth": identity.date_of_birth,
             "gender": identity.gender,
             "blood_group": identity.blood_group,

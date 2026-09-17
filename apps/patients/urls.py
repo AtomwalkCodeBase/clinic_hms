@@ -1,7 +1,9 @@
 from django.urls import path
 from .views import (
     PatientRegisterView,
+    PatientEmergencyRegisterView,
     PatientLookupView,
+    PatientAttachNetworkView,
     PatientSearchView,
     PatientFamilyTreeView,
     PatientDetailView,
@@ -21,7 +23,9 @@ from .growth_vaccination_views import (
 
 urlpatterns = [
     path("register/",          PatientRegisterView.as_view(),       name="patient-register"),
+    path("register-emergency/",PatientEmergencyRegisterView.as_view(), name="patient-register-emergency"),
     path("lookup/",            PatientLookupView.as_view(),          name="patient-lookup"),
+    path("attach-network/",    PatientAttachNetworkView.as_view(),   name="patient-attach-network"),
     path("search/",            PatientSearchView.as_view(),          name="patient-search"),
     path("family-tree/",       PatientFamilyTreeView.as_view(),      name="patient-family-tree"),
     path("documents/<int:doc_id>/", PatientDocumentDetailView.as_view(), name="patient-document-detail"),

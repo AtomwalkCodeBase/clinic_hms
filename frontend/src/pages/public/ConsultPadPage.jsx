@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { publicClient } from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import { formatYearsMonths } from "../../utils/age";
 
 const PAPER = "#ffffff";
 const RULE_COLOR = "#eef1f5";
@@ -664,7 +665,7 @@ export default function ConsultPadPage() {
         <strong style={{ fontSize: 15 }}>{patient?.patient_name || "Patient"}</strong>
         <span style={{ fontSize: 12, color: "#64748b" }}>
           {patient?.patient_awpid}
-          {patient?.age_years != null ? ` · ${patient.age_years} yrs` : ""}
+          {patient?.age_years != null ? ` · ${formatYearsMonths(patient.age_years, patient.age_months) || `${patient.age_years} yrs`}` : ""}
           {patient?.gender ? ` · ${patient.gender}` : ""}
         </span>
       </div>

@@ -3,11 +3,14 @@ from .views import (
     LabCatalogView, LabTestDetailView, LabRequestListCreateView, LabRequestLookupView,
     LabRequestChoiceView, LabRequestAttachDocumentView, LabRequestStatusView,
     LabReportUploadView, LabReportDeliverView,
+    SampleTypeListCreateView, SampleTypeDetailView,
 )
 
 urlpatterns = [
     path("catalog/",                  LabCatalogView.as_view(),               name="lab-catalog"),
     path("catalog/<int:pk>/",         LabTestDetailView.as_view(),            name="lab-catalog-detail"),
+    path("sample-types/",             SampleTypeListCreateView.as_view(),     name="lab-sample-type-list"),
+    path("sample-types/<int:pk>/",    SampleTypeDetailView.as_view(),         name="lab-sample-type-detail"),
     path("requests/",                 LabRequestListCreateView.as_view(),     name="lab-request-list"),
     path("requests/lookup/",          LabRequestLookupView.as_view(),         name="lab-request-lookup"),
     path("requests/<int:pk>/choice/", LabRequestChoiceView.as_view(),         name="lab-request-choice"),

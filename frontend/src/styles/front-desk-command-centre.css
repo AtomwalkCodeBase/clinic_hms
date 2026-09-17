@@ -1,0 +1,191 @@
+/**
+ * styles/front-desk-command-centre.css
+ * ---------------------------------------
+ * Visual design system for the Front Desk role's shell (topbar) and its
+ * "command centre" pages — Dashboard and Patient Intake — built to match
+ * the reference screens the hospital provided. Reuses the app's existing
+ * design tokens (variables.css: --color-primary, --color-hero, etc. — the
+ * "Private Practice" deep-green theme) rather than introducing a new
+ * palette, so this stays visually one system with the rest of the app.
+ * Every class here is prefixed `fdc-` and nothing here touches any
+ * existing global.css class, so no other role's pages are affected.
+ */
+
+/* ── Topbar (front-desk only — see AppShell.jsx) ──────────────────────── */
+/* Was a plain light bar (var(--color-surface)) — every other role's topbar
+   is the dark hero-gradient below (see AppShell.jsx's non-front-desk
+   branch); front desk being the one light exception made the app feel like
+   two different products. Now matches that gradient exactly, keeping only
+   the search/bell/profile controls as light "pills" sitting on top of it
+   for contrast (the same look those dark-topbar affordances would want on
+   any dark navbar) rather than making everything dark-on-dark. */
+.fdc-topbar {
+  background: linear-gradient(90deg, var(--color-hero) 0%, var(--color-hero-2) 100%);
+}
+.fdc-hospital-name { font-family: var(--font-family); font-weight: 700; font-size: 16px; color: var(--color-hero-text); letter-spacing: 0.01em; }
+.fdc-hospital-sub { font-size: 10px; font-weight: 700; color: var(--color-accent); letter-spacing: 0.08em; text-transform: uppercase; }
+
+.fdc-search {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--color-bg); border: 1px solid var(--color-border);
+  border-radius: 10px; padding: 9px 12px; width: 100%; max-width: 460px;
+  color: var(--color-text-muted);
+}
+.fdc-search input {
+  border: none; background: transparent; outline: none; flex: 1;
+  font-size: 13px; color: var(--color-text); font-family: var(--font-family);
+}
+.fdc-search input::placeholder { color: var(--color-text-disabled); }
+.fdc-search kbd {
+  font-family: var(--font-family); font-size: 10px; font-weight: 700; color: var(--color-text-muted);
+  background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 5px;
+  padding: 2px 6px; flex-shrink: 0;
+}
+
+.fdc-icon-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--color-border);
+  background: var(--color-surface); color: var(--color-text-secondary); cursor: pointer; position: relative; flex-shrink: 0;
+}
+.fdc-icon-btn:hover { background: var(--color-bg); }
+.fdc-icon-badge {
+  position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; border-radius: 99px;
+  background: var(--color-error); color: #fff; font-size: 9.5px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center; padding: 0 3px; border: 2px solid var(--color-surface);
+}
+
+.fdc-profile-chip {
+  display: flex; align-items: center; gap: 8px; padding: 5px 10px 5px 5px; border-radius: 99px;
+  border: 1px solid var(--color-border); background: var(--color-surface); cursor: pointer; position: relative;
+}
+.fdc-profile-avatar {
+  width: 30px; height: 30px; border-radius: 50%; background: var(--color-primary-light); color: var(--color-primary);
+  display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; flex-shrink: 0; overflow: hidden;
+}
+.fdc-profile-name { font-size: 12.5px; font-weight: 700; color: var(--color-text); line-height: 1.2; }
+.fdc-profile-role { font-size: 10.5px; color: var(--color-text-muted); line-height: 1.2; }
+.fdc-profile-menu {
+  position: absolute; top: calc(100% + 8px); right: 0; min-width: 180px; background: var(--color-surface);
+  border: 1px solid var(--color-border); border-radius: 10px; box-shadow: var(--shadow-dropdown); padding: 6px; z-index: 50;
+}
+.fdc-profile-menu button {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 8px 10px; border-radius: 7px;
+  border: none; background: none; font-size: 12.5px; font-weight: 600; color: var(--color-text); cursor: pointer; font-family: var(--font-family);
+}
+.fdc-profile-menu button:hover { background: var(--color-bg); }
+.fdc-profile-menu button.danger { color: var(--color-error); }
+
+/* ── Page header (eyebrow + title + subtitle) ─────────────────────────── */
+.fdc-eyebrow { font-size: 11.5px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-primary); margin-bottom: 4px; }
+.fdc-title { font-family: var(--font-family); font-size: 26px; font-weight: 800; color: var(--color-text); letter-spacing: -0.01em; line-height: 1.15; }
+.fdc-subtitle { font-size: 13px; color: var(--color-text-muted); margin-top: 6px; max-width: 640px; }
+.fdc-header-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+
+/* ── Tab bar (Patient Intake steps + table status filters) ───────────── */
+.fdc-tabs { display: flex; gap: 2px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 12px; padding: 5px; flex-wrap: wrap; box-shadow: var(--shadow-card); }
+.fdc-tab {
+  border: none; background: transparent; padding: 9px 16px; border-radius: 8px; font-size: 13px; font-weight: 700;
+  color: var(--color-text-muted); cursor: pointer; font-family: var(--font-family); white-space: nowrap;
+}
+.fdc-tab:hover:not(.active) { background: var(--color-bg); color: var(--color-text); }
+.fdc-tab.active { background: var(--color-primary-light); color: var(--color-primary); }
+.fdc-tab.cross-link { color: var(--color-text-muted); }
+
+.fdc-subtabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.fdc-subtab {
+  border: 1px solid var(--color-border); background: var(--color-surface); padding: 6px 12px; border-radius: 8px;
+  font-size: 12px; font-weight: 700; color: var(--color-text-muted); cursor: pointer; font-family: var(--font-family);
+}
+.fdc-subtab.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+
+/* ── Stat tiles ────────────────────────────────────────────────────────── */
+.fdc-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 20px; }
+.fdc-stat-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-card); padding: 16px; box-shadow: var(--shadow-card); }
+.fdc-stat-icon { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; }
+.fdc-stat-label { font-size: 11.5px; font-weight: 700; color: var(--color-text-muted); margin-bottom: 4px; }
+.fdc-stat-value { font-family: var(--font-family); font-size: 24px; font-weight: 800; color: var(--color-text); line-height: 1; }
+.fdc-stat-delta { font-size: 11px; color: var(--color-text-muted); margin-top: 6px; }
+.fdc-stat-delta.up { color: var(--color-success); }
+
+/* Icon-chip color variants (soft tint bg + solid icon color) */
+.fdc-tint-green  { background: var(--color-primary-light); color: var(--color-primary); }
+.fdc-tint-amber  { background: var(--color-warning-light); color: var(--color-warning); }
+.fdc-tint-violet { background: #EEE7FA; color: #6D4FC4; }
+.fdc-tint-red    { background: var(--color-error-light); color: var(--color-error); }
+.fdc-tint-gold   { background: var(--color-accent-light); color: #8A6A1E; }
+
+/* ── Quick actions ─────────────────────────────────────────────────────── */
+.fdc-quick-actions-card { background: var(--color-primary-light); border: 1px solid color-mix(in srgb, var(--color-primary) 25%, transparent); border-radius: var(--radius-card); padding: 16px; margin-bottom: 20px; }
+.fdc-quick-actions-head { font-size: 14px; font-weight: 800; color: var(--color-text); margin-bottom: 2px; }
+.fdc-quick-actions-sub { font-size: 12px; color: var(--color-text-muted); margin-bottom: 12px; }
+.fdc-quick-actions-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.fdc-quick-action-btn {
+  display: flex; align-items: center; gap: 8px; background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: 9px; padding: 9px 14px; font-size: 12.5px; font-weight: 700; color: var(--color-text); cursor: pointer; font-family: var(--font-family);
+}
+.fdc-quick-action-btn:hover { border-color: var(--color-primary); color: var(--color-primary); }
+
+/* ── Panels + tables ───────────────────────────────────────────────────── */
+.fdc-panel { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); overflow: hidden; }
+.fdc-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--color-border); flex-wrap: wrap; }
+.fdc-panel-title { font-size: 14px; font-weight: 800; color: var(--color-text); }
+.fdc-panel-sub { font-size: 11.5px; color: var(--color-text-muted); margin-top: 1px; }
+.fdc-panel-link { font-size: 12px; font-weight: 700; color: var(--color-primary); background: none; border: none; cursor: pointer; display: flex; align-items: center; gap: 4px; font-family: var(--font-family); }
+
+.fdc-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.fdc-table th { text-align: left; font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; color: var(--color-text-disabled); padding: 10px 18px; border-bottom: 1px solid var(--color-border); background: var(--color-bg); }
+.fdc-table td { padding: 11px 18px; border-bottom: 1px solid var(--color-border); vertical-align: middle; color: var(--color-text); }
+.fdc-table tr:last-child td { border-bottom: none; }
+.fdc-table tr:hover td { background: var(--color-bg); }
+
+.fdc-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 800; padding: 3px 9px; border-radius: 99px; white-space: nowrap; }
+.fdc-pill-waiting    { background: var(--color-warning-light); color: var(--color-warning); }
+.fdc-pill-progress   { background: var(--color-info-light); color: var(--color-info); }
+.fdc-pill-done       { background: var(--color-success-light); color: var(--color-success); }
+.fdc-pill-cancelled  { background: var(--color-error-light); color: var(--color-error); }
+.fdc-pill-neutral    { background: var(--color-table-header); color: var(--color-text-muted); }
+
+/* ── IPD bed donut ─────────────────────────────────────────────────────── */
+.fdc-donut-wrap { display: flex; flex-direction: column; align-items: center; padding: 18px; }
+.fdc-donut-center-value { font-family: var(--font-family); font-size: 22px; font-weight: 800; color: var(--color-text); }
+.fdc-donut-center-label { font-size: 10.5px; color: var(--color-text-muted); font-weight: 700; text-transform: uppercase; }
+.fdc-legend { width: 100%; margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.fdc-legend-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
+.fdc-legend-dot { width: 8px; height: 8px; border-radius: 99px; display: inline-block; margin-right: 7px; }
+.fdc-legend-value { font-weight: 800; color: var(--color-text); }
+
+/* ── Activity feed ─────────────────────────────────────────────────────── */
+.fdc-activity-list { display: flex; flex-direction: column; }
+.fdc-activity-item { display: flex; align-items: flex-start; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--color-border); font-size: 12.5px; }
+.fdc-activity-item:last-child { border-bottom: none; }
+.fdc-activity-dot { width: 7px; height: 7px; border-radius: 99px; margin-top: 5px; flex-shrink: 0; }
+.fdc-activity-time { font-size: 11px; color: var(--color-text-disabled); white-space: nowrap; margin-left: auto; padding-left: 10px; }
+
+/* ── Patient Intake: two-column landing ───────────────────────────────── */
+.fdc-two-col { display: grid; grid-template-columns: 1fr 320px; gap: 16px; align-items: start; margin-bottom: 20px; }
+@media (max-width: 900px) { .fdc-two-col { grid-template-columns: 1fr; } }
+
+.fdc-search-methods { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.fdc-search-method {
+  display: flex; align-items: center; gap: 7px; border: 1.5px solid var(--color-border); background: var(--color-surface);
+  border-radius: 9px; padding: 9px 14px; font-size: 12.5px; font-weight: 700; color: var(--color-text-muted); cursor: pointer; font-family: var(--font-family);
+}
+.fdc-search-method.active { border-color: var(--color-primary); background: var(--color-primary-light); color: var(--color-primary); }
+.fdc-search-method:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.fdc-empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 46px 20px; color: var(--color-text-muted); border: 1.5px dashed var(--color-border); border-radius: 12px; }
+.fdc-empty-state svg { color: var(--color-text-disabled); margin-bottom: 14px; }
+.fdc-empty-state-title { font-size: 14px; font-weight: 700; color: var(--color-text); margin-bottom: 4px; }
+.fdc-empty-state-sub { font-size: 12px; }
+
+.fdc-info-banner { display: flex; align-items: center; gap: 8px; background: var(--color-primary-light); color: var(--color-primary-dark); border-radius: 9px; padding: 10px 14px; font-size: 12px; margin-top: 14px; }
+.fdc-info-banner b { font-weight: 800; text-decoration: underline; cursor: pointer; }
+
+.fdc-cta-card { background: var(--color-primary-light); border: 1px solid color-mix(in srgb, var(--color-primary) 25%, transparent); border-radius: var(--radius-card); padding: 20px; }
+.fdc-cta-icon { width: 44px; height: 44px; border-radius: 12px; background: var(--color-primary); color: #fff; display: flex; align-items: center; justify-content: center; margin-bottom: 14px; }
+.fdc-cta-title { font-size: 15px; font-weight: 800; color: var(--color-text); margin-bottom: 5px; }
+.fdc-cta-sub { font-size: 12px; color: var(--color-text-secondary); margin-bottom: 16px; }
+.fdc-cta-btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; background: var(--color-primary); color: #fff; border: none; border-radius: 9px; padding: 12px; font-size: 13px; font-weight: 800; cursor: pointer; font-family: var(--font-family); }
+.fdc-cta-checklist { list-style: none; padding: 0; margin: 16px 0 0; display: flex; flex-direction: column; gap: 9px; }
+.fdc-cta-checklist li { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--color-text-secondary); }
+.fdc-cta-checklist svg { color: var(--color-primary); flex-shrink: 0; }

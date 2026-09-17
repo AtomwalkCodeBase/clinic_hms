@@ -24,9 +24,11 @@ INVESTOR_DEMO_CREDENTIALS.md
 # Frontend
 frontend/node_modules/
 frontend/dist/
+frontend/dist-verify-tmp*/
 frontend/build/
 frontend/.env.local
 frontend/.env.production
+frontend/vite.config.js.timestamp-*.mjs
 
 # Editors / OS
 .vscode/
@@ -47,3 +49,11 @@ Thumbs.db
 /IPD_Admission_Feature_Documentation_v2.docx
 /IPD_Admission_Feature_Documentation.docx
 /IPD_Full_Cycle.pptx
+
+# Internal planning folders (not meant for the repo) — previously listed
+# below as absolute Windows paths, which gitignore never actually matched
+# (it needs repo-relative patterns), so these were silently untracked-but-
+# not-ignored until now.
+/Claude outputs/
+/docs/
+/.claude/

@@ -1,6 +1,23 @@
 from rest_framework import serializers
 from core import storage as blob_storage
+from apps.billing.models import OptionList
 from .models import LabTest, LabRequest, LabReport, LabReportItem
+
+
+class SampleTypeSerializer(serializers.ModelSerializer):
+    """Generic read/write serializer for the sample-type catalog — mirrors
+    apps.prescriptions' drug-form-setup shape (name mirrors label on create).
+    `value` is exposed read-only because it's what LabTest.sample_type
+    actually stores and validate_sample_type checks — the seeded defaults
+    have a lowercase value ("blood") distinct from their display label
+    ("Blood"), so a consumer (e.g. CatalogPage.jsx's Sample Type dropdown)
+    must submit `value`, not `name`, as the test's sample_type."""
+    name = serializers.CharField(source="label")
+
+    class Meta:
+        model  = OptionList
+        fields = ["id", "name", "value", "is_active", "is_system", "sort_order"]
+        read_only_fields = ["id", "value", "is_system"]
 
 
 class LabTestSerializer(serializers.ModelSerializer):
@@ -8,6 +25,14 @@ class LabTestSerializer(serializers.ModelSerializer):
         model  = LabTest
         fields = ["id", "name", "code", "sample_type", "turnaround_hours", "price", "description", "is_active"]
         read_only_fields = ["id"]
+
+    def validate_sample_type(self, value):
+        tenant_db = self.context.get("tenant_db")
+        if tenant_db and not OptionList.objects.using(tenant_db).filter(
+            list_type=OptionList.LIST_SAMPLE_TYPE, value=value, is_active=True,
+        ).exists():
+            raise serializers.ValidationError("Not a configured sample type for this hospital.")
+        return value
 
 
 class LabReportItemSerializer(serializers.ModelSerializer):

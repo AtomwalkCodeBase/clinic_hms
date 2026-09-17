@@ -34,7 +34,7 @@ import { useAuth }   from "../../hooks/useAuth";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import ROUTES        from "../../config/routes.config";
-import { calcAge }   from "../../utils/age";
+import { formatAgeYM } from "../../utils/age";
 
 const inputStyle = {
   width: "100%", boxSizing: "border-box",
@@ -534,7 +534,7 @@ export default function MyProfilePage() {
                 <InfoField icon={User} chip="green" label="Gender" value={{ M: "Male", F: "Female", O: "Other" }[form.gender]} />
                 <InfoField
                   icon={Cake} chip="green" label="Date of Birth"
-                  value={form.date_of_birth ? `${form.date_of_birth}${calcAge(form.date_of_birth) != null ? ` · ${calcAge(form.date_of_birth)}y` : ""}` : ""}
+                  value={form.date_of_birth ? `${form.date_of_birth}${formatAgeYM(form.date_of_birth) ? ` · ${formatAgeYM(form.date_of_birth)}` : ""}` : ""}
                 />
               </div>
             )}
@@ -699,7 +699,7 @@ export default function MyProfilePage() {
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, flexWrap: "wrap" }}>
                             <span className="tag-pill">{REL_LABELS[m.relationship] || m.relationship}</span>
                             <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
-                              {m.date_of_birth ? `DOB ${m.date_of_birth}${calcAge(m.date_of_birth) != null ? ` · ${calcAge(m.date_of_birth)}y` : ""}` : ""}
+                              {m.date_of_birth ? `DOB ${m.date_of_birth}${formatAgeYM(m.date_of_birth) ? ` · ${formatAgeYM(m.date_of_birth)}` : ""}` : ""}
                             </span>
                           </div>
                           <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 2, fontFamily: "monospace" }}>

@@ -6,6 +6,7 @@ from .views import (
     ServiceCategoryListCreateView, ServiceCategoryDetailView,
     PaymentModeListCreateView, PaymentModeDetailView,
     InvoiceStatusListCreateView, InvoiceStatusDetailView,
+    RoomTypeListCreateView, RoomTypeDetailView,
 )
 
 urlpatterns = [
@@ -18,6 +19,11 @@ urlpatterns = [
     path("payment-modes/<int:pk>/",     PaymentModeDetailView.as_view(),         name="billing-payment-mode-detail"),
     path("invoice-statuses/",           InvoiceStatusListCreateView.as_view(),   name="billing-invoice-status-list"),
     path("invoice-statuses/<int:pk>/",  InvoiceStatusDetailView.as_view(),       name="billing-invoice-status-detail"),
+    # room-types/ now also carries what used to be the separate ward-types/
+    # catalog (General Ward, Private, ICU, …) — see billing.OptionList's
+    # docstring for the v8 unification.
+    path("room-types/",                 RoomTypeListCreateView.as_view(),        name="billing-room-type-list"),
+    path("room-types/<int:pk>/",        RoomTypeDetailView.as_view(),            name="billing-room-type-detail"),
 
     path("invoices/",              InvoiceListCreateView.as_view(),  name="invoice-list"),
     path("invoices/<int:pk>/",     InvoiceDetailView.as_view(),      name="invoice-detail"),

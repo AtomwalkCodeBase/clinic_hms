@@ -16,7 +16,8 @@ import { PageShell } from "../../components/common/PageShell";
 import apiClient     from "../../services/api.client";
 import { useToast }  from "../../hooks/useToast";
 import API_ENDPOINTS from "../../config/api.config";
-import { Receipt, Tag, ListChecks, Lock } from "lucide-react";
+import { Receipt, Tag, ListChecks } from "lucide-react";
+import { DropdownListEditor } from "../../components/hospital-admin/DropdownListEditor";
 
 const inputStyle = {
   boxSizing: "border-box",
@@ -164,147 +165,6 @@ function TenantBillingSettings() {
           <span style={{ fontSize: 13, color: "var(--color-text-muted)" }}>%</span>
         </div>
       </div>
-    </div>
-  );
-}
-
-// Small pill toggle, reused for per-item "accepted" switches below —
-// same visual language as the bigger toggles in TenantBillingSettings above.
-function MiniToggle({ checked, onChange, disabled }) {
-  return (
-    <button
-      type="button" onClick={onChange} disabled={disabled}
-      title={checked ? "Accepted — click to turn off" : "Not accepted — click to turn on"}
-      style={{
-        width: 30, height: 17, borderRadius: 9, border: "none", flexShrink: 0,
-        background: checked ? "var(--color-primary)" : "var(--color-border)",
-        cursor: disabled ? "default" : "pointer", position: "relative", transition: "background 0.15s",
-      }}>
-      <span style={{
-        position: "absolute", top: 2, left: checked ? 15 : 2,
-        width: 13, height: 13, borderRadius: "50%", background: "#fff", transition: "left 0.15s",
-      }} />
-    </button>
-  );
-}
-
-// ── Generic configurable dropdown list (service categories / payment modes
-//    / invoice statuses) — one small CRUD block, reused three times below.
-//    toggleable=true (Payment Modes) additionally fetches inactive entries
-//    and shows an is_active switch per item — this is what the hospital
-//    actually accepts, reflected to patients at booking time. ──
-function DropdownListEditor({ title, listEndpoint, itemEndpoint, identityField, extraFields, toggleable, helpText }) {
-  const { toastSuccess, toastApiError } = useToast();
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [form, setForm] = useState(() => {
-    const f = { [identityField]: "" };
-    (extraFields || []).forEach(ef => { f[ef.name] = ef.default ?? ""; });
-    return f;
-  });
-  const [saving, setSaving] = useState(false);
-  const [togglingId, setTogglingId] = useState(null);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    apiClient.get(toggleable ? `${listEndpoint}?all=1` : listEndpoint)
-      .then(r => setItems(r.data?.data || []))
-      .catch(() => setItems([]))
-      .finally(() => setLoading(false));
-  }, [listEndpoint, toggleable]);
-  useEffect(() => { load(); }, [load]);
-
-  async function toggleActive(item) {
-    setTogglingId(item.id);
-    try {
-      await apiClient.patch(itemEndpoint(item.id), { is_active: !item.is_active });
-      setItems(its => its.map(i => i.id === item.id ? { ...i, is_active: !i.is_active } : i));
-    } catch (err) {
-      toastApiError(err, "Could not update.");
-    } finally {
-      setTogglingId(null);
-    }
-  }
-
-  async function addItem(e) {
-    e.preventDefault();
-    if (!String(form[identityField] || "").trim()) return;
-    setSaving(true);
-    try {
-      await apiClient.post(listEndpoint, form);
-      toastSuccess("Added.");
-      setForm(f => ({ ...f, [identityField]: "" }));
-      load();
-    } catch (err) {
-      toastApiError(err, "Could not add.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function removeItem(item) {
-    if (item.is_system) return;
-    if (!confirm(`Remove "${item[identityField]}"?`)) return;
-    try {
-      await apiClient.delete(itemEndpoint(item.id));
-      toastSuccess("Removed.");
-      load();
-    } catch (err) {
-      toastApiError(err, "Could not remove.");
-    }
-  }
-
-  return (
-    <div>
-      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{title}</div>
-      {helpText && <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginBottom: 10 }}>{helpText}</div>}
-      {loading ? (
-        <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>Loading…</div>
-      ) : (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
-          {items.map(item => (
-            <span key={item.id} style={{
-              display: "inline-flex", alignItems: "center", gap: 7,
-              fontSize: 12, fontWeight: 600, padding: "4px 8px 4px 10px", borderRadius: 999,
-              background: "var(--color-bg)", border: "1px solid var(--color-border)",
-              opacity: toggleable && !item.is_active ? 0.55 : 1,
-            }}>
-              {item.is_system && <Lock size={10} style={{ color: "var(--color-text-muted)" }} />}
-              {item.label || item[identityField]}
-              {toggleable && (
-                <MiniToggle checked={item.is_active} disabled={togglingId === item.id}
-                  onChange={() => toggleActive(item)} />
-              )}
-              {!item.is_system && (
-                <button type="button" onClick={() => removeItem(item)}
-                  style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1, color: "var(--color-text-muted)" }}>
-                  ✕
-                </button>
-              )}
-            </span>
-          ))}
-          {items.length === 0 && <span style={{ fontSize: 12, color: "var(--color-text-muted)", fontStyle: "italic" }}>Nothing configured yet.</span>}
-        </div>
-      )}
-      <form onSubmit={addItem} style={{ display: "flex", gap: 8 }}>
-        <input
-          style={{ ...inputStyle, flex: 1 }}
-          placeholder={`Add a custom ${title.toLowerCase().replace(/s$/, "")}…`}
-          value={form[identityField]}
-          onChange={e => setForm(f => ({ ...f, [identityField]: e.target.value }))}
-        />
-        {identityField === "value" && (
-          <input
-            style={{ ...inputStyle, width: 140 }}
-            placeholder="Label"
-            value={form.label || ""}
-            onChange={e => setForm(f => ({ ...f, label: e.target.value }))}
-          />
-        )}
-        <button type="submit" disabled={saving} className="btn-outline" style={{ fontSize: 12, padding: "8px 16px" }}>
-          {saving ? "…" : "+ Add"}
-        </button>
-      </form>
     </div>
   );
 }

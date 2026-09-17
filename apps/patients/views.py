@@ -19,6 +19,7 @@ from core.permissions import IsHospitalStaff, IsDoctorOrNurse, IsFrontDesk
 
 from .serializers import (
     PatientRegisterSerializer,
+    PatientEmergencyRegisterSerializer,
     PatientDetailSerializer,
     PatientSearchSerializer,
     AllergySerializer,
@@ -109,6 +110,49 @@ class PatientRegisterView(APIView):
         )
 
 
+class PatientEmergencyRegisterView(APIView):
+    """
+    POST /api/v1/patients/register-emergency/
+
+    Front desk's entry point for Path 3 (Emergency) — see
+    docs/PENDING_IMPROVEMENTS.md item 1. Deliberately its own endpoint
+    rather than a flag on PatientRegisterView: the validation rules are
+    genuinely different (no mobile/guardian required at all), and keeping
+    them apart means the normal registration path's required-mobile-or-
+    guardian rule is never accidentally weakened while wiring this one in.
+    Restricted to front desk, same as normal registration.
+    """
+    permission_classes = [IsAuthenticated, IsFrontDesk | IsHospitalStaff]
+
+    def post(self, request):
+        serializer = PatientEmergencyRegisterSerializer(data=request.data)
+        if not serializer.is_valid():
+            return error(message="Validation error.", errors=serializer.errors)
+        try:
+            patient = PatientService.register_emergency(
+                data=serializer.validated_data,
+                db_name=request.tenant_db,
+                request=request,
+            )
+        except ValueError as exc:
+            return error(message=str(exc))
+        except Exception as exc:
+            logger.exception("Emergency patient registration failed: %s", exc)
+            return error(message=f"Registration failed: {exc}", status=500)
+
+        from core.audit import log_action
+        log_action(
+            request, request.tenant_db, action="patient.register_emergency",
+            resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk,
+            metadata={"is_mlc": patient.is_mlc, "arrival_channel": patient.arrival_channel},
+        )
+
+        return created(
+            data=PatientDetailSerializer(patient).data,
+            message="Emergency patient registered — provisional identity.",
+        )
+
+
 class PatientLookupView(APIView):
     """
     GET /api/v1/patients/lookup/?mobile=
@@ -126,6 +170,26 @@ class PatientLookupView(APIView):
             return success(data={"exists_in_network": False, "already_registered_here": False})
         result = PatientService.lookup_by_mobile(mobile_raw=mobile, db_name=request.tenant_db)
         return success(data=result)
+
+
+class PatientAttachNetworkView(APIView):
+    """Attach a searched Atomwalk identity to this hospital for a visit.
+
+    Tenant-local models require a local Patient/UHID, while the identity stays
+    global. This avoids asking reception to repeat a full registration.
+    """
+    permission_classes = [IsAuthenticated, IsFrontDesk | IsHospitalStaff]
+
+    def post(self, request):
+        mobile = (request.data.get("mobile") or "").strip()
+        branch_id = request.data.get("branch_id") or getattr(request.user, "branch_id", None)
+        if not mobile or not branch_id:
+            return error("mobile and an active branch are required.")
+        try:
+            patient = PatientService.attach_network_patient(mobile, int(branch_id), request.tenant_db)
+        except ValueError as exc:
+            return error(str(exc))
+        return success(data=PatientDetailSerializer(patient).data, message="Atomwalk patient ready for booking.")
 
 
 class PatientSearchView(APIView):

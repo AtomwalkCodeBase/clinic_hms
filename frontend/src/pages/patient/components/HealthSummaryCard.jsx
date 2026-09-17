@@ -7,10 +7,11 @@
  */
 import { useState } from "react";
 import { X, Building2, CalendarDays, Plus } from "lucide-react";
+import { formatYearsMonths } from "../../../utils/age";
 
-function ageFromYears(ageYears) {
+function ageFromYears(ageYears, ageMonths) {
   if (ageYears == null) return null;
-  return `${ageYears} yr${ageYears === 1 ? "" : "s"}`;
+  return formatYearsMonths(ageYears, ageMonths ?? 0) || `${ageYears} yr${ageYears === 1 ? "" : "s"}`;
 }
 
 const GENDER_LABEL = { M: "Male", F: "Female", O: "Other" };
@@ -48,7 +49,7 @@ export default function HealthSummaryCard({
   }
 
   const name         = displayName || summary?.patient_name || null;
-  const ageLabel     = ageFromYears(growth?.age_years ?? null);
+  const ageLabel     = ageFromYears(growth?.age_years ?? null, growth?.age_months ?? null);
   const genderLabel  = gender ? GENDER_LABEL[gender] || null : null;
   const initial      = (name || "?")[0].toUpperCase();
   const hospitalName = summary?.last_hospital || null;

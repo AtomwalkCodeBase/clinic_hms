@@ -10,9 +10,10 @@ from core.utils.nntm import get_next_number
 from core.pagination import paginate_queryset
 from core.file_validation import validate_data_uri, FileValidationError
 from core import storage as blob_storage
+from apps.billing.models import OptionList
 from .serializers import (
     LabTestSerializer, LabRequestSerializer, LabReportSerializer,
-    LabRequestChoiceSerializer,
+    LabRequestChoiceSerializer, SampleTypeSerializer,
 )
 from .models import LabTest, LabRequest, LabReport, LabReportItem
 
@@ -35,11 +36,11 @@ class LabCatalogView(APIView):
         return success(data=LabTestSerializer(tests, many=True).data)
 
     def post(self, request):
-        s = LabTestSerializer(data=request.data)
+        db = request.tenant_db
+        s = LabTestSerializer(data=request.data, context={"tenant_db": db})
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
 
-        db = request.tenant_db
         validated = dict(s.validated_data)
         # Code is never typed by hand — NNTM assigns it, same as UHID/invoice/
         # lab report numbers, so codes stay unique and consistently formatted.
@@ -74,15 +75,81 @@ class LabTestDetailView(APIView):
     permission_classes = [IsAuthenticated, IsLabTech, RequireFeature("feat_lab")]
 
     def patch(self, request, pk):
+        db = request.tenant_db
         try:
-            test = LabTest.objects.using(request.tenant_db).get(pk=pk)
+            test = LabTest.objects.using(db).get(pk=pk)
         except LabTest.DoesNotExist:
             return not_found("Test not found.")
-        s = LabTestSerializer(test, data=request.data, partial=True)
+        s = LabTestSerializer(test, data=request.data, partial=True, context={"tenant_db": db})
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         s.save()
         return success(data=LabTestSerializer(test).data, message="Test updated.")
+
+
+# ── Sample Type catalog — "make it configurable" ────────────────────────────
+# Backed by apps.billing.OptionList(list_type="sample_type"), same table as
+# Drug Form / Payment Mode / Room Type / Admission Type&Source — but a
+# bespoke view here (not billing's generic _DropdownListCreateView/
+# _DropdownDetailView) because that base class hardcodes IsHospitalAdmin for
+# viewing inactive entries (?all=1), which would lock the lab tech — the
+# actual domain expert who manages this catalog, same role as pharmacist for
+# Drug Form (see apps.prescriptions.views.DrugFormTypeListCreateView, the
+# direct precedent this mirrors) — out of the Sample Type Setup screen.
+class SampleTypeListCreateView(APIView):
+    """
+    GET  /api/v1/lab/sample-types/  — active list, for the Lab Test
+                                       Catalog's "Sample Type" dropdown.
+                                       Pass ?include_inactive=1 (Sample Type
+                                       Setup screen) to also see deactivated
+                                       ones.
+    POST /api/v1/lab/sample-types/  — lab tech adds a new sample type
+                                       (e.g. "Tissue").
+    """
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAuthenticated(), IsLabTech(), RequireFeature("feat_lab")()]
+        return [IsAuthenticated(), IsHospitalStaff(), RequireFeature("feat_lab")()]
+
+    def get(self, request):
+        types = OptionList.objects.using(request.tenant_db).filter(list_type=OptionList.LIST_SAMPLE_TYPE)
+        if request.query_params.get("include_inactive") != "1":
+            types = types.filter(is_active=True)
+        return success(data=SampleTypeSerializer(types, many=True).data)
+
+    def post(self, request):
+        s = SampleTypeSerializer(data=request.data)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        data = dict(s.validated_data)
+        data["value"] = data.get("label", "")
+        obj = OptionList.objects.using(request.tenant_db).create(
+            list_type=OptionList.LIST_SAMPLE_TYPE, is_system=False, **data
+        )
+        return created(data=SampleTypeSerializer(obj).data, message="Sample type added.")
+
+
+class SampleTypeDetailView(APIView):
+    """PATCH /api/v1/lab/sample-types/{id}/ — edit or deactivate a sample type."""
+    permission_classes = [IsAuthenticated, IsLabTech, RequireFeature("feat_lab")]
+
+    def patch(self, request, pk):
+        db = request.tenant_db
+        try:
+            obj = OptionList.objects.using(db).get(pk=pk, list_type=OptionList.LIST_SAMPLE_TYPE)
+        except OptionList.DoesNotExist:
+            return not_found("Sample type not found.")
+        if obj.is_system and request.data.get("is_active") is False:
+            return error("This is one of the default sample types — it can't be deactivated.")
+        s = SampleTypeSerializer(obj, data=request.data, partial=True)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        for attr, val in s.validated_data.items():
+            setattr(obj, attr, val)
+        if "label" in s.validated_data:
+            obj.value = s.validated_data["label"]
+        obj.save(using=db)
+        return success(data=SampleTypeSerializer(obj).data, message="Sample type updated.")
 
 
 class LabRequestListCreateView(APIView):

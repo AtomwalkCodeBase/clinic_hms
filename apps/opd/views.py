@@ -39,16 +39,42 @@ from core.permissions import IsHospitalStaff as IsTenantStaff, IsDoctor, IsDocto
 from core.pagination import paginate_queryset
 from core.response import error as api_error, not_found as api_not_found, forbidden as api_forbidden, success
 
+from apps.billing.models import OptionList
+from apps.billing.views import _DropdownListCreateView, _DropdownDetailView
+
 from .models import Appointment, OPDEncounter, Prescription, PrescriptionItem, PrescriptionFavourite, Vitals
 from .serializers import (
     AppointmentSerializer, AppointmentCreateSerializer, AppointmentStatusUpdateSerializer,
     OPDEncounterSerializer, OPDEncounterCreateSerializer,
     PrescriptionSerializer, PrescriptionItemSerializer,
     PrescriptionFavouriteSerializer, VitalsSerializer,
-    FollowUpActionSerializer,
+    FollowUpActionSerializer, AppointmentTypeSerializer,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ── Appointment Type catalog — "make it configurable" ───────────────────────
+# Reuses billing's generic OptionList CRUD base classes untouched (see
+# apps/billing/views.py) — same pattern already backing Drug Form / Payment
+# Mode / Invoice Status / Admission Type&Source / Room Type / Sample Type.
+# opd/booking itself never surfaces a picker for this today (front desk
+# always books "opd"; "followup"/"emergency" are set programmatically, not
+# chosen from a dropdown) — this exists so a hospital can see/extend the
+# catalog (e.g. add "teleconsult") even though nothing forces them to.
+class AppointmentTypeListCreateView(_DropdownListCreateView):
+    list_type = OptionList.LIST_APPOINTMENT_TYPE
+    serializer_class = AppointmentTypeSerializer
+    identity_field = "name"
+    model_field = "label"
+
+
+class AppointmentTypeDetailView(_DropdownDetailView):
+    list_type = OptionList.LIST_APPOINTMENT_TYPE
+    serializer_class = AppointmentTypeSerializer
+    identity_field = "name"
+    model_field = "label"
+    system_can_deactivate = False  # opd/followup/emergency stay available — backend fee/labeling logic depends on them existing
 
 
 def _nurse_assigned_doctor_ids(request, db):
@@ -205,7 +231,7 @@ class AppointmentListCreateView(APIView):
 
     def post(self, request):
         db = request.tenant_db
-        serializer = AppointmentCreateSerializer(data=request.data)
+        serializer = AppointmentCreateSerializer(data=request.data, context={"tenant_db": db})
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 

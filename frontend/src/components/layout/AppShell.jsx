@@ -9,7 +9,7 @@
  *   { type: "section", label }                                  — non-clickable divider label
  */
 
-import { useState, useEffect, useContext } from "react";
+import { useState, useEffect, useContext, useRef } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
@@ -18,6 +18,16 @@ import { ROUTES }    from "../../config/routes.config";
 import APP_CONFIG    from "../../config/app.config";
 import { PatientContext } from "../../context/PatientContext";
 import { ThemeSwitcher } from "./ThemeSwitcher";
+// New Front Desk sidebar icon set (Lucide) — kept separate from the
+// hand-rolled path-based ICONS map below (used by every other role) rather
+// than redrawing these seven shapes as single-path SVGs. See LUCIDE_ICONS.
+import {
+  LayoutDashboard, UserRoundPlus, CalendarDays, ListChecks,
+  FileClock, Bed as BedIconLucide, ReceiptIndianRupee, UserRound,
+  Search as SearchIconLucide, Bell as BellIconLucide, ChevronDown as ChevronDownLucide,
+  LogOut as LogOutLucide, UserCircle2 as UserCircle2Lucide, LayoutGrid as LayoutGridLucide,
+  Siren as SirenLucide, ClipboardList as ClipboardListLucide, Users as UsersLucide,
+} from "lucide-react";
 
 // ── Icons (inline SVG so no extra dep needed) ────────────────────────────────
 const Icon = ({ d, size = 18, style = {}, className }) => (
@@ -65,8 +75,30 @@ const ICONS = {
   bell:       "M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0",
   compliance: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
   qrcode:     "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM19 14h2v2h-2zM14 19h2v2h-2zM19 19h2v2h-2z",
-  // apps.ipd (Phase 1) — a stylized bed, matching the 24x24 stroke=currentColor convention above.
+  // apps.ipd — a stylized bed, matching the 24x24 stroke=currentColor convention above.
   admission:  "M3 10V6a2 2 0 012-2h3a2 2 0 012 2v4M3 10h18v7M3 10v7M3 17h18M9 14h6",
+  // Front-desk triage (pulse/vitals line) and emergency registration (alert triangle).
+  triage:     "M22 12h-4l-3 9L9 3l-3 9H2",
+  emergency:  "M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01",
+};
+
+// Front Desk's 8-item sidebar (see NAV_BY_ROLE below) uses real Lucide
+// components instead of the single-path ICONS convention above — checked
+// first in SidebarLink/SidebarGroup, falling back to ICONS[iconKey] for
+// every other role's nav, which is untouched.
+const LUCIDE_ICONS = {
+  fd_dashboard:      LayoutDashboard,
+  fd_search:         SearchIconLucide,
+  fd_register:       UserRoundPlus,
+  fd_emergency:      SirenLucide,
+  fd_appointments:   CalendarDays,
+  fd_opd_queue:      ListChecks,
+  fd_admission_requests: ClipboardListLucide,
+  fd_ipd_patients:   UsersLucide,
+  fd_bed_board:      LayoutGridLucide,
+  fd_visit_history:  FileClock,
+  fd_billing:        ReceiptIndianRupee,
+  fd_my_profile:     UserRound,
 };
 
 // ── Hospital monogram (fallback logo) ────────────────────────────────────────
@@ -173,6 +205,14 @@ const NAV_BY_ROLE = {
     // schedule (today + upcoming, with filters), so removed rather than
     // pointed at a real page — there's nothing a doctor-facing Appointments
     // page would show that Queue doesn't already.
+    // Added directly in response to feedback that "Recommend Admission"
+    // (a button inside an active encounter — see EncounterPage.jsx) was
+    // hard to find and had no follow-up view: this is a persistent,
+    // findable place for a doctor's IPD work, distinct from the OPD
+    // section above.
+    { type: "section", label: "IPD" },
+    { type: "link",    label: "IPD Referrals", iconKey: "admission", to: ROUTES.DOCTOR.IPD_REFERRALS },
+    { type: "link",    label: "My Inpatients", iconKey: "vitals",    to: ROUTES.DOCTOR.IPD_PATIENTS },
     { type: "section", label: "Account" },
     { type: "link",    label: "My Profile",    iconKey: "settings",     to: ROUTES.DOCTOR.MY_PROFILE },
   ],
@@ -185,20 +225,43 @@ const NAV_BY_ROLE = {
     { type: "link",  label: "My Profile", iconKey: "settings",  to: ROUTES.NURSE.MY_PROFILE },
   ],
 
+  // Redesigned per direct feedback: the old "Patient Intake" nested dropdown
+  // (Register/Triage/Emergency/OPD Booking/Referral Queue all buried one
+  // click deep, several of them duplicating a top-level link that already
+  // existed — e.g. "OPD Booking" and "Appointments" were literally the same
+  // page) made the module hard to scan and easy to get lost in. Flat
+  // sections (visible at all times, no expand/collapse) instead of a
+  // dropdown, split cleanly along OPD vs IPD — the same split used
+  // throughout the rest of this app's architecture docs — plus a dedicated
+  // "Current Patients" entry so a front-desk user can always find someone
+  // who was just admitted without hunting through tabs. "Triage" is gone
+  // entirely: it was never clinical triage, just a doctor-availability
+  // check before booking — TriagePage.jsx/its route still exist for any
+  // old bookmark/deep link, they're just not surfaced as their own concept
+  // here anymore (Appointments already shows real per-doctor slot
+  // availability, which is the same information).
   [ROLES.FRONT_DESK]: [
-    { type: "link",    label: "Dashboard",       iconKey: "dashboard",    to: ROUTES.FRONT_DESK.DASHBOARD },
+    { type: "link",    label: "Dashboard",             iconKey: "fd_dashboard",         to: ROUTES.FRONT_DESK.DASHBOARD },
+
     { type: "section", label: "Patients" },
-    { type: "link",    label: "Register Patient", iconKey: "patient",      to: ROUTES.FRONT_DESK.REGISTER_PATIENT },
-    { type: "link",    label: "All Patients",     iconKey: "users",        to: ROUTES.FRONT_DESK.PATIENTS },
-    { type: "link",    label: "Appointments",     iconKey: "appointments", to: ROUTES.FRONT_DESK.APPOINTMENTS },
-    { type: "link",    label: "OPD Queue",        iconKey: "queue",        to: ROUTES.FRONT_DESK.QUEUE },
-    { type: "link",    label: "History",          iconKey: "history",      to: ROUTES.FRONT_DESK.HISTORY },
-    { type: "section", label: "Inpatient (IPD)" },
-    { type: "link",    label: "Admissions",       iconKey: "admission",    to: ROUTES.FRONT_DESK.ADMISSIONS },
-    { type: "section", label: "Finance" },
-    { type: "link",    label: "Billing",          iconKey: "billing",      to: ROUTES.FRONT_DESK.BILLING },
-    { type: "section", label: "Account" },
-    { type: "link",    label: "My Profile",       iconKey: "settings",     to: ROUTES.FRONT_DESK.MY_PROFILE },
+    { type: "link",    label: "Search Patients",       iconKey: "fd_search",            to: ROUTES.FRONT_DESK.PATIENTS },
+    { type: "link",    label: "Register Patient",      iconKey: "fd_register",          to: ROUTES.FRONT_DESK.REGISTER_PATIENT },
+    { type: "link",    label: "Emergency Registration",iconKey: "fd_emergency",         to: ROUTES.FRONT_DESK.REGISTER_EMERGENCY },
+
+    { type: "section", label: "OPD" },
+    { type: "link",    label: "Appointments & Booking",iconKey: "fd_appointments",      to: ROUTES.FRONT_DESK.APPOINTMENTS },
+    { type: "link",    label: "OPD Queue",             iconKey: "fd_opd_queue",         to: ROUTES.FRONT_DESK.QUEUE },
+
+    { type: "section", label: "IPD" },
+    { type: "link",    label: "Admission Requests",    iconKey: "fd_admission_requests",to: ROUTES.FRONT_DESK.ADMISSIONS },
+    { type: "link",    label: "Current Patients",      iconKey: "fd_ipd_patients",      to: ROUTES.FRONT_DESK.IPD_PATIENTS },
+    { type: "link",    label: "Bed Board",             iconKey: "fd_bed_board",         to: ROUTES.FRONT_DESK.BED_BOARD },
+
+    { type: "section", label: "Records & Finance" },
+    { type: "link",    label: "Visit History",         iconKey: "fd_visit_history",     to: ROUTES.FRONT_DESK.HISTORY },
+    { type: "link",    label: "Billing",                iconKey: "fd_billing",          to: ROUTES.FRONT_DESK.BILLING },
+
+    { type: "link",    label: "My Profile",            iconKey: "fd_my_profile",        to: ROUTES.FRONT_DESK.MY_PROFILE },
   ],
 
   [ROLES.LAB_TECH]: [
@@ -208,6 +271,7 @@ const NAV_BY_ROLE = {
     { type: "link",    label: "Reports",    iconKey: "reports",   to: ROUTES.LAB.REPORTS },
     { type: "section", label: "Catalogue" },
     { type: "link",    label: "Test Catalog", iconKey: "tasks",   to: ROUTES.LAB.CATALOG },
+    { type: "link",    label: "Sample Type Setup", iconKey: "settings", to: ROUTES.LAB.SAMPLE_TYPE_SETUP },
     { type: "section", label: "Account" },
     { type: "link",    label: "My Profile",   iconKey: "settings", to: ROUTES.LAB.MY_PROFILE },
   ],
@@ -317,7 +381,14 @@ function SidebarLink({ label, iconKey, to, collapsed, indent = false }) {
       }
       title={collapsed ? label : undefined}>
       {iconKey && !indent && (
-        <Icon d={ICONS[iconKey]} size={17} className="sb-icon" style={{ minWidth: 17, opacity: 0.75 }} />
+        LUCIDE_ICONS[iconKey] ? (
+          (() => {
+            const LucideIcon = LUCIDE_ICONS[iconKey];
+            return <LucideIcon size={17} className="sb-icon" style={{ minWidth: 17, opacity: 0.75 }} />;
+          })()
+        ) : (
+          <Icon d={ICONS[iconKey]} size={17} className="sb-icon" style={{ minWidth: 17, opacity: 0.75 }} />
+        )
       )}
       {indent && (
         <span style={{
@@ -347,7 +418,14 @@ function SidebarGroup({ label, iconKey, children, collapsed, pathname }) {
         title={collapsed ? label : undefined}
         className={`sb-link${active ? " sb-link--active" : ""}`}
       >
-        <Icon d={ICONS[iconKey]} size={17} className="sb-icon" style={{ minWidth: 17, opacity: 0.75 }} />
+        {LUCIDE_ICONS[iconKey] ? (
+          (() => {
+            const LucideIcon = LUCIDE_ICONS[iconKey];
+            return <LucideIcon size={17} className="sb-icon" style={{ minWidth: 17, opacity: 0.75 }} />;
+          })()
+        ) : (
+          <Icon d={ICONS[iconKey]} size={17} className="sb-icon" style={{ minWidth: 17, opacity: 0.75 }} />
+        )}
         {!collapsed && (
           <>
             <span style={{ flex: 1, whiteSpace: "nowrap" }}>{label}</span>
@@ -476,6 +554,9 @@ export function AppShell({ children }) {
   const location = useLocation();
   const { toastSuccess } = useToast();
   const [collapsed, setCollapsed] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [topSearch, setTopSearch] = useState("");
+  const topSearchRef = useRef(null);
 
   // role="custom" staff (a hospital-defined Role — see apps/org/rbac.py)
   // get the union of every role their acts_as claim includes, e.g. a
@@ -500,6 +581,32 @@ export function AppShell({ children }) {
   const roleLabel = user?.role === "custom"
     ? (user?.custom_role_name || "Custom Role")
     : (ROLE_LABELS[user?.role] || "Staff");
+  // Front Desk gets a light, search-forward topbar (see the reference
+  // design it was built to match) — every other role keeps the existing
+  // dark hero-gradient topbar untouched below.
+  const isFrontDesk = user?.role === ROLES.FRONT_DESK;
+
+  // Ctrl/Cmd+K focuses the topbar search, matching the visible "Ctrl K"
+  // hint next to it (front desk only — a no-op keybinding with a visible
+  // hint would be worse than no hint at all).
+  useEffect(() => {
+    if (!isFrontDesk) return;
+    function onKeyDown(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        topSearchRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isFrontDesk]);
+
+  function submitTopSearch(e) {
+    e.preventDefault();
+    const q = topSearch.trim();
+    if (!q) return;
+    navigate(ROUTES.FRONT_DESK.PATIENTS, { state: { prefillQuery: q } });
+  }
 
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "var(--color-bg)" }}>
@@ -628,7 +735,74 @@ export function AppShell({ children }) {
 
         {/* Topbar — same height as the sidebar's brand row above, so the
             two sit flush as one continuous band instead of a jagged
-            skyline where the sidebar logo block used to be taller. */}
+            skyline where the sidebar logo block used to be taller.
+            Front Desk gets a distinct light, search-forward topbar (see
+            isFrontDesk above); every other role keeps the original dark
+            hero-gradient bar in the else branch below, byte-for-byte. */}
+        {isFrontDesk ? (
+          <header className="fdc-topbar" style={{
+            height: 76, flexShrink: 0,
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "0 24px", gap: 20, position: "relative", zIndex: 2,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+              <HospitalBadge logo={user?.logo} name={user?.hospital_name} tenantId={user?.tenant_id} />
+              <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.25 }}>
+                <span className="fdc-hospital-name">{user?.hospital_name || "Hospital"}</span>
+                <span className="fdc-hospital-sub">{roleLabel}</span>
+              </div>
+            </div>
+
+            <form className="fdc-search" style={{ flex: 1 }} onSubmit={submitTopSearch}>
+              <SearchIconLucide size={16} style={{ flexShrink: 0 }} />
+              <input
+                ref={topSearchRef}
+                value={topSearch}
+                onChange={(e) => setTopSearch(e.target.value)}
+                placeholder="Search patient by name, UHID, phone, or MRN…"
+              />
+              <kbd>Ctrl K</kbd>
+            </form>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+              {/* Static bell — no notifications backend exists for staff yet
+                  (only the patient portal has one), so this deliberately
+                  carries no invented unread count. */}
+              <button type="button" className="fdc-icon-btn" title="Notifications">
+                <BellIconLucide size={17} />
+              </button>
+
+              <div
+                tabIndex={0}
+                onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setProfileMenuOpen(false); }}
+                style={{ position: "relative" }}
+              >
+                <button type="button" className="fdc-profile-chip" onClick={() => setProfileMenuOpen(o => !o)}>
+                  <div className="fdc-profile-avatar">
+                    {user?.photo
+                      ? <img src={user.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      : initials}
+                  </div>
+                  <div style={{ textAlign: "left" }}>
+                    <div className="fdc-profile-name">{displayName}</div>
+                    <div className="fdc-profile-role">{roleLabel}</div>
+                  </div>
+                  <ChevronDownLucide size={15} style={{ color: "var(--color-text-muted)" }} />
+                </button>
+                {profileMenuOpen && (
+                  <div className="fdc-profile-menu">
+                    <button onClick={() => { setProfileMenuOpen(false); navigate(ROUTES.FRONT_DESK.MY_PROFILE); }}>
+                      <UserCircle2Lucide size={15} /> My Profile
+                    </button>
+                    <button className="danger" onClick={() => { setProfileMenuOpen(false); handleLogout(); }}>
+                      <LogOutLucide size={15} /> Sign Out
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </header>
+        ) : (
         <header style={{
           height: 76, flexShrink: 0,
           background: "linear-gradient(90deg, var(--color-hero) 0%, var(--color-hero-2) 100%)",
@@ -691,6 +865,7 @@ export function AppShell({ children }) {
             <ThemeSwitcher />
           </div>
         </header>
+        )}
 
         {/* Page content */}
         <main style={{ flex: 1, overflowY: "auto", background: "var(--color-bg)" }}>

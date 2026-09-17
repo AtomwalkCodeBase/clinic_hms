@@ -8,7 +8,7 @@
  * see everyone, page through them, and jump straight into booking.
  */
 import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import DependentBadge from "../../components/common/DependentBadge";
@@ -20,9 +20,13 @@ import { ROUTES }    from "../../config/routes.config";
 
 export default function FrontDeskPatientsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [query, setQuery] = useState("");
+  // Prefilled when arriving from the topbar's global search (AppShell.jsx)
+  // or a "found in network" prompt elsewhere — lands here with the same
+  // query already typed instead of making front desk retype it.
+  const [query, setQuery] = useState(location.state?.prefillQuery || "");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const debounceRef = useRef(null);
 
@@ -74,7 +78,7 @@ export default function FrontDeskPatientsPage() {
                 <button
                   className="btn-primary"
                   style={{ fontSize: 12, padding: "8px 18px" }}
-                  onClick={() => navigate(ROUTES.FRONT_DESK.REGISTER_PATIENT, { state: { mobile: debouncedQuery } })}
+                  onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_REGISTER, { state: { mobile: debouncedQuery } })}
                 >
                   Register them at this hospital
                 </button>

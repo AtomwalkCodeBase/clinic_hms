@@ -20,6 +20,7 @@ import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { publicClient } from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import { formatYearsMonths } from "../../utils/age";
 import {
   ShieldAlert, AlertTriangle, Pill, Stethoscope, Phone, User,
   Activity, Syringe, FileText, FlaskConical, ExternalLink,
@@ -105,7 +106,7 @@ export default function EmergencyViewPage() {
             <div style={{ borderBottom: "1px solid #eee", paddingBottom: 14, marginBottom: 16 }}>
               <div style={{ fontSize: 19, fontWeight: 800 }}>{data.full_name}</div>
               <div style={{ fontSize: 13, color: "#666", marginTop: 2 }}>
-                {data.age_years != null ? `${data.age_years} yrs` : "Age unknown"}
+                {data.age_years != null ? (formatYearsMonths(data.age_years, data.age_months) || `${data.age_years} yrs`) : "Age unknown"}
                 {data.gender ? ` · ${data.gender}` : ""}
                 {data.blood_group ? ` · Blood group ${data.blood_group}` : ""}
               </div>
