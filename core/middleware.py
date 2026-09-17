@@ -44,6 +44,10 @@ EXEMPT_PREFIXES = (
     "/api/v1/consult-pad/",          # Consultation-scratchpad pad (apps/patients/consult_pad_views.py) —
                                       # same story as /emergency/ above: scanned on a phone with no session;
                                       # the 43-char random token in the URL is the credential.
+    "/api/v1/records-share/",        # "Records Access" break-glass — the doctor's laptop half. Public
+                                      # create/status/records/download endpoints gated by the 32-char
+                                      # token in the URL. The patient half is at /api/v1/portal/records-share/
+                                      # and is NOT exempt (normal patient-JWT).
     "/health/",
     "/admin/",
 )

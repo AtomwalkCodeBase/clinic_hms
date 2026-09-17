@@ -30,6 +30,7 @@ const StaffForgotPasswordPage   = lazy(() => import("./pages/auth/StaffForgotPas
 const PatientForgotPasswordPage = lazy(() => import("./pages/auth/PatientForgotPasswordPage"));
 const EmergencyViewPage         = lazy(() => import("./pages/public/EmergencyViewPage"));
 const ConsultPadPage            = lazy(() => import("./pages/public/ConsultPadPage"));
+const ShareRecordsPage          = lazy(() => import("./pages/public/ShareRecordsPage"));
 
 // Platform Admin
 const PlatformDashboard  = lazy(() => import("./pages/platform-admin/DashboardPage"));
@@ -112,6 +113,7 @@ const PatientRecords       = lazy(() => import("./pages/patient/RecordsPage"));
 const PatientPrescriptions = lazy(() => import("./pages/patient/PrescriptionsPage"));
 const PatientLabReports    = lazy(() => import("./pages/patient/LabReportsPage"));
 const PatientMyReports     = lazy(() => import("./pages/patient/MyReportsPage"));
+const PatientSharedRecordsPrivacy = lazy(() => import("./pages/patient/SharedRecordsPrivacyPage"));
 const PatientNotifications = lazy(() => import("./pages/patient/NotificationsPage"));
 const PatientMyProfile     = lazy(() => import("./pages/patient/MyProfilePage"));
 const PatientCorrectionRequests = lazy(() => import("./pages/patient/CorrectionRequestsPage"));
@@ -215,6 +217,10 @@ export default function App() {
           <Route path={ROUTES.FORGOT_PASSWORD_PATIENT} element={<PatientForgotPasswordPage />} />
           <Route path={ROUTES.EMERGENCY_VIEW(":token")} element={<EmergencyViewPage />} />
           <Route path={ROUTES.CONSULT_PAD(":token")} element={<ConsultPadPage />} />
+          <Route path={ROUTES.SHARE_RECORDS_ENTRY} element={<ShareRecordsPage />} />
+          <Route path={ROUTES.SHARE_RECORDS_ENTRY_ALT} element={<ShareRecordsPage />} />
+          <Route path={ROUTES.SHARE_RECORDS} element={<ShareRecordsPage />} />
+          <Route path={ROUTES.SHARE_RECORDS_TOKEN(":token")} element={<ShareRecordsPage />} />
           <Route path="/change-password"      element={<ProtectedRoute><ChangePasswordPage /></ProtectedRoute>} />
 
           {/* Platform Admin */}
@@ -384,6 +390,8 @@ export default function App() {
             element={<PatientRoute><PatientLabReports /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.MY_REPORTS}
             element={<PatientRoute><PatientMyReports /></PatientRoute>} />
+          <Route path={ROUTES.PATIENT.SHARED_RECORDS_PRIVACY}
+            element={<PatientRoute><PatientSharedRecordsPrivacy /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.NOTIFICATIONS}
             element={<PatientRoute><PatientNotifications /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.MY_PROFILE}

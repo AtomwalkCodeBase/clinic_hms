@@ -13,9 +13,15 @@ from .portal_views import (
     PortalMobileChangeRequestOTPView,
     PortalInvoiceListView, PortalInvoiceReceiptPDFView,
     PortalFamilyListCreateView, PortalFamilyDetailView, PortalHealthSummaryView,
+    PortalHealthInsightsView, PortalLabTrendsView, PortalDocumentLabValuesView, PortalHealthInsightNarrativeView,
     PortalVaccinationListView, PortalVaccinationUploadView, PortalVaccinationFileView, PortalGrowthView,
     PortalHealthTimelineView, PortalNotificationsView, PortalNotificationMarkReadView,
     PortalEmergencyTokenView,
+)
+from .records_share_views import (
+    RecordsShareCreateView, RecordsShareDecisionView, RecordsShareEndView,
+    RecordsShareDownloadDecisionView, RecordsShareMineView,
+    RecordsPrivacyView, RecordsPrivacyToggleView, RecordsShareRevealView,
 )
 
 urlpatterns = [
@@ -40,6 +46,7 @@ urlpatterns = [
     path("documents/batch/<uuid:batch_id>/process/", PortalDocumentBatchProcessView.as_view(), name="portal-documents-batch-process"),
     path("documents/zip/",                  PortalDocumentZipView.as_view(), name="portal-documents-zip"),
     path("documents/<int:doc_id>/",         PortalDocumentDetailView.as_view(), name="portal-document-detail"),
+    path("documents/<int:doc_id>/lab-values/", PortalDocumentLabValuesView.as_view(), name="portal-document-lab-values"),
     path("lab-orders/",                     PortalLabOrderListView.as_view(), name="portal-lab-orders"),
     path("lab-orders/choice/",              PortalLabOrderChoiceView.as_view(), name="portal-lab-order-choice"),
     path("lab-orders/<str:tenant_db>/<int:request_id>/report/", PortalLabReportFileView.as_view(), name="portal-lab-report-file"),
@@ -52,6 +59,9 @@ urlpatterns = [
     path("family/",                         PortalFamilyListCreateView.as_view(), name="portal-family"),
     path("family/<str:awpid>/",             PortalFamilyDetailView.as_view(), name="portal-family-detail"),
     path("health-summary/",                 PortalHealthSummaryView.as_view(), name="portal-health-summary"),
+    path("health-insights/",                PortalHealthInsightsView.as_view(), name="portal-health-insights"),
+    path("health-insights/trends/",         PortalLabTrendsView.as_view(), name="portal-health-insights-trends"),
+    path("health-insights/narrate/",        PortalHealthInsightNarrativeView.as_view(), name="portal-health-insights-narrate"),
     path("vaccinations/",                   PortalVaccinationListView.as_view(), name="portal-vaccinations"),
     path("vaccinations/upload/",            PortalVaccinationUploadView.as_view(), name="portal-vaccinations-upload"),
     path("vaccinations/<int:record_id>/file/", PortalVaccinationFileView.as_view(), name="portal-vaccinations-file"),
@@ -60,4 +70,20 @@ urlpatterns = [
     path("notifications/",                  PortalNotificationsView.as_view(), name="portal-notifications"),
     path("notifications/<str:tenant_db>/<int:pk>/read/", PortalNotificationMarkReadView.as_view(), name="portal-notifications-read"),
     path("emergency/token/",                PortalEmergencyTokenView.as_view(), name="portal-emergency-token"),
+
+    # "Share Records" — patient-authenticated half: create the session, then
+    # approve / deny / end / release a download / list who currently has
+    # access. The public, token-gated half the doctor's laptop reads is at
+    # /api/v1/records-share/ (records_share_urls.py).
+    path("records-share/",                            RecordsShareCreateView.as_view(),           name="portal-records-share-create"),
+    path("records-share/mine/",                       RecordsShareMineView.as_view(),             name="portal-records-share-mine"),
+    # Shared-records privacy — the standing "what a doctor sees" config, the
+    # single-record lock used from My Reports, and the per-visit reveal on a
+    # live grant.
+    path("records-privacy/",                          RecordsPrivacyView.as_view(),               name="portal-records-privacy"),
+    path("records-privacy/toggle/",                   RecordsPrivacyToggleView.as_view(),         name="portal-records-privacy-toggle"),
+    path("records-share/<str:token>/reveal/",         RecordsShareRevealView.as_view(),           name="portal-records-share-reveal"),
+    path("records-share/<str:token>/decision/",       RecordsShareDecisionView.as_view(),         name="portal-records-share-decision"),
+    path("records-share/<str:token>/end/",            RecordsShareEndView.as_view(),              name="portal-records-share-end"),
+    path("records-share/<str:token>/downloads/decision/", RecordsShareDownloadDecisionView.as_view(), name="portal-records-share-download-decision"),
 ]

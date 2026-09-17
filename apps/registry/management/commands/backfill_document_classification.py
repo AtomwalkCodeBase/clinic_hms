@@ -139,7 +139,12 @@ class Command(BaseCommand):
                 doc.document_date = cr.doc_date
                 fields.append("document_date")
 
-            if cr.confident:
+            if cr.collection_date and not doc.collection_date:
+                doc.collection_date = cr.collection_date
+                doc.date_source = cr.date_source
+                fields += ["collection_date", "date_source"]
+
+            if cr.confident and not cr.unreadable:
                 n_typed += 1
                 if doc.doc_type != cr.doc_type:
                     doc.doc_type = cr.doc_type
@@ -147,7 +152,13 @@ class Command(BaseCommand):
                 if doc.review_state != "filed":
                     doc.review_state = "filed"
                     fields.append("review_state")
-                self.stdout.write(f"  {doc.id}: {doc.awpid}  ->  {cr.doc_type}  ({cr.confidence})")
+                if cr.doc_type == "lab_report" and cr.categories and not doc.report_categories:
+                    doc.report_categories = list(cr.categories)
+                    doc.category_method = "keyword"
+                    doc.category_confidence = cr.category_confidence
+                    fields += ["report_categories", "category_method", "category_confidence"]
+                cats = f"  [{', '.join(cr.categories)}]" if cr.categories else ""
+                self.stdout.write(f"  {doc.id}: {doc.awpid}  ->  {cr.doc_type}{cats}  ({cr.confidence})")
             else:
                 n_low += 1
                 if park:

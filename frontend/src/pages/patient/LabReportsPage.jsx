@@ -32,7 +32,7 @@ const DOC_TYPES = [
 // appear here — see MyReportsPage for the full vault.
 const LAB_PAGE_DOC_TYPES = new Set(["lab_report", "scan", "discharge_summary", "other"]);
 
-const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5MB — matches the backend's base64 guard
+const MAX_FILE_BYTES = 11 * 1024 * 1024; // 11MB — matches the backend's base64 guard
 
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -212,7 +212,7 @@ function LabOrderCard({ order, onChanged }) {
 
   async function uploadOutsideReport() {
     if (!file) { toastError("Choose a file first."); return; }
-    if (file.size > MAX_FILE_BYTES) { toastError("File is too large — please attach something under 5MB."); return; }
+    if (file.size > MAX_FILE_BYTES) { toastError("File is too large — please attach something under 11MB."); return; }
     setUploading(true);
     try {
       const dataUrl = await fileToDataUrl(file);
@@ -344,7 +344,7 @@ function UploadReportCard({ onUploaded }) {
     e.preventDefault();
     if (!title.trim()) { toastError("Give the report a title."); return; }
     if (!file) { toastError("Choose a file to attach."); return; }
-    if (file.size > MAX_FILE_BYTES) { toastError("File is too large — please attach something under 5MB."); return; }
+    if (file.size > MAX_FILE_BYTES) { toastError("File is too large — please attach something under 11MB."); return; }
 
     setUploading(true);
     try {
