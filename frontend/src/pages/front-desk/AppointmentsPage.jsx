@@ -15,6 +15,7 @@ import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import DependentBadge from "../../components/common/DependentBadge";
 import QuickRegisterModal from "../../components/front-desk/QuickRegisterModal";
+import { ROUTES } from "../../config/routes.config";
 import { useApi }    from "../../hooks/useApi";
 import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
@@ -83,7 +84,7 @@ function FamilyStrip({ members, selfAwpid, onSelectExisting, onRegisterNew, load
   );
 }
 
-export default function AppointmentsPage() {
+export function AppointmentsPageContent({ embedded = false }) {
   const { toastSuccess, toastApiError } = useToast();
   const { user } = useAuth();
   const location = useLocation();
@@ -95,6 +96,13 @@ export default function AppointmentsPage() {
   // should already have them selected instead of front desk having to
   // search for the person they just came from.
   const [justRegistered] = useState(() => !!location.state?.justRegistered);
+  // Arrives from EmergencyRegisterPage's "Close as Emergency OPD Encounter"
+  // with appointmentType: "emergency" (default "opd" otherwise — see
+  // apps/opd/models.py Appointment.TYPE_CHOICES); TriagePage passes a
+  // departmentHint so the doctor search below starts pre-filtered.
+  const [appointmentType] = useState(() => location.state?.appointmentType || "opd");
+  const [departmentHintApplied, setDepartmentHintApplied] = useState(false);
+  const departmentHint = location.state?.departmentHint || "";
 
   // ── Patient / booking form state ────────────────────────────────────
   const [patientQuery,  setPatientQuery]  = useState(() => location.state?.prefillQuery || "");
@@ -186,20 +194,46 @@ export default function AppointmentsPage() {
   // dependent's guardian/parent name (backend now matches guardian_name
   // too — see PatientService.search) ───────────────────────────────────
   const [isBrowseMode, setIsBrowseMode] = useState(true);
+  // Search intentionally remains hospital-scoped. When the registry knows a
+  // mobile number but this hospital has no local Patient row, surface that
+  // distinction instead of telling reception the person does not exist.
+  const [networkMatch, setNetworkMatch] = useState(null);
+  const [attachingNetworkPatient, setAttachingNetworkPatient] = useState(false);
   useEffect(() => {
     if (!searchOpen) return;
-    if (patientQuery.length === 1) { setPatientOpts([]); return; }
+    if (patientQuery.length === 1) { setPatientOpts([]); setNetworkMatch(null); return; }
     const t = setTimeout(async () => {
       try {
         const { data } = await apiClient.get(API_ENDPOINTS.PATIENTS.SEARCH, {
           params: patientQuery.length >= 2 ? { q: patientQuery } : {},
         });
-        setPatientOpts(data?.data?.results || data?.results || []);
-        setIsBrowseMode(!!(data?.data?.is_browse ?? data?.is_browse ?? patientQuery.length < 2));
-      } catch { setPatientOpts([]); }
+        const payload = data?.data || data || {};
+        setPatientOpts(payload.results || []);
+        setNetworkMatch(payload.network_match || null);
+        setIsBrowseMode(!!(payload.is_browse ?? patientQuery.length < 2));
+      } catch { setPatientOpts([]); setNetworkMatch(null); }
     }, patientQuery.length >= 2 ? 300 : 0);
     return () => clearTimeout(t);
   }, [patientQuery, searchOpen]);
+
+  async function useNetworkPatient() {
+    if (!patientQuery || !defaultBranchId) return;
+    setAttachingNetworkPatient(true);
+    try {
+      const { data } = await apiClient.post(API_ENDPOINTS.PATIENTS.ATTACH_NETWORK, {
+        mobile: patientQuery, branch_id: defaultBranchId,
+      });
+      setPatient(data?.data || data);
+      setPatientQuery("");
+      setNetworkMatch(null);
+      setSearchOpen(false);
+      toastSuccess("Patient found and ready to book.");
+    } catch (err) {
+      toastApiError(err, "Could not open this Atomwalk patient at this hospital.");
+    } finally {
+      setAttachingNetworkPatient(false);
+    }
+  }
 
   // True when the query itself is a precise identifier (UHID/AWPID/mobile)
   // that resolved to exactly one record — there's no real ambiguity to
@@ -237,7 +271,13 @@ export default function AppointmentsPage() {
   const [specFilter,    setSpecFilter]    = useState("");
   const [doctorList,    setDoctorList]    = useState([]);
   const { data: specData } = useApi(API_ENDPOINTS.ORG.DOCTOR_SPECIALISATIONS);
-  const specialisations = specData?.data || specData || [];
+  const specialisations = useMemo(() => specData?.data || specData || [], [specData]);
+
+  useEffect(() => {
+    if (!departmentHint || departmentHintApplied || specialisations.length === 0) return;
+    if (specialisations.includes(departmentHint)) setSpecFilter(departmentHint);
+    setDepartmentHintApplied(true);
+  }, [departmentHint, departmentHintApplied, specialisations]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -300,7 +340,7 @@ export default function AppointmentsPage() {
         patient_awpid:   patient.awpid,
         doctor_user_id:  doctorId,
         doctor_name:     doc ? `${doc.first_name || ""} ${doc.last_name || ""}`.trim() || doc.full_name || doc.email : "",
-        appointment_type: "opd",
+        appointment_type: appointmentType,
         scheduled_date:  date,
         ...(slot ? { scheduled_time: slot } : {}),
         chief_complaint: complaint,
@@ -324,11 +364,41 @@ export default function AppointmentsPage() {
     } finally {
       setBooking(false);
     }
-  }, [patient, doctorId, date, slot, complaint, doctorList, refetch, fetchTodayPatients, toastSuccess, toastApiError]);
+  }, [patient, doctorId, date, slot, complaint, doctorList, appointmentType, refetch, fetchTodayPatients, toastSuccess, toastApiError]);
 
-  return (
-    <AppShell>
-      <PageShell title="Appointments">
+  const frame = (content) => embedded ? content : <AppShell><PageShell title="">{content}</PageShell></AppShell>;
+
+  function startNewAppointment() {
+    setPatient(null); setPatientQuery(""); setSearchOpen(false);
+    setDoctorId(""); setSlot(""); setComplaint("");
+  }
+
+  return frame(
+    <>
+      {!embedded && (
+        <div className="fdc-header-row">
+          <div>
+            <div className="fdc-eyebrow">Front Desk</div>
+            <div className="fdc-title">Appointments</div>
+            <div className="fdc-subtitle">Book, manage and view appointments for new and existing patients.</div>
+          </div>
+          <button className="btn-primary" style={{ fontSize: 12 }} onClick={startNewAppointment}>
+            + New Appointment
+          </button>
+        </div>
+      )}
+
+        {appointmentType === "emergency" && (
+          <div className="callout" style={{ background: "var(--color-error-light)", borderColor: "color-mix(in srgb, var(--color-error) 30%, transparent)" }}>
+            <div>
+              <div className="callout-title" style={{ color: "var(--color-error)" }}>Booking an emergency OPD encounter</div>
+              <div className="callout-body">
+                Closing out this visit as an OPD encounter rather than an inpatient admission —
+                pick any doctor with availability below; a fixed time slot isn't required.
+              </div>
+            </div>
+          </div>
+        )}
 
         <QuickRegisterModal
           // Forces a fresh mount per target — the modal stays in the tree
@@ -367,7 +437,7 @@ export default function AppointmentsPage() {
         />
 
         {justRegistered && patient && (
-          <div className="card" style={{
+          <div className="fdc-panel" style={{
             marginBottom: 16, padding: "12px 18px", display: "flex", alignItems: "center", gap: 10,
             border: "1px solid var(--color-primary)", background: "var(--color-primary-light)",
           }}>
@@ -378,7 +448,7 @@ export default function AppointmentsPage() {
         )}
 
         {todayPatients.length > 0 && (
-          <div className="card" style={{ marginBottom: 22, padding: 0, overflow: "hidden" }}>
+          <div className="fdc-panel" style={{ marginBottom: 22, padding: 0, overflow: "hidden" }}>
             <div style={{
               display: "flex", alignItems: "center", gap: 8,
               padding: "12px 20px", borderBottom: "1px solid var(--color-border)",
@@ -421,7 +491,7 @@ export default function AppointmentsPage() {
         )}
 
         {/* ── Booking card ──────────────────────────────────────────── */}
-        <div className="card" style={{ marginBottom: 22, padding: 24 }}>
+        <div className="fdc-panel" style={{ marginBottom: 22, padding: 24 }}>
           <div className="dot-label dot-label--green" style={{ marginBottom: 16 }}>Book an appointment</div>
           <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 1.4fr auto", gap: 12, alignItems: "end" }}>
 
@@ -480,13 +550,21 @@ export default function AppointmentsPage() {
                   )}
                   {patientOpts.length === 0 ? (
                     <div style={{ padding: "14px", fontSize: 12.5, color: "var(--color-text-muted)" }}>
-                      {patientQuery.length >= 2 ? `No patients matched "${patientQuery}".` : "No patients registered here yet."}
+                      {networkMatch ? (
+                        <>
+                          <div style={{ color: "var(--color-text-secondary)", marginBottom: 4 }}>
+                            <strong>{networkMatch.full_name || "This patient"}</strong> is an Atomwalk patient. Their identity is available across hospitals.
+                          </div>
+                          <div style={{ fontSize: 11.5 }}>Use this patient to open their local visit record and book—no registration form or duplicate identity.</div>
+                        </>
+                      ) : patientQuery.length >= 2 ? `No patients registered at this hospital matched "${patientQuery}".` : "No patients registered here yet."}
                       {patientQuery.length >= 2 && (
                         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
                           <button type="button" className="btn-outline" style={{ fontSize: 11.5, padding: "5px 10px" }}
-                            onClick={() => { setSearchOpen(false); navigate("/front-desk/register-patient", { state: { prefillQuery: patientQuery } }); }}>
+                            disabled={attachingNetworkPatient}
+                            onClick={networkMatch ? useNetworkPatient : () => { setSearchOpen(false); navigate(ROUTES.FRONT_DESK.INTAKE_REGISTER, { state: { mobile: patientQuery } }); }}>
                             <UserPlus size={12} style={{ marginRight: 4, verticalAlign: -2 }} />
-                            Full registration
+                            {networkMatch ? (attachingNetworkPatient ? "Opening patient…" : "Use this patient") : "Full registration"}
                           </button>
                           <button type="button" className="btn-primary" style={{ fontSize: 11.5, padding: "5px 10px" }}
                             onClick={() => { setSearchOpen(false); setQuickRegisterFor("emergency"); }}>
@@ -702,7 +780,7 @@ export default function AppointmentsPage() {
         </div>
 
         {/* ── Today's list ──────────────────────────────────────────── */}
-        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <div className="fdc-panel" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{
             display: "flex", alignItems: "center", justifyContent: "space-between",
             padding: "14px 20px", borderBottom: "1px solid var(--color-border)",
@@ -717,7 +795,7 @@ export default function AppointmentsPage() {
               Nothing booked for today yet.
             </div>
           ) : (
-            <table className="data-table">
+            <table className="fdc-table">
               <thead>
                 <tr>
                   <th style={{ width: 60 }}>#</th>
@@ -763,7 +841,10 @@ export default function AppointmentsPage() {
             </table>
           )}
         </div>
-      </PageShell>
-    </AppShell>
+    </>
   );
+}
+
+export default function AppointmentsPage() {
+  return <AppointmentsPageContent />;
 }

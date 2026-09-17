@@ -85,6 +85,51 @@ class Patient(models.Model):
     registered_at   = models.DateTimeField(auto_now_add=True)
     updated_at      = models.DateTimeField(auto_now=True)
 
+    # ── Emergency / unidentified patient intake ──────────────────────────
+    # See docs/PENDING_IMPROVEMENTS.md item 1. A patient registered with no
+    # ID and no family present starts "provisional" — enough to open a
+    # chart and treat, not a claim that this is a confirmed identity.
+    # identity_status stays "confirmed" (the default) for every normal
+    # registration; nothing about existing rows or the normal register()
+    # path changes.
+    IDENTITY_CONFIRMED   = "confirmed"
+    IDENTITY_PROVISIONAL = "provisional"
+    IDENTITY_STATUS_CHOICES = [
+        (IDENTITY_CONFIRMED, "Confirmed"),
+        (IDENTITY_PROVISIONAL, "Provisional"),
+    ]
+    ARRIVAL_AMBULANCE   = "ambulance"
+    ARRIVAL_BROUGHT_IN  = "brought_in"
+    ARRIVAL_POLICE_CASE = "police_case"
+    ARRIVAL_WALK_IN_UNRESPONSIVE = "walk_in_unresponsive"
+    ARRIVAL_OTHER       = "other"
+    ARRIVAL_CHANNEL_CHOICES = [
+        (ARRIVAL_AMBULANCE, "Ambulance"),
+        (ARRIVAL_BROUGHT_IN, "Brought in"),
+        (ARRIVAL_POLICE_CASE, "Police case"),
+        (ARRIVAL_WALK_IN_UNRESPONSIVE, "Walk-in, unresponsive"),
+        (ARRIVAL_OTHER, "Other"),
+    ]
+
+    identity_status = models.CharField(max_length=12, choices=IDENTITY_STATUS_CHOICES, default=IDENTITY_CONFIRMED)
+    # Mirrors ipd.AdmissionReferral.is_mlc, but at the patient level — an
+    # MLC (Medico-Legal Case) flag needs to travel with the patient from
+    # the moment of registration, before any admission referral exists at
+    # all (e.g. an emergency OPD-only encounter that never becomes an
+    # admission is still an MLC case).
+    is_mlc          = models.BooleanField(default=False)
+    arrival_channel = models.CharField(max_length=25, choices=ARRIVAL_CHANNEL_CHOICES, blank=True)
+    # e.g. "Unknown Male, approx. 30yrs" — shown instead of full_name until
+    # the identity is confirmed (see #2 in the same backlog item, "identity
+    # merge", not built yet — this field just makes the label explicit
+    # rather than overloading full_name with a placeholder value).
+    placeholder_label = models.CharField(max_length=200, blank=True)
+    # Auto-logged reason when DPDP/HIE consent is skipped under the
+    # emergency-treatment doctrine (see ipd.AdmissionDeposit's docstring for
+    # the same legal basis, cited there re: advance-payment gating) — never
+    # left implicit as "consent just wasn't captured".
+    consent_deferred_reason = models.CharField(max_length=255, blank=True)
+
     class Meta:
         app_label = "patients"
         db_table  = "patient"

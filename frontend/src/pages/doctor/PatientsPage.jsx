@@ -19,12 +19,7 @@ import apiClient             from "../../services/api.client";
 import API_ENDPOINTS         from "../../config/api.config";
 import { ROUTES }            from "../../config/routes.config";
 import { Search, AlertTriangle, FolderOpen, SearchX, Filter, X } from "lucide-react";
-
-function calcAge(dob) {
-  if (!dob) return "—";
-  const diff = Date.now() - new Date(dob).getTime();
-  return Math.floor(diff / (365.25 * 24 * 3600 * 1000)) + "y";
-}
+import { formatAgeYM, formatYearsMonths } from "../../utils/age";
 
 export default function DoctorPatientsPage() {
   const navigate = useNavigate();
@@ -289,7 +284,7 @@ export default function DoctorPatientsPage() {
                         {p.patient_uhid || "—"}
                       </td>
                       <td style={{ fontSize: 13 }}>
-                        {p.patient_age != null ? `${p.patient_age}y` : "—"} / {
+                        {p.patient_age != null ? (formatYearsMonths(p.patient_age, p.patient_age_months) || `${p.patient_age}y`) : "—"} / {
                           p.patient_gender === "M" ? "Male" :
                           p.patient_gender === "F" ? "Female" :
                           p.patient_gender || "—"
@@ -402,7 +397,7 @@ export default function DoctorPatientsPage() {
                           {p.uhid || "—"}
                         </td>
                         <td style={{ fontSize: 13 }}>
-                          {calcAge(p.date_of_birth)} / {
+                          {formatAgeYM(p.date_of_birth) || "—"} / {
                             p.gender === "M" ? "Male" :
                             p.gender === "F" ? "Female" :
                             p.gender || "—"

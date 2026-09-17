@@ -32,14 +32,19 @@ class Appointment(models.Model):
         (STATUS_NO_SHOW,     "No Show"),
     ]
 
+    # Was a fixed choices= list — now hospital-configurable via
+    # billing.OptionList(list_type="appointment_type"), same mechanism as
+    # Room.room_type / Drug.form / LabTest.sample_type. Validated at the
+    # serializer layer (AppointmentCreateSerializer), not here. The three
+    # constants below stay as plain Python string literals — backend logic
+    # branches on TYPE_FOLLOWUP specifically (see views.py's
+    # _resolve_doctor_consultation_fee) — so they're still seeded as
+    # is_system=True defaults (see apps/opd/migrations/0002_seed_appointment_types.py)
+    # a hospital can add more (e.g. "teleconsult") alongside, never rename/
+    # remove these three.
     TYPE_OPD = "opd"
     TYPE_FOLLOWUP = "followup"
     TYPE_EMERGENCY = "emergency"
-    TYPE_CHOICES = [
-        (TYPE_OPD, "OPD"),
-        (TYPE_FOLLOWUP, "Follow-up"),
-        (TYPE_EMERGENCY, "Emergency"),
-    ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     patient_id = models.UUIDField(db_index=True)           # FK → patients.patient.id
@@ -51,7 +56,7 @@ class Appointment(models.Model):
     # new bookings get it from the booking user automatically (see views.py).
     branch_id = models.IntegerField(null=True, blank=True, db_index=True)  # org.Branch.id (tenant DB)
 
-    appointment_type = models.CharField(max_length=15, choices=TYPE_CHOICES, default=TYPE_OPD)
+    appointment_type = models.CharField(max_length=15, default=TYPE_OPD)
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default=STATUS_SCHEDULED, db_index=True)
 
     scheduled_date = models.DateField(db_index=True)

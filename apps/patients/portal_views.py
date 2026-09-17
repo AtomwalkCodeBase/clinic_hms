@@ -28,6 +28,7 @@ from core.permissions import IsPatient
 from core.response import success, error, not_found
 from core.pagination import paginate_list, paginate_queryset
 from core.file_validation import validate_data_uri, FileValidationError
+from apps.patients.age_utils import age_years_months as _age_years_months
 from core import storage as blob_storage
 from apps.tenants.models import Tenant
 from apps.registry.models import PatientAccount, PatientIdentity
@@ -3418,14 +3419,14 @@ class PortalGrowthView(APIView):
                     "source": v.source,
                 })
 
-        age_years = None
-        if dob:
-            today = date.today()
-            age_years = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+        _age_ym = _age_years_months(dob)
+        age_years = _age_ym[0] if _age_ym else None
+        age_months = _age_ym[1] if _age_ym else None
 
         return success(data={
             "date_of_birth": dob,
             "age_years": age_years,
+            "age_months": age_months,
             "is_minor": age_years is not None and age_years < 18,
             "series": series,
             "latest": series[-1] if series else None,

@@ -15,19 +15,21 @@ from apps.opd.models import OPDEncounter
 
 
 class LabTest(models.Model):
-    """Tenant-managed lab test catalog."""
-    SAMPLE_CHOICES = [
-        ("blood",  "Blood"),
-        ("urine",  "Urine"),
-        ("stool",  "Stool"),
-        ("sputum", "Sputum"),
-        ("swab",   "Swab"),
-        ("other",  "Other"),
-    ]
+    """
+    Tenant-managed lab test catalog.
 
+    sample_type was a fixed choices= list (blood/urine/stool/sputum/swab/
+    other) — now hospital-configurable via billing.OptionList(list_type=
+    "sample_type"), same mechanism as Room.room_type / Drug.form /
+    Invoice.status. Validated at the serializer layer (LabTestSerializer),
+    not here, since a DB choices= constraint can't be extended per-tenant.
+    The six values above are still seeded as is_system=True defaults (see
+    apps/lab/migrations/0002_seed_sample_types.py) — a hospital can add more
+    (e.g. "tissue", "csf") alongside them.
+    """
     name            = models.CharField(max_length=200)
     code            = models.CharField(max_length=50, blank=True)  # internal code
-    sample_type     = models.CharField(max_length=20, choices=SAMPLE_CHOICES, default="blood")
+    sample_type     = models.CharField(max_length=20, default="blood")
     turnaround_hours= models.PositiveSmallIntegerField(default=24)
     price           = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
     description     = models.TextField(blank=True)

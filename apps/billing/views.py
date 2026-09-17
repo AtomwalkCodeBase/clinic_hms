@@ -13,6 +13,7 @@ from core.utils.nntm import get_next_number
 from .serializers import (
     InvoiceSerializer, InvoiceItemSerializer, PaymentSerializer, BillingServiceSerializer,
     ServiceCategorySerializer, PaymentModeOptionSerializer, InvoiceStatusOptionSerializer,
+    RoomTypeOptionSerializer,
 )
 from .models import (
     Invoice, InvoiceItem, Payment, BillingService, OptionList,
@@ -249,6 +250,29 @@ class InvoiceStatusDetailView(_DropdownDetailView):
     model_field = "value"
 
 
+class RoomTypeListCreateView(_DropdownListCreateView):
+    """GET/POST /api/v1/billing/room-types/"""
+    list_type = OptionList.LIST_ROOM_TYPE
+    serializer_class = RoomTypeOptionSerializer
+    identity_field = "value"
+    model_field = "value"
+
+
+class RoomTypeDetailView(_DropdownDetailView):
+    """PATCH/DELETE /api/v1/billing/room-types/{id}/"""
+    list_type = OptionList.LIST_ROOM_TYPE
+    serializer_class = RoomTypeOptionSerializer
+    identity_field = "value"
+    model_field = "value"
+    # Nothing in the backend branches on a specific room type value (unlike
+    # InvoiceStatusOption) — a hospital that doesn't run procedures should
+    # be able to switch "Procedure" off, same reasoning as PaymentModeOption.
+    # (What used to be a separate WardTypeListCreateView/WardTypeDetailView
+    # pair is gone — ward types are just room_type rows with
+    # is_bed_based=True now, see billing.OptionList's docstring.)
+    system_can_deactivate = True
+
+
 class InvoiceListCreateView(APIView):
     """
     GET  /api/v1/billing/invoices/  — list invoices (optionally filter by
@@ -298,7 +322,24 @@ class InvoiceListCreateView(APIView):
 
         if not patient_pk:
             return error("patient (or appointment_id) is required.", errors={"patient": "Required."})
-        branch_id = branch_id or 1
+
+        # No appointment_id (billing without a visit — e.g. a registration
+        # fee or a standalone charge) and no explicit branch in the request:
+        # fall back to the requesting staff member's own branch, then to the
+        # patient's own registered branch. Previously fell back to a bare
+        # `1` — always billing to whichever branch happened to have that
+        # database ID, silently mis-attributing revenue on any multi-branch
+        # hospital rather than to the branch this actually happened at.
+        if not branch_id:
+            branch_id = getattr(request.user, "branch_id", None)
+        if not branch_id:
+            from apps.patients.models import Patient
+            branch_id = Patient.objects.using(db).filter(pk=patient_pk).values_list("branch_id", flat=True).first()
+        if not branch_id:
+            return error(
+                "Could not determine which branch to bill this invoice to — pass branch explicitly.",
+                errors={"branch": "Required."},
+            )
 
         inv_number, _ = get_next_number(branch_id=branch_id, entity="invoice", using=db)
         inv = Invoice.objects.using(db).create(

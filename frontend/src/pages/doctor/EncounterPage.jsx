@@ -23,6 +23,7 @@ import { useToast }    from "../../hooks/useToast";
 import apiClient       from "../../services/api.client";
 import API_ENDPOINTS   from "../../config/api.config";
 import { openDataUrlInNewTab } from "../../utils/fileViewer";
+import { formatYearsMonths } from "../../utils/age";
 import {
   AlertTriangle, Stethoscope, Pill, FlaskConical, Activity, Clock, Paperclip,
   Sparkles, Printer, Download, CalendarClock, Cake, User, Upload,
@@ -2084,7 +2085,7 @@ function ClinicalSummaryHeader({ enc, history, allergies, activeProblems, vitals
               <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
                 {genderLabel && <><User size={12} /> {genderLabel}</>}
                 {genderLabel && enc.patient_age != null && " · "}
-                {enc.patient_age != null && <><Cake size={12} /> {enc.patient_age} yrs</>}
+                {enc.patient_age != null && <><Cake size={12} /> {formatYearsMonths(enc.patient_age, enc.patient_age_months) || `${enc.patient_age} yrs`}</>}
               </span>
             )}
             <span>· UHID: {enc.patient_uhid || "—"}</span>

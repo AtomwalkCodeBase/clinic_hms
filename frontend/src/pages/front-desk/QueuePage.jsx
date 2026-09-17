@@ -16,7 +16,7 @@ import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { ROUTES }    from "../../config/routes.config";
-import { Search, Filter, X, CalendarDays } from "lucide-react";
+import { Search, Filter, X, CalendarDays, Users, Clock, Stethoscope, CheckCircle2 } from "lucide-react";
 
 const TODAY = new Date().toISOString().split("T")[0];
 const MAX_RESCHEDULE_DATE = (() => {
@@ -224,26 +224,36 @@ export default function FrontDeskQueuePage() {
 
   return (
     <AppShell>
-      <PageShell title="OPD Queue">
+      <PageShell title="">
+        <div className="fdc-header-row">
+          <div>
+            <div className="fdc-eyebrow">Front Desk</div>
+            <div className="fdc-title">OPD Queue</div>
+            <div className="fdc-subtitle">Live queue showing patients for today's OPD consultations.</div>
+          </div>
+          <button className="btn-primary" style={{ fontSize: 12 }} onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_REGISTER)}>
+            + Register Walk-in
+          </button>
+        </div>
+
         {/* Stat strip */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 22 }}>
+        <div className="fdc-stat-grid">
           {[
-            { label: "Total today", value: counts.total,      dot: "dot-label--green" },
-            { label: "In queue",    value: counts.waiting,    dot: "dot-label--gold" },
-            { label: "With doctor", value: counts.inProgress, dot: "dot-label--blue" },
-            { label: "Completed",   value: counts.done,       dot: "dot-label--green" },
-          ].map(({ label, value, dot }) => (
-            <div key={label} className="card" style={{ padding: "16px 20px" }}>
-              <div className={`dot-label ${dot}`} style={{ marginBottom: 8 }}>{label}</div>
-              <div style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 600 }}>
-                {isLoading ? "—" : value}
-              </div>
+            { label: "Total Today", value: counts.total,      icon: <Users size={18} />,       tint: "green" },
+            { label: "In Queue",    value: counts.waiting,    icon: <Clock size={18} />,        tint: "amber" },
+            { label: "With Doctor", value: counts.inProgress, icon: <Stethoscope size={18} />,  tint: "violet" },
+            { label: "Completed",   value: counts.done,       icon: <CheckCircle2 size={18} />, tint: "green" },
+          ].map(({ label, value, icon, tint }) => (
+            <div key={label} className="fdc-stat-card">
+              <div className={`fdc-stat-icon fdc-tint-${tint}`}>{icon}</div>
+              <div className="fdc-stat-label">{label}</div>
+              <div className="fdc-stat-value">{isLoading ? "—" : value}</div>
             </div>
           ))}
         </div>
 
         {/* Search + filter bar — shared by Today and Upcoming below */}
-        <div className="card" style={{ marginBottom: 18, padding: 16 }}>
+        <div className="fdc-panel" style={{ marginBottom: 18, padding: 16 }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <div style={{ position: "relative", flex: "2 1 260px" }}>
               <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--color-text-muted)" }} />
@@ -302,7 +312,7 @@ export default function FrontDeskQueuePage() {
           )}
         </div>
 
-        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <div className="fdc-panel" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{
             display: "flex", alignItems: "center", justifyContent: "space-between",
             padding: "14px 20px", borderBottom: "1px solid var(--color-border)",
@@ -325,7 +335,7 @@ export default function FrontDeskQueuePage() {
               </div>
             </div>
           ) : (
-            <table className="data-table">
+            <table className="fdc-table">
               <thead>
                 <tr>
                   <th style={{ width: 70 }}>Token</th>
@@ -432,7 +442,7 @@ export default function FrontDeskQueuePage() {
         </div>
 
         {/* ── Upcoming bookings — everything after today, by date/day/slot ── */}
-        <div className="card" style={{ padding: 0, overflow: "hidden", marginTop: 22 }}>
+        <div className="fdc-panel" style={{ padding: 0, overflow: "hidden", marginTop: 22 }}>
           <div style={{
             display: "flex", alignItems: "center", justifyContent: "space-between",
             padding: "14px 20px", borderBottom: "1px solid var(--color-border)",
@@ -460,7 +470,7 @@ export default function FrontDeskQueuePage() {
                 }}>
                   {formatDateLabel(dateStr)} · {dateStr === TOMORROW ? "Tomorrow" : ""} {items.length} booking{items.length !== 1 ? "s" : ""}
                 </div>
-                <table className="data-table">
+                <table className="fdc-table">
                   <thead>
                     <tr>
                       <th style={{ width: 70 }}>Slot</th>

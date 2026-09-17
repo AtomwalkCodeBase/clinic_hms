@@ -37,11 +37,7 @@ from .models import Patient
 logger = logging.getLogger(__name__)
 
 
-def _age_years(dob):
-    if not dob:
-        return None
-    today = date.today()
-    return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+from .age_utils import age_years_months as _age_years_months
 
 
 def _handle_vaccination_file(patient, d, vaccine_name=""):
@@ -142,12 +138,15 @@ class PatientGrowthView(APIView):
                     })
 
         series = sorted(points.values(), key=lambda p: p["date"])
-        age_years = _age_years(patient.date_of_birth)
+        _age_ym = _age_years_months(patient.date_of_birth)
+        age_years = _age_ym[0] if _age_ym else None
+        age_months = _age_ym[1] if _age_ym else None
 
         return success(data={
             "patient_name": patient.full_name,
             "date_of_birth": patient.date_of_birth,
             "age_years": age_years,
+            "age_months": age_months,
             "is_minor": age_years is not None and age_years < 18,
             "consent_given": patient.hie_consent_given,
             "series": series,

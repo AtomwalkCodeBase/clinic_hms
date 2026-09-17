@@ -14,7 +14,7 @@ import { useAuth }   from "../../hooks/useAuth";
 import { usePermissions } from "../../hooks/usePermissions";
 import API_ENDPOINTS from "../../config/api.config";
 import { Mail, Users, Plus, X, MapPin } from "lucide-react";
-import { calcAge }   from "../../utils/age";
+import { formatAgeYM } from "../../utils/age";
 import { sanitizeMobileInput, isValidMobile, mobileError } from "../../utils/validation";
 import AutofillDecoy from "../../components/auth/AutofillDecoy";
 
@@ -1595,7 +1595,7 @@ export default function StaffPage() {
                       ? ` · ${s.branches.map(b => b.name).join(", ")}`
                       : (s.branch_name && ` · ${s.branch_name}`)}
                     {s.department_name && ` / ${s.department_name}`}
-                    {calcAge(s.date_of_birth) != null && ` · ${calcAge(s.date_of_birth)}y`}
+                    {formatAgeYM(s.date_of_birth) && ` · ${formatAgeYM(s.date_of_birth)}`}
                   </div>
                   {s.role === "nurse" && (
                     <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 2 }}>

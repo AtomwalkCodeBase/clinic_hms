@@ -14,6 +14,15 @@ from django.core.validators import RegexValidator
 from rest_framework import serializers
 from .models import Patient, Allergy
 
+# Consent is never withheld from an emergency patient because a reason
+# wasn't supplied — this is the always-applied default, matching the legal
+# basis already cited on ipd.AdmissionDeposit (emergency treatment isn't
+# conditioned on consent). A caller may pass a more specific reason.
+DEFAULT_EMERGENCY_CONSENT_DEFERRED_REASON = (
+    "DPDP/HIE consent deferred — patient unable to consent and no guardian "
+    "present at registration (emergency-treatment doctrine)."
+)
+
 # Central format check for every mobile-number field below — exactly 10
 # digits, no country code / spaces / punctuation. Applied via `validators=`
 # so it's skipped for blank optional fields (DRF short-circuits blank
@@ -114,6 +123,47 @@ class PatientRegisterSerializer(serializers.Serializer):
         return data
 
 
+class PatientEmergencyRegisterSerializer(serializers.Serializer):
+    """
+    Input serializer for the emergency/unidentified-patient registration
+    path (see docs/PENDING_IMPROVEMENTS.md item 1) — deliberately a
+    SEPARATE serializer from PatientRegisterSerializer rather than more
+    conditional branches bolted onto it: normal registration always
+    requires either a mobile or a guardian; this path requires neither,
+    and that's the whole point of it. Full name is optional here (a
+    placeholder label stands in for it) where it's required everywhere
+    else in the app.
+    """
+    branch_id          = serializers.IntegerField()
+    placeholder_label  = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    full_name          = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    gender             = serializers.ChoiceField(
+        choices=["male", "female", "other", "prefer_not_to_say", "M", "F", "O"],
+        required=False, allow_blank=True,
+    )
+    date_of_birth      = serializers.DateField(required=False, allow_null=True)
+    is_mlc             = serializers.BooleanField(required=False, default=False)
+    arrival_channel    = serializers.ChoiceField(
+        choices=[c[0] for c in Patient.ARRIVAL_CHANNEL_CHOICES], required=False, allow_blank=True,
+    )
+    # Whatever is known about the patient at intake, best-effort — none of
+    # this is required, since the whole premise of this path is that it
+    # might not be known yet.
+    mobile             = serializers.CharField(max_length=15, required=False, allow_blank=True,
+                                               validators=[mobile_validator])
+    guardian_name      = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    guardian_mobile     = serializers.CharField(max_length=15, required=False, allow_blank=True,
+                                                validators=[mobile_validator])
+    consent_deferred_reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+    def validate(self, data):
+        if not data.get("placeholder_label", "").strip() and not data.get("full_name", "").strip():
+            raise serializers.ValidationError({
+                "placeholder_label": "Either a name or a placeholder label (e.g. \"Unknown Male, approx. 30yrs\") is required."
+            })
+        return data
+
+
 class PatientDetailSerializer(serializers.ModelSerializer):
     """Full patient detail. Never exposes internal IDs from other tenants."""
 
@@ -129,6 +179,7 @@ class PatientDetailSerializer(serializers.ModelSerializer):
             "payer_type", "insurance_provider", "policy_number", "tpa_name",
             "is_dependent", "guardian_name", "guardian_mobile", "guardian_relation", "guardian_awpid",
             "dpdp_consent_captured", "preferred_language", "registered_at",
+            "identity_status", "is_mlc", "arrival_channel", "placeholder_label", "consent_deferred_reason",
         ]
         read_only_fields = ["id", "awpid", "uhid", "registered_at", "dpdp_consent_captured"]
 

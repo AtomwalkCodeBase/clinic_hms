@@ -74,6 +74,8 @@ export const ROUTES = {
     PATIENT:     (id) => `/doctor/patients/${id}`,
     SCHEDULE:           "/doctor/schedule",
     HISTORY:            "/doctor/history",
+    IPD_REFERRALS:      "/doctor/ipd-referrals",
+    IPD_PATIENTS:       "/doctor/ipd-patients",
     MY_PROFILE:         "/doctor/my-profile",
   },
 
@@ -89,13 +91,31 @@ export const ROUTES = {
   // Front Desk
   FRONT_DESK: {
     DASHBOARD:          "/front-desk/dashboard",
+    // Consolidated Patient Intake workspace — ONE sidebar item (an
+    // expandable group, see AppShell.jsx) covering all five intake steps
+    // as tabs on ONE page (PatientIntakePage.jsx), each embedding the
+    // exact same content component the standalone Triage/Register/
+    // Emergency/Appointments/Admissions pages use — no duplicated
+    // implementation, no separate step-wizard bar repeated on those
+    // standalone pages. INTAKE (bare) redirects to INTAKE_REGISTER.
+    INTAKE:              "/front-desk/intake",
+    INTAKE_REGISTER:     "/front-desk/intake/register",
+    INTAKE_TRIAGE:       "/front-desk/intake/triage",
+    INTAKE_EMERGENCY:    "/front-desk/intake/emergency",
+    INTAKE_OPD:          "/front-desk/intake/opd",
+    INTAKE_REFERRALS:    "/front-desk/intake/referrals",
+    TRIAGE:             "/front-desk/triage",
     REGISTER_PATIENT:   "/front-desk/register-patient",
+    REGISTER_EMERGENCY: "/front-desk/register-emergency",
     PATIENTS:           "/front-desk/patients",
     APPOINTMENTS:       "/front-desk/appointments",
     QUEUE:              "/front-desk/queue",
     BILLING:            "/front-desk/billing",
     HISTORY:            "/front-desk/history",
     ADMISSIONS:         "/front-desk/admissions",
+    ADMISSION_DETAIL: (id) => `/front-desk/admissions/${id}`,
+    IPD_PATIENTS:       "/front-desk/ipd-patients",
+    BED_BOARD:          "/front-desk/bed-board",
     MY_PROFILE:         "/front-desk/my-profile",
   },
 
@@ -106,6 +126,7 @@ export const ROUTES = {
     REPORTS:            "/lab/reports",
     REPORT:      (id) => `/lab/reports/${id}`,
     CATALOG:            "/lab/catalog",
+    SAMPLE_TYPE_SETUP:  "/lab/sample-type-setup",
     MY_PROFILE:         "/lab/my-profile",
   },
 

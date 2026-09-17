@@ -45,6 +45,34 @@ class OptionList(models.Model):
     # for the seeded is_system=True defaults.
     LIST_ADMISSION_TYPE   = "admission_type"
     LIST_ADMISSION_SOURCE = "admission_source"
+    # Added so org.Room.room_type stops being a fixed 3-value choices= list
+    # and becomes hospital-configurable, same as everything else here —
+    # see org.Room's own comment and org.views.RoomListCreateView/
+    # RoomDetailView for where it's validated (value must match an active
+    # row here, checked with a local import to avoid apps.org <-> apps.billing
+    # circularity, since apps.billing.models already imports from apps.org).
+    #
+    # v8 unification: this catalog now ALSO carries what used to be the
+    # separate "ward_type" list (General/Private/Semi-Private/ICU/HDU/
+    # Isolation/…) — org.Ward was folded into org.Room (see org.Room's own
+    # docstring and the org 0025-0028 migrations), so there's no longer a
+    # separate physical entity for a "ward type" to describe. `category`
+    # and `is_bed_based` (below) are what let one catalog now serve both
+    # OPD rooms and IPD wards: a hospital admin picks "General Ward" the
+    # same way they'd have picked "Consultation" before, and the presence
+    # of beds is driven by is_bed_based rather than by which table the row
+    # lived in.
+    LIST_ROOM_TYPE        = "room_type"
+    # Added to stop LabTest.sample_type (blood/urine/stool/sputum/swab/other)
+    # and Appointment.appointment_type (opd/followup/emergency) from being
+    # fixed choices= lists — same "make it configurable" treatment as
+    # everything else here. Both keep their existing values seeded as
+    # is_system=True (see apps/lab/migrations and apps/opd/migrations) since
+    # backend logic branches on the exact strings (fee resolution for
+    # "followup", catalog seeding for the six sample types) — a hospital can
+    # add more, not rename/remove what's already load-bearing.
+    LIST_SAMPLE_TYPE      = "sample_type"
+    LIST_APPOINTMENT_TYPE = "appointment_type"
     LIST_TYPE_CHOICES = [
         (LIST_SERVICE_CATEGORY, "Service Category"),
         (LIST_PAYMENT_MODE, "Payment Mode"),
@@ -52,6 +80,26 @@ class OptionList(models.Model):
         (LIST_DRUG_FORM, "Drug Form"),
         (LIST_ADMISSION_TYPE, "Admission Type"),
         (LIST_ADMISSION_SOURCE, "Admission Source"),
+        (LIST_ROOM_TYPE, "Room Type"),
+        (LIST_SAMPLE_TYPE, "Sample Type"),
+        (LIST_APPOINTMENT_TYPE, "Appointment Type"),
+    ]
+
+    # Meaningful only for list_type="room_type" rows (every other list_type
+    # leaves both blank/False) — see the docstring above. `category` is
+    # display/filtering metadata only, nothing branches on it in the
+    # backend. `is_bed_based` is the one that matters functionally:
+    # org.views.RoomListCreateView/RoomDetailView require a `capacity` and
+    # allow beds under a room only when its room_type row has this set.
+    CATEGORY_OPD       = "opd"
+    CATEGORY_IPD       = "ipd"
+    CATEGORY_PROCEDURE = "procedure"
+    CATEGORY_OTHER     = "other"
+    CATEGORY_CHOICES = [
+        (CATEGORY_OPD, "OPD"),
+        (CATEGORY_IPD, "IPD"),
+        (CATEGORY_PROCEDURE, "Procedure"),
+        (CATEGORY_OTHER, "Other"),
     ]
 
     list_type   = models.CharField(max_length=20, choices=LIST_TYPE_CHOICES, db_index=True)
@@ -60,6 +108,15 @@ class OptionList(models.Model):
     is_active   = models.BooleanField(default=True)
     is_system   = models.BooleanField(default=False)  # seeded default — can't be deleted
     sort_order  = models.PositiveSmallIntegerField(default=0)
+    category      = models.CharField(max_length=12, choices=CATEGORY_CHOICES, blank=True)
+    is_bed_based  = models.BooleanField(default=False)
+    # Meaningful only for list_type="room_type" rows where is_bed_based=True
+    # — the per-night rate apps.ipd.views.GenerateInvoiceView bills against
+    # (nights stayed × this). Null/blank means "no rate set yet"; generating
+    # an invoice for a room type with no rate is refused with a clear error
+    # rather than silently billing ₹0, so a hospital notices the gap instead
+    # of shipping a broken invoice.
+    daily_rate  = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     created_at  = models.DateTimeField(auto_now_add=True)
 
     class Meta:

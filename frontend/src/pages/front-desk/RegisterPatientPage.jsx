@@ -22,8 +22,9 @@ import { useAuth }       from "../../hooks/useAuth";
 import apiClient         from "../../services/api.client";
 import API_ENDPOINTS     from "../../config/api.config";
 import PaginationControls from "../../components/common/PaginationControls";
-import { calcAge }       from "../../utils/age";
+import { formatAgeYM } from "../../utils/age";
 import { sanitizeMobileInput, isValidMobile } from "../../utils/validation";
+import { ROUTES } from "../../config/routes.config";
 import {
   Search, Contact, Phone, Building2, Shield, Lock, Smartphone,
   AlertTriangle, User, Siren,
@@ -65,7 +66,7 @@ function FSelect({ error, children, ...props }) {
 
 function SectionCard({ title, subtitle, color = "#5B52EE", bgColor = "#EDE9FF", icon: Icon, children }) {
   return (
-    <div className="card" style={{ padding: 0, marginBottom: 20, overflow: "hidden" }}>
+    <div className="fdc-panel" style={{ padding: 0, marginBottom: 20, overflow: "hidden" }}>
       <div style={{
         background: bgColor, padding: "12px 20px",
         borderBottom: "1px solid var(--color-border)",
@@ -123,7 +124,7 @@ function ThreeCol({ children }) {
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
-export default function RegisterPatientPage() {
+export function RegisterPatientPageContent({ embedded = false } = {}) {
   const navigate = useNavigate();
   const location = useLocation();
   const { toastSuccess, toastApiError } = useToast();
@@ -147,7 +148,7 @@ export default function RegisterPatientPage() {
     // QuickRegisterModal already toasts the "registered" confirmation —
     // straight to booking next, same as the rest of this page's flow.
     setQuickRegisterMember(null);
-    navigate("/front-desk/appointments", { state: { patient: created, justRegistered: true } });
+    navigate(ROUTES.FRONT_DESK.INTAKE_OPD, { state: { patient: created, justRegistered: true } });
   }
 
   const [form, setForm] = useState({
@@ -389,7 +390,7 @@ export default function RegisterPatientPage() {
       // appointments) would just look empty and silently "lose" them. This
       // is also the reason a new registration used to look like it "didn't
       // show up" in the queue: it never should have until it's booked.
-      navigate("/front-desk/appointments", { state: { patient, justRegistered: true } });
+      navigate(ROUTES.FRONT_DESK.INTAKE_OPD, { state: { patient, justRegistered: true } });
     } catch (err) {
       if (err?.errors) setErrors(err.errors);
       toastApiError(err, "Registration failed.");
@@ -398,10 +399,8 @@ export default function RegisterPatientPage() {
     }
   }
 
-  return (
-    <AppShell>
-      <PageShell title="Register New Patient">
-
+  const content = (
+    <>
         <QuickRegisterModal
           key={quickRegisterMember?.awpid || "closed"}
           open={!!quickRegisterMember}
@@ -492,7 +491,7 @@ export default function RegisterPatientPage() {
                     Use their existing record instead of creating a new one — book their appointment directly.
                   </div>
                   <button type="button" className="btn-primary" style={{ fontSize: 12, padding: "6px 14px" }}
-                    onClick={() => navigate("/front-desk/appointments", {
+                    onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_OPD, {
                       state: { prefillQuery: lookup.existing_uhid || lookup.full_name },
                     })}>
                     Book Appointment →
@@ -517,7 +516,7 @@ export default function RegisterPatientPage() {
                       <div style={{ fontWeight: 700, fontSize: 14 }}>{lookup.full_name}</div>
                       <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
                         {lookup.date_of_birth
-                          ? `Born ${lookup.date_of_birth}${calcAge(lookup.date_of_birth) != null ? ` · ${calcAge(lookup.date_of_birth)}y` : ""}`
+                          ? `Born ${lookup.date_of_birth}${formatAgeYM(lookup.date_of_birth) ? ` · ${formatAgeYM(lookup.date_of_birth)}` : ""}`
                           : "Registered at another Atomwalk hospital"}
                       </div>
                     </div>
@@ -571,12 +570,12 @@ export default function RegisterPatientPage() {
                           <div>
                             <div style={{ fontWeight: 700, fontSize: 13 }}>{m.full_name}</div>
                             <div style={{ fontSize: 11, color: "var(--color-text-muted)", textTransform: "capitalize" }}>
-                              {m.relationship}{m.date_of_birth ? ` · DOB ${m.date_of_birth}${calcAge(m.date_of_birth) != null ? ` (${calcAge(m.date_of_birth)}y)` : ""}` : ""}
+                              {m.relationship}{m.date_of_birth ? ` · DOB ${m.date_of_birth}${formatAgeYM(m.date_of_birth) ? ` (${formatAgeYM(m.date_of_birth)})` : ""}` : ""}
                             </div>
                           </div>
                           {m.already_registered_here ? (
                             <button type="button" className="btn-outline" style={{ fontSize: 11, padding: "5px 12px" }}
-                              onClick={() => navigate("/front-desk/appointments", {
+                              onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_OPD, {
                                 state: { prefillQuery: m.full_name },
                               })}>
                               Already here — Book Appointment
@@ -1023,10 +1022,10 @@ export default function RegisterPatientPage() {
                 </div>
               </div>
             ) : (
-              <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+              <div className="fdc-panel" style={{ padding: 0, overflow: "hidden" }}>
                 <div style={{ display: "grid", gap: 8, padding: 10, maxHeight: 420, overflowY: "auto" }}>
                   {nameResults.map(p => {
-                    const age = calcAge(p.date_of_birth);
+                    const age = formatAgeYM(p.date_of_birth) || null;
                     const initials = (p.full_name || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
                     return (
                       <div key={p.id} style={{
@@ -1056,13 +1055,13 @@ export default function RegisterPatientPage() {
                             <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginTop: 2, display: "flex", gap: 8, flexWrap: "wrap" }}>
                               <span>UHID {p.uhid}</span>
                               {p.mobile && <span>· {p.mobile}</span>}
-                              {(age != null || p.gender) && <span>· {[age != null ? `${age}y` : null, p.gender].filter(Boolean).join(" ")}</span>}
+                              {(age != null || p.gender) && <span>· {[age, p.gender].filter(Boolean).join(" ")}</span>}
                               {p.branch_name && <span>· {p.branch_name}</span>}
                             </div>
                           </div>
                         </div>
                         <button type="button" className="btn-outline" style={{ fontSize: 12, padding: "6px 14px", flexShrink: 0 }}
-                          onClick={() => navigate("/front-desk/appointments", { state: { patient: p } })}>
+                          onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_OPD, { state: { patient: p } })}>
                           Book Appointment →
                         </button>
                       </div>
@@ -1078,7 +1077,17 @@ export default function RegisterPatientPage() {
             )}
           </div>
         )}
-      </PageShell>
+    </>
+  );
+
+  if (embedded) return content;
+  return <PageShell title="Register New Patient">{content}</PageShell>;
+}
+
+export default function RegisterPatientPage() {
+  return (
+    <AppShell>
+      <RegisterPatientPageContent />
     </AppShell>
   );
 }

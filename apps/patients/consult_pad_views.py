@@ -40,11 +40,7 @@ logger = logging.getLogger(__name__)
 _MAX_TAB_BASE64_CHARS = 9_000_000
 _TABS = {"rx", "note"}
 
-def _age_years(dob):
-    if not dob:
-        return None
-    today = date.today()
-    return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+from .age_utils import age_years_months as _age_years_months
 
 
 # Drug-name normalisation. The recognition model is told it MAY fix an
@@ -559,7 +555,8 @@ class ConsultPadView(APIView):
             "session_id": sess.id,
             "patient_name": identity.full_name,
             "patient_awpid": identity.awpid,
-            "age_years": _age_years(identity.date_of_birth),
+            "age_years": (_age_years_months(identity.date_of_birth) or (None,))[0],
+            "age_months": (_age_years_months(identity.date_of_birth) or (None, None))[1],
             "gender": identity.gender,
             "updated_at": sess.updated_at,
             "tabs": {

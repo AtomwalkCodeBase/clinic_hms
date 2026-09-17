@@ -24,6 +24,7 @@ import { useToast } from "../../hooks/useToast";
 import apiClient from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { sanitizeMobileInput, isValidMobile } from "../../utils/validation";
+import { formatAgeYM } from "../../utils/age";
 
 function approximateDobFromAge(age) {
   const n = Number(age);
@@ -32,15 +33,24 @@ function approximateDobFromAge(age) {
   return `${year}-01-01`;
 }
 
-// Inverse of the above, for prefilling from a known date_of_birth (e.g. a
-// family-tree entry) — just whole years, same precision the age field
-// itself works in.
-function ageFromDob(dob) {
-  if (!dob) return "";
-  const year = Number(String(dob).slice(0, 4));
-  if (!year) return "";
-  const age = new Date().getFullYear() - year;
-  return age > 0 ? String(age) : "";
+// prefill.gender arrives as the single normalized character the backend
+// stores ("M"/"F"/"O" — see apps/patients/services.py::_normalize_gender)
+// rather than the lowercase word this form's <select> options use, so it
+// never matched an option and silently showed as unselected. Map it back.
+const GENDER_CODE_TO_OPTION = { M: "male", F: "female", O: "other" };
+function normalizeGenderPrefill(g) {
+  if (!g) return "";
+  const s = String(g).trim();
+  if (s.length === 1) return GENDER_CODE_TO_OPTION[s.toUpperCase()] || "";
+  const lower = s.toLowerCase();
+  return ["male", "female", "other"].includes(lower) ? lower : "";
+}
+
+function joinWithAnd(items) {
+  if (items.length === 0) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
 }
 
 const RELATIONS = [
@@ -72,12 +82,22 @@ export default function QuickRegisterModal({ open, onClose, onRegistered, branch
   const { toastSuccess, toastApiError } = useToast();
   const [fullName, setFullName] = useState(prefill?.full_name || guardian?.suggestedName || "");
   const [mobile, setMobile] = useState("");
-  const [age, setAge] = useState(() => ageFromDob(prefill?.date_of_birth));
-  const [gender, setGender] = useState(prefill?.gender || "");
+  // A known exact DOB (from a family-tree record) is kept as-is and sent
+  // to the backend directly — never round-tripped through a whole-years
+  // number input, which is how an infant's age used to get silently
+  // dropped (age computed as 0 was treated as "not entered").
+  const knownDob = prefill?.date_of_birth || null;
+  const [age, setAge] = useState("");
+  const [gender, setGender] = useState(() => normalizeGenderPrefill(prefill?.gender));
   const [relationship, setRelationship] = useState(guardian?.relation || "child");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const hasPrefill = !!(prefill?.full_name || prefill?.date_of_birth || prefill?.gender);
+  const knownFields = [
+    prefill?.full_name && "name",
+    knownDob && "age",
+    prefill?.gender && "gender",
+  ].filter(Boolean);
+  const hasPrefill = knownFields.length > 0;
 
   // "Who is the patient?" — only asked in true emergency mode (no guardian
   // already found via family-tree lookup). The caller who phones in isn't
@@ -107,7 +127,7 @@ export default function QuickRegisterModal({ open, onClose, onRegistered, branch
     if (!isDependent && !isValidMobile(mobile)) { setError("Enter a valid 10-digit mobile number."); return; }
     if (isEmergencyRelative && !isValidMobile(mobile)) { setError("Enter a valid 10-digit mobile number for the caller."); return; }
 
-    const dob = approximateDobFromAge(age);
+    const dob = knownDob || approximateDobFromAge(age);
     if (isDependent && !dob) { setError("Age is required to register a dependent."); return; }
 
     const payload = {
@@ -182,7 +202,7 @@ export default function QuickRegisterModal({ open, onClose, onRegistered, branch
             fontSize: 11.5, color: "var(--color-primary)", background: "var(--color-primary-light)",
             borderRadius: 8, padding: "8px 12px", marginBottom: 16, fontWeight: 600,
           }}>
-            Name, age, and gender below are already known from this family's record — just confirm and register.
+            {`${joinWithAnd(knownFields).replace(/^./, c => c.toUpperCase())} below ${knownFields.length > 1 ? "are" : "is"} already known from this family's record — just confirm and register.`}
           </div>
         )}
 
@@ -251,8 +271,17 @@ export default function QuickRegisterModal({ open, onClose, onRegistered, branch
               <label className="stat-label" style={{ display: "block", marginBottom: 6 }}>
                 {isEmergencyRelative ? "Patient's age *" : `Age ${isDependent ? "*" : ""}`}
               </label>
-              <input className="form-input" type="number" min="0" max="120" value={age}
-                onChange={e => setAge(e.target.value)} placeholder="Years" />
+              {knownDob ? (
+                <div className="form-input" style={{
+                  display: "flex", alignItems: "center", background: "var(--color-bg-secondary, #f1f5f9)",
+                  color: "var(--color-text-secondary)",
+                }}>
+                  {formatAgeYM(knownDob) || "—"}
+                </div>
+              ) : (
+                <input className="form-input" type="number" min="0" max="120" value={age}
+                  onChange={e => setAge(e.target.value)} placeholder="Years" />
+              )}
             </div>
             <div>
               <label className="stat-label" style={{ display: "block", marginBottom: 6 }}>Gender</label>

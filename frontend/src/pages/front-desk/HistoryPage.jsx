@@ -11,7 +11,14 @@ import VisitHistoryView from "../../components/history/VisitHistoryView";
 export default function FrontDeskHistoryPage() {
   return (
     <AppShell>
-      <PageShell title="Visit History">
+      <PageShell title="">
+        <div className="fdc-header-row">
+          <div>
+            <div className="fdc-eyebrow">Front Desk</div>
+            <div className="fdc-title">Visit History</div>
+            <div className="fdc-subtitle">View past visits, consultations, and treatments across the hospital.</div>
+          </div>
+        </div>
         <VisitHistoryView role="front-desk" />
       </PageShell>
     </AppShell>

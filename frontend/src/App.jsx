@@ -58,6 +58,8 @@ const DoctorQueue     = lazy(() => import("./pages/doctor/QueuePage"));
 const DoctorEncounter = lazy(() => import("./pages/doctor/EncounterPage"));
 const DoctorPatients  = lazy(() => import("./pages/doctor/PatientsPage"));
 const DoctorHistory   = lazy(() => import("./pages/doctor/HistoryPage"));
+const DoctorIpdReferrals = lazy(() => import("./pages/doctor/IpdReferralsPage"));
+const DoctorIpdPatients  = lazy(() => import("./pages/doctor/IpdPatientsPage"));
 const DoctorMyProfile = lazy(() => import("./pages/doctor/MyProfilePage"));
 
 // Nurse
@@ -69,19 +71,26 @@ const NurseHistory   = lazy(() => import("./pages/nurse/HistoryPage"));
 
 // Front Desk
 const FrontDeskDashboard      = lazy(() => import("./pages/front-desk/DashboardPage"));
+const FrontDeskIntake         = lazy(() => import("./pages/front-desk/PatientIntakePage"));  // sidebar hub: Register Patient + Triage + Emergency Registration tabs
+const FrontDeskTriage         = lazy(() => import("./pages/front-desk/TriagePage"));
 const FrontDeskRegisterPatient= lazy(() => import("./pages/front-desk/RegisterPatientPage"));
+const FrontDeskRegisterEmergency = lazy(() => import("./pages/front-desk/EmergencyRegisterPage"));
 const FrontDeskPatients       = lazy(() => import("./pages/front-desk/PatientsPage"));
 const FrontDeskAppointments   = lazy(() => import("./pages/front-desk/AppointmentsPage"));
 const FrontDeskQueue          = lazy(() => import("./pages/front-desk/QueuePage"));
 const FrontDeskBilling        = lazy(() => import("./pages/front-desk/BillingPage"));
 const FrontDeskHistory        = lazy(() => import("./pages/front-desk/HistoryPage"));
-const FrontDeskAdmissions     = lazy(() => import("./pages/front-desk/AdmissionsPage"));  // IPD Phase 1
+const FrontDeskAdmissions     = lazy(() => import("./pages/front-desk/AdmissionsPage"));  // IPD admissions + bed assignment
+const FrontDeskAdmissionDetail = lazy(() => import("./pages/front-desk/AdmissionDetailPage"));  // single admission: edit, discharge, billing
+const FrontDeskBedBoard       = lazy(() => import("./pages/front-desk/BedBoardPage"));  // live Floor->Room->Bed grid + turnover/reserve/transfer actions
+const FrontDeskIpdPatients    = lazy(() => import("./pages/front-desk/IpdPatientsPage"));  // "Current Patients" — everyone currently admitted, searchable
 
 // Lab
 const LabDashboard = lazy(() => import("./pages/lab/DashboardPage"));
 const LabRequests  = lazy(() => import("./pages/lab/RequestsPage"));
 const LabReports   = lazy(() => import("./pages/lab/ReportsPage"));
 const LabCatalog   = lazy(() => import("./pages/lab/CatalogPage"));
+const LabSampleTypeSetup = lazy(() => import("./pages/lab/SampleTypeSetupPage"));
 
 // Pharmacist
 const PharmacistDashboard     = lazy(() => import("./pages/pharmacist/DashboardPage"));
@@ -263,6 +272,10 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorPatients /></ProtectedRoute>} />
           <Route path={ROUTES.DOCTOR.HISTORY}
             element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorHistory /></ProtectedRoute>} />
+          <Route path={ROUTES.DOCTOR.IPD_REFERRALS}
+            element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorIpdReferrals /></ProtectedRoute>} />
+          <Route path={ROUTES.DOCTOR.IPD_PATIENTS}
+            element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorIpdPatients /></ProtectedRoute>} />
           <Route path={ROUTES.DOCTOR.MY_PROFILE}
             element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorMyProfile /></ProtectedRoute>} />
 
@@ -281,8 +294,33 @@ export default function App() {
           {/* Front Desk — also accessible to hospital admin for oversight */}
           <Route path={ROUTES.FRONT_DESK.DASHBOARD}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskDashboard /></ProtectedRoute>} />
+          {/* Patient Intake hub — one page, five tabs (each the exact same
+              content component the standalone routes below still mount),
+              addressed by distinct paths so the sidebar's expandable
+              group can highlight the right one. Bare INTAKE redirects to
+              the Register tab. */}
+          <Route path={ROUTES.FRONT_DESK.INTAKE}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><Navigate to={ROUTES.FRONT_DESK.INTAKE_REGISTER} replace /></ProtectedRoute>} />
+          <Route path={ROUTES.FRONT_DESK.INTAKE_REGISTER}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIntake /></ProtectedRoute>} />
+          <Route path={ROUTES.FRONT_DESK.INTAKE_TRIAGE}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIntake /></ProtectedRoute>} />
+          <Route path={ROUTES.FRONT_DESK.INTAKE_EMERGENCY}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIntake /></ProtectedRoute>} />
+          <Route path={ROUTES.FRONT_DESK.INTAKE_OPD}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIntake /></ProtectedRoute>} />
+          <Route path={ROUTES.FRONT_DESK.INTAKE_REFERRALS}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIntake /></ProtectedRoute>} />
+          {/* Kept mounted for backward compatibility / deep links — no longer
+              linked from the sidebar, which now sends people through
+              Patient Intake (above) instead. Same page components, same
+              APIs; nothing here was removed. */}
+          <Route path={ROUTES.FRONT_DESK.TRIAGE}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskTriage /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.REGISTER_PATIENT}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskRegisterPatient /></ProtectedRoute>} />
+          <Route path={ROUTES.FRONT_DESK.REGISTER_EMERGENCY}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskRegisterEmergency /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.PATIENTS}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskPatients /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.APPOINTMENTS}
@@ -295,6 +333,12 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskHistory /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.ADMISSIONS}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskAdmissions /></ProtectedRoute>} />
+          <Route path={ROUTES.FRONT_DESK.ADMISSION_DETAIL(":id")}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskAdmissionDetail /></ProtectedRoute>} />
+          <Route path={ROUTES.FRONT_DESK.BED_BOARD}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskBedBoard /></ProtectedRoute>} />
+          <Route path={ROUTES.FRONT_DESK.IPD_PATIENTS}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIpdPatients /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.MY_PROFILE}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><SharedMyProfile /></ProtectedRoute>} />
 
@@ -307,6 +351,8 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><LabReports /></ProtectedRoute>} />
           <Route path={ROUTES.LAB.CATALOG}
             element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><LabCatalog /></ProtectedRoute>} />
+          <Route path={ROUTES.LAB.SAMPLE_TYPE_SETUP}
+            element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><LabSampleTypeSetup /></ProtectedRoute>} />
           <Route path={ROUTES.LAB.MY_PROFILE}
             element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><SharedMyProfile /></ProtectedRoute>} />
 

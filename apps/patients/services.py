@@ -35,6 +35,37 @@ def _normalize_gender(gender_raw: str) -> str:
 
 class PatientService:
 
+    @staticmethod
+    def attach_network_patient(mobile_raw: str, branch_id: int, db_name: str) -> Patient:
+        """Create this hospital's operational record for an existing Atomwalk identity.
+
+        The identity is never recreated: this only gives a cross-hospital
+        patient a hospital-local UHID, which the tenant-scoped OPD/IPD models
+        require. It is intentionally a visit attachment, not a second patient
+        registration or a registration-fee event.
+        """
+        mobile_norm = normalize_mobile(mobile_raw)
+        identity = PatientIdentity.objects.using("default").filter(
+            mobile_hash=hash_mobile(mobile_norm)
+        ).first()
+        if not identity:
+            raise ValueError("No Atomwalk patient was found for this mobile number.")
+        existing = Patient.objects.using(db_name).filter(awpid=identity.awpid).first()
+        if existing:
+            return existing
+        try:
+            branch = Branch.objects.get(pk=branch_id, is_active=True)
+        except Branch.DoesNotExist:
+            raise ValueError("Select an active branch before booking this patient.")
+        uhid, _ = get_next_number(branch_id=branch.id, entity="uhid", using=db_name)
+        return Patient.objects.using(db_name).create(
+            awpid=identity.awpid, uhid=uhid, branch=branch,
+            full_name=identity.full_name, date_of_birth=identity.date_of_birth,
+            gender=_normalize_gender(identity.gender), blood_group=identity.blood_group,
+            mobile=mobile_raw, email=identity.email,
+            preferred_language=identity.preferred_language,
+        )
+
     # ── Registration ──────────────────────────────────────────────────────
     @staticmethod
     def register(data: dict, tenant_id: int, db_name: str, request=None) -> Patient:
@@ -220,6 +251,89 @@ class PatientService:
                 db_name, patient, ConsentRecord.CONSENT_HIE_SHARING,
                 ConsentRecord.SOURCE_FRONT_DESK, request=request, recorded_by=recorded_by,
             )
+
+        return patient
+
+    # ── Emergency / unidentified registration ───────────────────────────
+    # See docs/PENDING_IMPROVEMENTS.md item 1. Separate from register()
+    # above rather than another conditional branch inside it: this path
+    # skips identity resolution by mobile/guardian entirely (there may be
+    # neither), mints a brand-new provisional network identity every time
+    # (nothing to dedupe an unidentified patient against yet — that's what
+    # the identity-merge step, #2 in the same backlog item, is for once a
+    # real identity becomes known), and defers consent with a logged reason
+    # instead of requiring it.
+    @staticmethod
+    def register_emergency(data: dict, db_name: str, request=None) -> Patient:
+        """
+        Register an emergency/unidentified patient — no mobile, no
+        guardian, minimal identity. Raises ValueError if the branch is not
+        found. Unlike register(), there is no "already registered" check
+        (a genuinely unidentified patient can't be deduped against
+        anything) and no dpdp/hie consent is captured — see
+        consent_deferred_reason.
+        """
+        branch_id = data["branch_id"]
+        try:
+            branch = Branch.objects.get(pk=branch_id, is_active=True)
+        except Branch.DoesNotExist:
+            raise ValueError(f"Branch {branch_id} not found.")
+
+        placeholder_label = (data.get("placeholder_label") or "").strip()
+        full_name = (data.get("full_name") or "").strip() or placeholder_label
+        if not full_name:
+            raise ValueError("Either a name or a placeholder label is required.")
+
+        with transaction.atomic(using="default"):
+            identity = PatientIdentity.objects.using("default").create(
+                awpid=generate_unique_awpid(),
+                full_name=full_name,
+                date_of_birth=data.get("date_of_birth"),
+                gender=_normalize_gender(data.get("gender", "")),
+                mobile_hash=None,
+                is_dependent=False,
+                preferred_language=data.get("preferred_language", "en"),
+            )
+
+        uhid, _ = get_next_number(branch_id=branch.id, entity="uhid", using=db_name)
+
+        consent_deferred_reason = (
+            data.get("consent_deferred_reason", "").strip()
+            or "DPDP/HIE consent deferred — patient unable to consent and no "
+               "guardian present at registration (emergency-treatment doctrine)."
+        )
+
+        patient = Patient.objects.using(db_name).create(
+            awpid=identity.awpid,
+            uhid=uhid,
+            branch=branch,
+            full_name=full_name,
+            date_of_birth=data.get("date_of_birth"),
+            gender=_normalize_gender(data.get("gender", "")),
+            mobile=data.get("mobile", ""),
+            guardian_name=data.get("guardian_name", ""),
+            guardian_mobile=data.get("guardian_mobile", ""),
+            identity_status=Patient.IDENTITY_PROVISIONAL,
+            is_mlc=bool(data.get("is_mlc", False)),
+            arrival_channel=data.get("arrival_channel", ""),
+            placeholder_label=placeholder_label,
+            consent_deferred_reason=consent_deferred_reason,
+            # Deliberately NOT captured — see consent_deferred_reason above.
+            dpdp_consent_captured=False,
+            hie_consent_given=False,
+            preferred_language=data.get("preferred_language", "en"),
+        )
+
+        logger.info(
+            "Emergency patient registered: awpid=%s uhid=%s branch=%s is_mlc=%s",
+            identity.awpid, uhid, branch.name, patient.is_mlc,
+        )
+
+        # Consent is deliberately NOT recorded as granted here (unlike
+        # register() above) — the whole point of this path is that it
+        # wasn't captured. The deferral itself is on the Patient row
+        # (consent_deferred_reason) and in the audit log the calling view
+        # writes, which together are the durable proof of why it's absent.
 
         return patient
 

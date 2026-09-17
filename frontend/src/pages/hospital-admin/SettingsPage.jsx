@@ -9,6 +9,8 @@ import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import HospitalLogoUpload from "../../components/common/HospitalLogoUpload";
+import API_ENDPOINTS from "../../config/api.config";
+import { DropdownListEditor } from "../../components/hospital-admin/DropdownListEditor";
 
 const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 };
 
@@ -254,6 +256,21 @@ export default function SettingsPage() {
               )}
             </div>
           )}
+
+          {/* ── Appointment Types ─────────────────────────────────── */}
+          <div className="card" style={{ padding: 28 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Appointment Types</h2>
+            <p style={{ fontSize: 13, color: "var(--color-text-muted)", marginBottom: 16 }}>
+              OPD, Follow-up and Emergency are set up by default and can't be removed — booking and fee logic
+              depend on them. Add your own (e.g. Teleconsult, Home Visit) alongside them for your own reporting.
+            </p>
+            <DropdownListEditor
+              title="Appointment Types"
+              listEndpoint={API_ENDPOINTS.OPD.APPOINTMENT_TYPES}
+              itemEndpoint={API_ENDPOINTS.OPD.APPOINTMENT_TYPE_ITEM}
+              identityField="name"
+            />
+          </div>
 
           {/* ── Session ───────────────────────────────────────────── */}
           <div className="card" style={{ padding: 28 }}>

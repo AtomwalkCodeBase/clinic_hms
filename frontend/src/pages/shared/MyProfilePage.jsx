@@ -17,7 +17,7 @@ import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import ProfilePhotoUpload from "../../components/common/ProfilePhotoUpload";
 import ChangePasswordCard from "../../components/common/ChangePasswordCard";
-import { calcAge }   from "../../utils/age";
+import { formatAgeYM } from "../../utils/age";
 
 const inputStyle = {
   width: "100%", boxSizing: "border-box",
@@ -114,7 +114,6 @@ export default function MyProfilePage() {
   return (
     <AppShell>
       <PageShell title="My Profile">
-
         <div className="card" style={{ padding: 24, marginBottom: 20 }}>
           <div className="dot-label dot-label--green" style={{ marginBottom: 14 }}>Profile photo</div>
           <ProfilePhotoUpload photo={photo} onUploaded={(p) => { setPhoto(p); refreshUser(); }} initials={initials} />
@@ -215,7 +214,7 @@ export default function MyProfilePage() {
                   <label style={labelStyle}>Date of Birth</label>
                   <div style={{ fontSize: 14 }}>
                     {dob
-                      ? `${dob}${calcAge(dob) != null ? ` · ${calcAge(dob)}y` : ""}`
+                      ? `${dob}${formatAgeYM(dob) ? ` · ${formatAgeYM(dob)}` : ""}`
                       : <span style={{ color: "var(--color-text-muted)" }}>Not set</span>}
                   </div>
                 </div>

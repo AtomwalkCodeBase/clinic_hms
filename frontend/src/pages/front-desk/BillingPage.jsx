@@ -10,7 +10,7 @@
  */
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Filter, X } from "lucide-react";
+import { Filter, X, FileText, Wallet, Clock3, CheckCircle2 } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useApi }    from "../../hooks/useApi";
@@ -500,8 +500,29 @@ export default function BillingPage() {
   const appointments = (apptData?.results || []).filter(a => a.status !== "cancelled");
 
   const { data: invData, isLoading: invLoading, refetch: refetchInvoices } =
-    useApi(API_ENDPOINTS.BILLING.INVOICES, { params: { page_size: 20 } });
+    useApi(API_ENDPOINTS.BILLING.INVOICES, { params: { page_size: 100 } });
   const invoices = useMemo(() => invData?.results || [], [invData]);
+
+  // Real stat-strip figures — all derived from the same invoices already
+  // fetched above (bumped to page_size 100 so "today" isn't cut short by
+  // pagination), not a separate summary endpoint. "Bills Today"/"Total
+  // Amount (Today)" only count invoices created today; Pending/Completed
+  // cover every fetched invoice regardless of date.
+  const todayInvoices = useMemo(
+    () => invoices.filter(inv => inv.created_at && inv.created_at.slice(0, 10) === TODAY),
+    [invoices]
+  );
+  const billsToday = todayInvoices.length;
+  const totalAmountToday = todayInvoices.reduce((s, inv) => s + (Number(inv.total_amount) || 0), 0);
+  const pendingInvoices = useMemo(
+    () => invoices.filter(inv => (Number(inv.total_amount) || 0) - (Number(inv.paid_amount) || 0) > 0.001),
+    [invoices]
+  );
+  const completedInvoices = useMemo(
+    () => invoices.filter(inv => (Number(inv.total_amount) || 0) > 0 && (Number(inv.total_amount) || 0) - (Number(inv.paid_amount) || 0) <= 0.001),
+    [invoices]
+  );
+  const pendingAmount = pendingInvoices.reduce((s, inv) => s + ((Number(inv.total_amount) || 0) - (Number(inv.paid_amount) || 0)), 0);
 
   const { data: svcData } = useApi(API_ENDPOINTS.BILLING.SERVICES);
   const services = svcData?.data || svcData || [];
@@ -544,11 +565,43 @@ export default function BillingPage() {
 
   return (
     <AppShell>
-      <PageShell title="Billing">
+      <PageShell title="">
+        <div className="fdc-header-row">
+          <div>
+            <div className="fdc-eyebrow">Front Desk</div>
+            <div className="fdc-title">Billing</div>
+            <div className="fdc-subtitle">Generate invoices, process payments, and manage billing records.</div>
+          </div>
+        </div>
+
+        <div className="fdc-stat-grid">
+          <div className="fdc-stat-card">
+            <div className="fdc-stat-icon fdc-tint-green"><FileText size={18} /></div>
+            <div className="fdc-stat-label">Bills Today</div>
+            <div className="fdc-stat-value">{invLoading ? "—" : billsToday}</div>
+          </div>
+          <div className="fdc-stat-card">
+            <div className="fdc-stat-icon fdc-tint-gold"><Wallet size={18} /></div>
+            <div className="fdc-stat-label">Total Amount (Today)</div>
+            <div className="fdc-stat-value">{invLoading ? "—" : `₹${totalAmountToday.toLocaleString("en-IN")}`}</div>
+          </div>
+          <div className="fdc-stat-card">
+            <div className="fdc-stat-icon fdc-tint-amber"><Clock3 size={18} /></div>
+            <div className="fdc-stat-label">Pending Payments</div>
+            <div className="fdc-stat-value">{invLoading ? "—" : pendingInvoices.length}</div>
+            <div className="fdc-stat-delta">{invLoading ? "" : `₹${pendingAmount.toLocaleString("en-IN")} pending`}</div>
+          </div>
+          <div className="fdc-stat-card">
+            <div className="fdc-stat-icon fdc-tint-violet"><CheckCircle2 size={18} /></div>
+            <div className="fdc-stat-label">Completed Payments</div>
+            <div className="fdc-stat-value">{invLoading ? "—" : completedInvoices.length}</div>
+          </div>
+        </div>
+
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
 
           {/* Today's appointments needing billing */}
-          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <div className="fdc-panel" style={{ padding: 0, overflow: "hidden" }}>
             <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
               <span className="dot-label dot-label--gold">Today's patients</span>
               <input className="form-input" placeholder="Search patient, doctor, or token…"
@@ -587,7 +640,7 @@ export default function BillingPage() {
           </div>
 
           {/* Recent invoices */}
-          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <div className="fdc-panel" style={{ padding: 0, overflow: "hidden" }}>
             <div style={{
               display: "flex", justifyContent: "space-between", alignItems: "center",
               padding: "14px 20px", borderBottom: "1px solid var(--color-border)",
