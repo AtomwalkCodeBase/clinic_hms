@@ -32,7 +32,8 @@ def store_lab_report_document(report, db, tenant_id, *, force=False):
     from apps.registry.models import SharedDocument
     from core import storage as blob_storage
     from core import normalise
-    from core.qr_token import issue as qr_issue
+    from core import report_types
+    from core.qr_token import issue_url as qr_issue
     from core.pdf_qr import stamp_qr
 
     from apps.opd.archive import _self_heal
@@ -47,6 +48,16 @@ def store_lab_report_document(report, db, tenant_id, *, force=False):
     test_name = test.name if test else "Lab Report"
     branch = Branch.objects.using(db).filter(pk=req.branch_id).first() if req and req.branch_id else None
 
+    # The lab test's own catalog name ("Lipid Profile", "CBC") is a short,
+    # admin-entered string — the same title-matching classify() uses on messy
+    # OCR text works even more reliably here, so this gets a panel tag with
+    # no OCR/LLM step at all, unlike an upload's classification path. Ignore
+    # .confident (its 0.72 bar is calibrated for a title mention buried in a
+    # full noisy OCR page) — any match at all on an isolated clean test name
+    # is already as reliable as classification gets.
+    panel_result = report_types.classify(test_name)
+    report_categories = panel_result.categories
+
     tenant = Tenant.objects.using("default").filter(pk=tenant_id).first()
     hospital_name = tenant.name if tenant else "Hospital"
     when = report.delivered_at.date() if report.delivered_at else None
@@ -54,7 +65,13 @@ def store_lab_report_document(report, db, tenant_id, *, force=False):
     src_ref = f"labreport:{report.id}"
     existing = SharedDocument.objects.using("default").filter(source_ref=src_ref).first()
     if existing is not None and not force:
-        return _self_heal(existing, "", hospital_name, report.report_number or "", when)
+        healed = _self_heal(existing, "", hospital_name, report.report_number or "", when)
+        if report_categories and not healed.report_categories:
+            healed.report_categories = report_categories
+            healed.category_method = "keyword"
+            healed.category_confidence = panel_result.confidence
+            healed.save(using="default", update_fields=["report_categories", "category_method", "category_confidence"])
+        return healed
 
     token = ""
     if report.report_number:
@@ -113,11 +130,17 @@ def store_lab_report_document(report, db, tenant_id, *, force=False):
         existing.hospital_label = hospital_name
         existing.public_document_id = report.report_number or ""
         existing.document_date = when
+        if report_categories:
+            existing.report_categories = report_categories
+            existing.category_method = "keyword"
+            existing.category_confidence = panel_result.confidence
         existing.save(using="default")
         return existing
 
     return SharedDocument.objects.using("default").create(
         awpid=awpid, title=title, doc_type="lab_report",
+        report_categories=report_categories, category_method="keyword" if report_categories else "",
+        category_confidence=panel_result.confidence if report_categories else None,
         file_name=f"{title}.pdf", mime_type="application/pdf", file_data=file_ref,
         uploaded_by="staff", source_tenant_id=tenant_id, source_ref=src_ref,
         public_document_id=report.report_number or "", hospital_label=hospital_name,

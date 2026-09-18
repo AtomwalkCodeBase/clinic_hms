@@ -24,6 +24,13 @@ export const ROUTES = {
   // doctor's phone browser has no Atomwalk session. See
   // pages/public/ConsultPadPage.jsx + apps/patients/consult_pad_views.py.
   CONSULT_PAD: (token) => `/consult-pad/${token}`,
+  // What the QR printed on a prescription/lab report opens when scanned by
+  // anything other than the patient app itself (Google Lens, any camera
+  // app). The app's own capture flow never routes here — it decodes the
+  // same QR and posts straight to the My Reports upload pipeline instead.
+  // Outside every route guard: no Atomwalk login. See
+  // pages/public/ViewReportPage.jsx + apps/patients/document_view_views.py.
+  VIEW_REPORT: (token) => `/view-report/${token}`,
   // "Share Records" break-glass — the doctor-has-a-laptop flow. The
   // clinician opens the base path on their laptop (or a shared /:token
   // link); a QR is shown; the patient scans it and approves (opening the

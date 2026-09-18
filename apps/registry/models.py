@@ -1109,6 +1109,14 @@ class RecordsShareRequest(models.Model):
     # per-session override of their standing RecordsPrivacy. Cleared when the
     # grant ends, so the next share starts from full standing privacy again.
     shown_private_ids = models.JSONField(default=list, blank=True)
+    # A bulk, session-scoped alternative to shown_private_ids: chosen once at
+    # approval time (RecordsShareDecisionView) instead of revealing records
+    # one at a time. True means "skip standing RecordsPrivacy entirely for
+    # this grant" — this specific doctor sees everything, including private
+    # records, for this visit only. Doesn't touch RecordsPrivacy itself, so
+    # every future share (with anyone else) still starts from the patient's
+    # normal standing privacy, same as before this field existed.
+    share_all   = models.BooleanField(default=False)
     # A single SharedDocument id the doctor has asked to download, awaiting
     # the patient's decision. Cleared once decided.
     pending_download_id = models.IntegerField(null=True, blank=True)

@@ -281,6 +281,11 @@ REST_FRAMEWORK = {
         # seconds while it waits for the patient to approve. The 32-char
         # random token is the real gate; this is a per-IP backstop.
         "records_share": "90/min",
+        # Public document-view page (apps/patients/document_view_views.py) —
+        # what a printed prescription/lab-report QR opens for a non-app
+        # scanner (Google Lens etc). Permanent, unguessable signed token is
+        # the real gate; this is a per-IP backstop.
+        "view_report": "20/min",
     },
 }
 

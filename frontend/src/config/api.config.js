@@ -215,6 +215,14 @@ export const API_ENDPOINTS = {
     SUMMARY: (token) => `${API_V1}/emergency/${token}/`,
   },
 
+  // Public document-view page — what a printed prescription/lab-report QR
+  // opens for a non-app scanner (see apps/patients/document_view_views.py).
+  // Fetched with publicClient only after the patient clicks "Yes" on the
+  // confirm prompt — nothing is fetched before that.
+  VIEW_REPORT: {
+    RESOLVE: (token) => `${API_V1}/view-report/${token}/`,
+  },
+
   // Consultation handwriting pad — public, no auth (see
   // apps/patients/consult_pad_views.py). One URL: GET returns the live
   // session (both tabs' saved pages + recognised text), PUT autosaves one

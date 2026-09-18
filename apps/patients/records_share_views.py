@@ -438,13 +438,19 @@ class RecordsShareRecordsView(APIView):
         documents = _vault_documents(grant.awpid)
 
         # ── standing privacy: drop what the patient keeps private, minus the
-        #    records they revealed for this one visit ──────────────────────
-        privacy = _privacy_for(grant.awpid)
-        hidden_ids = _privacy_hidden_ids(grant.awpid, documents, privacy)
+        #    records they revealed for this one visit — skipped entirely when
+        #    the patient chose "share everything" for this grant at approval
+        #    time (grant.share_all), same effect as revealing every private
+        #    record but without touching standing RecordsPrivacy itself ─────
         shown_now = set(grant.shown_private_ids or [])
-        withheld = sum(1 for d in documents if d["id"] in hidden_ids and d["id"] not in shown_now)
-        documents = [d for d in documents if d["id"] not in hidden_ids or d["id"] in shown_now]
-        hidden_sections = list((privacy.hidden_sections if privacy else []) or [])
+        if grant.share_all:
+            hidden_ids, withheld, hidden_sections = set(), 0, []
+        else:
+            privacy = _privacy_for(grant.awpid)
+            hidden_ids = _privacy_hidden_ids(grant.awpid, documents, privacy)
+            withheld = sum(1 for d in documents if d["id"] in hidden_ids and d["id"] not in shown_now)
+            documents = [d for d in documents if d["id"] not in hidden_ids or d["id"] in shown_now]
+            hidden_sections = list((privacy.hidden_sections if privacy else []) or [])
 
         for d in documents:
             d["revealed_for_visit"] = d["id"] in hidden_ids and d["id"] in shown_now
@@ -713,22 +719,38 @@ class RecordsShareDecisionView(APIView):
             )
 
         if not request.data.get("consent_confirmed"):
+            docs = _vault_documents(me)
+            private_count = len(_privacy_hidden_ids(me, docs))
             return error(
                 "Confirm what you're sharing before granting access.",
                 errors={
                     "consent_required": True,
                     "share_categories": EMERGENCY_SHARE_CATEGORIES,
                     "window_hours": RecordsShareRequest.WINDOW_HOURS,
+                    # How many records the patient's standing privacy would
+                    # withhold from THIS share by default — lets the app skip
+                    # showing the all-vs-default choice entirely when it's 0
+                    # (nothing private exists yet, so the two are identical).
+                    "private_count": private_count,
                 },
                 status=428,
             )
+
+        # One-time bulk choice, made here instead of one record at a time via
+        # RecordsShareRevealView: "all" skips standing RecordsPrivacy for the
+        # whole grant, "default" (or anything else / omitted) keeps it. Never
+        # touches RecordsPrivacy itself — this is scoped to this one grant.
+        share_all = (request.data.get("share_scope") or "default").strip() == "all"
 
         now = timezone.now()
         grant.awpid = me
         grant.status = RecordsShareRequest.STATUS_APPROVED
         grant.decided_at = now
         grant.expires_at = now + timedelta(hours=RecordsShareRequest.WINDOW_HOURS)
-        grant.save(using="default", update_fields=["awpid", "status", "decided_at", "expires_at"])
+        grant.share_all = share_all
+        grant.save(using="default", update_fields=[
+            "awpid", "status", "decided_at", "expires_at", "share_all",
+        ])
         _audit(me, EmergencyAccessLog.EVENT_GENERATED, _client_ip(request))
 
         return success(data={
@@ -737,6 +759,7 @@ class RecordsShareDecisionView(APIView):
             "requester_label": grant.requester_label,
             "expires_at": grant.expires_at,
             "seconds_left": grant.seconds_left(),
+            "share_all": grant.share_all,
         }, message="Access granted for the next 2 hours.")
 
 
@@ -828,6 +851,7 @@ class RecordsShareMineView(APIView):
                 "seconds_left": g.seconds_left(),
                 "last_seen_at": g.last_seen_at,
                 "pending_download": _pending_download_payload(g),
+                "share_all": g.share_all,
             })
         return success(data={"grants": out})
 
@@ -1049,6 +1073,7 @@ class RecordsPrivacyView(APIView):
                 "requester_label":   live.requester_label,
                 "seconds_left":      live.seconds_left(),
                 "shown_private_ids": live.shown_private_ids or [],
+                "share_all":         live.share_all,
             } if live else None),
         })
 

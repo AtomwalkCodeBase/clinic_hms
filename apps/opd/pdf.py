@@ -63,18 +63,21 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
     when = visit_date or prescription.created_at
 
     # ── QR: "scan to save in My Reports" ────────────────────────────────
-    # Encodes an HMAC-signed token (core.qr_token) tying this Rx number to
-    # the patient's AWPID, so the portal can verify a re-uploaded photo of
-    # this sheet and file it under Prescriptions automatically. Best-effort:
-    # a missing rx_number / awpid, or any error, just omits the QR.
+    # Encodes a view-report link (core.qr_token.issue_url) whose token ties
+    # this Rx number to the patient's AWPID — the app's own camera forwards
+    # whatever it scans straight to the verify() path and files it under
+    # Prescriptions automatically; any other scanner (Google Lens etc.) just
+    # opens the link as a normal webpage with a view-consent prompt
+    # (apps/patients/document_view_views.py). Best-effort: a missing
+    # rx_number / awpid, or any error, just omits the QR.
     header_right = right
     try:
         awpid = getattr(patient, "awpid", "") if patient else ""
         if prescription.rx_number and awpid:
             import qrcode
-            from core.qr_token import issue as _qr_issue
-            _tok = _qr_issue(doc_type="prescription",
-                             public_document_id=prescription.rx_number, awpid=awpid)
+            from core.qr_token import issue_url as _qr_issue_url
+            _tok = _qr_issue_url(doc_type="prescription",
+                                  public_document_id=prescription.rx_number, awpid=awpid)
             _qr = qrcode.QRCode(box_size=4, border=1)
             _qr.add_data(_tok)
             _qr.make(fit=True)

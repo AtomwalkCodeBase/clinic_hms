@@ -48,6 +48,9 @@ EXEMPT_PREFIXES = (
                                       # create/status/records/download endpoints gated by the 32-char
                                       # token in the URL. The patient half is at /api/v1/portal/records-share/
                                       # and is NOT exempt (normal patient-JWT).
+    "/api/v1/view-report/",          # Printed prescription/lab-report QR, opened by a non-app scanner
+                                      # (apps/patients/document_view_views.py) — no Atomwalk login at all;
+                                      # auth is the signed token in the URL itself (core/qr_token.py).
     "/health/",
     "/admin/",
 )

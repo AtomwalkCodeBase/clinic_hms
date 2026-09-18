@@ -29,6 +29,7 @@ const ChangePasswordPage = lazy(() => import("./pages/auth/ChangePasswordPage"))
 const StaffForgotPasswordPage   = lazy(() => import("./pages/auth/StaffForgotPasswordPage"));
 const PatientForgotPasswordPage = lazy(() => import("./pages/auth/PatientForgotPasswordPage"));
 const EmergencyViewPage         = lazy(() => import("./pages/public/EmergencyViewPage"));
+const ViewReportPage            = lazy(() => import("./pages/public/ViewReportPage"));
 const ConsultPadPage            = lazy(() => import("./pages/public/ConsultPadPage"));
 const ShareRecordsPage          = lazy(() => import("./pages/public/ShareRecordsPage"));
 
@@ -207,6 +208,7 @@ export default function App() {
           <Route path={ROUTES.FORGOT_PASSWORD_STAFF}   element={<StaffForgotPasswordPage />} />
           <Route path={ROUTES.FORGOT_PASSWORD_PATIENT} element={<PatientForgotPasswordPage />} />
           <Route path={ROUTES.EMERGENCY_VIEW(":token")} element={<EmergencyViewPage />} />
+          <Route path={ROUTES.VIEW_REPORT(":token")} element={<ViewReportPage />} />
           <Route path={ROUTES.CONSULT_PAD(":token")} element={<ConsultPadPage />} />
           <Route path={ROUTES.SHARE_RECORDS_ENTRY} element={<ShareRecordsPage />} />
           <Route path={ROUTES.SHARE_RECORDS_ENTRY_ALT} element={<ShareRecordsPage />} />

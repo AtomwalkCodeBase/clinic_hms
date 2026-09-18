@@ -53,6 +53,11 @@ urlpatterns = [
     # token; the approve/end endpoints are patient-authenticated. Same
     # "reached without an account here" reasoning as /emergency/ above.
     path("api/v1/records-share/", include("apps.patients.records_share_urls")),
+    # Also intentionally public (see apps/patients/document_view_views.py) —
+    # what a printed prescription/lab-report QR opens when scanned by
+    # anything other than the patient app itself (Google Lens etc). Same
+    # "reached without an account here" reasoning as /emergency/ above.
+    path("api/v1/view-report/",   include("apps.patients.document_view_urls")),
     # apps.clinical's Encounter/Vital/Diagnosis/FollowUp/ClinicalDocument were
     # retired (HMS-07c-1, confirmed dead — the live flow writes through
     # apps.opd, see apps/opd/views.py::_sync_to_hie for the actual HIE write
