@@ -86,6 +86,8 @@ def _tenant_to_dict(tenant):
         "gstin":      tenant.gstin,
         "accreditations": tenant.accreditations,
         "about":      tenant.about,
+        "latitude":   tenant.latitude,
+        "longitude":  tenant.longitude,
         "is_active":  tenant.is_active,
         "created_at": tenant.created_at.isoformat(),
         "subscription": subscription,
@@ -404,6 +406,34 @@ class TenantDetailView(APIView):
         if profile_updated:
             tenant.save(update_fields=profile_updated)
             updated_fields.append("profile")
+
+        # ── Coordinates — power the patient app's "hospitals near me"
+        # (apps.patients.portal_views, core.geo.haversine_km). Sent as
+        # numbers, not the free-text profile fields above: validated to
+        # real-world lat/lng ranges so a typo can't quietly break every
+        # distance sort. Either key alone clears just that one field
+        # (empty string/null → None) rather than requiring both at once.
+        geo_updated = []
+        if "latitude" in d or "longitude" in d:
+            for field, lo, hi in (("latitude", -90, 90), ("longitude", -180, 180)):
+                if field not in d:
+                    continue
+                raw = d[field]
+                if raw in (None, ""):
+                    setattr(tenant, field, None)
+                    geo_updated.append(field)
+                    continue
+                try:
+                    value = float(raw)
+                except (TypeError, ValueError):
+                    return error(f"{field.capitalize()} must be a number.", errors={field: "Invalid number."})
+                if not (lo <= value <= hi):
+                    return error(f"{field.capitalize()} must be between {lo} and {hi}.", errors={field: "Out of range."})
+                setattr(tenant, field, value)
+                geo_updated.append(field)
+        if geo_updated:
+            tenant.save(update_fields=geo_updated)
+            updated_fields.append("coordinates")
 
         if "is_active" in d:
             before = tenant.is_active

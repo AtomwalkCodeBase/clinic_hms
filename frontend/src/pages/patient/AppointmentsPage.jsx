@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
+import HospitalDirections from "../../components/common/HospitalDirections";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
 import { useApi } from "../../hooks/useApi";
 import { useToast } from "../../hooks/useToast";
@@ -468,7 +469,11 @@ function HeroAppointment({ b, ownAwpid, onCancel, onReschedule }) {
                   </span>
                 )}
               </div>
-              {mapsUrl(b.hospital, b.hospital_city, b.hospital_state) && (
+              {(b.hospital_latitude != null && b.hospital_longitude != null) ? (
+                <div style={{ marginTop: 8 }}>
+                  <HospitalDirections latitude={b.hospital_latitude} longitude={b.hospital_longitude} hospitalName={b.hospital} />
+                </div>
+              ) : mapsUrl(b.hospital, b.hospital_city, b.hospital_state) && (
                 <a
                   href={mapsUrl(b.hospital, b.hospital_city, b.hospital_state)} target="_blank" rel="noreferrer"
                   style={{ display: "inline-flex", alignItems: "center", gap: 3, marginTop: 6, fontSize: 11.5, fontWeight: 700, color: "var(--color-primary)", textDecoration: "none" }}

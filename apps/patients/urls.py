@@ -20,6 +20,10 @@ from .growth_vaccination_views import (
     PatientVaccinationDeclineView,
     PatientVaccinationAdministerView,
 )
+from .pediatric_views import (
+    BirthHistoryView,
+    PatientMilestoneListCreateView,
+)
 
 urlpatterns = [
     path("register/",          PatientRegisterView.as_view(),       name="patient-register"),
@@ -39,4 +43,7 @@ urlpatterns = [
     path("<int:pk>/vaccinations/order/",      PatientVaccinationOrderView.as_view(),      name="patient-vaccination-order"),
     path("<int:pk>/vaccinations/decline/",    PatientVaccinationDeclineView.as_view(),    name="patient-vaccination-decline"),
     path("<int:pk>/vaccinations/administer/", PatientVaccinationAdministerView.as_view(), name="patient-vaccination-administer"),
+    # ── Pediatric-only additions ────────────────────────────────────────
+    path("<int:pk>/birth-history/", BirthHistoryView.as_view(),              name="patient-birth-history"),
+    path("<int:pk>/milestones/",    PatientMilestoneListCreateView.as_view(), name="patient-milestones"),
 ]

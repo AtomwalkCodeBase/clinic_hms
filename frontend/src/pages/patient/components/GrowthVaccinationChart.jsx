@@ -11,12 +11,19 @@
  *                  items: { vaccine_name, scheduled_label, administered_date,
  *                           due_date, status, timing, record_id, has_certificate, ... }
  *
- * Honesty constraints carried over from the backend (do not relax these
- * client-side just to make the chart look richer):
- *   - No percentile/reference curves — PortalGrowthView returns
- *     percentile_available: false on purpose ("a made-up percentile band
- *     would be worse than not showing one"). Nothing here draws one.
- *   - No head-circumference metric — SharedVital has no such field.
+ * Percentile bands (WHO growth reference, ages 0-5y): PortalGrowthView now
+ * computes a per-point `percentiles.<metric>` block (see
+ * apps.registry.growth_reference) once the child is a minor with a WHO-
+ * covered age/gender — `percentile_available` on the growth payload says
+ * whether ANY point in the series actually carries one. When it's false
+ * (adult patient, age outside 0-5y, unsupported gender, or simply no data
+ * yet), nothing here fabricates a percentile — same honesty rule as before,
+ * just no longer a blanket "never" now that the backend has real numbers.
+ * Head Circumference is a real metric now too (Vitals/SharedVital both
+ * carry head_circumference_cm) — only offered in the metric switcher for a
+ * minor patient (growth.is_minor), never cluttering an adult's chart.
+ *
+ * Other honesty constraint carried over from the backend:
  *   - Growth measurements have no uploaded document attached in this system
  *     (only vaccination records do). Hovering/clicking a growth point shows
  *     a detail card (date / value / age / source), NOT a fake "view
@@ -40,8 +47,10 @@ import { useToast } from "../../../hooks/useToast";
 import { openDataUrlInNewTab } from "../../../utils/fileViewer";
 
 const METRICS = [
-  { id: "height_cm", label: "Height", unit: "cm", color: "var(--color-primary)", light: "var(--color-primary-light)" },
-  { id: "weight_kg", label: "Weight", unit: "kg", color: "#2E6FA3", light: "#E3EDF5" },
+  { id: "height_cm", label: "Height", unit: "cm", color: "var(--color-primary)", light: "var(--color-primary-light)", percentileKey: "height" },
+  { id: "weight_kg", label: "Weight", unit: "kg", color: "#2E6FA3", light: "#E3EDF5", percentileKey: "weight" },
+  // Pediatric-only — appended at render time only when growth.is_minor.
+  { id: "head_circumference_cm", label: "Head Circumference", unit: "cm", color: "#8B5CF6", light: "#EDE9FE", percentileKey: "head_circumference" },
 ];
 
 const CHART_TYPES = [
@@ -116,19 +125,23 @@ export default function GrowthVaccinationChart({ growth, growthLoading, roadmap,
   const [certLoading, setCertLoading] = useState(false);
 
   const dob = growth?.date_of_birth;
-  const metricDef = METRICS.find(m => m.id === metric);
+  // Head Circumference only makes sense — and is only ever populated by the
+  // backend — for a minor patient (see METRICS' comment above).
+  const availableMetrics = growth?.is_minor ? METRICS : METRICS.filter(m => m.id !== "head_circumference_cm");
+  const metricDef = availableMetrics.find(m => m.id === metric) || availableMetrics[0];
 
   const growthPoints = useMemo(() => {
     const series = growth?.series || [];
     return series
       .map(p => ({
         date: p.date,
-        value: p[metric],
+        value: p[metricDef.id],
         source: p.source,
         ageDays: dob ? daysBetween(dob, p.date) : null,
+        percentile: p.percentiles?.[metricDef.percentileKey]?.percentile ?? null,
       }))
       .filter(p => p.value != null);
-  }, [growth, metric, dob]);
+  }, [growth, metricDef, dob]);
 
   const vaxMarkers = useMemo(() => {
     if (!dob) return [];
@@ -200,19 +213,27 @@ export default function GrowthVaccinationChart({ growth, growthLoading, roadmap,
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <SegmentedControl options={METRICS.map(m => ({ id: m.id, label: m.label }))} value={metric} onChange={setMetric} />
+          <SegmentedControl options={availableMetrics.map(m => ({ id: m.id, label: m.label }))} value={metricDef.id} onChange={setMetric} />
           <SegmentedControl options={CHART_TYPES} value={chartType} onChange={setChartType} />
         </div>
       </div>
 
       {!loading && latest && (
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, margin: "10px 0 4px" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, margin: "10px 0 4px", flexWrap: "wrap" }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: 0.5 }}>
             Latest
           </span>
           <span style={{ fontSize: 22, fontWeight: 800, fontFamily: "var(--font-display)", color: metricDef.color }}>
             {latest.value} <span style={{ fontSize: 13, fontWeight: 600 }}>{metricDef.unit}</span>
           </span>
+          {latest.percentile != null && (
+            <span style={{
+              fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10,
+              background: metricDef.light, color: metricDef.color,
+            }}>
+              {latest.percentile}th percentile (WHO)
+            </span>
+          )}
           {trend && (
             <span style={{
               display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 700,
@@ -495,6 +516,7 @@ function StoryChart({ points, markers, metricDef, onMarkerClick }) {
       {hover?.kind === "point" && (
         <ChartTooltip x={hover.x} y={hover.y} viewW={width} viewH={totalH}>
           <TooltipValue label={metricDef.label} value={`${hover.p.value} ${metricDef.unit}`} />
+          {hover.p.percentile != null && <TooltipValue label="Percentile (WHO)" value={`${hover.p.percentile}th`} />}
           <TooltipValue label="Date" value={formatDate(hover.p.date)} />
           {hover.p.ageDays != null && <TooltipValue label="Age" value={formatAge(hover.p.ageDays)} />}
           {SOURCE_LABEL[hover.p.source] && <div style={{ opacity: 0.65, marginTop: 2 }}>{SOURCE_LABEL[hover.p.source]}</div>}
@@ -620,6 +642,7 @@ function SimpleChart({ type, points, metricDef }) {
       {hover != null && (
         <ChartTooltip x={coords[hover].x} y={coords[hover].y} viewW={width} viewH={height}>
           <TooltipValue label={metricDef.label} value={`${coords[hover].value} ${metricDef.unit}`} />
+          {coords[hover].percentile != null && <TooltipValue label="Percentile (WHO)" value={`${coords[hover].percentile}th`} />}
           <TooltipValue label="Date" value={formatDate(coords[hover].date)} />
           {coords[hover].ageDays != null && <TooltipValue label="Age" value={formatAge(coords[hover].ageDays)} />}
           {SOURCE_LABEL[coords[hover].source] && <div style={{ opacity: 0.65, marginTop: 2 }}>{SOURCE_LABEL[coords[hover].source]}</div>}

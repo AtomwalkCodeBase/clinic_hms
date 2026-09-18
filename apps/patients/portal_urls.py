@@ -15,6 +15,7 @@ from .portal_views import (
     PortalFamilyListCreateView, PortalFamilyDetailView, PortalHealthSummaryView,
     PortalHealthInsightsView, PortalLabTrendsView, PortalDocumentLabValuesView, PortalHealthInsightNarrativeView,
     PortalVaccinationListView, PortalVaccinationUploadView, PortalVaccinationFileView, PortalGrowthView,
+    PortalMilestoneListView,
     PortalHealthTimelineView, PortalNotificationsView, PortalNotificationMarkReadView,
     PortalEmergencyTokenView,
 )
@@ -66,6 +67,7 @@ urlpatterns = [
     path("vaccinations/upload/",            PortalVaccinationUploadView.as_view(), name="portal-vaccinations-upload"),
     path("vaccinations/<int:record_id>/file/", PortalVaccinationFileView.as_view(), name="portal-vaccinations-file"),
     path("growth/",                         PortalGrowthView.as_view(), name="portal-growth"),
+    path("milestones/",                     PortalMilestoneListView.as_view(), name="portal-milestones"),
     path("timeline/",                       PortalHealthTimelineView.as_view(), name="portal-timeline"),
     path("notifications/",                  PortalNotificationsView.as_view(), name="portal-notifications"),
     path("notifications/<str:tenant_db>/<int:pk>/read/", PortalNotificationMarkReadView.as_view(), name="portal-notifications-read"),

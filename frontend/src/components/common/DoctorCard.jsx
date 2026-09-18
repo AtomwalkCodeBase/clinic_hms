@@ -10,6 +10,7 @@
  */
 import { useState } from "react";
 import { Building2, ChevronDown, ChevronUp } from "lucide-react";
+import HospitalDirections from "./HospitalDirections";
 
 export default function DoctorCard({ d, hospitalName, hospitalCity, onBook, onViewProfile }) {
   const [expanded, setExpanded] = useState(false);
@@ -45,6 +46,7 @@ export default function DoctorCard({ d, hospitalName, hospitalCity, onBook, onVi
             <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 3, display: "flex", alignItems: "center", gap: 5 }}>
               <Building2 size={12} style={{ flexShrink: 0 }} />
               {hospital}{city ? `, ${city}` : ""}
+              {d.distance_km != null && <span style={{ fontWeight: 700 }}>· {d.distance_km} km away</span>}
             </div>
           )}
           <div style={{ fontSize: 13, color: "var(--color-text-secondary)", marginTop: 6 }}>
@@ -54,6 +56,15 @@ export default function DoctorCard({ d, hospitalName, hospitalCity, onBook, onVi
           {languages.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
               {languages.map(l => <span key={l} className="tag-pill">{l}</span>)}
+            </div>
+          )}
+          {/* Cross-hospital search results carry hospital_latitude/longitude
+              per doctor (each row can be a different hospital) — the
+              single-hospital doctor list shows directions once at the top
+              of the page instead, so this stays empty there. */}
+          {(d.hospital_latitude != null && d.hospital_longitude != null) && (
+            <div style={{ marginTop: 10 }} onClick={(e) => e.stopPropagation()}>
+              <HospitalDirections latitude={d.hospital_latitude} longitude={d.hospital_longitude} hospitalName={hospital} />
             </div>
           )}
         </div>

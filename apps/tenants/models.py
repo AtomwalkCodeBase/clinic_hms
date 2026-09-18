@@ -29,6 +29,14 @@ class Tenant(models.Model):
     # description. Platform-admin-managed, not editable by tenant staff.
     accreditations = models.CharField(max_length=300, blank=True)
     about          = models.TextField(blank=True)
+    # Set once by platform admin (Hospital profile → Edit), same
+    # provenance as accreditations/about above — patient app never writes
+    # these. Powers "hospitals near me" (apps.patients.portal_views) via a
+    # plain haversine distance calc (core.geo.haversine_km); null until an
+    # admin fills them in, so a hospital missing coordinates just sorts to
+    # the end of a distance-ranked list instead of breaking it.
+    latitude    = models.FloatField(null=True, blank=True)
+    longitude   = models.FloatField(null=True, blank=True)
     is_active   = models.BooleanField(default=True)
     # Which VaccinationSchedule (apps.registry.models.VaccinationSchedule)
     # this hospital's staff-facing vaccination roadmap is built against.
@@ -48,6 +56,13 @@ class Tenant(models.Model):
     # the field must tolerate it) falls back to the global "Default
     # Schedule" template at the call site.
     active_vaccination_schedule_id = models.IntegerField(null=True, blank=True)
+
+    # Same pattern as active_vaccination_schedule_id above, for the
+    # pediatric developmental-milestone module (apps.registry.models.
+    # MilestoneSchedule) — hospital-configurable milestone catalog, cloned
+    # from a platform-admin template the same way vaccination schedules are.
+    # null=True: falls back to the global default template at the call site.
+    active_milestone_schedule_id = models.IntegerField(null=True, blank=True)
 
     # Who controls the consultation fee for doctors at this hospital.
     #   "doctor"   — each doctor sets their own fee from their profile.

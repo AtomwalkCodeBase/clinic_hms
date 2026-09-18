@@ -35,6 +35,8 @@ PERMISSION_CATALOG = {
     "lab.process":             "Process lab requests",
     "lab.report.upload":       "Upload/deliver lab reports",
     "vitals.record":            "Record patient vitals",
+    "birth_history.record":      "Record/edit a pediatric patient's birth history",
+    "milestone.record":           "Record a pediatric developmental-milestone assessment",
     "appointment.manage":        "Create/manage appointments",
     "queue.manage":               "Manage the check-in / consultation queue",
     "billing.manage":              "Handle billing intake and transactions",
@@ -53,14 +55,15 @@ SYSTEM_ROLE_PERMISSIONS = {
     "doctor": {
         "patient.view", "encounter.create", "encounter.sign",
         "prescription.create", "lab.order", "queue.manage", "profile.edit.own",
+        "birth_history.record", "milestone.record",
     },
     "nurse": {
         "patient.view", "vitals.record", "queue.manage", "lab.order",
-        "profile.edit.own",
+        "profile.edit.own", "milestone.record",
     },
     "front_desk": {
         "patient.register", "appointment.manage", "queue.manage",
-        "billing.manage", "profile.edit.own",
+        "billing.manage", "profile.edit.own", "birth_history.record",
     },
     "lab_tech": {
         "lab.catalog.manage", "lab.process", "lab.report.upload",

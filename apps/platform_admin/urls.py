@@ -8,6 +8,9 @@ from .views import (
 from .vaccination_template_views import (
     VaccinationTemplateListCreateView, VaccinationTemplateDetailView,
 )
+from .milestone_template_views import (
+    MilestoneTemplateListCreateView, MilestoneTemplateDetailView,
+)
 
 urlpatterns = [
     path("stats/",          PlatformStatsView.as_view(), name="platform-stats"),
@@ -28,4 +31,9 @@ urlpatterns = [
     # apps.org.vaccination_schedule_views.VaccinationScheduleListCreateView.
     path("vaccination-templates/", VaccinationTemplateListCreateView.as_view(), name="platform-vaccination-template-list-create"),
     path("vaccination-templates/<int:pk>/", VaccinationTemplateDetailView.as_view(), name="platform-vaccination-template-detail"),
+
+    # System-level developmental-milestone schedule templates — same
+    # clone-a-template pattern as vaccination templates above.
+    path("milestone-templates/", MilestoneTemplateListCreateView.as_view(), name="platform-milestone-template-list-create"),
+    path("milestone-templates/<int:pk>/", MilestoneTemplateDetailView.as_view(), name="platform-milestone-template-detail"),
 ]

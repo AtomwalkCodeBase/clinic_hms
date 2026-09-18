@@ -12,7 +12,7 @@ SharedRecordSerializer    — read-only: clinical records from HIE (cross-tenant
 
 from django.core.validators import RegexValidator
 from rest_framework import serializers
-from .models import Patient, Allergy
+from .models import Patient, Allergy, BirthHistory
 
 # Consent is never withheld from an emergency patient because a reason
 # wasn't supplied — this is the always-applied default, matching the legal
@@ -206,6 +206,28 @@ class AllergySerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "patient", "recorded_at", "updated_at"]
 
 
+class BirthHistorySerializer(serializers.ModelSerializer):
+    """
+    CRUD serializer for BirthHistory — mirrors AllergySerializer's shape.
+    Writable by both front desk (at registration) and doctor (edited later
+    at consultation) per the pediatric workflow design; the view layer
+    (apps.patients.pediatric_views.BirthHistoryView) gates who can write via
+    core.permissions.IsDoctorOrFrontDesk, not this serializer.
+    """
+    delivery_mode_display = serializers.CharField(source="get_delivery_mode_display", read_only=True)
+
+    class Meta:
+        model  = BirthHistory
+        fields = [
+            "id", "patient", "gestational_age_weeks", "birth_weight_kg",
+            "delivery_mode", "delivery_mode_display", "multiple_birth",
+            "nicu_admission", "nicu_days", "birth_complications",
+            "congenital_conditions", "apgar_score_1min", "apgar_score_5min",
+            "notes", "recorded_by", "recorded_at", "updated_by", "updated_at",
+        ]
+        read_only_fields = ["id", "patient", "recorded_by", "recorded_at", "updated_by", "updated_at"]
+
+
 class SharedDiagnosisSerializer(serializers.Serializer):
     """Read-only serializer for shared HIE diagnosis — source_tenant_id excluded."""
     icd10_code      = serializers.CharField()
@@ -228,6 +250,7 @@ class SharedVitalSerializer(serializers.Serializer):
     height_cm       = serializers.DecimalField(max_digits=6, decimal_places=2, allow_null=True)
     resp_rate       = serializers.IntegerField(allow_null=True)
     blood_sugar_mgdl= serializers.DecimalField(max_digits=6, decimal_places=2, allow_null=True)
+    head_circumference_cm = serializers.DecimalField(max_digits=5, decimal_places=2, allow_null=True)
 
 
 class SharedAllergySerializer(serializers.Serializer):

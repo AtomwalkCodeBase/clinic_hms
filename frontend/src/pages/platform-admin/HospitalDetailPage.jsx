@@ -27,12 +27,14 @@ const ROLE_LABELS = {
 
 function OverviewTab({ tenant, overview, onChanged }) {
   const api = apiClient;
-  const { toastSuccess, toastApiError } = useToast();
+  const { toastSuccess, toastApiError, toastError } = useToast();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
     name: tenant.name || "", city: tenant.city || "", state: tenant.state || "",
     gstin: tenant.gstin || "", accreditations: tenant.accreditations || "", about: tenant.about || "",
+    latitude: tenant.latitude ?? "", longitude: tenant.longitude ?? "",
   });
+  const [locating, setLocating] = useState(false);
   const [saving, setSaving] = useState(false);
 
   function set(field, value) { setForm(f => ({ ...f, [field]: value })); }
@@ -115,11 +117,49 @@ function OverviewTab({ tenant, overview, onChanged }) {
               <label style={labelStyle}>About</label>
               <textarea style={{ ...inputStyle, minHeight: 70, resize: "vertical" }} value={form.about} onChange={e => set("about", e.target.value)} />
             </div>
+            <div>
+              <label style={labelStyle}>
+                Coordinates <span style={{ fontWeight: 400, color: "var(--color-text-muted)" }}>(powers "hospitals near me" on the patient app)</span>
+              </label>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input style={inputStyle} type="number" step="any" placeholder="Latitude"
+                  value={form.latitude} onChange={e => set("latitude", e.target.value)} />
+                <input style={inputStyle} type="number" step="any" placeholder="Longitude"
+                  value={form.longitude} onChange={e => set("longitude", e.target.value)} />
+                <button
+                  type="button"
+                  disabled={locating}
+                  onClick={() => {
+                    setLocating(true);
+                    navigator.geolocation?.getCurrentPosition(
+                      (pos) => {
+                        set("latitude", String(pos.coords.latitude.toFixed(6)));
+                        set("longitude", String(pos.coords.longitude.toFixed(6)));
+                        setLocating(false);
+                      },
+                      () => { toastError("Couldn't get current location — enter it manually."); setLocating(false); },
+                      { timeout: 10000 }
+                    );
+                  }}
+                  title="Use this device's current location (only accurate if you're physically at the hospital)"
+                  style={{ fontSize: 12, padding: "8px 12px", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "none", cursor: locating ? "default" : "pointer", whiteSpace: "nowrap" }}
+                >
+                  {locating ? "Locating…" : "Use current"}
+                </button>
+              </div>
+            </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={save} disabled={saving} className="btn-primary" style={{ fontSize: 13, padding: "8px 18px" }}>
                 {saving ? "Saving…" : "Save"}
               </button>
-              <button onClick={() => { setEditing(false); setForm({ name: tenant.name, city: tenant.city, state: tenant.state, gstin: tenant.gstin, accreditations: tenant.accreditations, about: tenant.about }); }}
+              <button onClick={() => {
+                setEditing(false);
+                setForm({
+                  name: tenant.name, city: tenant.city, state: tenant.state, gstin: tenant.gstin,
+                  accreditations: tenant.accreditations, about: tenant.about,
+                  latitude: tenant.latitude ?? "", longitude: tenant.longitude ?? "",
+                });
+              }}
                 style={{ fontSize: 13, padding: "8px 18px", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "none", cursor: "pointer" }}>
                 Cancel
               </button>
@@ -129,6 +169,14 @@ function OverviewTab({ tenant, overview, onChanged }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, fontSize: 13.5 }}>
             <div><div className="stat-label">GSTIN</div><div style={{ marginTop: 2 }}>{tenant.gstin || "—"}</div></div>
             <div><div className="stat-label">Accreditations</div><div style={{ marginTop: 2 }}>{tenant.accreditations || "—"}</div></div>
+            <div>
+              <div className="stat-label">Coordinates</div>
+              <div style={{ marginTop: 2 }}>
+                {tenant.latitude != null && tenant.longitude != null
+                  ? `${tenant.latitude.toFixed(5)}, ${tenant.longitude.toFixed(5)}`
+                  : <span style={{ color: "var(--color-warning)" }}>Not set — won't appear in "near me" results</span>}
+              </div>
+            </div>
             <div style={{ gridColumn: "1 / -1" }}><div className="stat-label">About</div><div style={{ marginTop: 2 }}>{tenant.about || "—"}</div></div>
           </div>
         )}
