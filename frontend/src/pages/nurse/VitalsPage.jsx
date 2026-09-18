@@ -52,10 +52,17 @@ export default function VitalsPage() {
     temperature:    "",
     weight_kg:      "",
     height_cm:      "",
+    head_circumference_cm: "",
     blood_sugar_rbs: "",
     chief_complaint: "",
     nurse_notes:    "",
   });
+
+  // Pediatric-only field — shown only for a minor patient (age < 18), same
+  // is_minor derivation used everywhere else in this codebase (see
+  // EncounterPage.jsx's growthData.is_minor gate). Appointment.patient_age
+  // is already on every appointment row via AppointmentSerializer.
+  const isMinorPatient = selected?.patient_age != null && selected.patient_age < 18;
 
   useEffect(() => {
     setLoading(true);
@@ -84,6 +91,7 @@ export default function VitalsPage() {
       temperature:    "",
       weight_kg:      "",
       height_cm:      "",
+      head_circumference_cm: "",
       blood_sugar_rbs: "",
       chief_complaint: appt.chief_complaint || "",
       nurse_notes:    "",
@@ -104,7 +112,7 @@ export default function VitalsPage() {
       // Build vitals payload — only send non-empty fields
       const vitals = {};
       const numFields = ["systolic_bp","diastolic_bp","pulse_rate","spo2",
-                         "temperature","weight_kg","height_cm","blood_sugar_rbs"];
+                         "temperature","weight_kg","height_cm","head_circumference_cm","blood_sugar_rbs"];
       numFields.forEach(f => {
         if (form[f] !== "") vitals[f] = parseFloat(form[f]);
       });
@@ -275,6 +283,13 @@ export default function VitalsPage() {
                       value={form.height_cm} onChange={handleChange} placeholder="170" />
                     <VitalInput label="Blood Sugar (RBS)" unit="mg/dL" name="blood_sugar_rbs"
                       value={form.blood_sugar_rbs} onChange={handleChange} placeholder="90" />
+                    {/* Pediatric-only — head circumference matters for growth
+                        tracking in infants/young children; hidden for adults
+                        so it never clutters the standard vitals form. */}
+                    {isMinorPatient && (
+                      <VitalInput label="Head Circumference" unit="cm" name="head_circumference_cm"
+                        value={form.head_circumference_cm} onChange={handleChange} placeholder="43" />
+                    )}
                   </div>
                 </div>
 

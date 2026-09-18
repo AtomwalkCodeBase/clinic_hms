@@ -27,7 +27,7 @@ import { formatYearsMonths } from "../../utils/age";
 import {
   AlertTriangle, Stethoscope, Pill, FlaskConical, Activity, Clock, Paperclip,
   Sparkles, Printer, Download, CalendarClock, Cake, User, Upload,
-  TrendingUp, Syringe, Check, X as XIcon, Mic, Square, QrCode,
+  TrendingUp, Syringe, Check, X as XIcon, Mic, Square, QrCode, Baby,
 } from "lucide-react";
 
 // ─── Common ICD-10 codes (expandable; backend search in Phase 2) ─────────────
@@ -590,6 +590,17 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
   const { data: vaxData, isLoading: vaxLoading, refetch: refetchVax } = useApi(
     patientPk ? API_ENDPOINTS.PATIENTS.VACCINATIONS(patientPk) : null, { skip: !patientPk }
   );
+  // Pediatric-only additions — Birth History + developmental-milestone
+  // roadmap. Both fetch unconditionally alongside growth/vaccinations (the
+  // request is cheap and the response is small); the panels themselves are
+  // gated to growthData.is_minor === true, same as Vaccinations above, so
+  // an adult patient's sidebar never shows or fetches-for-display these.
+  const { data: birthHistoryData, isLoading: birthHistoryLoading, refetch: refetchBirthHistory } = useApi(
+    patientPk ? API_ENDPOINTS.PATIENTS.BIRTH_HISTORY(patientPk) : null, { skip: !patientPk }
+  );
+  const { data: milestoneData, isLoading: milestoneLoading, refetch: refetchMilestones } = useApi(
+    patientPk ? API_ENDPOINTS.PATIENTS.MILESTONES(patientPk) : null, { skip: !patientPk }
+  );
   const { toastSuccess, toastApiError } = useToast();
 
   // Ad-hoc "Order Vaccine" inline form — matches this file's existing
@@ -742,6 +753,97 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
       setLogging(false);
     }
   }
+
+  // ── Birth History (pediatric-only) ──────────────────────────────────────
+  // Front desk may already have captured this at registration (see
+  // RegisterPatientPage.jsx) — the doctor's job here is to review and, if
+  // needed, add or correct it during consultation. POST creates the record
+  // (first capture), PATCH edits an existing one — same create-vs-edit split
+  // as apps.patients.pediatric_views.BirthHistoryView.
+  const [bhFormOpen, setBhFormOpen] = useState(false);
+  const [bhForm, setBhForm] = useState(null); // populated on open, from birthHistoryData or blank
+  const [bhSaving, setBhSaving] = useState(false);
+  const bhExists = !!birthHistoryData?.id;
+
+  function openBhForm() {
+    setBhForm({
+      gestational_age_weeks: birthHistoryData?.gestational_age_weeks ?? "",
+      birth_weight_kg: birthHistoryData?.birth_weight_kg ?? "",
+      delivery_mode: birthHistoryData?.delivery_mode ?? "",
+      multiple_birth: birthHistoryData?.multiple_birth ?? "",
+      nicu_admission: birthHistoryData?.nicu_admission ?? false,
+      nicu_days: birthHistoryData?.nicu_days ?? "",
+      birth_complications: birthHistoryData?.birth_complications ?? "",
+      congenital_conditions: birthHistoryData?.congenital_conditions ?? "",
+      apgar_score_1min: birthHistoryData?.apgar_score_1min ?? "",
+      apgar_score_5min: birthHistoryData?.apgar_score_5min ?? "",
+      notes: birthHistoryData?.notes ?? "",
+    });
+    setBhFormOpen(true);
+  }
+  function updBhForm(k, v) { setBhForm(p => ({ ...p, [k]: v })); }
+
+  async function submitBirthHistory(e) {
+    e.preventDefault();
+    if (!bhForm || !patientPk) return;
+    setBhSaving(true);
+    try {
+      const body = {};
+      Object.entries(bhForm).forEach(([k, v]) => {
+        if (v === "" || v === null || v === undefined) return;
+        body[k] = v;
+      });
+      body.nicu_admission = !!bhForm.nicu_admission;
+      const call = bhExists ? apiClient.patch : apiClient.post;
+      await call(API_ENDPOINTS.PATIENTS.BIRTH_HISTORY(patientPk), body);
+      toastSuccess(bhExists ? "Birth history updated." : "Birth history recorded.");
+      setBhFormOpen(false);
+      refetchBirthHistory?.();
+    } catch (err) {
+      toastApiError(err, "Could not save birth history.");
+    } finally {
+      setBhSaving(false);
+    }
+  }
+
+  // ── Developmental Milestones (pediatric-only) ───────────────────────────
+  const [assessingKey, setAssessingKey] = useState(null); // which roadmap row's mini-form is open
+  const [assessForm, setAssessForm] = useState({ status: "achieved", notes: "" });
+  const [assessSaving, setAssessSaving] = useState(false);
+
+  function openAssess(item) {
+    const key = item.record_id ?? `${item.domain}:${item.milestone}`;
+    setAssessingKey(k => (k === key ? null : key));
+    setAssessForm({ status: "achieved", notes: "" });
+  }
+
+  async function submitAssessment(item) {
+    if (!patientPk) return;
+    setAssessSaving(true);
+    try {
+      await apiClient.post(API_ENDPOINTS.PATIENTS.MILESTONES(patientPk), {
+        domain: item.domain,
+        milestone: item.milestone,
+        scheduled_label: item.scheduled_label,
+        status: assessForm.status,
+        notes: assessForm.notes || undefined,
+      });
+      toastSuccess("Milestone assessment recorded.");
+      setAssessingKey(null);
+      refetchMilestones?.();
+    } catch (err) {
+      toastApiError(err, "Could not record the milestone assessment.");
+    } finally {
+      setAssessSaving(false);
+    }
+  }
+
+  const MILESTONE_STATUS_STYLE = {
+    achieved:   { bg: "#ECFDF5", color: "#047857", label: "Achieved" },
+    not_yet:    { bg: "#F3F4F6", color: "#6B7280", label: "Not Yet" },
+    concern:    { bg: "#FEF2F2", color: "#B91C1C", label: "Concern" },
+    unassessed: { bg: "var(--color-bg)", color: "var(--color-text-muted)", label: "Not Assessed" },
+  };
 
   // Status values from build_roadmap() (apps/registry/vaccine_schedule.py):
   // "completed"/"pending_review"/"rejected"/"ordered"/"declined" when a real
@@ -1276,6 +1378,198 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
                               <XIcon size={12} /> Not Required
                             </button>
                           )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </HistorySection>
+          )}
+
+          {growthData?.is_minor === true && (
+          <HistorySection title="Birth History" icon={<Baby size={13} />} count={bhExists ? 1 : 0}>
+            <div style={{ marginBottom: 10 }}>
+              <button
+                type="button"
+                onClick={() => (bhFormOpen ? setBhFormOpen(false) : openBhForm())}
+                disabled={!patientPk}
+                style={{
+                  width: "100%", fontSize: 11, fontWeight: 700, padding: "6px 10px", borderRadius: 6,
+                  border: "1px dashed var(--color-primary)", background: bhFormOpen ? "var(--color-primary-light)" : "var(--color-bg)",
+                  color: "var(--color-primary)", cursor: patientPk ? "pointer" : "not-allowed",
+                }}
+              >
+                {bhFormOpen ? "− Cancel" : bhExists ? "Edit Birth History" : "+ Record Birth History"}
+              </button>
+              {bhFormOpen && bhForm && (
+                <form onSubmit={submitBirthHistory} style={{
+                  marginTop: 8, background: "#FBF9F5", borderRadius: 10, padding: 10,
+                  border: "1px dashed var(--color-primary)", display: "grid", gap: 8,
+                }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>GESTATIONAL AGE (WEEKS)</label>
+                      <input type="number" className="form-input" value={bhForm.gestational_age_weeks}
+                        onChange={e => updBhForm("gestational_age_weeks", e.target.value)}
+                        style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>BIRTH WEIGHT (KG)</label>
+                      <input type="number" step="0.01" className="form-input" value={bhForm.birth_weight_kg}
+                        onChange={e => updBhForm("birth_weight_kg", e.target.value)}
+                        style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }} />
+                    </div>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>DELIVERY MODE</label>
+                    <select className="form-input" value={bhForm.delivery_mode}
+                      onChange={e => updBhForm("delivery_mode", e.target.value)}
+                      style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }}>
+                      <option value="">—</option>
+                      <option value="normal">Normal Vaginal Delivery</option>
+                      <option value="c_section">C-Section</option>
+                      <option value="assisted">Assisted (Forceps/Vacuum)</option>
+                      <option value="unknown">Unknown</option>
+                    </select>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
+                        <input type="checkbox" checked={!!bhForm.nicu_admission}
+                          onChange={e => updBhForm("nicu_admission", e.target.checked)} />
+                        NICU ADMISSION
+                      </label>
+                      {bhForm.nicu_admission && (
+                        <input type="number" className="form-input" placeholder="Days in NICU" value={bhForm.nicu_days}
+                          onChange={e => updBhForm("nicu_days", e.target.value)}
+                          style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }} />
+                      )}
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>MULTIPLE BIRTH</label>
+                      <input className="form-input" placeholder="e.g. twin" value={bhForm.multiple_birth}
+                        onChange={e => updBhForm("multiple_birth", e.target.value)}
+                        style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }} />
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>APGAR (1 MIN)</label>
+                      <input type="number" min="0" max="10" className="form-input" value={bhForm.apgar_score_1min}
+                        onChange={e => updBhForm("apgar_score_1min", e.target.value)}
+                        style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>APGAR (5 MIN)</label>
+                      <input type="number" min="0" max="10" className="form-input" value={bhForm.apgar_score_5min}
+                        onChange={e => updBhForm("apgar_score_5min", e.target.value)}
+                        style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }} />
+                    </div>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>BIRTH COMPLICATIONS</label>
+                    <textarea className="form-input" rows={2} value={bhForm.birth_complications}
+                      onChange={e => updBhForm("birth_complications", e.target.value)}
+                      style={{ width: "100%", boxSizing: "border-box", fontSize: 12, resize: "vertical" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>CONGENITAL CONDITIONS</label>
+                    <textarea className="form-input" rows={2} value={bhForm.congenital_conditions}
+                      onChange={e => updBhForm("congenital_conditions", e.target.value)}
+                      style={{ width: "100%", boxSizing: "border-box", fontSize: 12, resize: "vertical" }} />
+                  </div>
+                  <button type="submit" className="btn-primary" style={{ fontSize: 12, padding: "6px 10px" }} disabled={bhSaving}>
+                    {bhSaving ? "Saving…" : bhExists ? "Save Changes" : "Record Birth History"}
+                  </button>
+                </form>
+              )}
+            </div>
+
+            {birthHistoryLoading ? <EmptyNote>Loading birth history…</EmptyNote> : !bhExists ? (
+              <EmptyNote>No birth history recorded yet.</EmptyNote>
+            ) : (
+              <div style={{ display: "grid", gap: 4, fontSize: 11 }}>
+                {birthHistoryData.gestational_age_weeks != null && (
+                  <div>Gestational age: <strong>{birthHistoryData.gestational_age_weeks} weeks</strong></div>
+                )}
+                {birthHistoryData.birth_weight_kg != null && (
+                  <div>Birth weight: <strong>{birthHistoryData.birth_weight_kg} kg</strong></div>
+                )}
+                {birthHistoryData.delivery_mode_display && (
+                  <div>Delivery: <strong>{birthHistoryData.delivery_mode_display}</strong></div>
+                )}
+                {birthHistoryData.multiple_birth && <div>Multiple birth: <strong>{birthHistoryData.multiple_birth}</strong></div>}
+                {birthHistoryData.nicu_admission && (
+                  <div>NICU: <strong>Yes{birthHistoryData.nicu_days ? ` — ${birthHistoryData.nicu_days} days` : ""}</strong></div>
+                )}
+                {(birthHistoryData.apgar_score_1min != null || birthHistoryData.apgar_score_5min != null) && (
+                  <div>APGAR: <strong>{birthHistoryData.apgar_score_1min ?? "—"} / {birthHistoryData.apgar_score_5min ?? "—"}</strong></div>
+                )}
+                {birthHistoryData.birth_complications && <div>Complications: {birthHistoryData.birth_complications}</div>}
+                {birthHistoryData.congenital_conditions && <div>Congenital conditions: {birthHistoryData.congenital_conditions}</div>}
+              </div>
+            )}
+          </HistorySection>
+          )}
+
+          {growthData?.is_minor === true && (
+          <HistorySection title="Developmental Milestones" icon={<Baby size={13} />} count={milestoneData?.roadmap?.length}>
+            {milestoneLoading ? <EmptyNote>Loading milestone roadmap…</EmptyNote> : !milestoneData?.roadmap?.length ? (
+              <EmptyNote>No milestone schedule available.</EmptyNote>
+            ) : (
+              <div style={{ display: "grid", gap: 6 }}>
+                {milestoneData.roadmap.map((m, i) => {
+                  const st = MILESTONE_STATUS_STYLE[m.status] || MILESTONE_STATUS_STYLE.unassessed;
+                  const key = m.record_id ?? `${m.domain}:${m.milestone}`;
+                  const isOpen = assessingKey === key;
+                  return (
+                    <div key={i} style={{
+                      borderRadius: 8, border: "1px solid var(--color-border)", padding: "8px 10px",
+                      background: "var(--color-bg)",
+                    }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text)" }}>{m.milestone}</span>
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10,
+                          background: st.bg, color: st.color, whiteSpace: "nowrap",
+                        }}>{st.label}</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 3, textTransform: "capitalize" }}>
+                        {m.domain?.replace("_", " ")} · {m.scheduled_label}
+                        {m.assessed_date && ` · assessed ${new Date(m.assessed_date).toLocaleDateString("en-IN")}`}
+                        {m.status === "unassessed" && m.timing === "due_now" && " · recommended now"}
+                        {m.status === "unassessed" && m.timing === "past_window" && " · past the usual window"}
+                      </div>
+                      <button
+                        type="button" onClick={() => openAssess(m)}
+                        style={{
+                          marginTop: 6, fontSize: 10, fontWeight: 700, padding: "4px 8px", borderRadius: 6,
+                          border: "1px solid var(--color-primary)", background: isOpen ? "var(--color-primary-light)" : "var(--color-bg)",
+                          color: "var(--color-primary)", cursor: "pointer",
+                        }}
+                      >
+                        {isOpen ? "− Cancel" : "Assess"}
+                      </button>
+                      {isOpen && (
+                        <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                          <select className="form-input" value={assessForm.status}
+                            onChange={e => setAssessForm(f => ({ ...f, status: e.target.value }))}
+                            style={{ fontSize: 12 }}>
+                            <option value="achieved">Achieved</option>
+                            <option value="not_yet">Not Yet</option>
+                            <option value="concern">Concern — flag for follow-up</option>
+                          </select>
+                          <input className="form-input" placeholder="Notes (optional)" value={assessForm.notes}
+                            onChange={e => setAssessForm(f => ({ ...f, notes: e.target.value }))}
+                            style={{ fontSize: 12 }} />
+                          <button
+                            type="button" onClick={() => submitAssessment(m)} disabled={assessSaving}
+                            className="btn-primary" style={{ fontSize: 11, padding: "5px 8px" }}
+                          >
+                            {assessSaving ? "Saving…" : "Save Assessment"}
+                          </button>
                         </div>
                       )}
                     </div>

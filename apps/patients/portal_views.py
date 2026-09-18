@@ -28,6 +28,7 @@ from core.permissions import IsPatient
 from core.response import success, error, not_found
 from core.pagination import paginate_list, paginate_queryset
 from core.file_validation import validate_data_uri, FileValidationError
+from core.geo import haversine_km, parse_lat_lng
 from apps.patients.age_utils import age_years_months as _age_years_months
 from core import storage as blob_storage
 from apps.tenants.models import Tenant
@@ -178,7 +179,48 @@ class PortalRegisterView(APIView):
 
 # ── Hospitals & doctors ──────────────────────────────────────────────────────
 
+def _hospital_card(t, lat=None, lng=None):
+    """
+    Shared shape for every patient-facing hospital listing (browse list +
+    cross-hospital search) — keeps "near me" distance math in one place.
+    distance_km is None whenever the patient hasn't shared their location
+    OR this hospital has no lat/lng on file yet (platform admin hasn't set
+    it) — either way that's "unknown", not "far away", so callers sort
+    None to the end rather than treating it as infinitely close/far.
+    """
+    distance_km = None
+    if lat is not None and t.latitude is not None and t.longitude is not None:
+        distance_km = round(haversine_km(lat, lng, t.latitude, t.longitude), 1)
+    return {
+        "tenant_id": t.id,
+        "name": t.name,
+        "city": t.city or "",
+        "state": t.state or "",
+        "accreditations": [a.strip() for a in (t.accreditations or "").split(",") if a.strip()],
+        "about": t.about or "",
+        "logo": blob_storage.signed_url(t.logo),
+        "distance_km": distance_km,
+        # Raw coordinates, for "Get Directions" / map-preview links on the
+        # frontend — None when the platform admin hasn't set them yet.
+        # Deliberately alongside distance_km rather than replacing it: this
+        # is the only place the frontend ever sees a hospital's location.
+        "latitude": t.latitude,
+        "longitude": t.longitude,
+    }
+
+
+def _sort_by_distance(cards):
+    cards.sort(key=lambda c: c["distance_km"] if c["distance_km"] is not None else float("inf"))
+    return cards
+
+
 class PortalHospitalListView(APIView):
+    """
+    GET /api/v1/portal/hospitals/?lat=&lng=
+    lat/lng are optional — pass them (from the browser's Geolocation API)
+    to get each hospital's distance and have the nearest sorted first;
+    omit them and this behaves exactly as before (alphabetical).
+    """
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -188,18 +230,13 @@ class PortalHospitalListView(APIView):
             .filter(feat_patient_app=True)
             .values_list("tenant_id", flat=True)
         )
+        lat, lng = parse_lat_lng(request)
         hospitals = [
-            {
-                "tenant_id": t.id,
-                "name": t.name,
-                "city": t.city or "",
-                "state": t.state or "",
-                "accreditations": [a.strip() for a in (t.accreditations or "").split(",") if a.strip()],
-                "about": t.about or "",
-                "logo": blob_storage.signed_url(t.logo),
-            }
+            _hospital_card(t, lat, lng)
             for t in Tenant.objects.using("default").filter(is_active=True, id__in=enabled_tenant_ids).order_by("name")
         ]
+        if lat is not None:
+            _sort_by_distance(hospitals)
         return Response({"results": hospitals})
 
 
@@ -297,7 +334,8 @@ class PortalSearchView(APIView):
         q = (request.query_params.get("q") or "").strip()
         specialty = (request.query_params.get("specialty") or "").strip()
         city = (request.query_params.get("city") or "").strip()
-        sort = (request.query_params.get("sort") or "").strip()  # "experience" | "fee" | "name"
+        sort = (request.query_params.get("sort") or "").strip()  # "experience" | "fee" | "name" | "distance"
+        lat, lng = parse_lat_lng(request)
 
         # Optional numeric refinements — doctors with unknown data on either
         # field are kept rather than hidden (a profile the hospital hasn't
@@ -327,17 +365,9 @@ class PortalSearchView(APIView):
             tenant_qs = tenant_qs.filter(hosp_q)
         if city:
             tenant_qs = tenant_qs.filter(city__icontains=city)
-        hospitals = [
-            {
-                "tenant_id": t.id,
-                "name": t.name,
-                "city": t.city or "",
-                "state": t.state or "",
-                "accreditations": [a.strip() for a in (t.accreditations or "").split(",") if a.strip()],
-                "about": t.about or "",
-            }
-            for t in tenant_qs.order_by("name")[:20]
-        ]
+        hospitals = [_hospital_card(t, lat, lng) for t in tenant_qs.order_by("name")[:20]]
+        if lat is not None:
+            _sort_by_distance(hospitals)
 
         from apps.org.models import StaffUser, DoctorProfile
 
@@ -395,11 +425,17 @@ class PortalSearchView(APIView):
                     p.staff_id: p for p in
                     DoctorProfile.objects.using(db).filter(staff_id__in=staff_by_id.keys())
                 }
+                tenant_distance_km = None
+                if lat is not None and tenant.latitude is not None and tenant.longitude is not None:
+                    tenant_distance_km = round(haversine_km(lat, lng, tenant.latitude, tenant.longitude), 1)
                 for sid, staff in staff_by_id.items():
                     card = _doctor_card(staff, profiles_by_staff.get(sid))
                     card["tenant_id"] = tenant.id
                     card["hospital"] = tenant.name
                     card["hospital_city"] = tenant.city or ""
+                    card["distance_km"] = tenant_distance_km
+                    card["hospital_latitude"] = tenant.latitude
+                    card["hospital_longitude"] = tenant.longitude
                     doctors.append(card)
             except Exception as exc:
                 logger.warning("portal search: skipped %s (%s)", db, exc)
@@ -418,6 +454,8 @@ class PortalSearchView(APIView):
             doctors.sort(key=lambda d: float(d["consultation_fee"]) if d["consultation_fee"] else float("inf"))
         elif sort == "name":
             doctors.sort(key=lambda d: d["name"].lower())
+        elif sort == "distance":
+            doctors.sort(key=lambda d: d["distance_km"] if d["distance_km"] is not None else float("inf"))
 
         return Response({"hospitals": hospitals, "doctors": doctors[:40]})
 
@@ -510,19 +548,31 @@ class PortalDoctorListView(APIView):
         _ensure_db(tenant.db_name)
         from apps.org.models import StaffUser, DoctorProfile
 
-        staff_list = list(
-            StaffUser.objects.using(tenant.db_name)
-            .filter(DOCTOR_Q, is_active=True).order_by("first_name")
-        )
-        profiles = {
-            p.staff_id: p
-            for p in DoctorProfile.objects.using(tenant.db_name)
-                .filter(staff_id__in=[s.id for s in staff_list])
-        }
-        doctors = [_doctor_card(s, profiles.get(s.id)) for s in staff_list]
+        try:
+            staff_list = list(
+                StaffUser.objects.using(tenant.db_name)
+                .filter(DOCTOR_Q, is_active=True).order_by("first_name")
+            )
+            profiles = {
+                p.staff_id: p
+                for p in DoctorProfile.objects.using(tenant.db_name)
+                    .filter(staff_id__in=[s.id for s in staff_list])
+            }
+            doctors = [_doctor_card(s, profiles.get(s.id)) for s in staff_list]
+        except Exception:
+            # A hospital can exist in the registry (listed, bookable-in-theory)
+            # before its own operational database has been provisioned — e.g.
+            # a directory listing awaiting full onboarding. That's "no
+            # doctors yet", not a platform error, so this degrades to an
+            # empty list instead of a 500.
+            logger.warning("portal doctors: tenant db %s unreachable", tenant.db_name, exc_info=True)
+            doctors = []
         return Response({
             "results": doctors,
-            "hospital": {"tenant_id": tenant.id, "name": tenant.name, "logo": blob_storage.signed_url(tenant.logo)},
+            "hospital": {
+                "tenant_id": tenant.id, "name": tenant.name, "logo": blob_storage.signed_url(tenant.logo),
+                "latitude": tenant.latitude, "longitude": tenant.longitude,
+            },
         })
 
 
@@ -554,6 +604,7 @@ class PortalDoctorDetailView(APIView):
             "tenant_id": tenant.id, "name": tenant.name, "city": tenant.city or "",
             "accreditations": [a.strip() for a in (tenant.accreditations or "").split(",") if a.strip()],
             "logo": blob_storage.signed_url(tenant.logo),
+            "latitude": tenant.latitude, "longitude": tenant.longitude,
         }
 
         # Which payment modes this hospital currently accepts (hospital admin
@@ -936,6 +987,7 @@ class PortalBookView(APIView):
 
         return Response({
             "booking_id": booking.id,
+            "tenant_id": tenant.id,
             "hospital": tenant.name,
             "doctor": doctor_name,
             "date": str(scheduled_date),
@@ -950,6 +1002,10 @@ class PortalBookView(APIView):
             # other slot-dependent lookup.
             "room_name": room_fields.get("room_name") or None,
             "floor": room_fields.get("floor") or None,
+            # For the confirmation screen's "Get Directions" / map preview —
+            # same fields _hospital_card() exposes, None if not set yet.
+            "latitude": tenant.latitude,
+            "longitude": tenant.longitude,
         }, status=201)
 
 
@@ -1352,6 +1408,8 @@ class PortalMyBookingsView(APIView):
                 "hospital": b.hospital_name,
                 "hospital_city": (tenant.city if tenant else "") or "",
                 "hospital_state": (tenant.state if tenant else "") or "",
+                "hospital_latitude": tenant.latitude if tenant else None,
+                "hospital_longitude": tenant.longitude if tenant else None,
                 "doctor": b.doctor_name,
                 "doctor_photo": doctor_photo,
                 "doctor_specialisation": doctor_specialisation,
@@ -3406,11 +3464,12 @@ class PortalGrowthView(APIView):
         series = []
         for v in (SharedVital.objects.using("default")
                   .filter(awpid=target_awpid).order_by("recorded_at")):
-            if v.height_cm or v.weight_kg:
+            if v.height_cm or v.weight_kg or v.head_circumference_cm:
                 series.append({
                     "date": str(v.recorded_at.date()),
                     "height_cm": float(v.height_cm) if v.height_cm else None,
                     "weight_kg": float(v.weight_kg) if v.weight_kg else None,
+                    "head_circumference_cm": float(v.head_circumference_cm) if v.head_circumference_cm else None,
                     # "clinic" (recorded during a hospital visit) or "home"
                     # (self-reported) — real field on SharedVital, shown on
                     # the growth chart so a clicked point can honestly say
@@ -3422,15 +3481,45 @@ class PortalGrowthView(APIView):
         _age_ym = _age_years_months(dob)
         age_years = _age_ym[0] if _age_ym else None
         age_months = _age_ym[1] if _age_ym else None
+        is_minor = age_years is not None and age_years < 18
+
+        # Percentile bands — same WHO LMS engine as the staff-side
+        # PatientGrowthView (see apps.registry.growth_reference). Gender
+        # isn't on PatientAccount/PatientIdentity uniformly enough to trust
+        # here without an extra lookup, so this reads it off PatientIdentity
+        # when available; no identity row (shouldn't normally happen) simply
+        # means no percentile overlay, same graceful fallback as an
+        # unsupported age/gender in get_percentile() itself.
+        percentile_available = False
+        if is_minor and dob:
+            from apps.registry.growth_reference import get_percentile, MEASUREMENTS
+            identity = PatientIdentity.objects.using("default").filter(awpid=target_awpid).first()
+            gender = getattr(identity, "gender", None)
+            if gender in ("M", "F"):
+                for p in series:
+                    try:
+                        reading_date = date.fromisoformat(p["date"])
+                    except ValueError:
+                        continue
+                    reading_age_months = (reading_date.year - dob.year) * 12 + (reading_date.month - dob.month)
+                    if reading_age_months < 0 or reading_age_months > 60:
+                        continue
+                    p["percentiles"] = {}
+                    for m in MEASUREMENTS:
+                        val = p.get({"weight": "weight_kg", "height": "height_cm", "head_circumference": "head_circumference_cm"}[m])
+                        result = get_percentile(m, gender, reading_age_months, val)
+                        if result:
+                            p["percentiles"][m] = result
+                            percentile_available = True
 
         return success(data={
             "date_of_birth": dob,
             "age_years": age_years,
             "age_months": age_months,
-            "is_minor": age_years is not None and age_years < 18,
+            "is_minor": is_minor,
             "series": series,
             "latest": series[-1] if series else None,
-            "percentile_available": False,
+            "percentile_available": percentile_available,
         })
 
 
@@ -3560,6 +3649,54 @@ class PortalVaccinationListView(APIView):
             "total_count": summary["total_count"],
             "next_recommended": summary["next_recommended"],
             "next_due": summary["next_due"],  # deprecated alias, see summarize_roadmap()
+            "stats": summary["stats"],
+        })
+
+
+def _portal_milestone_schedule_rules():
+    """Milestone analog of _portal_schedule_rules() above — same reasoning,
+    same simplification (always the global "Default Schedule" template)."""
+    from apps.registry.models import MilestoneSchedule, MilestoneScheduleRule
+
+    schedule = (
+        MilestoneSchedule.objects.using("default")
+        .filter(owner_tenant_id__isnull=True, is_template=True, active=True)
+        .order_by("id")
+        .first()
+    )
+    if not schedule:
+        return []
+    return list(
+        MilestoneScheduleRule.objects.using("default")
+        .filter(schedule=schedule)
+        .order_by("sort_order")
+    )
+
+
+class PortalMilestoneListView(APIView):
+    """
+    GET /api/v1/portal/milestones/?patient_awpid=
+    Same developmental-milestone roadmap staff see, for the account owner or
+    a linked family member — mirrors PortalVaccinationListView.
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request):
+        from apps.registry.milestone_roadmap import build_roadmap, summarize_roadmap
+
+        target_awpid, dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+
+        rules = _portal_milestone_schedule_rules()
+        roadmap = build_roadmap(target_awpid, dob, rules)
+        summary = summarize_roadmap(roadmap)
+        return success(data={
+            "date_of_birth": dob,
+            "roadmap": roadmap,
+            "achieved_count": summary["achieved_count"],
+            "total_count": summary["total_count"],
+            "next_recommended": summary["next_recommended"],
             "stats": summary["stats"],
         })
 

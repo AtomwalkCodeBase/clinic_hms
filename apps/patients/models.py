@@ -165,3 +165,60 @@ class Allergy(models.Model):
 
     def __str__(self):
         return f"{self.patient.uhid} — {self.substance}"
+
+
+class BirthHistory(models.Model):
+    """
+    Pediatric birth history — one row per Patient, relevant only for minor
+    (child) patients. Captured either by front desk at registration (if the
+    parent/guardian knows the details on hand) or filled in/edited later by
+    the pediatrician during consultation — both are legitimate entry points,
+    so this is a separate editable record rather than a registration-only
+    field set. recorded_by / updated_by track StaffUser.id (no FK — staff
+    live in tenant DB but this app doesn't import apps.org.StaffUser to
+    avoid a circular app dependency; matches Allergy.recorded_by's pattern).
+    """
+    DELIVERY_NORMAL   = "normal"
+    DELIVERY_C_SECTION = "c_section"
+    DELIVERY_ASSISTED  = "assisted"      # forceps / vacuum
+    DELIVERY_UNKNOWN   = "unknown"
+    DELIVERY_MODE_CHOICES = [
+        (DELIVERY_NORMAL,    "Normal Vaginal Delivery"),
+        (DELIVERY_C_SECTION, "C-Section"),
+        (DELIVERY_ASSISTED,  "Assisted (Forceps/Vacuum)"),
+        (DELIVERY_UNKNOWN,   "Unknown"),
+    ]
+
+    patient = models.OneToOneField(Patient, on_delete=models.CASCADE,
+                                   related_name="birth_history")
+
+    # Gestational age at birth, in completed weeks — used to flag
+    # prematurity (< 37 weeks) on the pediatric summary.
+    gestational_age_weeks = models.PositiveSmallIntegerField(null=True, blank=True)
+    birth_weight_kg        = models.DecimalField(max_digits=4, decimal_places=2, null=True, blank=True)
+    delivery_mode           = models.CharField(max_length=12, choices=DELIVERY_MODE_CHOICES, blank=True)
+    # Multiple birth (twin/triplet/etc.) — free text since exact term varies
+    # ("twin", "triplet A of 3") rather than a rigid choice list.
+    multiple_birth          = models.CharField(max_length=50, blank=True)
+
+    nicu_admission = models.BooleanField(default=False)
+    nicu_days       = models.PositiveSmallIntegerField(null=True, blank=True)
+    birth_complications = models.TextField(blank=True)  # e.g. jaundice, birth asphyxia
+    congenital_conditions = models.TextField(blank=True)
+
+    apgar_score_1min  = models.PositiveSmallIntegerField(null=True, blank=True)
+    apgar_score_5min  = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    notes = models.TextField(blank=True)
+
+    recorded_by = models.IntegerField(null=True, blank=True)  # StaffUser.id — who first captured this
+    recorded_at = models.DateTimeField(auto_now_add=True)
+    updated_by  = models.IntegerField(null=True, blank=True)  # StaffUser.id — who last edited this
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "patients"
+        db_table  = "birth_history"
+
+    def __str__(self):
+        return f"{self.patient.uhid} — birth history"

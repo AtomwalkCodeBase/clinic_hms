@@ -54,6 +54,7 @@ export const ROUTES = {
     USERS:              "/platform/users",
     USAGE:              "/platform/usage",
     VACCINATION_TEMPLATES: "/platform/vaccination-templates",
+    MILESTONE_TEMPLATES: "/platform/milestone-templates",
   },
 
   // Hospital Admin
@@ -68,6 +69,7 @@ export const ROUTES = {
     ROOMS:              "/admin/rooms",
     ROLES:              "/admin/roles",
     VACCINATION_SCHEDULE: "/admin/vaccination-schedule",
+    MILESTONE_SCHEDULE: "/admin/milestone-schedule",
     SETTINGS:           "/admin/settings",
     MY_PROFILE:         "/admin/my-profile",
   },

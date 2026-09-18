@@ -110,12 +110,13 @@ class PatientGrowthView(APIView):
             .filter(appointment_id__in=appt_ids).order_by("recorded_at")
         )
         for v in local_vitals:
-            if v.height_cm or v.weight_kg:
+            if v.height_cm or v.weight_kg or v.head_circumference_cm:
                 d = v.recorded_at.date()
                 points[d] = {
                     "date": str(d),
                     "height_cm": float(v.height_cm) if v.height_cm else None,
                     "weight_kg": float(v.weight_kg) if v.weight_kg else None,
+                    "head_circumference_cm": float(v.head_circumference_cm) if v.head_circumference_cm else None,
                     "bmi": float(v.bmi) if v.bmi else None,
                     "source": "this_hospital",
                 }
@@ -127,12 +128,13 @@ class PatientGrowthView(APIView):
                 .filter(awpid=patient.awpid).order_by("recorded_at")
             )
             for v in shared:
-                if v.height_cm or v.weight_kg:
+                if v.height_cm or v.weight_kg or v.head_circumference_cm:
                     d = v.recorded_at.date()
                     points.setdefault(d, {
                         "date": str(d),
                         "height_cm": float(v.height_cm) if v.height_cm else None,
                         "weight_kg": float(v.weight_kg) if v.weight_kg else None,
+                        "head_circumference_cm": float(v.head_circumference_cm) if v.head_circumference_cm else None,
                         "bmi": None,
                         "source": "other_hospital",
                     })
@@ -141,19 +143,54 @@ class PatientGrowthView(APIView):
         _age_ym = _age_years_months(patient.date_of_birth)
         age_years = _age_ym[0] if _age_ym else None
         age_months = _age_ym[1] if _age_ym else None
+        is_minor = age_years is not None and age_years < 18
+
+        # Percentile bands — only meaningful for a child within the WHO 0-5y
+        # reference range, and only when the patient's gender maps to a WHO
+        # sex bucket ("M"/"F"; "O"/blank has no reference table — see
+        # growth_reference.get_percentile). Computed per-point using the
+        # child's age AT THAT READING (not their current age), and only for
+        # this-hospital readings — cross-hospital SharedVital rows don't
+        # carry a recorded age snapshot precise enough to re-derive reliably
+        # (recorded_at is a timestamp, not a birthdate-relative age), so
+        # those points render on the chart without a percentile overlay.
+        percentile_available = False
+        if is_minor and patient.gender in ("M", "F") and patient.date_of_birth:
+            from apps.registry.growth_reference import get_percentile, MEASUREMENTS
+            dob = patient.date_of_birth
+            for p in series:
+                if p["source"] != "this_hospital":
+                    continue
+                try:
+                    reading_date = date.fromisoformat(p["date"])
+                except ValueError:
+                    continue
+                reading_age_months = (reading_date.year - dob.year) * 12 + (reading_date.month - dob.month)
+                if reading_age_months < 0 or reading_age_months > 60:
+                    continue
+                p["percentiles"] = {}
+                for m in MEASUREMENTS:
+                    val = p.get({"weight": "weight_kg", "height": "height_cm", "head_circumference": "head_circumference_cm"}[m])
+                    result = get_percentile(m, patient.gender, reading_age_months, val)
+                    if result:
+                        p["percentiles"][m] = result
+                        percentile_available = True
 
         return success(data={
             "patient_name": patient.full_name,
             "date_of_birth": patient.date_of_birth,
             "age_years": age_years,
             "age_months": age_months,
-            "is_minor": age_years is not None and age_years < 18,
+            "is_minor": is_minor,
             "consent_given": patient.hie_consent_given,
             "series": series,
-            # No percentile curves yet — plotting a made-up percentile band
-            # would be worse than not showing one. Real WHO/IAP growth
-            # reference tables are a follow-up, not something to fake here.
-            "percentile_available": False,
+            # True once at least one point in `series` carries a computed
+            # `percentiles` block (see growth_reference.py — WHO standard,
+            # ages 0-60 months, sex M/F only). Structured so a second
+            # standard (IAP) can be added later without a response-shape
+            # change — a point's `percentiles.<measurement>` would just gain
+            # more entries keyed by standard if/when that ships.
+            "percentile_available": percentile_available,
         })
 
 

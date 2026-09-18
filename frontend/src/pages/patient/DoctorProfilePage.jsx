@@ -20,6 +20,7 @@ import { Building2, ShieldCheck, CircleCheck, Lock, Clock } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import AvailabilityCalendar from "../../components/common/AvailabilityCalendar";
+import HospitalDirections from "../../components/common/HospitalDirections";
 import { useApi }    from "../../hooks/useApi";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
@@ -302,6 +303,16 @@ export default function PatientDoctorProfilePage() {
                 borderRadius: 10, padding: "8px 16px", marginBottom: 18,
               }}>
                 Go to {confirmation.room_name}{confirmation.floor ? `, Floor ${confirmation.floor}` : ""}
+              </div>
+            )}
+            {(confirmation.latitude != null && confirmation.longitude != null) && (
+              <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}>
+                <HospitalDirections
+                  latitude={confirmation.latitude}
+                  longitude={confirmation.longitude}
+                  hospitalName={confirmation.hospital}
+                  defaultShowMap
+                />
               </div>
             )}
             <button className="btn-primary" onClick={() => navigate(ROUTES.PATIENT.APPOINTMENTS)}>

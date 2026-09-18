@@ -534,6 +534,9 @@ class SharedVital(models.Model):
     height_cm         = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     resp_rate         = models.SmallIntegerField(null=True, blank=True)
     blood_sugar_mgdl  = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    # Pediatric-only measurement, mirrors apps.opd.models.Vitals.head_circumference_cm
+    # — only populated when the source Vitals row had it set (i.e. for minors).
+    head_circumference_cm = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     source_tenant_id  = models.IntegerField()
     created_at        = models.DateTimeField(auto_now_add=True)
 
@@ -716,6 +719,132 @@ class VaccinationScheduleRule(models.Model):
 
     def __str__(self):
         return f"{self.schedule.name} — {self.vaccine_name} ({self.scheduled_label})"
+
+
+class MilestoneSchedule(models.Model):
+    """
+    A named, ordered set of developmental-milestone rules
+    (MilestoneScheduleRule) that a hospital's pediatric milestone roadmap is
+    built against. Exact structural mirror of VaccinationSchedule above —
+    hospital-configurable via the same clone-a-template pattern: platform
+    admin maintains system templates (owner_tenant_id=None, is_template=
+    True), a hospital admin clones one into their own editable copy
+    (owner_tenant_id=<tenant>), and Tenant.active_milestone_schedule_id
+    (apps/tenants/models.py) points at whichever schedule is currently live
+    for that hospital's staff-facing roadmap.
+
+    See VaccinationSchedule's docstring for the full rationale (owner_tenant_id
+    as a plain IntegerField rather than a cross-app FK, is_template's role) —
+    it applies identically here.
+    """
+    name            = models.CharField(max_length=200)
+    description     = models.TextField(blank=True)
+    owner_tenant_id = models.IntegerField(null=True, blank=True)  # null = system-level template
+    is_template     = models.BooleanField(default=False)
+    active          = models.BooleanField(default=True)
+    created_at      = models.DateTimeField(auto_now_add=True)
+    updated_at      = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "milestone_schedule"
+
+    def __str__(self):
+        return self.name
+
+
+class MilestoneScheduleRule(models.Model):
+    """
+    One developmental-milestone slot within a MilestoneSchedule — e.g.
+    domain="gross_motor", milestone="Sits without support", expected at
+    min_age_days=180 (6 months). Mirrors VaccinationScheduleRule exactly;
+    milestone_roadmap.build_roadmap() iterates a schedule's rules the same
+    way vaccine_schedule.build_roadmap() iterates VaccinationScheduleRule.
+    """
+    DOMAIN_GROSS_MOTOR = "gross_motor"
+    DOMAIN_FINE_MOTOR  = "fine_motor"
+    DOMAIN_LANGUAGE    = "language"
+    DOMAIN_COGNITIVE   = "cognitive"
+    DOMAIN_SOCIAL      = "social_emotional"
+    DOMAIN_CHOICES = [
+        (DOMAIN_GROSS_MOTOR, "Gross Motor"),
+        (DOMAIN_FINE_MOTOR,  "Fine Motor"),
+        (DOMAIN_LANGUAGE,    "Language / Communication"),
+        (DOMAIN_COGNITIVE,   "Cognitive"),
+        (DOMAIN_SOCIAL,      "Social / Emotional"),
+    ]
+
+    schedule         = models.ForeignKey(MilestoneSchedule, on_delete=models.CASCADE, related_name="rules")
+    domain           = models.CharField(max_length=20, choices=DOMAIN_CHOICES)
+    milestone        = models.CharField(max_length=200)   # e.g. "Sits without support"
+    scheduled_label  = models.CharField(max_length=50)     # human age-window label, e.g. "6 months"
+    min_age_days     = models.PositiveIntegerField()
+    max_age_days     = models.PositiveIntegerField(null=True, blank=True)
+    mandatory        = models.BooleanField(default=True)   # false = "nice to note", not a red-flag if missed
+    sort_order       = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "milestone_schedule_rule"
+        ordering  = ["sort_order"]
+
+    def __str__(self):
+        return f"{self.schedule.name} — {self.milestone} ({self.scheduled_label})"
+
+
+class SharedMilestoneRecord(models.Model):
+    """
+    Per-patient developmental-milestone achievement record, visible across
+    every hospital in the network — mirrors SharedVaccination's shape and
+    verification-free simplicity (no cross-hospital certificate-review
+    workflow here; a milestone is simply observed and recorded by clinical
+    staff at the time of an encounter, source is always "clinic").
+
+    status:
+      ACHIEVED  — the child has reached this milestone; achieved_date set.
+      NOT_YET   — assessed and explicitly not yet reached (still tracked,
+                  not just silently absent — lets the roadmap distinguish
+                  "asked, not yet doing it" from "never assessed").
+      CONCERN   — flagged by the pediatrician as a possible developmental
+                  delay worth follow-up; achieved_date stays null.
+    A roadmap slot with no matching record at all is simply "not assessed"
+    (computed by build_roadmap(), not stored as a row) — matches
+    vaccine_schedule.build_roadmap()'s "no record = pending/upcoming" logic.
+    """
+    STATUS_ACHIEVED = "achieved"
+    STATUS_NOT_YET  = "not_yet"
+    STATUS_CONCERN  = "concern"
+    STATUS_CHOICES = [
+        (STATUS_ACHIEVED, "Achieved"),
+        (STATUS_NOT_YET,  "Not Yet"),
+        (STATUS_CONCERN,  "Concern Flagged"),
+    ]
+
+    awpid            = models.CharField(max_length=30, db_index=True)
+    domain           = models.CharField(max_length=20, choices=MilestoneScheduleRule.DOMAIN_CHOICES)
+    milestone        = models.CharField(max_length=200)
+    # The schedule-rule label this fulfills (e.g. "6 months"), blank if it
+    # doesn't match a standard schedule slot.
+    scheduled_label  = models.CharField(max_length=50, blank=True)
+    status           = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_ACHIEVED)
+    achieved_date    = models.DateField(null=True, blank=True)
+    assessed_date    = models.DateField(null=True, blank=True)  # when this observation was made, regardless of status
+    notes            = models.TextField(blank=True)
+
+    recorded_by_name = models.CharField(max_length=200, blank=True)  # snapshot — staff live in tenant DBs, no FK across DBs
+    source_tenant_id = models.IntegerField(null=True, blank=True)
+
+    created_at       = models.DateTimeField(auto_now_add=True)
+    updated_at       = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "shared_milestone_record"
+        indexes = [models.Index(fields=["awpid", "domain"])]
+        ordering  = ["assessed_date"]
+
+    def __str__(self):
+        return f"{self.awpid} — {self.milestone} ({self.status})"
 
 
 class BlacklistedToken(models.Model):

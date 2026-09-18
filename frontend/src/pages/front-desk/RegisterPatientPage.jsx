@@ -27,7 +27,7 @@ import { sanitizeMobileInput, isValidMobile } from "../../utils/validation";
 import { ROUTES } from "../../config/routes.config";
 import {
   Search, Contact, Phone, Building2, Shield, Lock, Smartphone,
-  AlertTriangle, User, Siren,
+  AlertTriangle, User, Siren, Baby,
 } from "lucide-react";
 
 // ── Field helpers ─────────────────────────────────────────────────────────────
@@ -198,6 +198,38 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
     guardian_mobile: "",
     relationship:    "child",
   });
+
+  // Pediatric-only — Birth History, captured here (registration) OR later by
+  // the doctor at consultation (see EncounterPage.jsx's Birth History panel)
+  // per the "both" build decision. Kept as a separate form since it posts to
+  // its own endpoint (patient must exist first) rather than the patient
+  // registration payload itself — front desk fills it in only when they have
+  // the details on hand; nothing here is mandatory.
+  const [birthHistory, setBirthHistory] = useState({
+    gestational_age_weeks: "", birth_weight_kg: "", delivery_mode: "",
+    nicu_admission: false, nicu_days: "", birth_complications: "",
+  });
+  function setBh(key) {
+    return (e) => {
+      const val = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+      setBirthHistory(f => ({ ...f, [key]: val }));
+    };
+  }
+  // Shown only while registering a dependent whose DOB marks them a minor —
+  // never for an adult record, and never on the "own mobile" (non-dependent)
+  // path, since Birth History is specifically about the child being
+  // registered here, not an adult filling in their own details.
+  function isMinorDob(dob) {
+    if (!dob) return false;
+    const born = new Date(dob);
+    if (Number.isNaN(born.getTime())) return false;
+    const now = new Date();
+    let age = now.getFullYear() - born.getFullYear();
+    const m = now.getMonth() - born.getMonth();
+    if (m < 0 || (m === 0 && now.getDate() < born.getDate())) age--;
+    return age < 18;
+  }
+  const showBirthHistory = form.is_dependent && isMinorDob(form.date_of_birth);
 
   // ── Step 1: mobile-number check, gates the rest of the form ──────────────
   // Front desk shouldn't have to type a patient's full name/DOB/gender before
@@ -384,6 +416,30 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
     try {
       const { data: envelope } = await apiClient.post("/api/v1/patients/register/", form);
       const patient = envelope?.data;
+
+      // Optional Birth History — only when there's actually something to
+      // save, so a front desk that skipped these fields doesn't create an
+      // empty record (BirthHistoryView.post requires none of these; an
+      // all-empty POST would just be a wasted request). Best-effort: a
+      // failure here shouldn't block registration itself — the doctor can
+      // still add it later at consultation (see EncounterPage.jsx).
+      if (showBirthHistory && patient?.id) {
+        const bhBody = {};
+        Object.entries(birthHistory).forEach(([k, v]) => {
+          if (v === "" || v === null || v === undefined) return;
+          bhBody[k] = v;
+        });
+        if (Object.keys(bhBody).length > 0) {
+          bhBody.nicu_admission = !!birthHistory.nicu_admission;
+          try {
+            await apiClient.post(API_ENDPOINTS.PATIENTS.BIRTH_HISTORY(patient.id), bhBody);
+          } catch {
+            // Non-fatal — registration already succeeded; birth history can
+            // be added/corrected later from the doctor's consultation screen.
+          }
+        }
+      }
+
       toastSuccess("Patient registered successfully.");
       // Straight to booking, not the queue — a freshly registered patient
       // has no appointment yet, so the queue (which only ever shows today's
@@ -734,6 +790,49 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
               </FieldGroup>
             </ThreeCol>
           </SectionCard>
+
+          {/* ── Birth History (pediatric-only) ── shown only for a dependent
+              whose DOB marks them a minor; entirely optional — the
+              pediatrician can also add/correct this later at consultation. */}
+          {showBirthHistory && (
+            <SectionCard title="Birth History" subtitle="Optional — fill in if you have the details on hand. The pediatrician can also add this at consultation."
+              icon={Baby} bgColor="#FFF7ED" color="#C2410C">
+              <TwoCol>
+                <FieldGroup label="Gestational Age (weeks)">
+                  <Input type="number" value={birthHistory.gestational_age_weeks} onChange={setBh("gestational_age_weeks")} placeholder="e.g. 39" />
+                </FieldGroup>
+                <FieldGroup label="Birth Weight (kg)">
+                  <Input type="number" step="0.01" value={birthHistory.birth_weight_kg} onChange={setBh("birth_weight_kg")} placeholder="e.g. 3.2" />
+                </FieldGroup>
+              </TwoCol>
+              <TwoCol>
+                <FieldGroup label="Delivery Mode">
+                  <FSelect value={birthHistory.delivery_mode} onChange={setBh("delivery_mode")}>
+                    <option value="">Select</option>
+                    <option value="normal">Normal Vaginal Delivery</option>
+                    <option value="c_section">C-Section</option>
+                    <option value="assisted">Assisted (Forceps/Vacuum)</option>
+                    <option value="unknown">Unknown</option>
+                  </FSelect>
+                </FieldGroup>
+                <FieldGroup label="NICU Admission">
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginTop: 6 }}>
+                    <input type="checkbox" checked={birthHistory.nicu_admission} onChange={setBh("nicu_admission")} />
+                    Was admitted to NICU
+                  </label>
+                  {birthHistory.nicu_admission && (
+                    <Input type="number" style={{ marginTop: 6 }} value={birthHistory.nicu_days}
+                      onChange={setBh("nicu_days")} placeholder="Days in NICU" />
+                  )}
+                </FieldGroup>
+              </TwoCol>
+              <FieldGroup label="Birth Complications">
+                <textarea className="form-input" rows={2} value={birthHistory.birth_complications}
+                  onChange={setBh("birth_complications")} placeholder="e.g. jaundice, birth asphyxia (optional)"
+                  style={{ resize: "vertical" }} />
+              </FieldGroup>
+            </SectionCard>
+          )}
 
           {/* ── 2. Contact Information ── */}
           <SectionCard title="Contact Information" icon={Phone} bgColor="#F0FDF4" color="#15803D">

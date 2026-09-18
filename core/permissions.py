@@ -122,6 +122,18 @@ class IsDoctorOrNurse(BasePermission):
         return request.user.is_authenticated and _acts_as(request.user, ROLE_DOCTOR, ROLE_NURSE)
 
 
+class IsDoctorOrFrontDesk(BasePermission):
+    """
+    Doctor + front desk share write access to pediatric Birth History —
+    front desk can capture it at registration (parent often has the details
+    on hand right then), and the pediatrician can add/correct it later at
+    consultation. See apps.patients.models.BirthHistory.
+    """
+    message = "Access restricted to front desk staff and doctors."
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and _acts_as(request.user, ROLE_DOCTOR, ROLE_FRONT_DESK)
+
+
 def RequireTier(minimum_tier: str):
     """
     Factory — returns a DRF permission class enforcing a minimum license tier.

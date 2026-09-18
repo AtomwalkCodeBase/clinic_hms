@@ -48,6 +48,8 @@ export const API_ENDPOINTS = {
     USAGE:            `${API_V1}/platform/usage/`,
     VACCINATION_TEMPLATES:      `${API_V1}/platform/vaccination-templates/`,
     VACCINATION_TEMPLATE: (id) => `${API_V1}/platform/vaccination-templates/${id}/`,
+    MILESTONE_TEMPLATES:      `${API_V1}/platform/milestone-templates/`,
+    MILESTONE_TEMPLATE: (id) => `${API_V1}/platform/milestone-templates/${id}/`,
   },
 
   ORG: {
@@ -72,6 +74,9 @@ export const API_ENDPOINTS = {
     VACCINATION_SCHEDULES:        `${API_V1}/org/vaccination-schedules/`,
     VACCINATION_SCHEDULE:  (id) => `${API_V1}/org/vaccination-schedules/${id}/`,
     VACCINATION_SCHEDULE_ACTIVATE: (id) => `${API_V1}/org/vaccination-schedules/${id}/activate/`,
+    MILESTONE_SCHEDULES:        `${API_V1}/org/milestone-schedules/`,
+    MILESTONE_SCHEDULE:  (id) => `${API_V1}/org/milestone-schedules/${id}/`,
+    MILESTONE_SCHEDULE_ACTIVATE: (id) => `${API_V1}/org/milestone-schedules/${id}/activate/`,
     FLOORS:            `${API_V1}/org/floors/`,
     FLOOR:      (id) => `${API_V1}/org/floors/${id}/`,
     ROOMS:             `${API_V1}/org/rooms/`,
@@ -84,9 +89,6 @@ export const API_ENDPOINTS = {
     // see org.Room's own docstring for the v8 unification).
     BEDS:              `${API_V1}/org/beds/`,
     BED:        (id) => `${API_V1}/org/beds/${id}/`,
-    BED_BOARD:         `${API_V1}/org/beds/board/`,
-    BED_MARK_CLEAN: (id) => `${API_V1}/org/beds/${id}/mark-clean/`,
-    BED_MAINTENANCE: (id) => `${API_V1}/org/beds/${id}/maintenance/`,
     DEPARTMENTS_AVAILABILITY: `${API_V1}/org/departments/availability/`,
   },
 
@@ -111,6 +113,9 @@ export const API_ENDPOINTS = {
     VACCINATION_ORDER:     (id) => `${API_V1}/patients/${id}/vaccinations/order/`,
     VACCINATION_DECLINE:   (id) => `${API_V1}/patients/${id}/vaccinations/decline/`,
     VACCINATION_ADMINISTER:(id) => `${API_V1}/patients/${id}/vaccinations/administer/`,
+    // ── Pediatric-only additions ────────────────────────────────────────
+    BIRTH_HISTORY:     (id) => `${API_V1}/patients/${id}/birth-history/`,
+    MILESTONES:        (id) => `${API_V1}/patients/${id}/milestones/`,
   },
 
   SCHEDULING: {
@@ -148,8 +153,6 @@ export const API_ENDPOINTS = {
     PRESCRIPTION_ITEM: (rxId, itemId) => `${API_V1}/opd/prescriptions/${rxId}/items/${itemId}/`,
     RX_ITEMS:            (id) => `${API_V1}/opd/prescriptions/${id}/items/`,
     FAVOURITES:                `${API_V1}/opd/favourites/`,
-    APPOINTMENT_TYPES:         `${API_V1}/opd/appointment-types/`,
-    APPOINTMENT_TYPE_ITEM: (id) => `${API_V1}/opd/appointment-types/${id}/`,
   },
 
   // Patient portal (patient JWT)
@@ -172,7 +175,6 @@ export const API_ENDPOINTS = {
     INVOICE_RECEIPT: (tenantDb, id) => `${API_V1}/portal/invoices/${tenantDb}/${id}/receipt/`,
     DOCUMENTS:             `${API_V1}/portal/documents/`,
     DOCUMENT: (id) =>       `${API_V1}/portal/documents/${id}/`,
-    DOCUMENT_LAB_VALUES: (id) => `${API_V1}/portal/documents/${id}/lab-values/`,
     DOCUMENTS_BATCH:        `${API_V1}/portal/documents/batch/`,
     DOCUMENTS_BATCH_PROCESS: (id) => `${API_V1}/portal/documents/batch/${id}/process/`,
     DOCUMENTS_ZIP:         `${API_V1}/portal/documents/zip/`,
@@ -194,36 +196,11 @@ export const API_ENDPOINTS = {
     VACCINATION_UPLOAD:     `${API_V1}/portal/vaccinations/upload/`,
     VACCINATION_FILE: (recordId) => `${API_V1}/portal/vaccinations/${recordId}/file/`,
     GROWTH:                 `${API_V1}/portal/growth/`,
+    MILESTONES:             `${API_V1}/portal/milestones/`,
     TIMELINE:               `${API_V1}/portal/timeline/`,
     NOTIFICATIONS:          `${API_V1}/portal/notifications/`,
     NOTIFICATION_READ: (tenantDb, id) => `${API_V1}/portal/notifications/${tenantDb}/${id}/read/`,
     EMERGENCY_TOKEN:        `${API_V1}/portal/emergency/token/`,
-    // "Share Records" — patient-authenticated half: the patient CREATES the
-    // session here, then approves / ends / releases downloads / lists access.
-    RECORDS_SHARE_CREATE:           `${API_V1}/portal/records-share/`,
-    RECORDS_SHARE_MINE:             `${API_V1}/portal/records-share/mine/`,
-    RECORDS_SHARE_DECISION: (token) => `${API_V1}/portal/records-share/${token}/decision/`,
-    RECORDS_SHARE_END:      (token) => `${API_V1}/portal/records-share/${token}/end/`,
-    RECORDS_SHARE_DOWNLOAD_DECISION: (token) => `${API_V1}/portal/records-share/${token}/downloads/decision/`,
-    // Shared-records privacy — the standing "what a doctor sees" config, the
-    // single-record lock used from My Reports, and the per-visit reveal on a
-    // live grant (scope: visit | always | conceal).
-    RECORDS_PRIVACY:                `${API_V1}/portal/records-privacy/`,
-    RECORDS_PRIVACY_TOGGLE:         `${API_V1}/portal/records-privacy/toggle/`,
-    RECORDS_SHARE_REVEAL:  (token) => `${API_V1}/portal/records-share/${token}/reveal/`,
-  },
-
-  // "Share Records" — public, token-gated half the doctor's laptop reads
-  // (see apps/patients/records_share_views.py). publicClient: no login.
-  RECORDS_SHARE: {
-    // The doctor's laptop binds itself to a session — by the patient's
-    // 6-digit code (typed at /s) or by the link's own token.
-    CLAIM:   `${API_V1}/records-share/claim/`,
-    STATUS:  (token) => `${API_V1}/records-share/${token}/`,
-    RECORDS: (token) => `${API_V1}/records-share/${token}/records/`,
-    DOC_VIEW: (token, docId) => `${API_V1}/records-share/${token}/documents/${docId}/view/`,
-    DOWNLOADS: (token) => `${API_V1}/records-share/${token}/downloads/`,
-    CLOSE:   (token) => `${API_V1}/records-share/${token}/close/`,
   },
 
   // Emergency QR summary — public, no auth (see apps/patients/emergency_views.py).
@@ -266,8 +243,6 @@ export const API_ENDPOINTS = {
   LAB: {
     CATALOG:              `${API_V1}/lab/catalog/`,
     CATALOG_ITEM:  (id) => `${API_V1}/lab/catalog/${id}/`,
-    SAMPLE_TYPES:         `${API_V1}/lab/sample-types/`,
-    SAMPLE_TYPE_ITEM: (id) => `${API_V1}/lab/sample-types/${id}/`,
     REQUESTS:             `${API_V1}/lab/requests/`,
     REQUEST_LOOKUP:       `${API_V1}/lab/requests/lookup/`,
     REQUEST_CHOICE: (id) => `${API_V1}/lab/requests/${id}/choice/`,
@@ -329,22 +304,16 @@ export const API_ENDPOINTS = {
   // deferred). See docs/PENDING_IMPROVEMENTS.md item 3.
   IPD: {
     REFERRALS:                `${API_V1}/ipd/referrals/`,
-    REFERRALS_MINE:           `${API_V1}/ipd/referrals/mine/`,
     REFERRAL_RECOMMEND:       `${API_V1}/ipd/referrals/recommend/`,
     REFERRAL_REGISTER_EXTERNAL: `${API_V1}/ipd/referrals/register-external/`,
     REFERRAL_ACCEPT:   (id) => `${API_V1}/ipd/referrals/${id}/accept/`,
     ADMISSIONS:                `${API_V1}/ipd/admissions/`,
-    ADMISSIONS_MINE:           `${API_V1}/ipd/admissions/mine/`,
     ADMISSION_REGISTER:        `${API_V1}/ipd/admissions/register/`,
     ADMISSION_AWAITING_BED:    `${API_V1}/ipd/admissions/awaiting-bed/`,
     ADMISSION:         (id) => `${API_V1}/ipd/admissions/${id}/`,
     ADMISSION_DEPOSIT: (id) => `${API_V1}/ipd/admissions/${id}/deposit/`,
     ADMISSION_ASSIGN_BED:  (id) => `${API_V1}/ipd/admissions/${id}/assign-bed/`,
     ADMISSION_RELEASE_BED: (id) => `${API_V1}/ipd/admissions/${id}/release-bed/`,
-    ADMISSION_RESERVE_BED: (id) => `${API_V1}/ipd/admissions/${id}/reserve-bed/`,
-    ADMISSION_CANCEL_BED_RESERVATION: (id) => `${API_V1}/ipd/admissions/${id}/cancel-bed-reservation/`,
-    ADMISSION_TRANSFER_BED: (id) => `${API_V1}/ipd/admissions/${id}/transfer-bed/`,
-    ADMISSION_MOVEMENTS:    (id) => `${API_V1}/ipd/admissions/${id}/movements/`,
     ADMISSION_DISCHARGE:        (id) => `${API_V1}/ipd/admissions/${id}/discharge/`,
     ADMISSION_GENERATE_INVOICE: (id) => `${API_V1}/ipd/admissions/${id}/generate-invoice/`,
     ADMISSION_TYPES:           `${API_V1}/ipd/admission-types/`,

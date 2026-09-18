@@ -135,6 +135,10 @@ class Vitals(models.Model):
     height_cm        = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
     bmi              = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
     blood_sugar_rbs  = models.IntegerField(null=True, blank=True)       # mg/dL random blood sugar
+    # Pediatric-only measurement — nurse UI only shows this field when the
+    # patient is a minor (see growthData.is_minor gating in frontend). Kept
+    # nullable/optional for adult encounters where it's simply never entered.
+    head_circumference_cm = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
     nurse_notes      = models.TextField(blank=True)                     # nurse observations
 
     class Meta:

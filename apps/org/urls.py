@@ -17,6 +17,9 @@ from .views import (
 from .vaccination_schedule_views import (
     VaccinationScheduleListCreateView, VaccinationScheduleDetailView, VaccinationScheduleActivateView,
 )
+from .milestone_schedule_views import (
+    MilestoneScheduleListCreateView, MilestoneScheduleDetailView, MilestoneScheduleActivateView,
+)
 
 urlpatterns = [
     # Branches
@@ -69,6 +72,12 @@ urlpatterns = [
     path("vaccination-schedules/",             VaccinationScheduleListCreateView.as_view(), name="vaccination-schedule-list-create"),
     path("vaccination-schedules/<int:pk>/",    VaccinationScheduleDetailView.as_view(),     name="vaccination-schedule-detail"),
     path("vaccination-schedules/<int:pk>/activate/", VaccinationScheduleActivateView.as_view(), name="vaccination-schedule-activate"),
+
+    # Pediatric developmental-milestone schedules — same hospital-configurable
+    # clone-a-template pattern as vaccination schedules above.
+    path("milestone-schedules/",             MilestoneScheduleListCreateView.as_view(), name="milestone-schedule-list-create"),
+    path("milestone-schedules/<int:pk>/",    MilestoneScheduleDetailView.as_view(),     name="milestone-schedule-detail"),
+    path("milestone-schedules/<int:pk>/activate/", MilestoneScheduleActivateView.as_view(), name="milestone-schedule-activate"),
 
     # Tenant-level clinical settings (fee_ownership, etc.)
     path("settings/",                          TenantSettingsView.as_view(),   name="tenant-settings"),
