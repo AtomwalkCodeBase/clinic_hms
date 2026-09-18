@@ -32,6 +32,26 @@ class InvoiceStatusOptionSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "is_system"]
 
 
+class RoomTypeOptionSerializer(serializers.ModelSerializer):
+    # Same value+label shape as InvoiceStatusOptionSerializer (not the
+    # name-mirrors-label shape ServiceCategory/PaymentMode use) — Room.room_type
+    # stores this row's machine `value`, while `label` is what the Room
+    # form's dropdown displays, matching how the field already worked
+    # before it became hospital-configurable (was a fixed choices= list on org.models.Room).
+    #
+    # category/is_bed_based are what let this one catalog serve both OPD
+    # rooms (Consultation, Procedure — category="opd"/"procedure",
+    # is_bed_based=False) and bed-based IPD rooms (General Ward, Private,
+    # ICU, … — category="ipd", is_bed_based=True) since the v8 unification
+    # folded org.Ward's old, separate ward_type catalog in here. See
+    # billing.OptionList's own docstring.
+    class Meta:
+        model  = OptionList
+        fields = ["id", "value", "label", "is_active", "is_system", "sort_order",
+                  "category", "is_bed_based", "daily_rate"]
+        read_only_fields = ["id", "is_system"]
+
+
 class BillingServiceSerializer(serializers.ModelSerializer):
     class Meta:
         model  = BillingService

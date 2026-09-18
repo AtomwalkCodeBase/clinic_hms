@@ -1,0 +1,233 @@
+/**
+ * styles/intake-workspace.css
+ * ----------------------------
+ * Design system for the unified Triage -> OPD Booking -> Emergency
+ * Registration -> Referral Queue -> Complete Admission workspace, matching
+ * the approved unified-intake.html mockup exactly (colors, type, component
+ * shapes). Deliberately kept separate from variables.css/global.css (the
+ * app's own "Private Practice" theme) rather than merged into it — every
+ * selector here is scoped under .intake-workspace so it can never leak
+ * into or collide with the rest of the app. Imported once, globally, from
+ * main.jsx, same as the other stylesheets (Vite doesn't scope CSS imports
+ * to a component, so the .intake-workspace prefix is what does the actual
+ * scoping).
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+.intake-workspace {
+  --iw-bg:#F3F6F5; --iw-surface:#FFFFFF; --iw-surface-2:#E9F0EE; --iw-surface-3:#DEE9E5;
+  --iw-border:#D6E1DD; --iw-border-strong:#BCCCC6;
+  --iw-text:#152420; --iw-text-muted:#57685F; --iw-text-faint:#8B9C94;
+  --iw-opd:#0F6E63; --iw-opd-soft:#E3F1EE; --iw-opd-strong:#0B4F47;
+  --iw-ipd:#3B5BA5; --iw-ipd-soft:#E7EBF6; --iw-ipd-strong:#2B4380;
+  --iw-critical:#B3261E; --iw-critical-soft:#FBE9E7;
+  --iw-new-badge:#8A5A00; --iw-new-badge-soft:#FBF0DA;
+  --iw-shadow: 0 1px 2px rgba(20,40,34,.06), 0 4px 14px rgba(20,40,34,.05);
+  --iw-radius: 10px;
+
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  color: var(--iw-text);
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+.intake-workspace *{ box-sizing: border-box; }
+.intake-workspace .iw-mono{ font-family:"IBM Plex Mono", ui-monospace, monospace; font-variant-numeric:tabular-nums; }
+.intake-workspace button{ font-family: inherit; }
+
+/* ── Chips / badges / dots ─────────────────────────────────────── */
+.intake-workspace .chip{
+  display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600;
+  padding:2.5px 8px; border-radius:99px; line-height:1.4; white-space:nowrap;
+}
+.intake-workspace .chip-opd{ background:var(--iw-opd-soft); color:var(--iw-opd-strong); }
+.intake-workspace .chip-ipd{ background:var(--iw-ipd-soft); color:var(--iw-ipd-strong); }
+.intake-workspace .chip-shared{ background:var(--iw-surface-3); color:var(--iw-text-muted); }
+.intake-workspace .chip-new{ background:var(--iw-new-badge-soft); color:var(--iw-new-badge); }
+.intake-workspace .chip-critical{ background:var(--iw-critical-soft); color:var(--iw-critical); }
+.intake-workspace .dot{ width:7px; height:7px; border-radius:99px; flex:none; display:inline-block; }
+.intake-workspace .dot-opd{ background:var(--iw-opd); }
+.intake-workspace .dot-ipd{ background:var(--iw-ipd); }
+.intake-workspace .dot-critical{ background:var(--iw-critical); }
+
+/* ── Step wizard nav (persistent across all 5 steps) ──────────── */
+.intake-workspace .fd-steps{
+  display:flex; gap:6px; flex-wrap:wrap; background:var(--iw-surface); border:1px solid var(--iw-border);
+  border-radius:var(--iw-radius); padding:6px; box-shadow:var(--iw-shadow);
+}
+.intake-workspace .fd-step-btn{
+  display:flex; align-items:center; gap:8px; border:none; background:transparent; color:var(--iw-text-muted);
+  padding:8px 12px; border-radius:7px; font-size:12.5px; font-weight:600; cursor:pointer; text-decoration:none;
+}
+.intake-workspace .fd-step-btn .n{
+  width:20px; height:20px; border-radius:99px; background:var(--iw-surface-3); color:var(--iw-text-muted);
+  display:flex; align-items:center; justify-content:center; font-size:11px; flex:none;
+}
+.intake-workspace .fd-step-btn.active{ background:var(--iw-opd-soft); color:var(--iw-opd-strong); }
+.intake-workspace .fd-step-btn.active .n{ background:var(--iw-opd); color:#fff; }
+.intake-workspace .fd-step-btn:hover:not(.active){ background:var(--iw-surface-2); }
+.intake-workspace .fd-step-btn:disabled{ opacity:.45; cursor:not-allowed; }
+
+/* ── Panels / sections / fields ───────────────────────────────── */
+.intake-workspace .panel{
+  background:var(--iw-surface); border:1px solid var(--iw-border); border-radius:var(--iw-radius);
+  box-shadow:var(--iw-shadow); overflow:hidden;
+}
+.intake-workspace .panel-head{
+  padding:14px 16px; border-bottom:1px solid var(--iw-border); display:flex; align-items:center;
+  justify-content:space-between; gap:10px; flex-wrap:wrap;
+}
+.intake-workspace .panel-head h2{ font-size:15px; font-weight:600; margin:0; }
+.intake-workspace .id-banner{
+  display:flex; align-items:center; gap:10px; padding:11px 16px; background:var(--iw-critical-soft);
+  color:var(--iw-critical); font-size:12.5px; font-weight:600; border-bottom:1px solid var(--iw-border);
+}
+.intake-workspace .section{ padding:16px; border-bottom:1px solid var(--iw-border); display:flex; flex-direction:column; gap:12px; }
+.intake-workspace .section:last-child{ border-bottom:none; }
+.intake-workspace .section-title{
+  display:flex; align-items:center; gap:8px; font-size:12.5px; font-weight:700; text-transform:uppercase;
+  letter-spacing:.04em; color:var(--iw-text-muted);
+}
+.intake-workspace .section-num{
+  width:18px; height:18px; border-radius:99px; background:var(--iw-surface-3); color:var(--iw-text-muted);
+  font-size:10px; display:flex; align-items:center; justify-content:center; font-weight:700; flex:none;
+}
+
+.intake-workspace .fgrid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(180px,1fr)); gap:12px 14px; }
+.intake-workspace .field{ display:flex; flex-direction:column; gap:4px; min-width:0; }
+.intake-workspace .field label{
+  font-size:11px; color:var(--iw-text-faint); font-weight:600; text-transform:uppercase; letter-spacing:.03em;
+}
+.intake-workspace .field .val{
+  background:var(--iw-surface-2); border:1px solid var(--iw-border); border-radius:7px; padding:8px 10px;
+  font-size:13px; color:var(--iw-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.intake-workspace .field .val.empty{ color:var(--iw-text-faint); font-style:italic; }
+/* Real, editable inputs styled to the same shape as the mockup's read-only .val boxes */
+.intake-workspace .field input,
+.intake-workspace .field select,
+.intake-workspace .field textarea{
+  background:var(--iw-surface-2); border:1px solid var(--iw-border); border-radius:7px; padding:8px 10px;
+  font-size:13px; color:var(--iw-text); font-family:inherit; width:100%;
+}
+.intake-workspace .field input:focus,
+.intake-workspace .field select:focus,
+.intake-workspace .field textarea:focus{ outline:2px solid var(--iw-opd); outline-offset:1px; border-color:var(--iw-opd); }
+.intake-workspace .field input::placeholder{ color:var(--iw-text-faint); }
+
+.intake-workspace .toggle-row{ display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer; }
+.intake-workspace .fakecheck{
+  width:16px; height:16px; border-radius:4px; border:1.5px solid var(--iw-border-strong); flex:none;
+  display:flex; align-items:center; justify-content:center;
+}
+.intake-workspace .fakecheck.on{ background:var(--iw-opd); border-color:var(--iw-opd); }
+.intake-workspace .fakecheck.on svg{ width:11px; height:11px; color:#fff; }
+.intake-workspace .fakecheck.on.crit{ background:var(--iw-critical); border-color:var(--iw-critical); }
+
+.intake-workspace .btnbar{ display:flex; gap:8px; padding:14px 16px; background:var(--iw-surface-2); flex-wrap:wrap; }
+.intake-workspace .primary-btn{
+  background:var(--iw-opd); color:#fff; border:none; padding:9px 16px; border-radius:7px; font-size:13px;
+  font-weight:700; cursor:pointer;
+}
+.intake-workspace .primary-btn.ipd{ background:var(--iw-ipd); }
+.intake-workspace .primary-btn:disabled{ opacity:.5; cursor:not-allowed; }
+.intake-workspace .secondary-btn{
+  background:var(--iw-surface); border:1px solid var(--iw-border-strong); color:var(--iw-text); padding:9px 16px;
+  border-radius:7px; font-size:13px; font-weight:600; cursor:pointer;
+}
+.intake-workspace .secondary-btn:disabled{ opacity:.5; cursor:not-allowed; }
+.intake-workspace .critical-btn{
+  background:var(--iw-critical); color:#fff; border:none; padding:8px 14px; border-radius:7px; font-size:12.5px;
+  font-weight:700; cursor:pointer;
+}
+
+.intake-workspace .side-card{
+  background:var(--iw-surface); border:1px solid var(--iw-border); border-radius:var(--iw-radius);
+  box-shadow:var(--iw-shadow); padding:16px; display:flex; flex-direction:column; gap:12px;
+}
+.intake-workspace .side-card h3{ font-size:13px; margin:0; }
+.intake-workspace .idline{ display:flex; justify-content:space-between; gap:8px; font-size:12.5px; padding-block:5px; border-bottom:1px dashed var(--iw-border); }
+.intake-workspace .idline:last-child{ border-bottom:none; }
+.intake-workspace .idline span:first-child{ color:var(--iw-text-faint); }
+.intake-workspace .idline span:last-child{ font-weight:600; text-align:right; }
+
+.intake-workspace .intake-grid{ display:grid; grid-template-columns:1fr 260px; gap:14px; align-items:start; }
+@media (max-width:900px){ .intake-workspace .intake-grid{ grid-template-columns:1fr; } }
+
+/* ── Triage: availability rows ────────────────────────────────── */
+.intake-workspace .avail-list{ display:flex; flex-direction:column; gap:8px; }
+.intake-workspace .avail-row{
+  display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:12px 14px;
+  border:1px solid var(--iw-border); border-radius:9px; background:var(--iw-surface-2);
+}
+.intake-workspace .avail-row.none{ background:var(--iw-critical-soft); border-color:color-mix(in srgb, var(--iw-critical) 30%, var(--iw-border)); }
+.intake-workspace .avail-dept{ font-weight:600; font-size:13.5px; }
+.intake-workspace .avail-meta{ font-size:12.5px; color:var(--iw-text-muted); }
+.intake-workspace .avail-row.none .avail-meta{ color:var(--iw-critical); }
+.intake-workspace .avail-actions{ display:flex; gap:8px; flex-wrap:wrap; }
+
+/* ── Referral queue: table ────────────────────────────────────── */
+.intake-workspace .wtable{ width:100%; border-collapse:collapse; font-size:12.5px; min-width:560px; }
+.intake-workspace .wtable th{
+  text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--iw-text-faint);
+  font-weight:700; padding:10px 14px; border-bottom:1px solid var(--iw-border-strong);
+}
+.intake-workspace .wtable td{ padding:10px 14px; border-bottom:1px solid var(--iw-border); vertical-align:middle; }
+.intake-workspace .wtable tr:last-child td{ border-bottom:none; }
+.intake-workspace .row-emergency{ background:var(--iw-critical-soft); }
+
+/* ── Bed picker: visual grid ──────────────────────────────────── */
+.intake-workspace .bedgrid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(46px,1fr)); gap:8px; }
+.intake-workspace .bed{
+  aspect-ratio:1; border-radius:8px; border:1px solid var(--iw-border-strong); display:flex; align-items:center;
+  justify-content:center; font-size:10.5px; font-weight:700; color:var(--iw-text-muted); background:var(--iw-surface-2);
+  cursor:pointer;
+}
+.intake-workspace .bed.free{ background:var(--iw-opd-soft); color:var(--iw-opd-strong); border-color:color-mix(in srgb, var(--iw-opd) 35%, var(--iw-border)); }
+.intake-workspace .bed.taken{ background:var(--iw-surface-3); color:var(--iw-text-faint); cursor:not-allowed; }
+.intake-workspace .bed.picked{ background:var(--iw-opd); color:#fff; border-color:var(--iw-opd); }
+/* Real per-status colors (available reuses .free above) — occupied/cleaning/
+   blocked/out_of_service are never selectable, same as .taken, but read
+   distinctly from each other instead of collapsing into one gray "taken". */
+.intake-workspace .bed.occupied{ background:var(--iw-critical-soft); color:var(--iw-critical); border-color:color-mix(in srgb, var(--iw-critical) 35%, var(--iw-border)); cursor:not-allowed; }
+.intake-workspace .bed.cleaning{ background:var(--iw-new-badge-soft); color:var(--iw-new-badge); border-color:color-mix(in srgb, var(--iw-new-badge) 35%, var(--iw-border)); cursor:not-allowed; }
+.intake-workspace .bed.blocked{ background:var(--iw-surface-3); color:var(--iw-text-faint); cursor:not-allowed; }
+/* Held for one specific admission (see org.Bed.STATUS_RESERVED) — distinct
+   from .occupied so a front-desk user can tell "held, not yet in it" from
+   "actually in it" at a glance. */
+.intake-workspace .bed.reserved{ background:var(--iw-shared-soft, #eef2ff); color:var(--iw-shared, #4f46e5); border-color:color-mix(in srgb, #4f46e5 35%, var(--iw-border)); cursor:not-allowed; }
+
+/* ── Bed picker: status legend + per-ward grouping ────────────── */
+.intake-workspace .bed-legend{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--iw-text-muted); }
+/* Bug fix: the generic .dot rule above forces width/height:7px on ANY
+   .dot element (it was written for a bare colored-circle indicator with no
+   text). A legend item is a text LABEL plus a small ::before bullet, not a
+   bare circle — without overriding width/height back to auto here, every
+   label's text was being clipped into a 7x7px box, rendering as illegible
+   overlapping text (confirmed live: getComputedStyle showed width:7px on
+   a "Available (8)"-text .dot span). */
+.intake-workspace .bed-legend .dot{ display:inline-flex; align-items:center; gap:5px; width:auto; height:auto; }
+.intake-workspace .bed-legend .dot::before{ content:""; width:8px; height:8px; border-radius:50%; background:currentColor; flex:none; }
+.intake-workspace .bed-legend .dot.available{ color:var(--iw-opd); }
+.intake-workspace .bed-legend .dot.occupied{ color:var(--iw-critical); }
+.intake-workspace .bed-legend .dot.cleaning{ color:var(--iw-new-badge); }
+.intake-workspace .bed-legend .dot.blocked{ color:var(--iw-text-faint); }
+.intake-workspace .bed-legend .dot.reserved{ color:#4f46e5; }
+
+.intake-workspace .ward-group-label{
+  font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+  color:var(--iw-text-muted); margin:14px 0 6px;
+}
+.intake-workspace .ward-group-label:first-child{ margin-top:0; }
+
+.intake-workspace .choice-row{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+@media (max-width:560px){ .intake-workspace .choice-row{ grid-template-columns:1fr; } }
+.intake-workspace .choice-card{
+  border:1.5px solid var(--iw-border-strong); border-radius:9px; padding:12px 14px; cursor:pointer;
+  display:flex; flex-direction:column; gap:4px; background:var(--iw-surface); text-align:left;
+}
+.intake-workspace .choice-card b{ font-size:13px; }
+.intake-workspace .choice-card span{ font-size:12px; color:var(--iw-text-muted); }
+.intake-workspace .choice-card.picked{ border-color:var(--iw-opd); background:var(--iw-opd-soft); }
+
+.intake-workspace .fine{ color:var(--iw-text-muted); font-size:12px; }

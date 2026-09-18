@@ -72,16 +72,32 @@ export const API_ENDPOINTS = {
     VACCINATION_SCHEDULES:        `${API_V1}/org/vaccination-schedules/`,
     VACCINATION_SCHEDULE:  (id) => `${API_V1}/org/vaccination-schedules/${id}/`,
     VACCINATION_SCHEDULE_ACTIVATE: (id) => `${API_V1}/org/vaccination-schedules/${id}/activate/`,
+    FLOORS:            `${API_V1}/org/floors/`,
+    FLOOR:      (id) => `${API_V1}/org/floors/${id}/`,
     ROOMS:             `${API_V1}/org/rooms/`,
     ROOM:       (id) => `${API_V1}/org/rooms/${id}/`,
     ROOM_ASSIGNMENTS:  `${API_V1}/org/room-assignments/`,
     ROOM_ASSIGNMENT: (id) => `${API_V1}/org/room-assignments/${id}/`,
+    // Beds (IPD bed assignment) + front-desk triage availability — see
+    // docs/PENDING_IMPROVEMENTS.md items 1 & 3. A bed hangs off ROOMS above
+    // now (a bed-based room — the old, separate wards/ endpoint is gone,
+    // see org.Room's own docstring for the v8 unification).
+    BEDS:              `${API_V1}/org/beds/`,
+    BED:        (id) => `${API_V1}/org/beds/${id}/`,
+    BED_BOARD:         `${API_V1}/org/beds/board/`,
+    BED_MARK_CLEAN: (id) => `${API_V1}/org/beds/${id}/mark-clean/`,
+    BED_MAINTENANCE: (id) => `${API_V1}/org/beds/${id}/maintenance/`,
+    DEPARTMENTS_AVAILABILITY: `${API_V1}/org/departments/availability/`,
   },
 
   PATIENTS: {
     LIST:             `${API_V1}/patients/`,
     REGISTER:         `${API_V1}/patients/register/`,
+    // Provisional/unidentified-patient registration (Emergency path) — no
+    // mobile or guardian required. See PatientEmergencyRegisterSerializer.
+    REGISTER_EMERGENCY: `${API_V1}/patients/register-emergency/`,
     LOOKUP:           `${API_V1}/patients/lookup/`,
+    ATTACH_NETWORK:   `${API_V1}/patients/attach-network/`,
     SEARCH:           `${API_V1}/patients/search/`,
     FAMILY_TREE:      `${API_V1}/patients/family-tree/`,
     DETAIL:     (id) => `${API_V1}/patients/${id}/`,
@@ -132,6 +148,8 @@ export const API_ENDPOINTS = {
     PRESCRIPTION_ITEM: (rxId, itemId) => `${API_V1}/opd/prescriptions/${rxId}/items/${itemId}/`,
     RX_ITEMS:            (id) => `${API_V1}/opd/prescriptions/${id}/items/`,
     FAVOURITES:                `${API_V1}/opd/favourites/`,
+    APPOINTMENT_TYPES:         `${API_V1}/opd/appointment-types/`,
+    APPOINTMENT_TYPE_ITEM: (id) => `${API_V1}/opd/appointment-types/${id}/`,
   },
 
   // Patient portal (patient JWT)
@@ -248,6 +266,8 @@ export const API_ENDPOINTS = {
   LAB: {
     CATALOG:              `${API_V1}/lab/catalog/`,
     CATALOG_ITEM:  (id) => `${API_V1}/lab/catalog/${id}/`,
+    SAMPLE_TYPES:         `${API_V1}/lab/sample-types/`,
+    SAMPLE_TYPE_ITEM: (id) => `${API_V1}/lab/sample-types/${id}/`,
     REQUESTS:             `${API_V1}/lab/requests/`,
     REQUEST_LOOKUP:       `${API_V1}/lab/requests/lookup/`,
     REQUEST_CHOICE: (id) => `${API_V1}/lab/requests/${id}/choice/`,
@@ -266,6 +286,11 @@ export const API_ENDPOINTS = {
     PAYMENT_MODE: (id) => `${API_V1}/billing/payment-modes/${id}/`,
     INVOICE_STATUSES:      `${API_V1}/billing/invoice-statuses/`,
     INVOICE_STATUS: (id) => `${API_V1}/billing/invoice-statuses/${id}/`,
+    // Also carries what used to be the separate ward-types/ catalog
+    // (General Ward, Private, ICU, …) — see billing.OptionList's docstring
+    // for the v8 unification.
+    ROOM_TYPES:      `${API_V1}/billing/room-types/`,
+    ROOM_TYPE: (id) => `${API_V1}/billing/room-types/${id}/`,
     INVOICES:         `${API_V1}/billing/invoices/`,
     INVOICE:    (id) => `${API_V1}/billing/invoices/${id}/`,
     INVOICE_ITEMS: (id) => `${API_V1}/billing/invoices/${id}/items/`,
@@ -300,16 +325,28 @@ export const API_ENDPOINTS = {
     PORTAL_AMENDMENTS:    `${API_V1}/compliance/portal/amendments/`,
   },
 
-  // IPD module — Phase 1 (admission intake) only. Bed/ward allocation and
-  // everything after it is not built yet — see apps/ipd/models.py.
+  // IPD module — admission intake + bed assignment (immediate or
+  // deferred). See docs/PENDING_IMPROVEMENTS.md item 3.
   IPD: {
     REFERRALS:                `${API_V1}/ipd/referrals/`,
+    REFERRALS_MINE:           `${API_V1}/ipd/referrals/mine/`,
     REFERRAL_RECOMMEND:       `${API_V1}/ipd/referrals/recommend/`,
+    REFERRAL_REGISTER_EXTERNAL: `${API_V1}/ipd/referrals/register-external/`,
     REFERRAL_ACCEPT:   (id) => `${API_V1}/ipd/referrals/${id}/accept/`,
     ADMISSIONS:                `${API_V1}/ipd/admissions/`,
+    ADMISSIONS_MINE:           `${API_V1}/ipd/admissions/mine/`,
     ADMISSION_REGISTER:        `${API_V1}/ipd/admissions/register/`,
+    ADMISSION_AWAITING_BED:    `${API_V1}/ipd/admissions/awaiting-bed/`,
     ADMISSION:         (id) => `${API_V1}/ipd/admissions/${id}/`,
     ADMISSION_DEPOSIT: (id) => `${API_V1}/ipd/admissions/${id}/deposit/`,
+    ADMISSION_ASSIGN_BED:  (id) => `${API_V1}/ipd/admissions/${id}/assign-bed/`,
+    ADMISSION_RELEASE_BED: (id) => `${API_V1}/ipd/admissions/${id}/release-bed/`,
+    ADMISSION_RESERVE_BED: (id) => `${API_V1}/ipd/admissions/${id}/reserve-bed/`,
+    ADMISSION_CANCEL_BED_RESERVATION: (id) => `${API_V1}/ipd/admissions/${id}/cancel-bed-reservation/`,
+    ADMISSION_TRANSFER_BED: (id) => `${API_V1}/ipd/admissions/${id}/transfer-bed/`,
+    ADMISSION_MOVEMENTS:    (id) => `${API_V1}/ipd/admissions/${id}/movements/`,
+    ADMISSION_DISCHARGE:        (id) => `${API_V1}/ipd/admissions/${id}/discharge/`,
+    ADMISSION_GENERATE_INVOICE: (id) => `${API_V1}/ipd/admissions/${id}/generate-invoice/`,
     ADMISSION_TYPES:           `${API_V1}/ipd/admission-types/`,
     ADMISSION_SOURCES:         `${API_V1}/ipd/admission-sources/`,
   },

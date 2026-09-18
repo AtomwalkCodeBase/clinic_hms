@@ -1,5 +1,7 @@
 from datetime import date as _date
 from rest_framework import serializers
+from apps.patients.age_utils import age_years_months as _age_years_months
+from apps.billing.models import OptionList
 from .models import Appointment, Vitals, OPDEncounter, Prescription, PrescriptionItem, PrescriptionFavourite
 
 
@@ -17,6 +19,7 @@ class AppointmentSerializer(serializers.ModelSerializer):
     patient_name  = serializers.SerializerMethodField()
     patient_uhid  = serializers.SerializerMethodField()
     patient_age   = serializers.SerializerMethodField()
+    patient_age_months = serializers.SerializerMethodField()
     patient_gender = serializers.SerializerMethodField()
     is_dependent  = serializers.SerializerMethodField()
     guardian_name = serializers.SerializerMethodField()
@@ -28,7 +31,7 @@ class AppointmentSerializer(serializers.ModelSerializer):
         model = Appointment
         fields = [
             "id", "patient_id", "patient_awpid", "awpid",
-            "patient_name", "patient_uhid", "patient_age", "patient_gender",
+            "patient_name", "patient_uhid", "patient_age", "patient_age_months", "patient_gender",
             "is_dependent", "guardian_name", "guardian_relation",
             "doctor_user_id", "doctor_name",
             "appointment_type", "visit_type", "status",
@@ -70,11 +73,13 @@ class AppointmentSerializer(serializers.ModelSerializer):
 
     def get_patient_age(self, obj):
         p = self._get_patient(obj)
-        if not p or not p.date_of_birth:
-            return None
-        today = _date.today()
-        dob = p.date_of_birth
-        return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+        ym = _age_years_months(p.date_of_birth) if p else None
+        return ym[0] if ym else None
+
+    def get_patient_age_months(self, obj):
+        p = self._get_patient(obj)
+        ym = _age_years_months(p.date_of_birth) if p else None
+        return ym[1] if ym else None
 
     def get_patient_gender(self, obj):
         p = self._get_patient(obj)
@@ -101,10 +106,31 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
             "appointment_type", "scheduled_date", "scheduled_time", "chief_complaint", "notes",
         ]
 
+    def validate_appointment_type(self, value):
+        tenant_db = self.context.get("tenant_db")
+        if tenant_db and not OptionList.objects.using(tenant_db).filter(
+            list_type=OptionList.LIST_APPOINTMENT_TYPE, value=value, is_active=True,
+        ).exists():
+            raise serializers.ValidationError("Not a configured appointment type for this hospital.")
+        return value
+
     def validate(self, data):
         if not data.get("patient_id") or not data.get("patient_awpid"):
             raise serializers.ValidationError("patient_id and patient_awpid are required.")
         return data
+
+
+class AppointmentTypeSerializer(serializers.ModelSerializer):
+    """Generic read/write serializer for the appointment-type catalog.
+    `value` is exposed read-only — it's what Appointment.appointment_type
+    actually stores (opd/followup/emergency, lowercase), distinct from the
+    display label, same reasoning as apps.lab.SampleTypeSerializer."""
+    name = serializers.CharField(source="label")
+
+    class Meta:
+        model  = OptionList
+        fields = ["id", "name", "value", "is_active", "is_system", "sort_order"]
+        read_only_fields = ["id", "value", "is_system"]
 
 
 class AppointmentStatusUpdateSerializer(serializers.Serializer):
@@ -138,6 +164,7 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
     patient_pk   = serializers.SerializerMethodField()
     appointment_type = serializers.SerializerMethodField()
     patient_age  = serializers.SerializerMethodField()
+    patient_age_months = serializers.SerializerMethodField()
     patient_gender = serializers.SerializerMethodField()
     is_dependent = serializers.SerializerMethodField()
     guardian_name = serializers.SerializerMethodField()
@@ -150,7 +177,7 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
         model = OPDEncounter
         fields = [
             "id", "appointment_id", "patient_id", "doctor_user_id",
-            "patient_name", "patient_uhid", "patient_pk", "appointment_type", "patient_age", "patient_gender",
+            "patient_name", "patient_uhid", "patient_pk", "appointment_type", "patient_age", "patient_age_months", "patient_gender",
             "is_dependent", "guardian_name", "guardian_relation",
             "patient_last_visit", "encounter_date", "chief_complaint",
             "status", "subjective", "objective", "assessment", "plan",
@@ -195,11 +222,13 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
 
     def get_patient_age(self, obj):
         p = self._patient(obj)
-        if not p or not p.date_of_birth:
-            return None
-        today = _date.today()
-        dob = p.date_of_birth
-        return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+        ym = _age_years_months(p.date_of_birth) if p else None
+        return ym[0] if ym else None
+
+    def get_patient_age_months(self, obj):
+        p = self._patient(obj)
+        ym = _age_years_months(p.date_of_birth) if p else None
+        return ym[1] if ym else None
 
     def get_patient_gender(self, obj):
         p = self._patient(obj)

@@ -22,16 +22,27 @@ Two design decisions worth understanding before touching this file:
    apps/billing/models.py's OptionList docstring, and this app's
    migrations/0002_seed_admission_option_lists.py for the seeded defaults.
 
-2. Front desk can NEVER originate an admission — only a doctor's own
-   authenticated action can. AdmissionReferral is the artifact that makes
-   this enforceable: it is created only by RecommendAdmissionView (IsDoctor,
-   stamps recommended_by from request.user, never from client input), and
-   for a referral that arrives from outside this hospital, it additionally
-   requires accepted_by to be set by AcceptExternalReferralView (also
-   IsDoctor) before front desk can act on it. CompleteAdmissionView (the
-   only way an Admission row gets created) requires an existing, pending
-   AdmissionReferral — there is no "create an Admission from scratch"
-   endpoint at all, by design.
+2. Front desk can NEVER single-handedly originate an ADMISSION — only a
+   doctor's own countersign can turn a referral into something
+   CompleteAdmissionView will act on. That invariant is unchanged. What DID
+   change (v9 — "front desk must be able to act on an external referral
+   letter"): front desk is now also allowed to LOG receipt of a referral
+   for a source that arrives from outside this hospital (external
+   referral / transfer-in / ambulance-EMS / medical tourism — see
+   SOURCES_REQUIRING_ACCEPTANCE below) via RegisterExternalReferralView,
+   not just an in-app doctor via RecommendAdmissionView. Either way the row
+   lands in the exact same place — status=PENDING, accepted_by=None — and
+   CompleteAdmissionView still refuses to touch it until one of this
+   hospital's own doctors calls AcceptExternalReferralView. front_desk_logged
+   just records which of the two paths created the row, so a doctor
+   reviewing their countersign queue can tell "a colleague recommended
+   this" from "front desk logged this off a paper letter". A source that
+   does NOT require acceptance (OPD Consultation, Walk-in, ...) still can
+   only ever be logged by a doctor through RecommendAdmissionView — see
+   RegisterExternalReferralSerializer.validate() for the enforcement.
+   CompleteAdmissionView (the only way an Admission row gets created)
+   requires an existing, pending AdmissionReferral — there is no "create an
+   Admission from scratch" endpoint at all, by design.
 """
 
 import uuid
@@ -123,6 +134,15 @@ class AdmissionReferral(models.Model):
     is_mlc               = models.BooleanField(default=False)
     guardian_consent_by  = models.CharField(max_length=200, blank=True)
 
+    # True when RegisterExternalReferralView (front desk, logging a paper/
+    # PDF letter) created this row instead of RecommendAdmissionView (an
+    # in-app doctor). Purely descriptive — it changes no enforcement
+    # anywhere (requires_acceptance()/accepted_by already gate
+    # CompleteAdmissionView identically either way) — it exists so a
+    # doctor's countersign queue and any audit view can tell the two
+    # origins apart. See module docstring, design decision 2.
+    front_desk_logged = models.BooleanField(default=False)
+
     status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
 
     class Meta:
@@ -156,13 +176,22 @@ class Admission(models.Model):
     # Same enforced-state-machine pattern as
     # apps.opd.views.AppointmentStatusView.ALLOWED_TRANSITIONS. Phase 1's
     # API only ever creates a row directly at STATUS_ADMITTED (see
-    # views.CompleteAdmissionView) — the rest of this map is modeled now so
-    # Phase 2 (bed allocation onward) doesn't need a schema change, but
-    # nothing in this app transitions into ACTIVE or beyond yet.
+    # views.CompleteAdmissionView) — the rest of this map was modeled but
+    # unused until the discharge/billing work: views.AssignBedView now
+    # moves ADMITTED -> ACTIVE the moment a bed is actually allocated (that
+    # is what ACTIVE always meant, per its own label above), and
+    # views.ReleaseBedView moves ACTIVE back to ADMITTED when a bed is
+    # freed without a discharge (so the patient correctly reappears on the
+    # Awaiting Bed worklist rather than being stuck ACTIVE with no bed).
+    # views.DischargeAdmissionView goes ACTIVE -> DISCHARGED directly in one
+    # step (an administrative "mark discharged", not a clinical multi-step
+    # workflow) — DISCHARGE_INITIATED stays modeled and reachable for a
+    # future real discharge-process feature, it's just not required to pass
+    # through it today.
     ALLOWED_TRANSITIONS = {
         STATUS_REQUESTED: [STATUS_ADMITTED, STATUS_CANCELLED],
         STATUS_ADMITTED:  [STATUS_ACTIVE, STATUS_CANCELLED],
-        STATUS_ACTIVE:    [STATUS_DISCHARGE_INITIATED],
+        STATUS_ACTIVE:    [STATUS_ADMITTED, STATUS_DISCHARGE_INITIATED, STATUS_DISCHARGED],
         STATUS_DISCHARGE_INITIATED: [STATUS_DISCHARGED],
         STATUS_DISCHARGED: [],
         STATUS_CANCELLED: [],
@@ -203,6 +232,27 @@ class Admission(models.Model):
         "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="readmissions",
     )
 
+    # Bed assignment — deliberately optional and independent of `status`.
+    # Front desk can assign a bed the moment the admission is completed (if
+    # one's free and the patient needs it immediately) OR leave this null
+    # and complete the admission anyway — the patient then sits on the
+    # "awaiting bed" worklist (see views.AwaitingBedListView) until
+    # views.AssignBedView is called later. Status alone (STATUS_ADMITTED)
+    # already means "awaiting bed" per the STATUS_CHOICES label above; this
+    # field is what actually lets that stop being true. See
+    # docs/PENDING_IMPROVEMENTS.md item 3.
+    bed = models.ForeignKey(
+        "org.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="admissions",
+    )
+    bed_assigned_at = models.DateTimeField(null=True, blank=True)
+
+    # Set once, by views.DischargeAdmissionView, the moment a discharge is
+    # recorded — the REAL end-of-stay timestamp, as opposed to
+    # expected_discharge_date above (an estimate, editable any time before
+    # then). Deliberately NOT cleared alongside `bed` on a plain
+    # ReleaseBedView call — this only ever gets set by an actual discharge.
+    discharged_at = models.DateTimeField(null=True, blank=True)
+
     status = models.CharField(max_length=22, choices=STATUS_CHOICES, default=STATUS_REQUESTED, db_index=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -227,8 +277,9 @@ class AdmissionDeposit(models.Model):
     Invoice — billing.Payment has a mandatory (non-nullable) FK to an
     already-existing Invoice, and a deposit is collected before there is
     anything to invoice yet (often before a bed is even assigned).
-    Reconciled as a credit line against the real Invoice at discharge —
-    that reconciliation is Phase 2, not built here.
+    Reconciled as a billing.Payment against the real Invoice by
+    views.GenerateInvoiceView (see reconciled_invoice below) — typically
+    called at/after discharge, but nothing requires that ordering.
 
     Deliberately unenforced as a blocking gate anywhere in this Phase 1 API:
     Indian law (Clinical Establishments Act 2010; NMC Professional Conduct
@@ -248,6 +299,16 @@ class AdmissionDeposit(models.Model):
     collected_by    = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True)
     collected_at    = models.DateTimeField(auto_now_add=True)
 
+    # The reconciliation this docstring used to describe as "Phase 2, not
+    # built here" — set by views.GenerateInvoiceView the moment this
+    # deposit is folded into a real billing.Invoice as a billing.Payment,
+    # so a later invoice-generation call for the same admission never
+    # applies the same deposit twice. Null means "not yet reconciled".
+    reconciled_invoice = models.ForeignKey(
+        "billing.Invoice", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="reconciled_ipd_deposits",
+    )
+
     class Meta:
         app_label = "ipd"
         db_table  = "admission_deposit"
@@ -255,3 +316,56 @@ class AdmissionDeposit(models.Model):
 
     def __str__(self):
         return f"₹{self.amount} advance for {self.admission.admission_number}"
+
+
+class PatientMovement(models.Model):
+    """
+    Append-only history of every bed change during an Admission's stay —
+    the "Phase 2" bed/transfer history org.Bed's own docstring anticipated
+    (there was previously no record at all of which beds a patient actually
+    occupied over time; org.Bed.status + Admission.bed only ever held the
+    CURRENT state). One row per movement event, written by the same views
+    that already change bed/admission state (views.AssignBedView,
+    views.TransferBedView, views.ReleaseBedView, views.DischargeAdmissionView)
+    — this model has no views of its own that create rows; it is a log, not
+    a workflow.
+
+    from_bed/to_bed are SET_NULL (not PROTECT/CASCADE) so deactivating a bed
+    later never blocks deleting it and never silently deletes history either
+    — a movement row makes sense to keep even if the bed itself is later
+    decommissioned.
+    """
+    INITIAL_ASSIGNMENT = "initial_assignment"
+    TRANSFER           = "transfer"
+    RELEASE            = "release"
+    DISCHARGE          = "discharge"
+    MOVEMENT_CHOICES = [
+        (INITIAL_ASSIGNMENT, "Initial Bed Assignment"),
+        (TRANSFER, "Bed Transfer"),
+        (RELEASE, "Bed Released (no discharge)"),
+        (DISCHARGE, "Discharge"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    admission     = models.ForeignKey(Admission, on_delete=models.CASCADE, related_name="movements")
+    movement_type = models.CharField(max_length=20, choices=MOVEMENT_CHOICES)
+    from_bed      = models.ForeignKey("org.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="movements_from")
+    to_bed        = models.ForeignKey("org.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="movements_to")
+    # Denormalized at write time (same rationale as Admission.admission_type/
+    # source) — a bed can be renamed/moved/deactivated later; this is what
+    # the movement actually looked like at the moment it happened.
+    from_room_name = models.CharField(max_length=100, blank=True)
+    from_bed_number = models.CharField(max_length=20, blank=True)
+    to_room_name   = models.CharField(max_length=100, blank=True)
+    to_bed_number  = models.CharField(max_length=20, blank=True)
+    moved_by  = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, related_name="patient_movements_recorded")
+    notes     = models.CharField(max_length=255, blank=True)
+    moved_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "ipd"
+        db_table  = "patient_movement"
+        ordering  = ["-moved_at"]
+
+    def __str__(self):
+        return f"{self.admission.admission_number}: {self.get_movement_type_display()}"

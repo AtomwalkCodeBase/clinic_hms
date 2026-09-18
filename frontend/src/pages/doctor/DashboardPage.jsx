@@ -78,8 +78,33 @@ function Sparkline({ points, width = 160, height = 44 }) {
 export default function DoctorDashboardPage() {
   const { user }   = useAuth();
   const navigate   = useNavigate();
-  const { toastApiError } = useToast();
+  const { toastSuccess, toastApiError } = useToast();
   const [starting, setStarting] = useState(null);
+
+  // ── External-referral countersign queue ──────────────────────────────
+  // PendingReferralsListView (apps/ipd/views.py) scopes this same endpoint
+  // to a doctor's own countersign queue automatically — referrals a
+  // colleague recommended OR front desk logged from an outside letter
+  // (AdmissionReferral.front_desk_logged), still awaiting one of this
+  // hospital's own doctors' accept. Only rendered when there's something
+  // to act on, so most doctors never see an empty IPD card on their OPD
+  // dashboard.
+  const { data: extReferralsData, refetch: refetchExtReferrals } = useApi(API_ENDPOINTS.IPD.REFERRALS, { pollMs: 45000 });
+  const extReferrals = extReferralsData || [];
+  const [accepting, setAccepting] = useState(null);
+
+  const acceptReferral = useCallback(async (r) => {
+    setAccepting(r.id);
+    try {
+      await apiClient.post(API_ENDPOINTS.IPD.REFERRAL_ACCEPT(r.id), {});
+      toastSuccess(`Countersigned — front desk can now register ${r.patient_name}'s admission.`);
+      refetchExtReferrals();
+    } catch (err) {
+      toastApiError(err, "Could not accept this referral.");
+    } finally {
+      setAccepting(null);
+    }
+  }, [toastSuccess, toastApiError, refetchExtReferrals]);
 
   const { data: meData } = useApi(API_ENDPOINTS.ORG.MY_PROFILE);
   const photo = meData?.photo;
@@ -222,6 +247,57 @@ export default function DoctorDashboardPage() {
             ))}
           </div>
         </div>
+
+        {/* ── External-referral countersign queue ────────────────────── */}
+        {extReferrals.length > 0 && (
+          <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 22, borderLeft: "3px solid var(--color-warning)" }}>
+            <div style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              padding: "14px 20px", borderBottom: "1px solid var(--color-border)",
+            }}>
+              <span className="dot-label dot-label--gold">Admission referrals awaiting your countersign</span>
+              <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>{extReferrals.length} pending</span>
+            </div>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Patient</th>
+                  <th>Referred by</th>
+                  <th>Source</th>
+                  <th>Reason</th>
+                  <th style={{ width: 110 }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {extReferrals.map(r => (
+                  <tr key={r.id}>
+                    <td>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>{r.patient_name}</div>
+                      <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>UHID {r.patient_uhid}</div>
+                    </td>
+                    <td style={{ fontSize: 12 }}>
+                      {r.front_desk_logged
+                        ? <span title={r.external_referring_facility}>{r.external_referring_doctor_name || "External doctor"} <span style={{ color: "var(--color-text-muted)" }}>(letter logged by front desk)</span></span>
+                        : (r.recommended_by_name || "—")}
+                    </td>
+                    <td style={{ fontSize: 12 }}>{r.admission_type}</td>
+                    <td style={{ fontSize: 12, maxWidth: 260 }}>{r.reason_for_admission}</td>
+                    <td>
+                      <button
+                        className="btn-primary"
+                        style={{ fontSize: 11, padding: "4px 12px" }}
+                        disabled={accepting === r.id}
+                        onClick={() => acceptReferral(r)}
+                      >
+                        {accepting === r.id ? "…" : "Accept →"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {/* ── Today's patients ───────────────────────────────────────── */}
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>

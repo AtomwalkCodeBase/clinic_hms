@@ -239,6 +239,67 @@ input, select, textarea {
   margin-top: 4px;
 }
 
+/* Block-form building blocks — a labeled field, a 2-col field grid, and a
+   small helper line under an input. Several pages (AdmissionsPage,
+   EncounterPage, StaffPage, ConsultPadPage, and the front-desk triage/
+   emergency-registration screens) already build their forms out of these
+   three classes; defined here so those labels/grids actually render
+   instead of falling back to unstyled browser defaults. */
+.form-field {
+  margin-bottom: 14px;
+}
+.form-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  margin-bottom: 6px;
+}
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 4px;
+}
+@media (max-width: 560px) {
+  .form-grid-2 { grid-template-columns: 1fr; }
+}
+.hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+}
+
+/* Inline callout / info panel — a left-accented notice box used wherever a
+   page explains a constraint or next step inline (e.g. "front desk
+   completes registration only") rather than via a toast. */
+.callout {
+  display: flex;
+  gap: 12px;
+  background: var(--color-primary-light);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 25%, transparent);
+  border-radius: var(--radius-card);
+  padding: 14px 16px;
+  margin-bottom: 20px;
+}
+.callout-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--color-primary-dark);
+  margin-bottom: 3px;
+}
+.callout-body {
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+/* Muted variant of .dot-label's colored marker (a section that isn't a
+   status per se — e.g. "Awaiting Bed" — vs. the green/gold/red/blue ones
+   above which map to a specific state). */
+.dot-label--muted::before { background: var(--color-text-disabled); }
+
+
 /* Page header row */
 .page-header {
   display: flex;

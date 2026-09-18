@@ -15,15 +15,6 @@ import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 
-const SAMPLE_TYPES = [
-  { value: "blood",  label: "Blood" },
-  { value: "urine",  label: "Urine" },
-  { value: "stool",  label: "Stool" },
-  { value: "sputum", label: "Sputum" },
-  { value: "swab",   label: "Swab" },
-  { value: "other",  label: "Other" },
-];
-
 // Common/generic lab tests every diagnostic lab runs — lets a lab tech pick
 // a standard test name off a list instead of retyping it (and typo'ing it)
 // every time, while still allowing a fully custom name for anything not on
@@ -76,7 +67,7 @@ const CUSTOM_OPTION = "__custom__";
 
 const EMPTY_FORM = { name: "", code: "", sample_type: "blood", price: "", turnaround_hours: "24", description: "" };
 
-function TestForm({ initial, onSave, onCancel, saving }) {
+function TestForm({ initial, onSave, onCancel, saving, sampleTypes }) {
   const [form, setForm] = useState(initial || EMPTY_FORM);
   // Tracks the quick-pick dropdown's own selection so it can show "Custom /
   // type your own" as chosen while the name field underneath stays freely
@@ -130,7 +121,7 @@ function TestForm({ initial, onSave, onCancel, saving }) {
         <div>
           <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>SAMPLE TYPE</label>
           <select className="form-input" value={form.sample_type} onChange={e => upd("sample_type", e.target.value)}>
-            {SAMPLE_TYPES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+            {sampleTypes.map(s => <option key={s.id} value={s.value}>{s.name}</option>)}
           </select>
         </div>
       </div>
@@ -162,6 +153,8 @@ export default function CatalogPage() {
   const { toastSuccess, toastApiError } = useToast();
   const { data, isLoading, refetch } = useApi(API_ENDPOINTS.LAB.CATALOG, { params: { include_inactive: 1 } });
   const tests = data || [];
+  const { data: sampleTypesData } = useApi(API_ENDPOINTS.LAB.SAMPLE_TYPES);
+  const sampleTypes = sampleTypesData || [];
 
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -216,7 +209,7 @@ export default function CatalogPage() {
         )}
 
         {adding && (
-          <TestForm onSave={createTest} onCancel={() => setAdding(false)} saving={saving} />
+          <TestForm onSave={createTest} onCancel={() => setAdding(false)} saving={saving} sampleTypes={sampleTypes} />
         )}
 
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
@@ -251,6 +244,7 @@ export default function CatalogPage() {
                           onSave={payload => updateTest(t.id, payload)}
                           onCancel={() => setEditingId(null)}
                           saving={saving}
+                          sampleTypes={sampleTypes}
                         />
                       </td>
                     </tr>

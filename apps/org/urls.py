@@ -8,8 +8,11 @@ from .views import (
     StaffBranchesView, MyBranchesView, StaffDoctorsView,
     PermissionListView, RoleListCreateView, RoleDetailView, StaffRolesView,
     TenantSettingsView, DoctorScheduleView,
+    FloorListCreateView, FloorDetailView,
     RoomListCreateView, RoomDetailView,
     RoomAssignmentListCreateView, RoomAssignmentDetailView,
+    BedListCreateView, BedDetailView, BedMarkCleanView, BedMaintenanceView, BedBoardView,
+    DepartmentAvailabilityView,
 )
 from .vaccination_schedule_views import (
     VaccinationScheduleListCreateView, VaccinationScheduleDetailView, VaccinationScheduleActivateView,
@@ -78,4 +81,21 @@ urlpatterns = [
     path("rooms/<int:pk>/",                    RoomDetailView.as_view(),           name="room-detail"),
     path("room-assignments/",                  RoomAssignmentListCreateView.as_view(), name="room-assignment-list-create"),
     path("room-assignments/<int:pk>/",         RoomAssignmentDetailView.as_view(),     name="room-assignment-detail"),
+
+    # Floors (set up once per branch; Rooms — OPD and bed-based IPD alike —
+    # assign to one)
+    path("floors/",                            FloorListCreateView.as_view(),      name="floor-list-create"),
+    path("floors/<int:pk>/",                   FloorDetailView.as_view(),          name="floor-detail"),
+
+    # Beds (IPD bed assignment — see docs/PENDING_IMPROVEMENTS.md item 3).
+    # What used to be a separate wards/ endpoint is just rooms/ above now —
+    # a ward IS a Room (bed-based room_type) since the v8 unification.
+    path("beds/board/",                        BedBoardView.as_view(),             name="bed-board"),
+    path("beds/",                              BedListCreateView.as_view(),        name="bed-list-create"),
+    path("beds/<int:pk>/",                     BedDetailView.as_view(),            name="bed-detail"),
+    path("beds/<int:pk>/mark-clean/",          BedMarkCleanView.as_view(),         name="bed-mark-clean"),
+    path("beds/<int:pk>/maintenance/",         BedMaintenanceView.as_view(),       name="bed-maintenance"),
+
+    # Front-desk triage: per-department doctor availability
+    path("departments/availability/",          DepartmentAvailabilityView.as_view(), name="dept-availability"),
 ]

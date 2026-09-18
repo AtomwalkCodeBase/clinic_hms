@@ -54,7 +54,7 @@ function bucketByDate(rows) {
 
 function HistoryTable({ rows, role, navigate, docActions }) {
   return (
-    <table className="data-table">
+    <table className={tableClass}>
       <thead>
         <tr>
           <th style={{ width: 70 }}>Token</th>
@@ -142,6 +142,12 @@ function HistoryTable({ rows, role, navigate, docActions }) {
 
 export default function VisitHistoryView({ role, initialPatient = "" }) {
   const navigate = useNavigate();
+  // Front desk gets the new fdc- "command centre" panel/table styling;
+  // doctor and nurse (the other two callers of this shared view) keep the
+  // existing card/data-table classes untouched.
+  const isFrontDesk = role === "front-desk";
+  const panelClass = isFrontDesk ? "fdc-panel" : "card";
+  const tableClass = isFrontDesk ? "fdc-table" : "data-table";
   const [patient,   setPatient]   = useState(initialPatient);
   const [dateFrom,  setDateFrom]  = useState("");
   const [dateTo,    setDateTo]    = useState("");
@@ -240,7 +246,7 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
   return (
     <div>
       {/* Search + filters */}
-      <div className="card" style={{ padding: 14, marginBottom: 20 }}>
+      <div className={panelClass} style={{ padding: 14, marginBottom: 20 }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <div style={{ position: "relative", flex: "1 1 260px" }}>
             <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--color-text-muted)" }} />
@@ -304,7 +310,7 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
       {loading ? (
         <div style={{ textAlign: "center", padding: 60, color: "var(--color-text-muted)" }}>Loading…</div>
       ) : rows.length === 0 ? (
-        <div className="card" style={{ textAlign: "center", padding: 60 }}>
+        <div className={panelClass} style={{ textAlign: "center", padding: 60 }}>
           <FolderOpen size={40} style={{ color: "var(--color-text-muted)", marginBottom: 12 }} />
           <div style={{ fontWeight: 600, marginBottom: 8 }}>
             {hasFilters ? "No visits match your search" : "No visit history yet"}
@@ -325,7 +331,7 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
             return sections.map(s => (
               <div key={s.key}>
                 <div className={`dot-label ${s.dot}`} style={{ marginBottom: 8 }}>{s.label} ({s.rows.length})</div>
-                <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+                <div className={panelClass} style={{ padding: 0, overflow: "hidden" }}>
                   <HistoryTable rows={s.rows} role={role} navigate={navigate} docActions={docActions} />
                 </div>
               </div>
@@ -333,7 +339,7 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
           })()}
 
           {pagination && pagination.total_pages > 1 && (
-            <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, padding: "16px 20px" }}>
+            <div className={panelClass} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, padding: "16px 20px" }}>
               <button className="btn-outline" style={{ fontSize: 12, padding: "6px 14px" }}
                 disabled={!pagination.has_previous}
                 onClick={() => setPage(p => Math.max(1, p - 1))}>
