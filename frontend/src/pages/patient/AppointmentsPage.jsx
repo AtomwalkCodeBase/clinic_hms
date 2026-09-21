@@ -25,6 +25,7 @@ import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import ROUTES        from "../../config/routes.config";
 import { openDataUrlInNewTab } from "../../utils/fileViewer";
+import { usePatientContext } from "../../context/PatientContext";
 
 const TODAY = new Date().toISOString().split("T")[0];
 // Mirrors the 2-month booking window enforced server-side (see
@@ -811,21 +812,50 @@ function BillRow({ inv }) {
 }
 
 function BillsSection() {
+  const { familyMembers } = usePatientContext();
+  // Invoices are a single-target list (see PortalInvoiceListView), unlike
+  // My Bookings' merged-then-client-filtered list — so "whose bills" is its
+  // own selector here rather than a client-side filter over one big list.
+  const [billsFor, setBillsFor] = useState(""); // "" = self, else a family member's awpid
   const {
     items: invoices, isLoading, pagination, loadMore, isLoadingMore, hasMore,
-  } = usePaginatedList(API_ENDPOINTS.PORTAL.INVOICES, { pageSize: 10 });
+  } = usePaginatedList(API_ENDPOINTS.PORTAL.INVOICES, {
+    pageSize: 10, params: billsFor ? { patient_awpid: billsFor } : {},
+  });
 
-  if (isLoading || invoices.length === 0) return null;
+  if (isLoading && !invoices.length && !familyMembers.length) return null;
+  if (!isLoading && invoices.length === 0 && !familyMembers.length) return null;
 
   return (
     <div style={{ marginTop: 24 }}>
-      <span className="dot-label dot-label--gold" style={{ marginBottom: 10, display: "inline-block", fontSize: 11, letterSpacing: "0.08em" }}>
-        <Receipt size={12} style={{ verticalAlign: -2, marginRight: 4 }} />
-        My Bills ({invoices.length})
-      </span>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+        <span className="dot-label dot-label--gold" style={{ display: "inline-block", fontSize: 11, letterSpacing: "0.08em" }}>
+          <Receipt size={12} style={{ verticalAlign: -2, marginRight: 4 }} />
+          My Bills ({invoices.length})
+        </span>
+        {familyMembers.length > 0 && (
+          <select
+            value={billsFor}
+            onChange={e => setBillsFor(e.target.value)}
+            className="form-input"
+            style={{ fontSize: 12, padding: "4px 8px", width: "auto" }}
+          >
+            <option value="">Myself</option>
+            {familyMembers.map(m => (
+              <option key={m.awpid} value={m.awpid}>{m.name || m.full_name || m.awpid}</option>
+            ))}
+          </select>
+        )}
+      </div>
+      {isLoading ? (
+        <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>Loading bills…</div>
+      ) : invoices.length === 0 ? (
+        <div style={{ fontSize: 12, color: "var(--color-text-muted)", fontStyle: "italic" }}>No bills on file.</div>
+      ) : (
       <div style={{ display: "grid", gap: 10 }}>
         {invoices.map(inv => <BillRow key={`${inv.tenant_db}-${inv.id}`} inv={inv} />)}
       </div>
+      )}
       {hasMore && (
         <div style={{ padding: 16, textAlign: "center" }}>
           <button

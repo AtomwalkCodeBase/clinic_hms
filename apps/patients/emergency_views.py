@@ -16,8 +16,10 @@ endpoint in this project works, so a few things are true by design:
     scan traffic without ever having an account). Everything returned here
     already lives in the registry DB's Shared* tables.
   - This is the patient's FULL cross-hospital shared history — diagnoses,
-    vitals, allergies, prescriptions, lab reports, uploaded documents, and
-    vaccination records, including viewable files — not a trimmed subset.
+    vitals (including head circumference for a minor), allergies,
+    prescriptions, lab reports, uploaded documents, vaccination records,
+    birth history, and flagged developmental-milestone concerns (for a
+    minor patient) — including viewable files — not a trimmed subset.
     That's a deliberate scope decision (the earlier, narrower version of
     this view only surfaced active allergies/diagnoses/latest prescription;
     the patient explicitly asked for everything). It's reused straight from
@@ -94,6 +96,58 @@ def _resolve_emergency_contact(awpid):
                 "relation": "Parent/Guardian",
             }
     return None
+
+
+def _birth_history(awpid):
+    """
+    A child's birth history, if any hospital has captured it — written
+    through from BirthHistoryView (see apps.patients.pediatric_views) into
+    registry.SharedBirthHistory. Returns None (not an empty dict) when
+    nothing's on file, so the frontend can tell "no birth history" apart
+    from "not applicable" the same way it already does for emergency_contact.
+    """
+    from apps.registry.models import SharedBirthHistory
+    bh = SharedBirthHistory.objects.using("default").filter(awpid=awpid).first()
+    if not bh:
+        return None
+    return {
+        "gestational_age_weeks": bh.gestational_age_weeks,
+        "birth_weight_kg": bh.birth_weight_kg,
+        "delivery_mode": bh.delivery_mode,
+        "multiple_birth": bh.multiple_birth,
+        "nicu_admission": bh.nicu_admission,
+        "nicu_days": bh.nicu_days,
+        "birth_complications": bh.birth_complications,
+        "congenital_conditions": bh.congenital_conditions,
+        "apgar_score_1min": bh.apgar_score_1min,
+        "apgar_score_5min": bh.apgar_score_5min,
+    }
+
+
+def _milestone_concerns(awpid):
+    """
+    Developmental-milestone records flagged "concern" by a doctor/nurse —
+    the only milestone information an ER doctor treating an unfamiliar
+    child actually needs in an emergency (a full achieved/not-yet roadmap is
+    a well-child-visit concern, not an acute-care one; see
+    apps.registry.milestone_roadmap for that fuller view, used by the
+    doctor's own consultation screen and the parent's portal). Sourced
+    straight from SharedMilestoneRecord — no schedule merge needed here,
+    just "what has a clinician actually flagged."
+    """
+    from apps.registry.models import SharedMilestoneRecord
+    records = (
+        SharedMilestoneRecord.objects.using("default")
+        .filter(awpid=awpid, status=SharedMilestoneRecord.STATUS_CONCERN)
+        .order_by("-assessed_date")[:20]
+    )
+    return [{
+        "domain": r.domain,
+        "milestone": r.milestone,
+        "assessed_date": r.assessed_date,
+        "notes": r.notes,
+        "recorded_by_name": r.recorded_by_name,
+    } for r in records]
 
 
 def _vaccination_history(awpid):
@@ -177,6 +231,8 @@ class EmergencySummaryView(APIView):
 
         contact = _resolve_emergency_contact(awpid)
         vaccinations = _vaccination_history(awpid)
+        birth_history = _birth_history(awpid)
+        milestone_concerns = _milestone_concerns(awpid)
 
         xff = request.META.get("HTTP_X_FORWARDED_FOR")
         ip_address = xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR")
@@ -201,5 +257,7 @@ class EmergencySummaryView(APIView):
             "lab_results": history["lab_results"],
             "documents": history["documents"],
             "vaccinations": vaccinations,
+            "birth_history": birth_history,
+            "milestone_concerns": milestone_concerns,
             "emergency_contact": contact,
         })

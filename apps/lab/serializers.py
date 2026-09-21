@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from core import storage as blob_storage
 from apps.billing.models import OptionList
+from apps.patients.age_utils import age_years_months as _age_years_months
 from .models import LabTest, LabRequest, LabReport, LabReportItem
 
 
@@ -69,6 +70,8 @@ class LabRequestSerializer(serializers.ModelSerializer):
     patient_name     = serializers.CharField(source="patient.full_name", read_only=True)
     patient_uhid     = serializers.CharField(source="patient.uhid", read_only=True)
     patient_phone    = serializers.CharField(source="patient.mobile", read_only=True)
+    patient_age      = serializers.SerializerMethodField()
+    patient_age_months = serializers.SerializerMethodField()
     requested_by_name = serializers.SerializerMethodField()
     report           = serializers.SerializerMethodField()
     attached_document = serializers.SerializerMethodField()
@@ -77,6 +80,7 @@ class LabRequestSerializer(serializers.ModelSerializer):
         model  = LabRequest
         fields = [
             "id", "patient", "patient_name", "patient_uhid", "patient_phone",
+            "patient_age", "patient_age_months",
             "encounter", "appointment_id", "test", "test_name", "test_code",
             "test_price", "test_turnaround_hours",
             "requested_by", "requested_by_name", "branch",
@@ -92,6 +96,20 @@ class LabRequestSerializer(serializers.ModelSerializer):
             return f"{obj.requested_by.first_name} {obj.requested_by.last_name}".strip()
         except Exception:
             return ""
+
+    # Real age at read time, derived from the patient's real date_of_birth —
+    # same helper used everywhere else in this codebase (see age_utils.py)
+    # — used only to show a real, dynamic pediatric-reference caution on the
+    # report upload screen; never to compute or guess a reference range
+    # itself (lab reference ranges are assay/lab-specific, not something
+    # this system fabricates — see UploadModal in RequestsPage.jsx).
+    def get_patient_age(self, obj):
+        ym = _age_years_months(obj.patient.date_of_birth) if obj.patient else None
+        return ym[0] if ym else None
+
+    def get_patient_age_months(self, obj):
+        ym = _age_years_months(obj.patient.date_of_birth) if obj.patient else None
+        return ym[1] if ym else None
 
     def get_report(self, obj):
         try:

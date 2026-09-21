@@ -11,17 +11,25 @@
  * It does NOT store permissions — see PermissionContext.jsx.
  */
 
-import { createContext, useState, useEffect, useCallback } from "react";
+import { createContext, useState, useEffect, useCallback, useRef } from "react";
 import { jwtDecode }      from "jwt-decode";
 import { publicClient, tokenStore } from "../services/api.client";
 import apiClient          from "../services/api.client";
 import API_ENDPOINTS      from "../config/api.config";
+import { clearStoredSelection } from "./PatientContext";
 
 export const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user,      setUser]      = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  // logout()/the session-expired handler below are stable useCallbacks (empty
+  // deps) so they don't churn the listeners that use them — a ref keeps them
+  // able to see the CURRENT user (for clearing that account's own stored
+  // "which family member am I viewing" selection) without needing `user` in
+  // their dependency arrays.
+  const userRef = useRef(user);
+  useEffect(() => { userRef.current = user; }, [user]);
 
   // The JWT never carries the profile photo (too large to put in a token),
   // so it's fetched separately from /me/ and merged onto the decoded-JWT
@@ -78,9 +86,9 @@ export function AuthProvider({ children }) {
   // ── Listen for session expiry fired by API client interceptor ────────────
   useEffect(() => {
     const onExpired = () => {
+      clearStoredSelection(userRef.current?.user_id);
       setUser(null);
       tokenStore.clear();
-      localStorage.removeItem("atomwalk:portal_selected_patient");
     };
     window.addEventListener("atomwalk:session-expired", onExpired);
     return () => window.removeEventListener("atomwalk:session-expired", onExpired);
@@ -149,13 +157,11 @@ export function AuthProvider({ children }) {
   // ── Logout ────────────────────────────────────────────────────────────────
   const logout = useCallback(() => {
     tokenStore.clear();
-    // "Which family member am I viewing" (patient portal) is stored in
-    // localStorage keyed globally, not per-account — clear it here so the
-    // next login on this browser (a different patient, or the same one)
-    // doesn't inherit a stranger's family-member selection. See also the
-    // ownership check in PatientContext, which catches the case where this
-    // didn't run (token just expired, no explicit logout).
-    localStorage.removeItem("atomwalk:portal_selected_patient");
+    // Tidy up this account's own stored "which family member am I viewing"
+    // selection — housekeeping, not load-bearing (PatientContext's storage
+    // key is scoped per user_id, so a different account can never read this
+    // one back regardless of whether it's cleared here).
+    clearStoredSelection(userRef.current?.user_id);
     setUser(null);
   }, []);
 

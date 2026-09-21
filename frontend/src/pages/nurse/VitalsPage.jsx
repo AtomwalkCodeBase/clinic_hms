@@ -10,9 +10,162 @@ import { AppShell }   from "../../components/layout/AppShell";
 import { PageShell }  from "../../components/common/PageShell";
 import DependentBadge from "../../components/common/DependentBadge";
 import { useToast }   from "../../hooks/useToast";
+import { useApi }     from "../../hooks/useApi";
 import apiClient      from "../../services/api.client";
 import API_ENDPOINTS  from "../../config/api.config";
-import { CheckCircle2, Stethoscope } from "lucide-react";
+import { CheckCircle2, Stethoscope, Baby } from "lucide-react";
+
+const MILESTONE_STATUS_STYLE = {
+  achieved:   { bg: "#ECFDF5", color: "#047857", label: "Achieved" },
+  not_yet:    { bg: "#F3F4F6", color: "#6B7280", label: "Not Yet" },
+  concern:    { bg: "#FEF2F2", color: "#B91C1C", label: "Concern" },
+  unassessed: { bg: "var(--color-bg)", color: "var(--color-text-muted)", label: "Not Assessed" },
+};
+
+// Read-only Birth History (nurses can view, per IsHospitalStaff on
+// BirthHistoryView.get — recording it is doctor/front-desk only, see
+// apps/patients/pediatric_views.py's own docstring) + Developmental
+// Milestones, which nurses CAN record (IsDoctorOrNurse on
+// PatientMilestoneListCreateView) — same roadmap/assess pattern as the
+// doctor's EncounterPage "Developmental Milestones" panel, just standalone
+// here rather than embedded in a consult.
+function PediatricPanel({ patientPk }) {
+  const { toastSuccess, toastApiError } = useToast();
+  const { data: bh, isLoading: bhLoading } = useApi(
+    patientPk ? API_ENDPOINTS.PATIENTS.BIRTH_HISTORY(patientPk) : null, { skip: !patientPk }
+  );
+  const { data: milestoneData, isLoading: milestoneLoading, refetch: refetchMilestones } = useApi(
+    patientPk ? API_ENDPOINTS.PATIENTS.MILESTONES(patientPk) : null, { skip: !patientPk }
+  );
+
+  const [assessingKey, setAssessingKey] = useState(null);
+  const [assessForm, setAssessForm] = useState({ status: "achieved", notes: "" });
+  const [assessSaving, setAssessSaving] = useState(false);
+
+  function openAssess(item) {
+    const key = item.record_id ?? `${item.domain}:${item.milestone}`;
+    setAssessingKey(k => (k === key ? null : key));
+    setAssessForm({ status: "achieved", notes: "" });
+  }
+
+  async function submitAssessment(item) {
+    if (!patientPk) return;
+    setAssessSaving(true);
+    try {
+      await apiClient.post(API_ENDPOINTS.PATIENTS.MILESTONES(patientPk), {
+        domain: item.domain,
+        milestone: item.milestone,
+        scheduled_label: item.scheduled_label,
+        status: assessForm.status,
+        notes: assessForm.notes || undefined,
+      });
+      toastSuccess("Milestone assessment recorded.");
+      setAssessingKey(null);
+      refetchMilestones?.();
+    } catch (err) {
+      toastApiError(err, "Could not record the milestone assessment.");
+    } finally {
+      setAssessSaving(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+        <Baby size={15} /> Pediatric
+      </div>
+
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--color-text-muted)", marginBottom: 6 }}>
+        Birth History
+      </div>
+      {bhLoading ? (
+        <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 16 }}>Loading…</div>
+      ) : !bh ? (
+        <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 16 }}>No birth history recorded yet — the doctor or front desk can add it.</div>
+      ) : (
+        <div style={{ display: "grid", gap: 4, fontSize: 11, marginBottom: 16 }}>
+          {bh.gestational_age_weeks != null && <div>Gestational age: <strong>{bh.gestational_age_weeks} weeks</strong></div>}
+          {bh.birth_weight_kg != null && <div>Birth weight: <strong>{bh.birth_weight_kg} kg</strong></div>}
+          {bh.delivery_mode_display && <div>Delivery: <strong>{bh.delivery_mode_display}</strong></div>}
+          {bh.multiple_birth && <div>Multiple birth: <strong>{bh.multiple_birth}</strong></div>}
+          {bh.nicu_admission && <div>NICU: <strong>Yes{bh.nicu_days ? ` — ${bh.nicu_days} days` : ""}</strong></div>}
+          {(bh.apgar_score_1min != null || bh.apgar_score_5min != null) && (
+            <div>APGAR: <strong>{bh.apgar_score_1min ?? "—"} / {bh.apgar_score_5min ?? "—"}</strong></div>
+          )}
+          {bh.birth_complications && <div>Complications: {bh.birth_complications}</div>}
+          {bh.congenital_conditions && <div>Congenital conditions: {bh.congenital_conditions}</div>}
+        </div>
+      )}
+
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--color-text-muted)", marginBottom: 6 }}>
+        Developmental Milestones
+      </div>
+      {milestoneLoading ? (
+        <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>Loading milestone roadmap…</div>
+      ) : !milestoneData?.roadmap?.length ? (
+        <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>No milestone schedule available.</div>
+      ) : (
+        <div style={{ display: "grid", gap: 6 }}>
+          {milestoneData.roadmap.map((m, i) => {
+            const st = MILESTONE_STATUS_STYLE[m.status] || MILESTONE_STATUS_STYLE.unassessed;
+            const key = m.record_id ?? `${m.domain}:${m.milestone}`;
+            const isOpen = assessingKey === key;
+            return (
+              <div key={i} style={{
+                borderRadius: 8, border: "1px solid var(--color-border)", padding: "8px 10px",
+                background: "var(--color-bg)",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text)" }}>{m.milestone}</span>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10,
+                    background: st.bg, color: st.color, whiteSpace: "nowrap",
+                  }}>{st.label}</span>
+                </div>
+                <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 3, textTransform: "capitalize" }}>
+                  {m.domain?.replace("_", " ")} · {m.scheduled_label}
+                  {m.assessed_date && ` · assessed ${new Date(m.assessed_date).toLocaleDateString("en-IN")}`}
+                  {m.status === "unassessed" && m.timing === "due_now" && " · recommended now"}
+                  {m.status === "unassessed" && m.timing === "past_window" && " · past the usual window"}
+                </div>
+                <button
+                  type="button" onClick={() => openAssess(m)}
+                  style={{
+                    marginTop: 6, fontSize: 10, fontWeight: 700, padding: "4px 8px", borderRadius: 6,
+                    border: "1px solid var(--color-primary)", background: isOpen ? "var(--color-primary-light)" : "var(--color-bg)",
+                    color: "var(--color-primary)", cursor: "pointer",
+                  }}
+                >
+                  {isOpen ? "− Cancel" : "Assess"}
+                </button>
+                {isOpen && (
+                  <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+                    <select className="form-input" value={assessForm.status}
+                      onChange={e => setAssessForm(f => ({ ...f, status: e.target.value }))}
+                      style={{ fontSize: 12 }}>
+                      <option value="achieved">Achieved</option>
+                      <option value="not_yet">Not Yet</option>
+                      <option value="concern">Concern — flag for follow-up</option>
+                    </select>
+                    <input className="form-input" placeholder="Notes (optional)" value={assessForm.notes}
+                      onChange={e => setAssessForm(f => ({ ...f, notes: e.target.value }))}
+                      style={{ fontSize: 12 }} />
+                    <button
+                      type="button" onClick={() => submitAssessment(m)} disabled={assessSaving}
+                      className="btn-primary" style={{ fontSize: 11, padding: "5px 8px" }}
+                    >
+                      {assessSaving ? "Saving…" : "Save Assessment"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -292,6 +445,8 @@ export default function VitalsPage() {
                     )}
                   </div>
                 </div>
+
+                {isMinorPatient && <PediatricPanel patientPk={selected.patient_id} />}
 
                 {/* Nurse notes */}
                 <div className="card" style={{ padding: 20, marginBottom: 16 }}>

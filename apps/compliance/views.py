@@ -178,9 +178,16 @@ class PortalRecordAmendmentView(APIView):
     def get(self, request):
         from apps.tenants.models import Tenant
         from apps.patients.models import Patient
-        from apps.registry.models import PatientAccount
+        from apps.registry.models import PatientAccount, PatientRelationship
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        target_awpid = (request.query_params.get("patient_awpid") or "").strip() or acct.awpid
+        if target_awpid != acct.awpid:
+            is_family = PatientRelationship.objects.using("default").filter(
+                guardian_awpid=acct.awpid, dependent_awpid=target_awpid,
+            ).exists()
+            if not is_family:
+                return error("That patient isn't linked to your account.", status=403)
 
         results = []
         for tenant in Tenant.objects.using("default").filter(is_active=True):
@@ -191,7 +198,7 @@ class PortalRecordAmendmentView(APIView):
                 if db not in settings.DATABASES:
                     settings.DATABASES[db] = _make_db_config(db)
 
-                patient = Patient.objects.using(db).filter(awpid=acct.awpid).first()
+                patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
                 if not patient:
                     continue
                 rows = RecordAmendment.objects.using(db).filter(patient=patient).select_related("reviewed_by")

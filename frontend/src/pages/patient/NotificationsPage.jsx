@@ -13,6 +13,7 @@ import { PageShell } from "../../components/common/PageShell";
 import { useApi }    from "../../hooks/useApi";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import { usePatientContext } from "../../context/PatientContext";
 import { Calendar, Stethoscope, Syringe, Building2, CircleCheck } from "lucide-react";
 
 const TYPE_META = {
@@ -34,7 +35,15 @@ function relativeDate(dateStr) {
 }
 
 export default function NotificationsPage() {
-  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.PORTAL.NOTIFICATIONS);
+  const { familyMembers } = usePatientContext();
+  // Like PortalInvoiceListView, notifications resolve one target patient at
+  // a time (see _resolve_target_awpid_and_dob) rather than merging the whole
+  // family — so "whose notifications" is a selector here, defaulting to self.
+  const [notifFor, setNotifFor] = useState(""); // "" = self, else a family member's awpid
+  const { data, isLoading, refetch } = useApi(
+    API_ENDPOINTS.PORTAL.NOTIFICATIONS,
+    { params: notifFor ? { patient_awpid: notifFor } : {} },
+  );
   const [markingId, setMarkingId] = useState(null);
   const notifications = data?.results || [];
   const unreadCount = data?.unread_count ?? 0;
@@ -61,11 +70,26 @@ export default function NotificationsPage() {
     <AppShell>
       <PageShell title="Notifications">
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: "1px solid var(--color-border)", flexWrap: "wrap", gap: 8 }}>
             <span className="dot-label dot-label--green">
               {unreadCount > 0 ? `${unreadCount} unread` : "All caught up"} ({notifications.length})
             </span>
-            <button className="btn-outline" style={{ fontSize: 12, padding: "5px 14px" }} onClick={refetch}>Refresh</button>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {familyMembers.length > 0 && (
+                <select
+                  value={notifFor}
+                  onChange={e => setNotifFor(e.target.value)}
+                  className="form-input"
+                  style={{ fontSize: 12, padding: "4px 8px", width: "auto" }}
+                >
+                  <option value="">Myself</option>
+                  {familyMembers.map(m => (
+                    <option key={m.awpid} value={m.awpid}>{m.name || m.full_name || m.awpid}</option>
+                  ))}
+                </select>
+              )}
+              <button className="btn-outline" style={{ fontSize: 12, padding: "5px 14px" }} onClick={refetch}>Refresh</button>
+            </div>
           </div>
 
           {isLoading ? (

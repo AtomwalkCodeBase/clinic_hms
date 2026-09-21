@@ -156,6 +156,7 @@ export const API_ENDPOINTS = {
     PRESCRIPTION_ITEM: (rxId, itemId) => `${API_V1}/opd/prescriptions/${rxId}/items/${itemId}/`,
     RX_ITEMS:            (id) => `${API_V1}/opd/prescriptions/${id}/items/`,
     FAVOURITES:                `${API_V1}/opd/favourites/`,
+    FAVOURITE_ITEM:      (id) => `${API_V1}/opd/favourites/${id}/`,
     APPOINTMENT_TYPES:         `${API_V1}/opd/appointment-types/`,
     APPOINTMENT_TYPE_ITEM: (id) => `${API_V1}/opd/appointment-types/${id}/`,
   },
@@ -198,6 +199,9 @@ export const API_ENDPOINTS = {
     FAMILY:                 `${API_V1}/portal/family/`,
     FAMILY_DETAIL:  (awpid) => `${API_V1}/portal/family/${awpid}/`,
     HEALTH_SUMMARY:         `${API_V1}/portal/health-summary/`,
+    HEALTH_INSIGHTS:               `${API_V1}/portal/health-insights/`,
+    HEALTH_INSIGHTS_TRENDS:        `${API_V1}/portal/health-insights/trends/`,
+    HEALTH_INSIGHTS_NARRATE:       `${API_V1}/portal/health-insights/narrate/`,
     VACCINATIONS:           `${API_V1}/portal/vaccinations/`,
     VACCINATION_UPLOAD:     `${API_V1}/portal/vaccinations/upload/`,
     VACCINATION_FILE: (recordId) => `${API_V1}/portal/vaccinations/${recordId}/file/`,
@@ -283,7 +287,6 @@ export const API_ENDPOINTS = {
     REQUEST_ATTACH_DOCUMENT: (id) => `${API_V1}/lab/requests/${id}/attach-document/`,
     REQUEST_STATUS: (id) => `${API_V1}/lab/requests/${id}/status/`,
     REQUEST_REPORT: (id) => `${API_V1}/lab/requests/${id}/report/`,
-    DELIVER:        (id) => `${API_V1}/lab/reports/${id}/deliver/`,
   },
 
   BILLING: {
@@ -357,7 +360,9 @@ export const API_ENDPOINTS = {
     ADMISSION_DISCHARGE:        (id) => `${API_V1}/ipd/admissions/${id}/discharge/`,
     ADMISSION_GENERATE_INVOICE: (id) => `${API_V1}/ipd/admissions/${id}/generate-invoice/`,
     ADMISSION_TYPES:           `${API_V1}/ipd/admission-types/`,
+    ADMISSION_TYPE_ITEM: (id) => `${API_V1}/ipd/admission-types/${id}/`,
     ADMISSION_SOURCES:         `${API_V1}/ipd/admission-sources/`,
+    ADMISSION_SOURCE_ITEM: (id) => `${API_V1}/ipd/admission-sources/${id}/`,
   },
 };
 

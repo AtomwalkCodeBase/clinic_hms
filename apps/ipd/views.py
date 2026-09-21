@@ -41,22 +41,35 @@ from .serializers import (
 class AdmissionTypeListCreateView(_DropdownListCreateView):
     list_type = OptionList.LIST_ADMISSION_TYPE
     serializer_class = OptionListSerializer
+    # `value` (not `label`) is what Admission.admission_type actually stores
+    # and what AdmissionReferralSerializer._option_exists() matches against —
+    # same reasoning as RoomTypeListCreateView/InvoiceStatusListCreateView:
+    # `value` is the locked, load-bearing identity; `label` stays freely
+    # renamable, including on system rows.
+    identity_field = "value"
+    model_field = "value"
 
 
 class AdmissionTypeDetailView(_DropdownDetailView):
     list_type = OptionList.LIST_ADMISSION_TYPE
     serializer_class = OptionListSerializer
+    identity_field = "value"
+    model_field = "value"
     system_can_deactivate = False  # Emergency/Elective/etc. stay available even if deactivated attempts are made — same caution as InvoiceStatusOption
 
 
 class AdmissionSourceListCreateView(_DropdownListCreateView):
     list_type = OptionList.LIST_ADMISSION_SOURCE
     serializer_class = OptionListSerializer
+    identity_field = "value"
+    model_field = "value"
 
 
 class AdmissionSourceDetailView(_DropdownDetailView):
     list_type = OptionList.LIST_ADMISSION_SOURCE
     serializer_class = OptionListSerializer
+    identity_field = "value"
+    model_field = "value"
     system_can_deactivate = True  # a hospital genuinely may not use e.g. Medical Tourism/Ambulance-EMS — safe to let them turn these off
 
 

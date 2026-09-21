@@ -591,26 +591,3 @@ class LabReportUploadView(APIView):
 
         return created(data=LabReportSerializer(report).data,
                        message="Report delivered." if deliver else "Report saved as draft.")
-
-
-class LabReportDeliverView(APIView):
-    """POST /api/v1/lab/reports/{id}/deliver/ — deliver a previously-saved draft report."""
-    permission_classes = [IsAuthenticated, IsLabTech, RequireFeature("feat_lab")]
-
-    def post(self, request, pk):
-        try:
-            report = LabReport.objects.using(request.tenant_db).get(pk=pk)
-        except LabReport.DoesNotExist:
-            return not_found("Report not found.")
-        if report.status == "delivered":
-            return error("Report already delivered.")
-        report.status       = "delivered"
-        report.delivered_at = timezone.now()
-        report.save(using=request.tenant_db, update_fields=["status", "delivered_at"])
-
-        req = report.request
-        req.status = "completed"
-        req.save(using=request.tenant_db, update_fields=["status"])
-        _bill_lab_request(req, request.tenant_db, request.user, request.tenant_id)
-        # Signal fires → SharedLabResult written to Registry DB
-        return success(message="Report delivered.")

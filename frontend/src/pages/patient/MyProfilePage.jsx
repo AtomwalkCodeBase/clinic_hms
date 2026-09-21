@@ -202,8 +202,8 @@ export default function MyProfilePage() {
     }
     setMemberSaving(true);
     try {
-      await apiClient.post(API_ENDPOINTS.PORTAL.FAMILY, memberForm);
-      toastSuccess("Family member added.");
+      const { data: res } = await apiClient.post(API_ENDPOINTS.PORTAL.FAMILY, memberForm);
+      toastSuccess(res?.message || "Family member added.");
       setMemberForm(EMPTY_MEMBER);
       setFamilyOpen(false);
       loadFamily();

@@ -9,13 +9,14 @@
  * views automatically without anything extra on their end.
  */
 import { useState, useMemo } from "react";
-import { Filter, X } from "lucide-react";
+import { Filter, X, Baby, Plus } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useApi }    from "../../hooks/useApi";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import { formatYearsMonths } from "../../utils/age";
 
 const STATUS_BADGE = {
   ordered:    { label: "Ordered",    bg: "var(--color-border)", color: "var(--color-text-muted)" },
@@ -37,11 +38,32 @@ function fileToDataUrl(file) {
   });
 }
 
+const EMPTY_ITEM = { parameter_name: "", result_value: "", unit: "", reference_range: "", is_abnormal: false };
+
 function UploadModal({ order, onClose, onDone }) {
   const { toastSuccess, toastApiError } = useToast();
   const [summary, setSummary] = useState("");
   const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
+  // Structured per-parameter results — optional, additive to the summary
+  // text + file above. Each row becomes a LabReportItem (see
+  // apps.lab.models) with its own reference_range, so the doctor/patient
+  // portal can show "13.2 g/dL (12.0–15.5)" per value instead of only a
+  // free-text summary paragraph.
+  const [items, setItems] = useState([]);
+
+  const isMinor = order.patient_age != null && order.patient_age < 18;
+  const ageLabel = isMinor ? (formatYearsMonths(order.patient_age, order.patient_age_months) || `${order.patient_age}y`) : "";
+
+  function addItem() {
+    setItems(prev => [...prev, { ...EMPTY_ITEM }]);
+  }
+  function updateItem(i, field, value) {
+    setItems(prev => prev.map((it, idx) => idx === i ? { ...it, [field]: value } : it));
+  }
+  function removeItem(i) {
+    setItems(prev => prev.filter((_, idx) => idx !== i));
+  }
 
   async function submit(deliver) {
     setSaving(true);
@@ -52,6 +74,10 @@ function UploadModal({ order, onClose, onDone }) {
         body.file_name = file.name;
         body.mime_type = file.type;
       }
+      const cleanItems = items
+        .filter(it => it.parameter_name.trim() && it.result_value.trim())
+        .map(it => ({ ...it, parameter_name: it.parameter_name.trim(), result_value: it.result_value.trim() }));
+      if (cleanItems.length) body.items = cleanItems;
       await apiClient.post(API_ENDPOINTS.LAB.REQUEST_REPORT(order.id), body);
       toastSuccess(deliver ? "Report delivered." : "Draft saved.");
       onDone();
@@ -65,19 +91,73 @@ function UploadModal({ order, onClose, onDone }) {
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <div style={{ background: "var(--color-surface)", borderRadius: 16, width: "100%", maxWidth: 480, padding: 28, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+      <div style={{ background: "var(--color-surface)", borderRadius: 16, width: "100%", maxWidth: 560, padding: 28, boxShadow: "0 20px 60px rgba(0,0,0,0.3)", maxHeight: "90vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
           <h2 style={{ margin: 0, fontSize: 17 }}>{order.test_name}</h2>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>✕</button>
         </div>
-        <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 18 }}>
+        <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 12 }}>
           {order.patient_name} · {order.patient_uhid}
         </div>
 
+        {isMinor && (
+          <div style={{
+            display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12, padding: "9px 12px",
+            borderRadius: 8, background: "#F1E9FA", color: "#6B3FA0", marginBottom: 16,
+          }}>
+            <Baby size={14} style={{ marginTop: 1, flexShrink: 0 }} />
+            <span>
+              Pediatric patient ({ageLabel}) — normal reference ranges differ from adult defaults and
+              vary by test/analyzer. Enter the age-appropriate range for each result below rather than
+              a default adult range.
+            </span>
+          </div>
+        )}
+
         <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>RESULT SUMMARY (optional)</label>
-        <textarea className="form-input" rows={4} value={summary} onChange={e => setSummary(e.target.value)}
+        <textarea className="form-input" rows={3} value={summary} onChange={e => setSummary(e.target.value)}
           placeholder="e.g. Hb 13.2 g/dL, WBC 7200/µL, Platelets 250,000/µL — all within normal range."
           style={{ width: "100%", boxSizing: "border-box", marginBottom: 14, resize: "vertical" }} />
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)" }}>STRUCTURED RESULTS (optional)</label>
+          <button type="button" onClick={addItem} className="btn-outline"
+            style={{ fontSize: 11, padding: "4px 10px", display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <Plus size={12} /> Add parameter
+          </button>
+        </div>
+        {items.length > 0 && (
+          <div style={{ display: "grid", gap: 8, marginBottom: 14 }}>
+            {items.map((it, i) => (
+              <div key={i} style={{ border: "1px solid var(--color-border)", borderRadius: 8, padding: 10, display: "grid", gap: 6 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                  <input className="form-input" placeholder="Parameter (e.g. Hemoglobin)" value={it.parameter_name}
+                    onChange={e => updateItem(i, "parameter_name", e.target.value)} style={{ fontSize: 12 }} />
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input className="form-input" placeholder="Value" value={it.result_value}
+                      onChange={e => updateItem(i, "result_value", e.target.value)} style={{ fontSize: 12, flex: 1 }} />
+                    <input className="form-input" placeholder="Unit" value={it.unit}
+                      onChange={e => updateItem(i, "unit", e.target.value)} style={{ fontSize: 12, width: 70 }} />
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <input className="form-input" placeholder={isMinor ? "Age-appropriate reference range" : "Reference range"}
+                    value={it.reference_range} onChange={e => updateItem(i, "reference_range", e.target.value)}
+                    style={{ fontSize: 12, flex: 1 }} />
+                  <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, whiteSpace: "nowrap" }}>
+                    <input type="checkbox" checked={it.is_abnormal}
+                      onChange={e => updateItem(i, "is_abnormal", e.target.checked)} />
+                    Abnormal
+                  </label>
+                  <button type="button" onClick={() => removeItem(i)}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-danger, #b91c1c)", fontSize: 15, lineHeight: 1 }}>
+                    ✕
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>REPORT FILE *</label>
         <input type="file" accept=".pdf,image/*" className="form-input" style={{ width: "100%", boxSizing: "border-box", marginBottom: 6 }}
