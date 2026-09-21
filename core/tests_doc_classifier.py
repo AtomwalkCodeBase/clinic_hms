@@ -623,6 +623,18 @@ class LayerMergeTests(SimpleTestCase):
         self.assertEqual(r.doc_date, date(2026, 9, 4))
         self.assertEqual(r.sources.get("date"), "llm")
 
+    def test_llm_future_or_ancient_date_is_rejected(self):
+        # A report can't be dated in the future; the AI layers get the same
+        # sanity gate as the keyword pass, so the patient is asked instead.
+        from datetime import date as _date, timedelta as _td
+        for bad in ((_date.today() + _td(days=30)).isoformat(), "1999-05-01"):
+            r = self._res("lab_report", conf=0.9, det=0.9, medical=True)
+            doc_classifier._apply_opinion(
+                r, {"categories": ["thyroid"], "report_date": bad, "date_source": "report"}, "llm")
+            self.assertIsNone(r.doc_date, bad)
+            self.assertNotIn("date", r.sources)
+            self.assertEqual(r.categories, ["thyroid"])      # panel still taken
+
     def test_empty_opinion_is_a_noop(self):
         r = self._res("lab_report", conf=0.9, det=0.9, medical=True)
         before = (r.doc_type, r.confidence)

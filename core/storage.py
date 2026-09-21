@@ -256,6 +256,26 @@ def upload_data_uri(data_uri: str, *, prefix: str, mime_type: str, category: str
     return key
 
 
+def _attachment_disposition(name: str) -> str:
+    """
+    A `Content-Disposition: attachment` value that S3 will accept for any title.
+
+    S3 rejects a response-content-disposition that isn't representable in
+    ISO-8859-1, so a raw `filename="Rx — 2026-09-07.pdf"` (long dash, accents,
+    Indic scripts...) made every View/Download link fail with InvalidArgument.
+    RFC 6266: send a plain-ASCII `filename=` fallback for old clients plus the
+    real name percent-encoded in `filename*=UTF-8''...`. Both are pure ASCII.
+    """
+    import unicodedata
+    from urllib.parse import quote
+
+    cleaned = re.sub(r'[\r\n"\\/]', " ", name or "").strip() or "download"
+    ascii_name = unicodedata.normalize("NFKD", cleaned.replace("—", "-").replace("–", "-"))
+    ascii_name = ascii_name.encode("ascii", "ignore").decode("ascii")
+    ascii_name = re.sub(r"\s+", " ", ascii_name).strip(" .") or "download"
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(cleaned, safe='')}"
+
+
 def signed_url(key: str, *, expires_in: int = None, download_name: str = None) -> str:
     """
     Generate a time-limited presigned GET URL for an S3 key.
@@ -282,8 +302,7 @@ def signed_url(key: str, *, expires_in: int = None, download_name: str = None) -
     expires_in = expires_in or settings.AWS_S3_URL_EXPIRY
     params = {"Bucket": settings.AWS_S3_BUCKET, "Key": key}
     if download_name:
-        safe = download_name.replace('"', "").replace("\n", " ").strip() or "download"
-        params["ResponseContentDisposition"] = f'attachment; filename="{safe}"'
+        params["ResponseContentDisposition"] = _attachment_disposition(download_name)
     try:
         return client.generate_presigned_url(
             "get_object",

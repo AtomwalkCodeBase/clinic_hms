@@ -332,10 +332,14 @@ def _apply_opinion(res: "ClassResult", out: dict, src: str) -> None:
     if out.get("report_date") and "date" in res.needs:
         try:
             y, m, d = (int(x) for x in str(out["report_date"])[:10].split("-"))
-            res.doc_date = date(y, m, d)
-            res.date_source = out.get("date_source") or src
-            res.date_confidence = 0.80
-            res.sources["date"] = src
+            dt = date(y, m, d)
+            # Same sanity gate the keyword pass applies: a report can't be dated
+            # in the future (or before 2000). Drop it so the patient is asked.
+            if doc_dates._plausible(dt):
+                res.doc_date = dt
+                res.date_source = out.get("date_source") or src
+                res.date_confidence = 0.80
+                res.sources["date"] = src
         except Exception:
             pass
 
