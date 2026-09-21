@@ -132,9 +132,17 @@ apiClient.interceptors.response.use(
           refresh: refreshToken,
         });
 
-        tokenStore.setAccess(data.access);
-        processQueue(null, data.access);
-        originalRequest.headers["Authorization"] = `Bearer ${data.access}`;
+        // The server wraps every reply as { success, message, data: {...} } (see
+        // core/response.py) — login reads data.data.access, and so must this. Reading
+        // data.access stored the string "undefined" as the token, so every request
+        // after the first 60-minute expiry failed with "Invalid token." until re-login.
+        const tokens = data?.data ?? data;
+        if (!tokens?.access) throw new Error("Token refresh returned no access token");
+
+        tokenStore.setAccess(tokens.access);
+        if (tokens.refresh) tokenStore.setRefresh(tokens.refresh);
+        processQueue(null, tokens.access);
+        originalRequest.headers["Authorization"] = `Bearer ${tokens.access}`;
         return apiClient(originalRequest);
       } catch (refreshError) {
         processQueue(refreshError, null);
