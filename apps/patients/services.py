@@ -355,6 +355,20 @@ class PatientService:
         and DOB (registered here, at another hospital, or via the portal),
         so the same child never ends up with two disconnected records.
 
+        Also relinks a PREVIOUSLY linked dependent who was removed and is
+        now being re-added: remove_family_member() deliberately hard-deletes
+        only the PatientRelationship join row (see its own docstring — the
+        identity must stay resolvable for existing history), which means a
+        plain "currently linked?" lookup can no longer find them, and would
+        otherwise mint a brand-new AWPID here — silently orphaning that
+        person's prior appointment/prescription/lab/document history under
+        the old, now-permanently-disconnected identity. guardian_mobile_hash
+        lives on PatientIdentity itself (set once at creation, untouched by
+        removal) precisely so this guardian's dependents can still be found
+        by mobile after a relationship row is gone — reused here as the
+        fallback dedup key, scoped to this guardian's own mobile hash so it
+        can never match a different guardian's family member.
+
         Returns (identity, created).
         """
         with transaction.atomic(using="default"):
@@ -371,6 +385,14 @@ class PatientService:
                     date_of_birth=date_of_birth,
                 ).first()
 
+            if identity is None and guardian_mobile_hash:
+                identity = PatientIdentity.objects.using("default").filter(
+                    guardian_mobile_hash=guardian_mobile_hash,
+                    full_name__iexact=full_name,
+                    date_of_birth=date_of_birth,
+                    is_dependent=True,
+                ).exclude(awpid__in=existing_rel_awpids).first()
+
             created = identity is None
             if identity is None:
                 identity = PatientIdentity.objects.using("default").create(
@@ -385,10 +407,14 @@ class PatientService:
                     blood_group=blood_group,
                     preferred_language=preferred_language,
                 )
-                PatientRelationship.objects.using("default").get_or_create(
-                    dependent_awpid=identity.awpid, guardian_awpid=guardian_awpid,
-                    defaults={"relationship": relationship},
-                )
+            # Covers all three paths above uniformly: brand-new identity (no
+            # relationship exists yet), still-linked identity (already
+            # exists, so this is a harmless no-op), and a relinked-after-
+            # removal identity (the row was deleted and needs recreating).
+            PatientRelationship.objects.using("default").get_or_create(
+                dependent_awpid=identity.awpid, guardian_awpid=guardian_awpid,
+                defaults={"relationship": relationship},
+            )
         return identity, created
 
     @staticmethod
@@ -700,8 +726,8 @@ class PatientService:
             .filter(awpid=awpid)
             .values(
                 "recorded_at", "source", "bp_systolic", "bp_diastolic", "pulse_rate",
-                "spo2", "temperature", "weight_kg", "height_cm", "resp_rate",
-                "blood_sugar_mgdl"
+                "spo2", "temperature", "weight_kg", "height_cm", "head_circumference_cm",
+                "resp_rate", "blood_sugar_mgdl"
             )
             .order_by("-recorded_at")[:20]  # last 20 vital records
         )

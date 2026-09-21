@@ -38,6 +38,38 @@ from .age_utils import age_years_months as _age_years_months
 logger = logging.getLogger(__name__)
 
 
+def _sync_birth_history_to_registry(bh, patient, tenant_id):
+    """
+    Best-effort write-through to registry.SharedBirthHistory — same pattern
+    as apps.opd.views._sync_to_hie for vitals/diagnoses/prescriptions — so
+    a child's birth history is visible cross-hospital (Emergency QR summary,
+    any future HIE view), not just at whichever hospital captured it. Never
+    blocks the main save; failures are logged and swallowed.
+    """
+    if not getattr(patient, "awpid", None):
+        return
+    try:
+        from apps.registry.models import SharedBirthHistory
+        SharedBirthHistory.objects.using("default").update_or_create(
+            awpid=patient.awpid,
+            defaults={
+                "gestational_age_weeks": bh.gestational_age_weeks,
+                "birth_weight_kg": bh.birth_weight_kg,
+                "delivery_mode": bh.delivery_mode,
+                "multiple_birth": bh.multiple_birth,
+                "nicu_admission": bh.nicu_admission,
+                "nicu_days": bh.nicu_days,
+                "birth_complications": bh.birth_complications,
+                "congenital_conditions": bh.congenital_conditions,
+                "apgar_score_1min": bh.apgar_score_1min,
+                "apgar_score_5min": bh.apgar_score_5min,
+                "source_tenant_id": tenant_id,
+            },
+        )
+    except Exception:
+        logger.exception("HIE SharedBirthHistory write failed for patient=%s", patient.id)
+
+
 class BirthHistoryView(APIView):
     """
     GET    — any hospital staff can view.
@@ -80,6 +112,7 @@ class BirthHistoryView(APIView):
             recorded_by=request.user.id,
             **serializer.validated_data,
         )
+        _sync_birth_history_to_registry(bh, patient, request.tenant_id)
         return created(data=BirthHistorySerializer(bh).data, message="Birth history recorded.")
 
     def patch(self, request, pk):
@@ -94,6 +127,7 @@ class BirthHistoryView(APIView):
         if not serializer.is_valid():
             return error(message="Validation error.", errors=serializer.errors)
         serializer.save(updated_by=request.user.id)
+        _sync_birth_history_to_registry(bh, patient, request.tenant_id)
         return success(data=BirthHistorySerializer(bh).data, message="Birth history updated.")
 
 

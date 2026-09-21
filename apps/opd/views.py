@@ -1855,6 +1855,7 @@ def _sync_to_hie(encounter, db, patient):
                     "temperature":       vitals.temperature,
                     "weight_kg":         vitals.weight_kg,
                     "height_cm":         vitals.height_cm,
+                    "head_circumference_cm": vitals.head_circumference_cm,
                     "resp_rate":         vitals.respiratory_rate,
                     "blood_sugar_mgdl":  vitals.blood_sugar_rbs,
                     "source_tenant_id":  source_tenant_id,

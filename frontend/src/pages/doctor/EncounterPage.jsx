@@ -1108,18 +1108,28 @@ function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onTo
                     Adult patient — trend shown, no pediatric percentile applies.
                   </div>
                 )}
-                {growthData.series.slice(-6).reverse().map((p, i) => (
+                {growthData.series.slice(-6).reverse().map((p, i) => {
+                  const pct = p.percentiles || {};
+                  return (
                   <div key={i} style={{ fontSize: 11, borderBottom: "1px dashed var(--color-border)", paddingBottom: 6 }}>
                     <div style={{ color: "var(--color-text-muted)", marginBottom: 2 }}>
                       {new Date(p.date).toLocaleDateString("en-IN")}{p.source === "other_hospital" ? " · other hospital" : ""}
                     </div>
                     <div>
-                      {p.height_cm != null && `${p.height_cm} cm  `}
-                      {p.weight_kg != null && `${p.weight_kg} kg  `}
+                      {p.height_cm != null && (
+                        <>{p.height_cm} cm{pct.height && ` (${pct.height.percentile}th pctl)`}{"  "}</>
+                      )}
+                      {p.weight_kg != null && (
+                        <>{p.weight_kg} kg{pct.weight && ` (${pct.weight.percentile}th pctl)`}{"  "}</>
+                      )}
+                      {p.head_circumference_cm != null && (
+                        <>HC {p.head_circumference_cm} cm{pct.head_circumference && ` (${pct.head_circumference.percentile}th pctl)`}{"  "}</>
+                      )}
                       {p.bmi != null && `BMI ${p.bmi}`}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
                 {growthData.consent_given === false && (
                   <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
                     Only this hospital's own records — patient hasn't consented to cross-hospital sharing.
@@ -2358,6 +2368,126 @@ function DrugForm({ onSave, disabled }) {
   );
 }
 
+// Doctor's saved drug bundles (apps.opd.PrescriptionFavourite) — one click
+// re-adds every item in a bundle via the same POST DrugForm's "+ Add Drug"
+// uses, or the current Rx can be saved as a new bundle for next time.
+function FavouritesBar({ currentItems, onApply, disabled }) {
+  const { toastSuccess, toastApiError } = useToast();
+  const { data: favData, refetch: refetchFavs } = useApi(API_ENDPOINTS.OPD.FAVOURITES);
+  const favourites = favData || [];
+  const [namingOpen, setNamingOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [applyingId, setApplyingId] = useState(null);
+
+  async function saveCurrent() {
+    if (!name.trim() || !currentItems.length || saving) return;
+    setSaving(true);
+    try {
+      const items = currentItems.map(it => ({
+        drug_name: it.drug_name, dosage: it.dosage, frequency: it.frequency,
+        route: it.route, duration_days: it.duration_days ?? null,
+        instructions: it.instructions || "",
+      }));
+      await apiClient.post(API_ENDPOINTS.OPD.FAVOURITES, { name: name.trim(), items });
+      toastSuccess("Saved as favourite.");
+      setName("");
+      setNamingOpen(false);
+      refetchFavs();
+    } catch (err) {
+      toastApiError(err, "Could not save this favourite — a bundle with that name may already exist.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function applyFav(fav) {
+    if (applyingId) return;
+    setApplyingId(fav.id);
+    try {
+      await onApply(fav.items || []);
+    } finally {
+      setApplyingId(null);
+    }
+  }
+
+  async function removeFav(fav) {
+    try {
+      await apiClient.delete(API_ENDPOINTS.OPD.FAVOURITE_ITEM(fav.id));
+      refetchFavs();
+    } catch (err) {
+      toastApiError(err, "Could not delete this favourite.");
+    }
+  }
+
+  if (disabled && favourites.length === 0) return null;
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      {favourites.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+          {favourites.map(fav => (
+            <span key={fav.id} style={{
+              display: "inline-flex", alignItems: "center", gap: 2,
+              border: "1px solid var(--color-primary)", borderRadius: 6, overflow: "hidden",
+            }}>
+              <button
+                type="button" onClick={() => applyFav(fav)}
+                disabled={disabled || applyingId === fav.id}
+                title={(fav.items || []).map(i => i.drug_name).join(", ")}
+                style={{
+                  fontSize: 11, fontWeight: 600, padding: "4px 8px", border: "none",
+                  background: "transparent", color: "var(--color-primary)",
+                  cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1,
+                }}
+              >
+                {applyingId === fav.id ? "Adding…" : `☆ ${fav.name} (${(fav.items || []).length})`}
+              </button>
+              {!disabled && (
+                <button
+                  type="button" onClick={() => removeFav(fav)} aria-label={`Delete favourite ${fav.name}`}
+                  style={{
+                    fontSize: 11, padding: "4px 6px", border: "none", borderLeft: "1px solid var(--color-primary)",
+                    background: "transparent", color: "var(--color-text-muted)", cursor: "pointer",
+                  }}
+                >
+                  ×
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+      {!disabled && (
+        namingOpen ? (
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            <input
+              className="form-input" value={name} onChange={e => setName(e.target.value)}
+              placeholder="Bundle name — e.g. Fever Bundle" style={{ fontSize: 12, flex: 1 }}
+              autoFocus
+            />
+            <button type="button" onClick={saveCurrent} disabled={saving || !name.trim() || !currentItems.length}
+              style={miniBtn("var(--color-primary)", "#fff", "var(--color-primary)", saving || !name.trim() || !currentItems.length)}>
+              Save
+            </button>
+            <button type="button" onClick={() => { setNamingOpen(false); setName(""); }}
+              style={miniBtn("var(--color-border)", "var(--color-text-muted)", "transparent", false)}>
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button" onClick={() => setNamingOpen(true)} disabled={!currentItems.length}
+            style={miniBtn("var(--color-border)", "var(--color-text-muted)", "transparent", !currentItems.length)}
+          >
+            ☆ Save current Rx as favourite
+          </button>
+        )
+      )}
+    </div>
+  );
+}
+
 // ─── Compact clinical summary header ─────────────────────────────────────────
 // A doctor with a full queue shouldn't have to scroll to understand who
 // they're seeing. Everything here is real: age/gender/UHID/last-visit come
@@ -3463,6 +3593,31 @@ export default function EncounterPage() {
     setPendingRx([]);
   }
 
+  // ── Favourites: re-add every item in a saved bundle ─────────────────────
+  async function applyFavourite(items) {
+    if (!items.length || addingRx) return;
+    setAddingRx(true);
+    try {
+      const pid = await ensureRx();
+      const added = [];
+      for (const it of items) {
+        try {
+          const res = await apiClient.post(API_ENDPOINTS.OPD.PRESCRIPTION_ITEMS(pid), _rxPayload(it));
+          added.push(res.data?.data || res.data);
+        } catch { /* skip the ones that fail, keep going */ }
+      }
+      if (added.length) {
+        setRxItems(prev => [...prev, ...added]);
+        setDirty(true);
+      }
+      toastSuccess(`${added.length} medication${added.length === 1 ? "" : "s"} added from favourite.`);
+    } catch (err) {
+      toastApiError(err, "Could not add this favourite.");
+    } finally {
+      setAddingRx(false);
+    }
+  }
+
   function addPendingDx(idx) {
     const d = pendingDx[idx];
     if (!d || !(d.description || "").trim()) return;
@@ -3887,6 +4042,7 @@ export default function EncounterPage() {
           {/* ── Prescription (under Diagnoses, right column) ───────────────── */}
           <SectionCard title="Prescription" badge={rxItems.length}
             extra={<DictateButton disabled={isClosed} onTranscript={t => openDictation("prescription", t)} />}>
+            <FavouritesBar currentItems={rxItems} onApply={applyFavourite} disabled={isClosed || addingRx} />
             {!isClosed && <DrugForm onSave={addDrug} disabled={addingRx} />}
             {!isClosed && pendingRx.length > 0 && (
               <div style={{ border: "1px solid var(--color-border)", borderRadius: 8, padding: 10, margin: "6px 0 12px", background: "var(--color-bg-subtle, #f8fafc)" }}>

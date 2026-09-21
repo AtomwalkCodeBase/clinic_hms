@@ -1681,6 +1681,18 @@ class PortalDocumentListCreateView(APIView):
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
 
+        # Documents attach to whichever patient the app has selected — self
+        # or a linked family member — not always the logged-in account. Same
+        # ownership check the GET on this view already uses.
+        target_awpid, _target_dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        if target_awpid == acct.awpid:
+            target_full_name = acct.full_name
+        else:
+            target_identity = PatientIdentity.objects.using("default").filter(awpid=target_awpid).first()
+            target_full_name = target_identity.full_name if target_identity else acct.full_name
+
         # ── My Reports pipeline: QR verify → dedup → classify → PDF ──────────
         import base64, hashlib
         from core import qr_token as _qt, doc_classifier as _dc, normalise as _nz
@@ -1709,7 +1721,7 @@ class PortalDocumentListCreateView(APIView):
         qr_tok = (d.get("qr_token") or "").strip()
         if qr_tok:
             v = _qt.verify(qr_tok)
-            if v.ok and v.awpid and v.awpid != acct.awpid:
+            if v.ok and v.awpid and v.awpid != target_awpid:
                 return error("This document belongs to another patient.", status=403)
             if v.ok:
                 doc_type = v.doc_type
@@ -1720,7 +1732,7 @@ class PortalDocumentListCreateView(APIView):
         # 2. De-duplication — by hospital id (QR path) or exact content hash.
         force = str(d.get("force") or "").strip().lower() in ("1", "true", "yes")
         dup_qs = SharedDocument.objects.using("default").filter(
-            awpid=acct.awpid, deleted_at__isnull=True,
+            awpid=target_awpid, deleted_at__isnull=True,
         )
         existing = None
         if public_document_id:
@@ -1798,7 +1810,7 @@ class PortalDocumentListCreateView(APIView):
         except Exception:
             logger.exception("PDF normalise failed; storing the original file")
 
-        identity = blob_storage.identity_slug(name=acct.full_name, identifier=acct.awpid)
+        identity = blob_storage.identity_slug(name=target_full_name, identifier=target_awpid)
         try:
             file_key = blob_storage.upload_data_uri(
                 file_data, prefix="patient-documents", mime_type=mime_type,
@@ -1814,11 +1826,11 @@ class PortalDocumentListCreateView(APIView):
         # called, so it's recognizable outside this app too.
         file_name = blob_storage.display_file_name(
             "patient-document", mime_type,
-            detail=title, name=acct.full_name, identifier=acct.awpid,
+            detail=title, name=target_full_name, identifier=target_awpid,
         )
 
         doc = SharedDocument.objects.using("default").create(
-            awpid=acct.awpid, title=title, doc_type=doc_type,
+            awpid=target_awpid, title=title, doc_type=doc_type,
             file_name=file_name, mime_type=mime_type, file_data=file_key,
             uploaded_by="patient", source_tenant_id=None, source_ref=source_ref,
             public_document_id=public_document_id, content_hash=content_hash,
@@ -2078,11 +2090,13 @@ class PortalDocumentBatchView(APIView):
     def get(self, request):
         from apps.registry.models import DocumentUploadBatch
 
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
         batch_id = (request.query_params.get("batch_id") or "").strip()
         if not batch_id:
             return error("batch_id is required.")
-        b = DocumentUploadBatch.objects.using("default").filter(pk=batch_id, awpid=acct.awpid).first()
+        b = DocumentUploadBatch.objects.using("default").filter(pk=batch_id, awpid=target_awpid).first()
         if not b:
             return error("Batch not found.", status=404)
         items = list(b.items.values("id", "original_filename", "status", "reason",
@@ -2102,6 +2116,14 @@ class PortalDocumentBatchView(APIView):
         from apps.registry.models import DocumentUploadBatch, DocumentUploadItem
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        if target_awpid == acct.awpid:
+            target_full_name = acct.full_name
+        else:
+            target_identity = PatientIdentity.objects.using("default").filter(awpid=target_awpid).first()
+            target_full_name = target_identity.full_name if target_identity else acct.full_name
         method = (request.data.get("method") or "files").strip()
         if method not in ("folder", "files", "photo"):
             method = "files"
@@ -2111,7 +2133,7 @@ class PortalDocumentBatchView(APIView):
 
         # one active batch per patient at a time
         if (DocumentUploadBatch.objects.using("default")
-                .filter(awpid=acct.awpid, status__in=("pending", "processing")).exists()):
+                .filter(awpid=target_awpid, status__in=("pending", "processing")).exists()):
             return error("You already have an upload in progress. Please wait for it to finish.")
 
         accepted, ignored, total_bytes = [], 0, 0
@@ -2137,9 +2159,9 @@ class PortalDocumentBatchView(APIView):
         if total_bytes > _BATCH_MAX_BYTES:
             return error("This folder is over the 300 MB per-upload limit. Split it into two.")
 
-        slug = blob_storage.identity_slug(name=acct.full_name, identifier=acct.awpid)
+        slug = blob_storage.identity_slug(name=target_full_name, identifier=target_awpid)
         batch = DocumentUploadBatch.objects.using("default").create(
-            awpid=acct.awpid, initiated_by="patient", method=method,
+            awpid=target_awpid, initiated_by="patient", method=method,
             total_files=len(accepted), ignored=ignored, status="pending",
         )
         out = []
@@ -2172,8 +2194,10 @@ class PortalDocumentBatchProcessView(APIView):
     def post(self, request, batch_id):
         from apps.registry.models import DocumentUploadBatch
 
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-        b = DocumentUploadBatch.objects.using("default").filter(pk=batch_id, awpid=acct.awpid).first()
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        b = DocumentUploadBatch.objects.using("default").filter(pk=batch_id, awpid=target_awpid).first()
         if not b:
             return error("Batch not found.", status=404)
         if b.status == "pending":
@@ -2297,6 +2321,9 @@ class PortalLabOrderListView(APIView):
                             "result_summary": rep.result_summary,
                             "has_file": bool(rep.file_url),
                             "delivered_at": rep.delivered_at,
+                            "items": list(rep.items.values(
+                                "parameter_name", "result_value", "unit", "reference_range", "is_abnormal",
+                            )),
                         }
                     except Exception:
                         # r.report is a OneToOne reverse accessor — this most
@@ -4114,6 +4141,7 @@ class PortalNotificationMarkReadView(APIView):
     def post(self, request, tenant_db, pk):
         from apps.patients.models import Patient
         from apps.notifications.models import NotificationLog
+        from apps.registry.models import PatientRelationship
 
         if not Tenant.objects.using("default").filter(db_name=tenant_db, is_active=True).exists():
             return error("Unknown hospital.")
@@ -4124,10 +4152,16 @@ class PortalNotificationMarkReadView(APIView):
             log = NotificationLog.objects.using(tenant_db).select_related("patient").get(pk=pk)
         except NotificationLog.DoesNotExist:
             return not_found("Notification not found.")
-        if not log.patient or log.patient.awpid != acct.awpid:
-            # Family-member notifications aren't surfaced by this endpoint
-            # today (the list view resolves one target_awpid at a time), so
-            # ownership here is intentionally strict to the account itself.
+        # PortalNotificationsView (the list this "id" comes from) already
+        # resolves a family member's own notifications via
+        # _resolve_target_awpid_and_dob — mirror the same ownership rule
+        # here instead of the stricter account-only check this used to have.
+        owner_awpid = log.patient.awpid if log.patient else None
+        is_owner = owner_awpid == acct.awpid
+        is_family = bool(owner_awpid) and not is_owner and PatientRelationship.objects.using("default").filter(
+            guardian_awpid=acct.awpid, dependent_awpid=owner_awpid,
+        ).exists()
+        if not (is_owner or is_family):
             return error("This notification does not belong to you.", status=403)
 
         if not log.read_at:
@@ -4211,7 +4245,8 @@ class PortalFamilyListCreateView(APIView):
             )
         except ValueError as exc:
             return error(str(exc))
-        return success(data=member, message="Family member added.")
+        message = "Family member added." if member.get("created") else "Reconnected — their existing records are linked again."
+        return success(data=member, message=message)
 
 
 class PortalFamilyDetailView(APIView):
@@ -4283,6 +4318,7 @@ EMERGENCY_SHARE_CATEGORIES = [
     "Lab test results and reports (viewable, not just listed)",
     "Uploaded documents — old reports, scans, discharge summaries",
     "Vaccination records and certificates",
+    "Birth history and any flagged developmental-milestone concerns (for a child)",
     "Your emergency contact's name and phone number",
 ]
 

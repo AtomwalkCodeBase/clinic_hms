@@ -272,6 +272,32 @@ export default function SettingsPage() {
             />
           </div>
 
+          {/* ── Admission Types & Sources ─────────────────────────── */}
+          <div className="card" style={{ padding: 28, marginBottom: 20 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Admission Types &amp; Sources</h2>
+            <p style={{ fontSize: 13, color: "var(--color-text-muted)", marginBottom: 20 }}>
+              Two separate catalogs used when a doctor or front desk logs an IPD admission: the type
+              answers "how urgent" (Emergency, Elective), the source answers "how the patient arrived"
+              (OPD Consultation, Referral, Ambulance/EMS). Defaults can be renamed or turned off but not
+              removed; add your own alongside them.
+            </p>
+            <div style={{ display: "grid", gap: 24 }}>
+              <DropdownListEditor
+                title="Admission Types"
+                listEndpoint={API_ENDPOINTS.IPD.ADMISSION_TYPES}
+                itemEndpoint={API_ENDPOINTS.IPD.ADMISSION_TYPE_ITEM}
+                identityField="value"
+              />
+              <DropdownListEditor
+                title="Admission Sources"
+                listEndpoint={API_ENDPOINTS.IPD.ADMISSION_SOURCES}
+                itemEndpoint={API_ENDPOINTS.IPD.ADMISSION_SOURCE_ITEM}
+                identityField="value"
+                toggleable
+              />
+            </div>
+          </div>
+
           {/* ── Session ───────────────────────────────────────────── */}
           <div className="card" style={{ padding: 28 }}>
             <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>Session</h2>

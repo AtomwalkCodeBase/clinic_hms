@@ -133,7 +133,7 @@ export default function PatientDoctorProfilePage() {
       if (newAwpid) setBookingFor(newAwpid);
       setMemberForm({ full_name: "", date_of_birth: "", gender: "", relationship: "child" });
       setAddingMember(false);
-      toastSuccess("Family member added.");
+      toastSuccess(res?.message || "Family member added.");
     } catch (err) {
       toastApiError(err, "Failed to add family member.");
     } finally {

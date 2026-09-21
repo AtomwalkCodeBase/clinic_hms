@@ -61,7 +61,7 @@ from apps.tenants.models import Tenant
 from apps.tenants.utils import _make_db_config
 from core.db_router import set_tenant_db
 from apps.org.models import Branch, StaffUser, DoctorProfile, NurseDoctorAssignment
-from apps.registry.models import PatientIdentity, PatientAccount, SharedVaccination
+from apps.registry.models import PatientIdentity, PatientAccount, SharedVaccination, SharedVital
 from apps.patients.models import Patient, BirthHistory
 from apps.patients.services import PatientService
 from apps.opd.models import Appointment, Vitals, OPDEncounter, Prescription, PrescriptionItem
@@ -292,9 +292,15 @@ class Command(BaseCommand):
 
     def _ensure_growth_visit(self, patient, doctor, dob, age_days, height_cm, weight_kg,
                               head_circumference_cm=None, complaint="Routine growth check-up"):
-        """A past, already-`done` well-child visit — exists purely to give
-        the growth chart a real historical Vitals-on-Appointment point (see
-        module docstring: there's no separate GrowthMeasurement model)."""
+        """A past, already-`done` well-child visit — gives the STAFF-side
+        growth chart (apps.patients.growth_vaccination_views.PatientGrowthView)
+        a real historical Vitals-on-Appointment point (there's no separate
+        GrowthMeasurement model — see module docstring). Also mirrors the
+        same reading into SharedVital, since the PATIENT-PORTAL growth chart
+        (PortalGrowthView) is cross-hospital by design and reads ONLY from
+        that registry table, never from a tenant's local Vitals — without
+        this the guardian's own portal view would show an empty chart even
+        though the doctor's view has the full history."""
         visit_date = dob + timedelta(days=age_days)
         appt = Appointment.objects.using(self.db).filter(
             patient_id=patient.uuid, doctor_user_id=doctor.id, scheduled_date=visit_date,
@@ -314,7 +320,22 @@ class Command(BaseCommand):
             appt, height_cm=Decimal(str(height_cm)), weight_kg=Decimal(str(weight_kg)),
             head_circumference_cm=Decimal(str(head_circumference_cm)) if head_circumference_cm else None,
         )
+        self._ensure_shared_vital(
+            patient.awpid, timezone.make_aware(datetime.combine(visit_date, dtime(10, 30))),
+            height_cm, weight_kg, head_circumference_cm,
+        )
         return appt
+
+    def _ensure_shared_vital(self, awpid, recorded_at, height_cm, weight_kg, head_circumference_cm=None):
+        if SharedVital.objects.using("default").filter(awpid=awpid, recorded_at=recorded_at).exists():
+            return
+        SharedVital.objects.using("default").create(
+            awpid=awpid, recorded_at=recorded_at, source="clinic",
+            height_cm=Decimal(str(height_cm)) if height_cm else None,
+            weight_kg=Decimal(str(weight_kg)) if weight_kg else None,
+            head_circumference_cm=Decimal(str(head_circumference_cm)) if head_circumference_cm else None,
+            source_tenant_id=self.tenant.id,
+        )
 
     def _ensure_vaccinations(self, awpid, dob, doctor, labels_done):
         label_to_names = dict(SCHEDULE_BY_LABEL)
@@ -382,6 +403,8 @@ class Command(BaseCommand):
             pulse_rate=130, spo2=99, respiratory_rate=42,
             nurse_notes="Feeding well per mother, active and pink.",
         )
+        self._ensure_shared_vital(vihaan.awpid, timezone.make_aware(datetime.combine(today, dtime(8, 0))),
+                                   51.0, 3.35, 35.0)
         self._ensure_encounter(
             appt, ped,
             subjective="Baby feeding well on breast milk, passing urine/stools normally, no fever noted by mother.",
@@ -416,6 +439,8 @@ class Command(BaseCommand):
             temperature=Decimal("98.2"), pulse_rate=98, spo2=99, respiratory_rate=22,
             nurse_notes="Active and cooperative, no distress.",
         )
+        self._ensure_shared_vital(ananya.awpid, timezone.make_aware(datetime.combine(today, dtime(8, 20))),
+                                   102.0, 16.0)
         self._ensure_encounter(
             appt, ped,
             subjective="Mother reports child is eating well, active, no complaints today — here for routine growth check.",

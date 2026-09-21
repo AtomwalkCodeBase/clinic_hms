@@ -25,7 +25,7 @@
  */
 import { useState, useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ChevronDown, ChevronUp, Calendar, Syringe, Activity, Building2, TrendingUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Calendar, Syringe, Activity, Building2, TrendingUp, Baby } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
@@ -41,6 +41,7 @@ import VaccinationStats from "./components/VaccinationStats";
 import VaccinationSidebar, { RecommendedByDoctor } from "./components/VaccinationSidebar";
 import HealthTimeline from "./components/HealthTimeline";
 import GrowthVaccinationChart from "./components/GrowthVaccinationChart";
+import MilestonesRoadmap from "./components/MilestonesRoadmap";
 
 const BADGE = {
   scheduled: "badge--primary", waiting: "badge--warning", vitals_done: "badge--success",
@@ -651,6 +652,7 @@ function VaccinationTimeline({ patientAwpid, vax, vaxLoading, refetchVax, upload
 // The "vaccinations" tab is only shown for patients under 18.
 const ALL_TABS = [
   { id: "vaccinations",    label: "Vaccinations",    icon: Syringe,   pediatricOnly: true },
+  { id: "milestones",      label: "Milestones",      icon: Baby,      pediatricOnly: true },
   { id: "health-timeline", label: "Health Timeline",  icon: Activity,  pediatricOnly: false },
   { id: "visits",          label: "Visits",           icon: Building2, pediatricOnly: false },
   { id: "growth",          label: "Growth",           icon: TrendingUp, pediatricOnly: false },
@@ -743,6 +745,8 @@ export default function PatientRecordsPage() {
   }, [ageYears]); // eslint-disable-line react-hooks/exhaustive-deps
   const { data: vax, isLoading: vaxLoading, refetch: refetchVax } =
     useApi(API_ENDPOINTS.PORTAL.VACCINATIONS, { params });
+  const { data: milestones, isLoading: milestonesLoading } =
+    useApi(API_ENDPOINTS.PORTAL.MILESTONES, { params, skip: isAdult });
   const { data: profile } = useApi(API_ENDPOINTS.PORTAL.PROFILE, { skip: !selectedPatient.isSelf });
 
   const familyMember = !selectedPatient.isSelf
@@ -823,6 +827,11 @@ export default function PatientRecordsPage() {
               </div>
             </div>
           </>
+        )}
+
+        {/* ── Milestones tab (children under 18 only) ─────────────── */}
+        {activeTab === "milestones" && !isAdult && (
+          <MilestonesRoadmap milestones={milestones} isLoading={milestonesLoading} />
         )}
 
         {/* ── Health Timeline tab ────────────────────────────────── */}

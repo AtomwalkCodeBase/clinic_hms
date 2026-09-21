@@ -31,6 +31,7 @@ const PatientForgotPasswordPage = lazy(() => import("./pages/auth/PatientForgotP
 const EmergencyViewPage         = lazy(() => import("./pages/public/EmergencyViewPage"));
 const ViewReportPage            = lazy(() => import("./pages/public/ViewReportPage"));
 const ConsultPadPage            = lazy(() => import("./pages/public/ConsultPadPage"));
+const ShareRecordsPage          = lazy(() => import("./pages/public/ShareRecordsPage"));
 
 // Platform Admin
 const PlatformDashboard  = lazy(() => import("./pages/platform-admin/DashboardPage"));
@@ -60,6 +61,8 @@ const DoctorQueue     = lazy(() => import("./pages/doctor/QueuePage"));
 const DoctorEncounter = lazy(() => import("./pages/doctor/EncounterPage"));
 const DoctorPatients  = lazy(() => import("./pages/doctor/PatientsPage"));
 const DoctorHistory   = lazy(() => import("./pages/doctor/HistoryPage"));
+const DoctorIpdReferrals = lazy(() => import("./pages/doctor/IpdReferralsPage"));
+const DoctorIpdPatients  = lazy(() => import("./pages/doctor/IpdPatientsPage"));
 const DoctorMyProfile = lazy(() => import("./pages/doctor/MyProfilePage"));
 
 // Nurse
@@ -82,12 +85,15 @@ const FrontDeskBilling        = lazy(() => import("./pages/front-desk/BillingPag
 const FrontDeskHistory        = lazy(() => import("./pages/front-desk/HistoryPage"));
 const FrontDeskAdmissions     = lazy(() => import("./pages/front-desk/AdmissionsPage"));  // IPD admissions + bed assignment
 const FrontDeskAdmissionDetail = lazy(() => import("./pages/front-desk/AdmissionDetailPage"));  // single admission: edit, discharge, billing
+const FrontDeskBedBoard       = lazy(() => import("./pages/front-desk/BedBoardPage"));  // live Floor->Room->Bed grid + turnover/reserve/transfer actions
+const FrontDeskIpdPatients    = lazy(() => import("./pages/front-desk/IpdPatientsPage"));  // "Current Patients" — everyone currently admitted, searchable
 
 // Lab
 const LabDashboard = lazy(() => import("./pages/lab/DashboardPage"));
 const LabRequests  = lazy(() => import("./pages/lab/RequestsPage"));
 const LabReports   = lazy(() => import("./pages/lab/ReportsPage"));
 const LabCatalog   = lazy(() => import("./pages/lab/CatalogPage"));
+const LabSampleTypeSetup = lazy(() => import("./pages/lab/SampleTypeSetupPage"));
 
 // Pharmacist
 const PharmacistDashboard     = lazy(() => import("./pages/pharmacist/DashboardPage"));
@@ -110,6 +116,7 @@ const PatientRecords       = lazy(() => import("./pages/patient/RecordsPage"));
 const PatientPrescriptions = lazy(() => import("./pages/patient/PrescriptionsPage"));
 const PatientLabReports    = lazy(() => import("./pages/patient/LabReportsPage"));
 const PatientMyReports     = lazy(() => import("./pages/patient/MyReportsPage"));
+const PatientSharedRecordsPrivacy = lazy(() => import("./pages/patient/SharedRecordsPrivacyPage"));
 const PatientNotifications = lazy(() => import("./pages/patient/NotificationsPage"));
 const PatientMyProfile     = lazy(() => import("./pages/patient/MyProfilePage"));
 const PatientCorrectionRequests = lazy(() => import("./pages/patient/CorrectionRequestsPage"));
@@ -214,6 +221,10 @@ export default function App() {
           <Route path={ROUTES.EMERGENCY_VIEW(":token")} element={<EmergencyViewPage />} />
           <Route path={ROUTES.VIEW_REPORT(":token")} element={<ViewReportPage />} />
           <Route path={ROUTES.CONSULT_PAD(":token")} element={<ConsultPadPage />} />
+          <Route path={ROUTES.SHARE_RECORDS_ENTRY} element={<ShareRecordsPage />} />
+          <Route path={ROUTES.SHARE_RECORDS_ENTRY_ALT} element={<ShareRecordsPage />} />
+          <Route path={ROUTES.SHARE_RECORDS} element={<ShareRecordsPage />} />
+          <Route path={ROUTES.SHARE_RECORDS_TOKEN(":token")} element={<ShareRecordsPage />} />
           <Route path="/change-password"      element={<ProtectedRoute><ChangePasswordPage /></ProtectedRoute>} />
 
           {/* Platform Admin */}
@@ -269,6 +280,10 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorPatients /></ProtectedRoute>} />
           <Route path={ROUTES.DOCTOR.HISTORY}
             element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorHistory /></ProtectedRoute>} />
+          <Route path={ROUTES.DOCTOR.IPD_REFERRALS}
+            element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorIpdReferrals /></ProtectedRoute>} />
+          <Route path={ROUTES.DOCTOR.IPD_PATIENTS}
+            element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorIpdPatients /></ProtectedRoute>} />
           <Route path={ROUTES.DOCTOR.MY_PROFILE}
             element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorMyProfile /></ProtectedRoute>} />
 
@@ -328,6 +343,10 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskAdmissions /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.ADMISSION_DETAIL(":id")}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskAdmissionDetail /></ProtectedRoute>} />
+          <Route path={ROUTES.FRONT_DESK.BED_BOARD}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskBedBoard /></ProtectedRoute>} />
+          <Route path={ROUTES.FRONT_DESK.IPD_PATIENTS}
+            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIpdPatients /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.MY_PROFILE}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><SharedMyProfile /></ProtectedRoute>} />
 
@@ -340,6 +359,8 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><LabReports /></ProtectedRoute>} />
           <Route path={ROUTES.LAB.CATALOG}
             element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><LabCatalog /></ProtectedRoute>} />
+          <Route path={ROUTES.LAB.SAMPLE_TYPE_SETUP}
+            element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><LabSampleTypeSetup /></ProtectedRoute>} />
           <Route path={ROUTES.LAB.MY_PROFILE}
             element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><SharedMyProfile /></ProtectedRoute>} />
 
@@ -377,6 +398,8 @@ export default function App() {
             element={<PatientRoute><PatientLabReports /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.MY_REPORTS}
             element={<PatientRoute><PatientMyReports /></PatientRoute>} />
+          <Route path={ROUTES.PATIENT.SHARED_RECORDS_PRIVACY}
+            element={<PatientRoute><PatientSharedRecordsPrivacy /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.NOTIFICATIONS}
             element={<PatientRoute><PatientNotifications /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.MY_PROFILE}

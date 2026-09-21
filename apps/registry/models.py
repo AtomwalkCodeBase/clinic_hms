@@ -545,6 +545,41 @@ class SharedVital(models.Model):
         db_table  = "shared_vital"
 
 
+class SharedBirthHistory(models.Model):
+    """
+    Cross-hospital mirror of apps.patients.models.BirthHistory — written
+    through (best-effort, same pattern as apps.opd.views._sync_to_hie) from
+    BirthHistoryView.post()/patch() whenever a hospital captures or edits a
+    child's birth history, so it's visible to the Emergency QR summary
+    (apps/patients/emergency_views.py) and any other cross-hospital view,
+    the same way vitals/diagnoses/prescriptions already are.
+
+    One row per awpid (unlike SharedVital, which keeps a history of
+    readings) — birth history is a single fact set about one birth event,
+    not a repeated measurement, so a hospital editing it overwrites the
+    shared copy rather than appending a new one. source_tenant_id records
+    whichever hospital most recently wrote it, for provenance only.
+    """
+    awpid = models.CharField(max_length=30, unique=True, db_index=True)
+    gestational_age_weeks = models.PositiveSmallIntegerField(null=True, blank=True)
+    birth_weight_kg = models.DecimalField(max_digits=4, decimal_places=2, null=True, blank=True)
+    delivery_mode = models.CharField(max_length=12, blank=True)
+    multiple_birth = models.CharField(max_length=50, blank=True)
+    nicu_admission = models.BooleanField(default=False)
+    nicu_days = models.PositiveSmallIntegerField(null=True, blank=True)
+    birth_complications = models.TextField(blank=True)
+    congenital_conditions = models.TextField(blank=True)
+    apgar_score_1min = models.PositiveSmallIntegerField(null=True, blank=True)
+    apgar_score_5min = models.PositiveSmallIntegerField(null=True, blank=True)
+    source_tenant_id = models.IntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "shared_birth_history"
+
+
 class SharedVaccination(models.Model):
     """
     Vaccination record for a patient, visible across every hospital in the

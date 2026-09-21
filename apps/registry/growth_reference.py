@@ -6,15 +6,27 @@ engine, used to render percentile bands on PatientGrowthView / the parent
 portal's growth chart for pediatric patients (see growth_vaccination_views.
 PatientGrowthView, apps.patients.portal_views.PortalGrowthView).
 
-IMPORTANT — same caveat as apps/registry/vaccine_schedule.py's
-DEFAULT_VACCINE_SCHEDULE: the LMS (Lambda-Mu-Sigma) coefficients below are a
-reasonable approximation of the published WHO Child Growth Standards tables
-at a set of checkpoint ages, meant to get the percentile-band feature working
-end-to-end. Before this is relied on for real clinical guidance, the exact
-coefficients must be verified against WHO's own published LMS tables
-(https://www.who.int/tools/child-growth-standards) — a hospital's clinical
-team should review and, if needed, replace REFERENCE_TABLES with the exact
-published values before this is used for real patient care decisions.
+DATA SOURCE — the LMS (Lambda-Mu-Sigma) coefficients below are transcribed
+directly from WHO's own published "Birth to 5 years (z-scores)" Excel tables
+(https://www.who.int/tools/child-growth-standards), one checkpoint age per
+row, exactly as WHO publishes them — not approximated or interpolated by
+this codebase. Source files, fetched from cdn.who.int:
+  weight-for-age:            wfa_{boys,girls}_0-to-5-years_zscores.xlsx
+  length-for-age (0-24mo):   lhfa_{boys,girls}_0-to-2-years_zscores.xlsx
+  height-for-age (24-60mo):  lhfa_{boys,girls}_2-to-5-years_zscores.xlsx
+  head-circumference-for-age: hcfa_{boys,girls}_0-5-zscores.xlsx
+height-for-age switches source table at 24 months, matching WHO's own
+convention (recumbent length vs standing height are measured differently
+and have slightly different reference curves — e.g. boys at 24mo: 87.82cm
+lying down vs 87.12cm standing — this is a real, documented WHO artifact of
+measurement technique, not a data error). Vitals.height_cm in this system
+doesn't record which technique was used, so — same tradeoff WHO's own
+combined growth charts make — one continuous curve is used across the
+switch rather than asking staff to record measurement posture.
+If a hospital's clinical team prefers to re-verify or replace these figures
+in the future, the safest path is re-fetching the same WHO Excel files above
+and re-extracting the L/M/S columns at these ages, rather than transcribing
+by hand.
 
 Standard scope (per product decision — see the "Both, WHO first" build
 decision): only the WHO standard ships in this iteration. Every table below
@@ -52,44 +64,46 @@ REFERENCE_TABLES = {
     "who": {
         "weight": {
             "M": [
-                (0, 0.3487, 3.3, 0.146), (1, 0.2297, 4.5, 0.161), (2, 0.1970, 5.6, 0.148),
-                (3, 0.1738, 6.4, 0.140), (6, 0.1329, 7.9, 0.129), (9, 0.0888, 8.9, 0.129),
-                (12, 0.0503, 9.6, 0.130), (18, -0.0017, 10.9, 0.132), (24, -0.0370, 12.2, 0.135),
-                (36, -0.0918, 14.3, 0.140), (48, -0.1600, 16.3, 0.146), (60, -0.2000, 18.3, 0.152),
+                (0, 0.3487, 3.3464, 0.1460), (1, 0.2297, 4.4709, 0.1340), (2, 0.1970, 5.5675, 0.1239),
+                (3, 0.1738, 6.3762, 0.1173), (6, 0.1257, 7.9340, 0.1096), (9, 0.0917, 8.9014, 0.1088),
+                (12, 0.0644, 9.6479, 0.1092), (18, 0.0211, 10.9385, 0.1112), (24, -0.0137, 12.1515, 0.1143),
+                (36, -0.0689, 14.3429, 0.1212), (48, -0.1131, 16.3489, 0.1276), (60, -0.1506, 18.3366, 0.1352),
             ],
             "F": [
-                (0, 0.3809, 3.2, 0.146), (1, 0.1714, 4.2, 0.162), (2, 0.0962, 5.1, 0.154),
-                (3, 0.0402, 5.8, 0.147), (6, -0.0756, 7.3, 0.137), (9, -0.1435, 8.2, 0.134),
-                (12, -0.1912, 8.9, 0.135), (18, -0.2491, 10.2, 0.137), (24, -0.2778, 11.5, 0.140),
-                (36, -0.3040, 13.9, 0.146), (48, -0.3210, 16.1, 0.152), (60, -0.3350, 18.2, 0.159),
+                (0, 0.3809, 3.2322, 0.1417), (1, 0.1714, 4.1873, 0.1372), (2, 0.0962, 5.1282, 0.1300),
+                (3, 0.0402, 5.8458, 0.1262), (6, -0.0756, 7.2970, 0.1220), (9, -0.1507, 8.2254, 0.1220),
+                (12, -0.2024, 8.9481, 0.1227), (18, -0.2637, 10.2315, 0.1231), (24, -0.2941, 11.4775, 0.1239),
+                (36, -0.3201, 13.8503, 0.1292), (48, -0.3361, 16.0697, 0.1388), (60, -0.3518, 18.2193, 0.1482),
             ],
         },
+        # 0-24mo from the length-for-age (recumbent) table, 24-60mo from the
+        # height-for-age (standing) table — see module docstring for why.
         "height": {
             "M": [
-                (0, 1, 49.9, 0.0379), (1, 1, 54.7, 0.0357), (2, 1, 58.4, 0.0349),
-                (3, 1, 61.4, 0.0346), (6, 1, 67.6, 0.0338), (9, 1, 72.0, 0.0335),
-                (12, 1, 75.7, 0.0336), (18, 1, 82.3, 0.0347), (24, 1, 87.1, 0.0357),
-                (36, 1, 96.1, 0.0379), (48, 1, 103.3, 0.0394), (60, 1, 110.0, 0.0408),
+                (0, 1, 49.8842, 0.0379), (1, 1, 54.7244, 0.0356), (2, 1, 58.4249, 0.0342),
+                (3, 1, 61.4292, 0.0333), (6, 1, 67.6236, 0.0316), (9, 1, 71.9687, 0.0312),
+                (12, 1, 75.7488, 0.0314), (18, 1, 82.2587, 0.0328), (24, 1, 87.8161, 0.0348),
+                (36, 1, 96.0835, 0.0386), (48, 1, 103.3273, 0.0406), (60, 1, 109.9638, 0.0421),
             ],
             "F": [
-                (0, 1, 49.1, 0.0379), (1, 1, 53.7, 0.0364), (2, 1, 57.1, 0.0358),
-                (3, 1, 59.8, 0.0356), (6, 1, 65.7, 0.0350), (9, 1, 70.1, 0.0347),
-                (12, 1, 74.0, 0.0349), (18, 1, 80.7, 0.0361), (24, 1, 85.7, 0.0372),
-                (36, 1, 95.1, 0.0394), (48, 1, 102.7, 0.0409), (60, 1, 109.4, 0.0421),
+                (0, 1, 49.1477, 0.0379), (1, 1, 53.6872, 0.0364), (2, 1, 57.0673, 0.0357),
+                (3, 1, 59.8029, 0.0352), (6, 1, 65.7311, 0.0345), (9, 1, 70.1435, 0.0344),
+                (12, 1, 74.0150, 0.0348), (18, 1, 80.7079, 0.0360), (24, 1, 86.4153, 0.0373),
+                (36, 1, 95.0515, 0.0401), (48, 1, 102.7312, 0.0419), (60, 1, 109.4233, 0.0435),
             ],
         },
         "head_circumference": {
             "M": [
-                (0, 1, 34.5, 0.0369), (1, 1, 37.3, 0.0334), (2, 1, 39.1, 0.0318),
-                (3, 1, 40.5, 0.0309), (6, 1, 43.3, 0.0293), (9, 1, 45.0, 0.0286),
-                (12, 1, 46.1, 0.0284), (18, 1, 47.4, 0.0284), (24, 1, 48.3, 0.0286),
-                (36, 1, 49.6, 0.0290), (48, 1, 50.5, 0.0294), (60, 1, 51.2, 0.0298),
+                (0, 1, 34.4618, 0.0369), (1, 1, 37.2759, 0.0313), (2, 1, 39.1285, 0.0300),
+                (3, 1, 40.5135, 0.0292), (6, 1, 43.3306, 0.0282), (9, 1, 44.9998, 0.0279),
+                (12, 1, 46.0661, 0.0279), (18, 1, 47.3711, 0.0280), (24, 1, 48.2515, 0.0282),
+                (36, 1, 49.4612, 0.0287), (48, 1, 50.2115, 0.0291), (60, 1, 50.7375, 0.0295),
             ],
             "F": [
-                (0, 1, 33.9, 0.0364), (1, 1, 36.2, 0.0332), (2, 1, 38.3, 0.0317),
-                (3, 1, 39.5, 0.0308), (6, 1, 42.2, 0.0292), (9, 1, 43.8, 0.0285),
-                (12, 1, 44.9, 0.0283), (18, 1, 46.2, 0.0284), (24, 1, 47.2, 0.0286),
-                (36, 1, 48.5, 0.0291), (48, 1, 49.4, 0.0296), (60, 1, 50.0, 0.0300),
+                (0, 1, 33.8787, 0.0350), (1, 1, 36.5463, 0.0321), (2, 1, 38.2521, 0.0317),
+                (3, 1, 39.5328, 0.0314), (6, 1, 42.1995, 0.0309), (9, 1, 43.8300, 0.0305),
+                (12, 1, 44.8965, 0.0303), (18, 1, 46.2424, 0.0299), (24, 1, 47.1822, 0.0296),
+                (36, 1, 48.5099, 0.0291), (48, 1, 49.3321, 0.0288), (60, 1, 49.9229, 0.0285),
             ],
         },
     },

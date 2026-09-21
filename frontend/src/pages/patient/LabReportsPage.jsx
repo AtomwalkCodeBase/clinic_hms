@@ -187,7 +187,7 @@ function ViewInHouseReportButton({ tenantDb, requestId }) {
 }
 
 // ─── One ordered test, self-contained: choice -> (price/pay | upload) -> result ──
-function LabOrderCard({ order, onChanged }) {
+function LabOrderCard({ order, onChanged, patientAwpid }) {
   const { toastSuccess, toastApiError, toastError } = useToast();
   const fileRef = useRef(null);
   const [saving, setSaving] = useState(false);
@@ -220,6 +220,7 @@ function LabOrderCard({ order, onChanged }) {
         title: order.test_name, doc_type: "lab_report",
         file_data: dataUrl, file_name: file.name, mime_type: file.type,
         source_ref: order.source_ref,
+        ...(patientAwpid ? { patient_awpid: patientAwpid } : {}),
       });
       toastSuccess("Report attached — your doctor will be able to see it.");
       setFile(null);
@@ -278,9 +279,25 @@ function LabOrderCard({ order, onChanged }) {
             borderRadius: "0 10px 10px 0", padding: "12px 16px",
           }}>
             <div style={{ fontWeight: 700, fontSize: 13, color: "var(--color-success)", marginBottom: 4 }}>✓ Result</div>
-            <div style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: order.report.has_file ? 10 : 0 }}>
-              {order.report.result_summary || "Report released — ask your hospital for the full file."}
+            <div style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: order.report.items?.length ? 8 : (order.report.has_file ? 10 : 0) }}>
+              {order.report.result_summary || (!order.report.items?.length && "Report released — ask your hospital for the full file.")}
             </div>
+            {order.report.items?.length > 0 && (
+              <div style={{ display: "grid", gap: 4, marginBottom: order.report.has_file ? 10 : 0 }}>
+                {order.report.items.map((it, i) => (
+                  <div key={i} style={{
+                    fontSize: 12.5, display: "flex", justifyContent: "space-between", gap: 10,
+                    color: it.is_abnormal ? "var(--color-danger, #b91c1c)" : "var(--color-text-secondary)",
+                  }}>
+                    <span style={{ fontWeight: it.is_abnormal ? 700 : 600 }}>{it.parameter_name}</span>
+                    <span style={{ textAlign: "right" }}>
+                      {it.result_value}{it.unit ? ` ${it.unit}` : ""}
+                      {it.reference_range && <span style={{ color: "var(--color-text-muted)" }}> ({it.reference_range})</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             {order.report.has_file && (
               <ViewInHouseReportButton tenantDb={order.tenant_db} requestId={order.id} />
             )}
@@ -332,7 +349,7 @@ function LabOrderCard({ order, onChanged }) {
   );
 }
 
-function UploadReportCard({ onUploaded }) {
+function UploadReportCard({ onUploaded, patientAwpid }) {
   const { toastSuccess, toastApiError, toastError } = useToast();
   const fileRef = useRef(null);
   const [title, setTitle] = useState("");
@@ -355,6 +372,7 @@ function UploadReportCard({ onUploaded }) {
         file_data: dataUrl,
         file_name: file.name,
         mime_type: file.type,
+        ...(patientAwpid ? { patient_awpid: patientAwpid } : {}),
       });
       toastSuccess("Report attached.");
       setTitle("");
@@ -486,12 +504,12 @@ export default function PatientLabReportsPage() {
         ) : (
           <div style={{ display: "grid", gap: 14, marginBottom: 18 }}>
             {orders.map(o => (
-              <LabOrderCard key={`${o.tenant_db}-${o.id}`} order={o} onChanged={() => { refetchOrders(); refetchDocs(); }} />
+              <LabOrderCard key={`${o.tenant_db}-${o.id}`} order={o} onChanged={() => { refetchOrders(); refetchDocs(); }} patientAwpid={patientAwpid} />
             ))}
           </div>
         )}
 
-        <UploadReportCard onUploaded={refetchDocs} />
+        <UploadReportCard onUploaded={refetchDocs} patientAwpid={patientAwpid} />
         <MyDocumentsList docs={docs} isLoading={docsLoading} />
       </PageShell>
     </AppShell>

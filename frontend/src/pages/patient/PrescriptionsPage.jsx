@@ -33,7 +33,7 @@ const RX_STATUS_BADGE = {
 
 // One prescription, self-contained: choice -> (rx_number/pay | nothing more
 // to do) — mirrors LabReportsPage's LabOrderCard shape and interaction.
-function PrescriptionOrderCard({ rx, onChanged }) {
+function PrescriptionOrderCard({ rx, onChanged, patientAwpid }) {
   const { toastSuccess, toastApiError } = useToast();
   const [saving, setSaving] = useState(false);
   const [editingPayment, setEditingPayment] = useState(!rx.payment_preference);
@@ -57,7 +57,9 @@ function PrescriptionOrderCard({ rx, onChanged }) {
   async function downloadHandwritten() {
     setOpeningHw(true);
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(rx.handwritten_document_id), { params: { download: 1 } });
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(rx.handwritten_document_id), {
+        params: { download: 1, ...(patientAwpid ? { patient_awpid: patientAwpid } : {}) },
+      });
       const data = res.data?.data || res.data;
       if (data?.file_data) downloadFile(data.file_data, data.file_name || "Handwritten prescription.pdf");
       else toastApiError(null, "Could not download the handwritten prescription.");
@@ -485,7 +487,7 @@ export default function PatientPrescriptionsPage() {
         {!rxLoading && rxOrders.length > 0 && (
           <div style={{ display: "grid", gap: 14, marginBottom: 24 }}>
             {rxOrders.map(rx => (
-              <PrescriptionOrderCard key={`${rx.tenant_db}-${rx.id}`} rx={rx} onChanged={refetchRxOrders} />
+              <PrescriptionOrderCard key={`${rx.tenant_db}-${rx.id}`} rx={rx} onChanged={refetchRxOrders} patientAwpid={patientAwpid} />
             ))}
           </div>
         )}

@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FileText, Pill, FlaskConical, HelpCircle, ShieldCheck, X, Download,
   Tag, Trash2, PenLine, Camera, QrCode, Upload, FolderUp, Plus, Search, CheckSquare, SlidersHorizontal,
-  Lock, Unlock, Clock, TrendingUp, TrendingDown,
+  Lock, Unlock, Clock, TrendingUp, TrendingDown, Sparkles, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { AppShell } from "../../components/layout/AppShell";
@@ -27,6 +27,7 @@ import API_ENDPOINTS from "../../config/api.config";
 import ROUTES from "../../config/routes.config";
 import { usePatientContext } from "../../context/PatientContext";
 import { openDataUrlInNewTab } from "../../utils/fileViewer";
+import HealthInsightsPanel from "./components/HealthInsightsPanel";
 
 const MAX_FILE_BYTES = 11 * 1024 * 1024; // matches the backend's single-upload guard (a modern phone photo runs ~8-11 MB)
 const OK_EXT = /\.(pdf|jpe?g|png)$/i;
@@ -365,18 +366,18 @@ function fmtLabDate(value) {
  * PortalDocumentLabValuesView. Read-only, lab_report documents only; a
  * document with nothing confidently extracted renders nothing (it already
  * surfaces in Health Insights' "Reports Needing Review" instead). */
-function LabValuesSection({ docId }) {
+function LabValuesSection({ docId, patientAwpid }) {
   const [values, setValues] = useState(null); // null = loading, [] = none
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setValues(null); setFailed(false);
-    apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT_LAB_VALUES(docId))
+    apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT_LAB_VALUES(docId), { params: patientAwpid ? { patient_awpid: patientAwpid } : {} })
       .then(res => { if (!cancelled) setValues((res.data?.data || res.data)?.values || []); })
       .catch(() => { if (!cancelled) setFailed(true); });
     return () => { cancelled = true; };
-  }, [docId]);
+  }, [docId, patientAwpid]);
 
   if (failed || (values && values.length === 0)) return null;
   if (values === null) {
@@ -444,17 +445,18 @@ function LabValuesSection({ docId }) {
 }
 
 /* ─────────────────────────────────────────────────────────── detail modal */
-function DetailModal({ doc, onClose, onChanged }) {
+function DetailModal({ doc, patientAwpid, onClose, onChanged }) {
   const { toastSuccess, toastApiError } = useToast();
   const [busy, setBusy] = useState(false);
   const [recat, setRecat] = useState(false);
   const m = TYPE_META[doc.doc_type] || TYPE_META.other;
   const hospital = !!doc.source_tenant_id || doc.uploaded_by === "staff";
+  const awpidParam = patientAwpid ? { patient_awpid: patientAwpid } : {};
 
   async function view(download, docId = doc.id) {
     const win = window.open("", "_blank");
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(docId), { params: download ? { download: 1 } : {} });
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(docId), { params: { ...(download ? { download: 1 } : {}), ...awpidParam } });
       const fd = (res.data?.data || res.data)?.file_data;
       if (fd) openDataUrlInNewTab(win, fd); else win?.close();
     } catch (err) { win?.close(); toastApiError(err, "Could not open the file."); }
@@ -464,10 +466,10 @@ function DetailModal({ doc, onClose, onChanged }) {
     setBusy(true);
     try {
       if (type === "__remove__") {
-        await apiClient.delete(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id));
+        await apiClient.delete(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { params: awpidParam });
         toastSuccess("Removed.");
       } else {
-        await apiClient.patch(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { doc_type: type });
+        await apiClient.patch(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { doc_type: type, ...awpidParam });
         toastSuccess(`Moved to ${type === "prescription" ? "Prescriptions" : "Lab reports"}.`);
       }
       onChanged(); onClose();
@@ -476,7 +478,7 @@ function DetailModal({ doc, onClose, onChanged }) {
   async function remove() {
     setBusy(true);
     try {
-      await apiClient.delete(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id));
+      await apiClient.delete(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { params: awpidParam });
       toastSuccess("Deleted from your reports.");
       onChanged(); onClose();
     } catch (err) { toastApiError(err, "Could not remove."); } finally { setBusy(false); }
@@ -512,7 +514,7 @@ function DetailModal({ doc, onClose, onChanged }) {
           ))}
         </div>
 
-        {doc.doc_type === "lab_report" && <LabValuesSection docId={doc.id} />}
+        {doc.doc_type === "lab_report" && <LabValuesSection docId={doc.id} patientAwpid={patientAwpid} />}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ display: "flex", gap: 8 }}>
@@ -953,6 +955,7 @@ export default function MyReportsPage() {
   }
 
   const [tab, setTab] = useState("all");
+  const [insightsOpen, setInsightsOpen] = useState(false);
   const [q, setQ] = useState("");
   const [picking, setPicking] = useState(false);
   const [sel, setSel] = useState(() => new Set());
@@ -1079,7 +1082,7 @@ export default function MyReportsPage() {
   }
   async function fileDoc(doc, patch) {
     try {
-      await apiClient.patch(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), patch);
+      await apiClient.patch(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { ...patch, ...(patientAwpid ? { patient_awpid: patientAwpid } : {}) });
       const where = patch.doc_type === "prescription" ? "Prescriptions"
         : patch.doc_type === "lab_report" ? (patch.report_categories?.length ? catLabel(patch.report_categories[0]) : "Lab reports")
         : "your reports";
@@ -1089,7 +1092,7 @@ export default function MyReportsPage() {
   }
   async function removeDoc(doc) {
     try {
-      await apiClient.delete(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id));
+      await apiClient.delete(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { params: patientAwpid ? { patient_awpid: patientAwpid } : {} });
       toastSuccess("Removed.");
       refetch();
     } catch (err) { toastApiError(err, "Could not remove."); }
@@ -1138,6 +1141,33 @@ export default function MyReportsPage() {
             </Link>
           </div>
         )}
+        {/* ── Health Insights (collapsed by default) ─────────────────── */}
+        <div className="card" style={{ marginBottom: 14, overflow: "hidden" }}>
+          <button
+            type="button" onClick={() => setInsightsOpen(v => !v)}
+            style={{
+              width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "12px 16px", background: "none", border: "none", cursor: "pointer", textAlign: "left",
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 700, color: "var(--color-text)" }}>
+              <Sparkles size={15} color="var(--color-primary)" /> Health Insights
+            </span>
+            {insightsOpen ? <ChevronUp size={16} color="var(--color-text-muted)" /> : <ChevronDown size={16} color="var(--color-text-muted)" />}
+          </button>
+          {insightsOpen && (
+            <div style={{ padding: "0 16px 18px" }}>
+              <HealthInsightsPanel
+                patientAwpid={patientAwpid}
+                onOpenDocument={(id) => {
+                  const d = docs.find(x => x.id === id);
+                  if (d) setDetail(d);
+                }}
+              />
+            </div>
+          )}
+        </div>
+
         {/* toolbar */}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
           <div style={{
@@ -1350,7 +1380,7 @@ export default function MyReportsPage() {
           onDone={goto => { setAddOpen(false); setTab(goto); refetch(); }} />
       )}
       {detail && (
-        <DetailModal doc={detail} onClose={() => setDetail(null)} onChanged={refetch} />
+        <DetailModal doc={detail} patientAwpid={patientAwpid} onClose={() => setDetail(null)} onChanged={refetch} />
       )}
       {lockDlg && (
         <div onClick={() => setLockDlg(null)} style={{ position: "fixed", inset: 0, background: "rgba(15,23,20,.42)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}>

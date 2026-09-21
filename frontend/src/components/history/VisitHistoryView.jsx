@@ -52,7 +52,7 @@ function bucketByDate(rows) {
   return buckets;
 }
 
-function HistoryTable({ rows, role, navigate, docActions }) {
+function HistoryTable({ rows, role, navigate, docActions, tableClass }) {
   return (
     <table className={tableClass}>
       <thead>
@@ -332,7 +332,7 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
               <div key={s.key}>
                 <div className={`dot-label ${s.dot}`} style={{ marginBottom: 8 }}>{s.label} ({s.rows.length})</div>
                 <div className={panelClass} style={{ padding: 0, overflow: "hidden" }}>
-                  <HistoryTable rows={s.rows} role={role} navigate={navigate} docActions={docActions} />
+                  <HistoryTable rows={s.rows} role={role} navigate={navigate} docActions={docActions} tableClass={tableClass} />
                 </div>
               </div>
             ));
