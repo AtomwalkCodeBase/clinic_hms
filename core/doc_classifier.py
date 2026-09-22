@@ -84,6 +84,13 @@ _NON_MEDICAL_HINTS = (
     "subtotal", "round off", "balance due", "receipt no", "payment received",
     "mode of payment", "upi ref", "transaction id", "order id", "unit price",
     "net amount", "billing address", "shipping address",
+    # a pharmacy OP bill lists the same drug names as a real prescription —
+    # these tokens are what actually distinguish "shop charging for medicine
+    # already sold" from "doctor ordering medicine" (added 2026-09-22 after a
+    # real pharmacy receipt was filed as a prescription in production: it hit
+    # only "gst" from the list above, once, so the >=2-hits rule below never
+    # fired; see _NON_MEDICAL_STRONG).
+    "op receipt", "net payable", "total outstanding", "d.l.no",
     # identity documents (also a privacy red flag for the medical vault)
     "aadhaar", "aadhar", "uidai", "unique identification authority",
     "permanent account number", "income tax department", "passport no", "voter id",
@@ -93,6 +100,20 @@ _NON_MEDICAL_HINTS = (
     "statement of account", "account no", "opening balance", "closing balance",
     "salary slip", "pay slip", "payslip", "admit card", "hall ticket",
     "mark sheet", "marksheet", "electricity bill", "rent agreement",
+)
+# A tighter subset: commerce/billing tokens specific enough that they don't
+# plausibly appear on a genuine prescription or lab report even when one is
+# ALSO full of drug names or lab terms (a pharmacy bill lists "Tab.", "Cream",
+# dosage-looking batch numbers etc. — that's exactly why the general
+# _medical_signal check alone isn't enough to catch it). 2+ of these force
+# non_medical regardless of _medical_signal; also drives `res._bill_signal`,
+# which lets a confident text-AI "not medical" verdict override even a
+# keyword-confident real-kind result in _apply_opinion.
+_NON_MEDICAL_STRONG = (
+    "gstin", "cgst", "sgst", "igst", "hsn code", "sac code", "tax invoice",
+    "proforma invoice", "cash memo", "upi ref", "transaction id",
+    "op receipt", "net payable", "total outstanding", "d.l.no",
+    "bill no", "receipt no",
 )
 
 
@@ -122,10 +143,14 @@ class ClassResult:
     # hit at all.
     non_medical: bool = False
     # ── audit / provenance ──
-    sources: dict = field(default_factory=dict)   # field -> "keyword"|"llm"|"vision"|"conflict"
+    sources: dict = field(default_factory=dict)   # field -> "keyword"|"llm"|"conflict"
     notes: str = ""                               # human-readable cross-layer disagreements
     _det_conf: float = 0.0                         # the keyword pass's own kind confidence
     _medical_signal: bool = False                 # keyword pass saw ANY lab/rx/img/discharge hint
+    _bill_signal: bool = False                    # keyword pass saw >=1 commerce/billing token
+                                                   # (_NON_MEDICAL_STRONG) — lets a confident text-AI
+                                                   # "not medical" verdict override even a keyword-
+                                                   # confident real-kind result (see _apply_opinion)
 
     @property
     def kind(self) -> str:
@@ -263,17 +288,33 @@ def _classify_kind(lower: str):
 
 # ── LLM tail (optional, off by default) ─────────────────────────────────
 # ── layer merge ───────────────────────────────────────────────────────
-_STRONG_KEYWORD = 0.90   # a keyword verdict this sure is never overridden by a guess
+# A keyword verdict this sure is not overridden by a WEAK challenger — but
+# (2026-09-22 change) it no longer wins unconditionally: a challenger that is
+# ALSO confident (kconf >= _CHALLENGE_CONF) turns it into a genuine conflict
+# instead of being silently ignored. This is what makes the merge an actual
+# vote between the two layers rather than "keyword wins if sure enough".
+_STRONG_KEYWORD = 0.90
+_CHALLENGE_CONF = 0.80   # how sure the text AI must be to contest a strong keyword result
+_BILL_OVERRIDE_CONF = 0.85   # how sure a not_medical verdict must be to override, given billing evidence
 
 
 def _apply_opinion(res: "ClassResult", out: dict, src: str) -> None:
     """
-    Fold one labeller's answer (`src` = "llm" or "vision") into `res`,
-    respecting what the deterministic keyword pass already decided:
-      * agreement       → raise confidence, clear the field from `.needs`
-      * keyword unsure  → take the labeller's value
-      * keyword strong  → keep keyword, log the dissent
-      * both sure, differ→ mark a conflict → the patient decides
+    Fold the text-AI's answer (`src` is always "llm" — the vision layer was
+    removed 2026-09-22) into `res` as a real vote against the deterministic
+    keyword pass, not a rubber stamp:
+      * agreement                → raise confidence, clear the field from `.needs`
+      * keyword unsure           → take the AI's value
+      * keyword strong, AI weak    → keep keyword, log the dissent
+      * keyword strong, AI ALSO confident → conflict → the patient decides
+      * "not medical" vs. a confident keyword real-kind → overridden only when
+        the keyword pass itself saw billing/commerce evidence (`_bill_signal`)
+        alongside the drug/lab words that made it look medical — this is the
+        fix for a pharmacy bill that lists the same medicine names as the
+        prescription it's billing for (2026-09-22, see _NON_MEDICAL_STRONG)
+
+    `src` is kept as a parameter (rather than hardcoded) purely so notes/logs
+    say who made each call — there is currently only one caller (_llm_refine).
     """
     if not out:
         return
@@ -283,19 +324,33 @@ def _apply_opinion(res: "ClassResult", out: dict, src: str) -> None:
     kconf = float(out.get("confidence") or 0.0)
 
     if k == "not_medical":
-        # Trust a "not medical" verdict unless the deterministic pass is
-        # *itself* confident about a real record. A faint keyword lean — a
-        # screenshot that merely says "prescription", say — is not enough to
-        # keep it: a confident vision "not medical" (>=0.75) overrides that.
-        keyword_sure = res.confident and res.doc_type in (
-            "prescription", "lab_report", "scan", "discharge_summary")
-        if (not keyword_sure and not res.non_medical
-                and (not res._medical_signal
-                     or (src == "vision" and kconf >= 0.75))):
+        if res.non_medical:
+            return
+        keyword_sure = res.confident   # confidence>=CONFIDENT AND a real kind
+        bill_override = (res._bill_signal and kconf >= _BILL_OVERRIDE_CONF)
+        if not keyword_sure:
+            # Keyword never confidently claimed a real kind — a "not medical"
+            # verdict is cheap to trust unless the text at least LEANS
+            # medical (some rx/lab/img/discharge word matched) with no
+            # billing evidence to explain that away.
+            if not res._medical_signal or bill_override:
+                res.non_medical = True
+                res.doc_type = "other"
+                res.sources["kind"] = src
+                res.notes = (res.notes + f" {src}:not_medical").strip()
+        elif bill_override:
+            # Keyword WAS confident about a real kind — only billing
+            # evidence backing up a very sure "not medical" verdict beats
+            # that (a pharmacy bill listing drug names, not a prescription).
+            was = res.doc_type
             res.non_medical = True
             res.doc_type = "other"
-            res.sources["kind"] = src
-            res.notes = (res.notes + f" {src}:not_medical").strip()
+            res.sources["kind"] = f"{src}+billing"
+            res.notes = (res.notes + f" overridden: keyword said {was}"
+                         f" but {src} said not_medical {kconf:.2f} +billing evidence").strip()
+        else:
+            res.notes = (res.notes + f" {src}:not_medical ({kconf:.2f}) ignored — "
+                         "keyword confident, no billing evidence").strip()
         return
 
     if k in ("prescription", "lab_report", "scan", "discharge_summary", "other"):
@@ -305,7 +360,16 @@ def _apply_opinion(res: "ClassResult", out: dict, src: str) -> None:
             res.confidence = max(res.confidence, kconf, 0.82)
             res.sources.setdefault("kind", res.sources.get("kind", "keyword"))
         elif det_kind_confident and res._det_conf >= _STRONG_KEYWORD:
-            res.notes = (res.notes + f" {src}!={res.doc_type}(said {k} {kconf:.2f})").strip()
+            if kconf >= _CHALLENGE_CONF:
+                # Both sides are confident and disagree — a genuine conflict,
+                # not a coin flip either way. Drop below the auto-file gate.
+                res.confidence = 0.60
+                res.sources["kind"] = "conflict"
+                res.notes = (res.notes + f" conflict keyword={res.doc_type}"
+                             f" {src}={k}({kconf:.2f})").strip()
+            else:
+                res.notes = (res.notes + f" {src}!={res.doc_type}"
+                             f"(said {k} {kconf:.2f}, too weak to challenge)").strip()
         elif "kind" in res.needs:
             res.doc_type = k
             res.confidence = kconf if kconf >= CONFIDENT else min(max(res.confidence, 0.50), 0.66)
@@ -346,11 +410,19 @@ def _apply_opinion(res: "ClassResult", out: dict, src: str) -> None:
 
 def _llm_refine(text: str, res: "ClassResult") -> "ClassResult":
     """
-    Text-LLM layer — resolves the uncertain tail from the OCR text. Enabled
-    only when `settings.DOC_CLASSIFIER_LLM` points at a callable `fn(text) ->
-    dict`; a blank API key makes that callable a no-op. Never raises.
+    Text-LLM layer — resolves the uncertain tail from the OCR text, and now
+    also double-checks a document the keyword pass otherwise considered
+    fully resolved IF it saw any billing/commerce token (`res._bill_signal`):
+    a single "GST" or "Bill No." mention isn't enough for the deterministic
+    non_medical override (which wants 2+), but it's reason enough to ask the
+    AI for a second opinion before auto-filing something that might be a
+    pharmacy bill rather than a prescription. A document with zero billing
+    signal and nothing else unresolved still skips the AI call entirely.
+    Enabled only when `settings.DOC_CLASSIFIER_LLM` points at a callable
+    `fn(text) -> dict`; a blank API key makes that callable a no-op. Never
+    raises.
     """
-    if res.unreadable or res.non_medical or not res.needs:
+    if res.unreadable or res.non_medical or (not res.needs and not res._bill_signal):
         return res
     try:
         from django.conf import settings
@@ -366,54 +438,12 @@ def _llm_refine(text: str, res: "ClassResult") -> "ClassResult":
     return res
 
 
-def _page_images(raw: bytes, mime_type: str) -> list:
-    if mime_type in ("image/jpeg", "image/png"):
-        return [raw]
-    if mime_type == "application/pdf":
-        try:
-            return ocr.pdf_page_images(raw, max_pages=2)
-        except Exception:
-            return []
-    return []
-
-
-def _vision_refine(res: "ClassResult", raw: bytes, mime_type: str, *, thin_text: bool) -> "ClassResult":
-    """
-    Vision layer — the last automated fallback. Sends the page image(s) to a
-    VLM. Runs only when the text layers left something open: the kind is
-    unresolved, a lab report's panel is unknown, the OCR text was too thin to
-    trust, or the earlier layers disagreed. OFF unless a vision model is
-    configured. Never raises.
-    """
-    try:
-        from core import doc_classifier_vision as _v
-        if not _v.enabled() or res.non_medical:
-            return res
-        trigger = (
-            thin_text
-            or "kind" in res.needs
-            or (res.doc_type == "lab_report" and "category" in res.needs)
-            or res.sources.get("kind") == "conflict"
-        )
-        if not trigger:
-            return res
-        imgs = _page_images(raw, mime_type)
-        if not imgs:
-            return res
-        out = _v.classify_images(imgs) or {}
-    except Exception:
-        logger.exception("doc_classifier: vision refine failed; keeping earlier result")
-        return res
-    _apply_opinion(res, out, "vision")
-    return res
-
-
 # ── public API ─────────────────────────────────────────────────────────
 def classify_text(text: str) -> ClassResult:
     """
     Deterministic keyword pass + the text-LLM refine. Callers that only have
-    text (tests, the QR-less single-page path) use this; `classify()` wraps it
-    with extraction, the image gate and the vision layer.
+    text (tests, the QR-less single-page path) use this; `classify()` wraps
+    it with extraction and the image quality gate.
     """
     text = (text or "").strip()
     if len(text) < _MIN_TEXT:
@@ -432,7 +462,13 @@ def classify_text(text: str) -> ClassResult:
         res.sources["kind"] = "keyword"
 
     # Clearly-not-a-medical-document → the caller drops it, nothing is stored.
-    if _score(lower, _NON_MEDICAL_HINTS) >= 2 and not res._medical_signal:
+    # Two tiers: 2+ STRONG commerce/billing tokens force it regardless of
+    # _medical_signal (catches a pharmacy bill that also lists drug names —
+    # see _NON_MEDICAL_STRONG); otherwise the older, more cautious rule of
+    # 2+ of ANY non-medical hint with zero medical signal at all.
+    non_strong = _score(lower, _NON_MEDICAL_STRONG)
+    res._bill_signal = non_strong >= 1
+    if non_strong >= 2 or (_score(lower, _NON_MEDICAL_HINTS) >= 2 and not res._medical_signal):
         res.non_medical = True
         res.doc_type = "other"
         res.sources["kind"] = "keyword"
@@ -467,60 +503,39 @@ def classify_text(text: str) -> ClassResult:
     return _llm_refine(text, res)
 
 
-def _quality_fallback_vision(raw: bytes, mime_type: str) -> "ClassResult | None":
-    """
-    The quality gate wants to bounce this image with a "retake". Before we do,
-    let the vision model look — a marginally blurry / dim photo of an obvious
-    prescription, or of an obvious non-document, is still worth a verdict, and
-    vision handles both. Returns a ClassResult only when vision is *confident*
-    (a real kind at/above the gate, or a clear "not medical"); a shrug returns
-    None and the caller falls back to "unreadable".
-    """
-    try:
-        from core import doc_classifier_vision as _v
-        if not _v.enabled():
-            return None
-        imgs = _page_images(raw, mime_type)
-        if not imgs:
-            return None
-        out = _v.classify_images(imgs) or {}
-    except Exception:
-        logger.exception("doc_classifier: quality-fallback vision failed")
-        return None
-    if not out:
-        return None
-    res = ClassResult(doc_type="other", confidence=0.0, method="vision")
-    _apply_opinion(res, out, "vision")   # folds in kind + panel + date in one pass
-    if res.non_medical:
-        return res
-    # The quality gate would have bounced this photo to "retake". If vision
-    # nonetheless commits to a real kind, trust it and file rather than send
-    # the patient to the review tray for a photo they think is fine. Read the
-    # raw vision confidence — _apply_opinion clamps `res.confidence` down when
-    # the keyword pass had nothing to agree with.
-    vconf = float(out.get("confidence") or 0.0)
-    if res.doc_type in ("prescription", "lab_report", "scan", "discharge_summary") and vconf >= 0.60:
-        res.confidence = max(res.confidence, vconf, CONFIDENT)
-        res.sources["kind"] = "vision"
-        res.method = "vision"
-        return res
-    return None
-
-
 def classify(raw: bytes, mime_type: str, *, check_quality: bool = True) -> ClassResult:
     """
     Full pipeline. `raw` is the ORIGINAL uploaded bytes, `mime_type` the
     verified type ("application/pdf" | "image/jpeg" | "image/png").
 
-      quality gate → encrypted check → text (PDF layer / OCR) →
-      deterministic keyword pass → text-LLM → vision-LLM → verdict
+      auto-crop/straighten (images, if enabled) → quality gate →
+      encrypted check → text (PDF layer / OCR) →
+      deterministic keyword pass → text-LLM → verdict
+
+    No vision/image-model stage (removed 2026-09-22 — it was the layer most
+    likely to turn a photographed pharmacy bill into a false "prescription",
+    it cost real money/latency per call, and it sent full page images to a
+    third party). A blurry/dark image that fails the quality gate now always
+    goes straight to "retake" — there is no automated second look.
+
+    The ORIGINAL bytes (not the cropped version) are what the caller goes
+    on to store — cropping only feeds a cleaner image into quality-gate
+    measurement and OCR; it never replaces what's saved to the vault.
     """
+    if check_quality and mime_type in ("image/jpeg", "image/png"):
+        try:
+            from django.conf import settings
+            if getattr(settings, "DOC_AUTO_CROP", False):
+                from core import doc_crop
+                cropped = doc_crop.auto_crop_straighten(raw)
+                if cropped:
+                    raw = cropped   # use the straightened version for quality + OCR only
+        except Exception:
+            logger.warning("doc_classifier: auto-crop step failed; using original image", exc_info=True)
+
     if check_quality:
         q = image_quality.assess(raw, mime_type)
         if not q.ok:
-            vres = _quality_fallback_vision(raw, mime_type)
-            if vres is not None:
-                return vres
             return ClassResult(
                 doc_type="other", confidence=0.0, method="unreadable",
                 unreadable=True, quality_reason=q.reason, quality_message=q.message,
@@ -551,14 +566,12 @@ def classify(raw: bytes, mime_type: str, *, check_quality: bool = True) -> Class
     res = classify_text(text) if len(text) >= _MIN_TEXT else \
         ClassResult(doc_type="other", confidence=0.0, text_len=len(text))
 
-    res = _vision_refine(res, raw, mime_type, thin_text=thin_text)
-
     # An IMAGE we couldn't read anything usable from → "retake", not a blind
     # "Other". (A PDF can't be retaken — it just falls to the review tray.)
     if (thin_text and mime_type in ("image/jpeg", "image/png")
             and not res.non_medical and res.doc_type == "other"
             and res.confidence < 0.40
-            and res.sources.get("kind") not in ("llm", "vision")):
+            and res.sources.get("kind") != "llm"):
         return ClassResult(
             doc_type="other", confidence=0.0, method="unreadable", unreadable=True,
             quality_reason="unreadable_ocr",

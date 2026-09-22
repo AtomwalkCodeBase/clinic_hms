@@ -21,9 +21,9 @@ from datetime import date
 from django.test import SimpleTestCase, override_settings
 
 
-# The keyword/date/panel layers are deterministic - pin the AI fallbacks OFF
-# so these tests never make a network call. The LLM/vision merge is covered
-# separately in LayerMergeTests with a stubbed labeller.
+# The keyword/date/panel layers are deterministic - pin the AI fallback OFF
+# so these tests never make a network call. The keyword/text-AI merge is
+# covered separately in LayerMergeTests with a stubbed labeller.
 from core import doc_classifier, doc_dates, image_quality, ocr, report_types
 
 
@@ -260,6 +260,33 @@ class KindTests(_Det):
         # "Investigations advised: CBC, CRP" must not flip it to lab_report
         r = self._kind(PRESCRIPTION)
         self.assertEqual(r.doc_type, "prescription")
+
+    def test_pharmacy_bill_with_drug_names_is_not_a_prescription(self):
+        # 2026-09-22: a real pharmacy OP receipt was filed as a prescription
+        # because it listed the same drug names as an actual Rx and only hit
+        # one general billing word ("gst") — not enough for the >=2 rule
+        # once _medical_signal was True from "tablet"/"cream". 2+ STRONG
+        # commerce tokens now force it regardless of drug names present.
+        bill = (
+            "BBH ANNEX PHARMA  OP Receipt ( Upi )\n"
+            "1) Azithromycin 500MG AZIVISTA-500 || TABLET  Qty 2\n"
+            "2) Fusidic Acid 2% SOFINOX-10GM || CREAM  Qty 1\n"
+            "Gross Total 470.30  SGST 11.2  CGST 11.2  Net Payable 470.00\n"
+            "D.L.No: KA-B12-295729"
+        )
+        r = self._kind(bill)
+        self.assertTrue(r.non_medical, r)
+        self.assertEqual(r.doc_type, "other")
+        self.assertTrue(r._bill_signal)
+
+    def test_single_billing_word_does_not_auto_skip_but_flags_bill_signal(self):
+        # One strong billing token isn't enough for the deterministic
+        # skip (needs 2+) — but it does set _bill_signal, which is what
+        # lets a confident text-AI verdict override this later.
+        r = self._kind(PRESCRIPTION + "\nGSTIN: 29AAAAA0000A1Z5")
+        self.assertFalse(r.non_medical)
+        self.assertEqual(r.doc_type, "prescription")
+        self.assertTrue(r._bill_signal)
 
     def test_too_short_text_is_other(self):
         r = self._kind("Meera Nair")
@@ -565,16 +592,78 @@ class OcrEngineTests(SimpleTestCase):
             self.assertEqual(ocr.warmup(), "")   # no-op second call, no raise
         ocr._WARMED = False
 
+    def test_tesseract_psm_defaults_to_6(self):
+        self.assertEqual(ocr._tesseract_psm(), 6)
 
-@override_settings(DOC_CLASSIFIER_LLM="", DOC_CLASSIFIER_VISION_MODEL="")
+    def test_tesseract_psm_is_configurable(self):
+        with self.settings(DOC_OCR_TESSERACT_PSM=11):
+            self.assertEqual(ocr._tesseract_psm(), 11)
+
+
+@override_settings(DOC_OCR_ENGINE="both")
+class OcrCombinedModeTests(SimpleTestCase):
+    """DOC_OCR_ENGINE="both" — run every backend and concatenate their text,
+    instead of stopping at the first one that returns something (2026-09-22:
+    measured 16/16 vs. 15/16 for either engine alone on real photos — the
+    two backends miss different documents)."""
+
+    def test_both_texts_are_concatenated(self):
+        import unittest.mock as mock
+        with mock.patch.dict(ocr._BACKENDS, {
+            "rapidocr": lambda raw: ("rapid saw this", 0.9),
+            "tesseract": lambda raw: ("tess saw this", 0.8),
+        }):
+            r = ocr.run(b"\x89PNG\r\n")
+        self.assertIn("rapid saw this", r.text)
+        self.assertIn("tess saw this", r.text)
+        self.assertEqual(r.engine, "rapidocr+tesseract")
+        self.assertAlmostEqual(r.conf, 0.85)
+
+    def test_one_backend_empty_still_returns_the_other(self):
+        import unittest.mock as mock
+        with mock.patch.dict(ocr._BACKENDS, {
+            "rapidocr": lambda raw: ("", None),
+            "tesseract": lambda raw: ("only tesseract read this", 0.7),
+        }):
+            r = ocr.run(b"\x89PNG\r\n")
+        self.assertEqual(r.text, "only tesseract read this")
+        self.assertEqual(r.engine, "tesseract")
+
+    def test_one_backend_unavailable_does_not_break_the_other(self):
+        import unittest.mock as mock
+        def _raise(raw):
+            raise ocr._Unavailable("not installed")
+        with mock.patch.dict(ocr._BACKENDS, {
+            "rapidocr": _raise,
+            "tesseract": lambda raw: ("tesseract text", 0.6),
+        }):
+            r = ocr.run(b"\x89PNG\r\n")
+        self.assertEqual(r.text, "tesseract text")
+
+    def test_both_empty_gives_empty_result(self):
+        import unittest.mock as mock
+        with mock.patch.dict(ocr._BACKENDS, {
+            "rapidocr": lambda raw: ("", None),
+            "tesseract": lambda raw: ("", None),
+        }):
+            r = ocr.run(b"\x89PNG\r\n")
+        self.assertEqual(r.text, "")
+        self.assertEqual(r.engine, "")
+
+    def test_available_reports_both(self):
+        self.assertEqual(ocr.available(), "rapidocr+tesseract")
+
+
+@override_settings(DOC_CLASSIFIER_LLM="")
 class LayerMergeTests(SimpleTestCase):
-    """_apply_opinion — how an LLM / vision answer folds onto the keyword pass."""
+    """_apply_opinion — how the text-AI's answer folds onto the keyword pass."""
 
     def _res(self, doc_type="other", conf=0.4, det=None, medical=False,
-             cats=None, catconf=0.0, doc_date=None, dateconf=0.0):
+             cats=None, catconf=0.0, doc_date=None, dateconf=0.0, bill=False):
         r = doc_classifier.ClassResult(doc_type=doc_type, confidence=conf, text_len=200)
         r._det_conf = det if det is not None else conf
         r._medical_signal = medical
+        r._bill_signal = bill
         r.categories = list(cats or [])
         r.category_confidence = catconf
         r.doc_date = doc_date
@@ -593,11 +682,25 @@ class LayerMergeTests(SimpleTestCase):
         self.assertEqual(r.doc_type, "prescription")
         self.assertEqual(r.sources.get("kind"), "llm")
 
-    def test_strong_keyword_is_never_overridden(self):
+    def test_weak_challenger_does_not_dislodge_a_strong_keyword(self):
+        # A strong keyword result isn't shaken by a challenger that isn't
+        # itself confident — it's kept, with the dissent only logged.
         r = self._res("prescription", conf=0.95, det=0.95, medical=True)
-        doc_classifier._apply_opinion(r, {"kind": "lab_report", "confidence": 0.95}, "vision")
-        self.assertEqual(r.doc_type, "prescription")          # kept
-        self.assertIn("vision!=prescription", r.notes)
+        doc_classifier._apply_opinion(r, {"kind": "lab_report", "confidence": 0.5}, "llm")
+        self.assertEqual(r.doc_type, "prescription")
+        self.assertNotEqual(r.sources.get("kind"), "conflict")
+        self.assertIn("too weak to challenge", r.notes)
+        self.assertNotIn("kind", r.needs)
+
+    def test_two_confident_but_disagreeing_opinions_go_to_review(self):
+        # 2026-09-22 change: a strong keyword result is no longer kept
+        # unconditionally — a challenger that is ALSO confident turns it
+        # into a real conflict instead of being silently overruled.
+        r = self._res("prescription", conf=0.95, det=0.95, medical=True)
+        doc_classifier._apply_opinion(r, {"kind": "lab_report", "confidence": 0.95}, "llm")
+        self.assertEqual(r.doc_type, "prescription")          # not switched either way
+        self.assertEqual(r.sources.get("kind"), "conflict")
+        self.assertIn("kind", r.needs)                        # dropped below the gate
 
     def test_moderate_disagreement_goes_to_the_patient(self):
         r = self._res("prescription", conf=0.78, det=0.78, medical=True)
@@ -613,6 +716,37 @@ class LayerMergeTests(SimpleTestCase):
         r2 = self._res("lab_report", conf=0.5, medical=True)
         doc_classifier._apply_opinion(r2, {"kind": "not_medical", "confidence": 0.99}, "llm")
         self.assertFalse(r2.non_medical)                      # medical lean protected
+
+    def test_billing_evidence_lets_not_medical_override_a_confident_keyword(self):
+        # The pharmacy-bill fix (2026-09-22): a page the keyword pass called
+        # a confident "prescription" (it lists drug names) is still
+        # overridden by a very sure text-AI "not medical" verdict when
+        # the keyword pass ALSO saw commerce/billing evidence (e.g. one
+        # "GSTIN" mention — not the 2+ needed for the deterministic
+        # override in classify_text, but enough to back up the AI here).
+        r = self._res("prescription", conf=0.96, det=0.96, medical=True, bill=True)
+        doc_classifier._apply_opinion(r, {"kind": "not_medical", "confidence": 0.95}, "llm")
+        self.assertTrue(r.non_medical)
+        self.assertEqual(r.doc_type, "other")
+        self.assertEqual(r.sources.get("kind"), "llm+billing")
+
+    def test_no_billing_evidence_protects_a_confident_prescription_from_a_hallucination(self):
+        # Without any billing evidence, a confident keyword real-kind result
+        # is NOT flipped by an AI "not medical" guess, however sure it
+        # claims to be — this is what stops a hallucinated verdict from
+        # dropping a genuine, unambiguous prescription.
+        r = self._res("prescription", conf=0.96, det=0.96, medical=True, bill=False)
+        doc_classifier._apply_opinion(r, {"kind": "not_medical", "confidence": 0.99}, "llm")
+        self.assertFalse(r.non_medical)
+        self.assertEqual(r.doc_type, "prescription")
+
+    def test_billing_evidence_alone_is_not_enough_without_ai_confidence(self):
+        # bill_signal is present, but the AI itself wasn't sure enough
+        # (< _BILL_OVERRIDE_CONF) — still protected.
+        r = self._res("prescription", conf=0.96, det=0.96, medical=True, bill=True)
+        doc_classifier._apply_opinion(r, {"kind": "not_medical", "confidence": 0.6}, "llm")
+        self.assertFalse(r.non_medical)
+        self.assertEqual(r.doc_type, "prescription")
 
     def test_llm_fills_panel_and_date(self):
         r = self._res("lab_report", conf=0.9, det=0.9, medical=True)  # kind fine, panel+date open
@@ -663,6 +797,19 @@ class PipelineWithStubbedLlmTests(SimpleTestCase):
         doc_classifier.classify_text(CBC)
         self.assertEqual(_STUB_CALLS, 0)   # keyword was sure -> LLM never called
 
+    def test_billing_hint_gets_a_second_opinion_even_once_keyword_is_settled(self):
+        # 2026-09-22: previously a document the keyword pass fully resolved
+        # (kind + date, needs==[]) never reached the AI at all, however
+        # billing-flavoured the text also was. One "GSTIN" mention now
+        # earns a second opinion before auto-filing.
+        global _STUB_CALLS
+        _STUB_CALLS = 0
+        text = PRESCRIPTION + "\nGSTIN: 29AAAAA0000A1Z5"
+        r = doc_classifier.classify_text(text)
+        self.assertEqual(_STUB_CALLS, 1)          # the AI WAS called
+        self.assertTrue(r.non_medical, r)
+        self.assertEqual(r.doc_type, "other")
+
 
 _STUB_CALLS = 0
 
@@ -675,4 +822,6 @@ def _stub_llm(text):
     if "bl00d c0unt" in low or "blood count" in low:
         return {"kind": "lab_report", "categories": ["cbc"],
                 "report_date": "2026-09-11", "date_source": "collection", "confidence": 0.95}
+    if "gstin: 29aaaaa0000a1z5" in low:
+        return {"kind": "not_medical", "confidence": 0.95}
     return {}

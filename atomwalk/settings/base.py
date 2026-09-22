@@ -401,6 +401,8 @@ DOC_QR_SECRET = config("DOC_QR_SECRET", default="") or SECRET_KEY
 # OCR engine for no-QR document classification (core/ocr.py):
 #   "auto" (default) — RapidOCR (PaddleOCR's PP-OCR models on ONNX Runtime;
 #     pip-only, CPU, no system package) when installed, else Tesseract.
+#   "both" — always run RapidOCR AND Tesseract, concatenate their text (see
+#     core/ocr.py module docstring for the accuracy measurement).
 #   "rapidocr" | "paddleocr" | "tesseract" — force one.  "none" — disable OCR.
 DOC_OCR_ENGINE = config("DOC_OCR_ENGINE", default="auto")
 
@@ -409,6 +411,17 @@ DOC_OCR_ENGINE = config("DOC_OCR_ENGINE", default="auto")
 # tesseract-ocr); set it only if the binary lives somewhere non-standard
 # (some Windows dev machines) — core/ocr.py also auto-probes the usual paths.
 TESSERACT_CMD = config("TESSERACT_CMD", default="")
+
+# Tesseract page-segmentation mode. 6 ("assume a single uniform block of
+# text") measured far better than Tesseract's own default of 3 (automatic
+# layout analysis) on real phone photos — see core/ocr.py module docstring.
+DOC_OCR_TESSERACT_PSM = config("DOC_OCR_TESSERACT_PSM", default=6, cast=int)
+
+# Auto-crop/straighten a photographed document (find the page, flatten its
+# perspective) before quality-gate measurement and OCR — see core/doc_crop.py.
+# Default False: this is new and unmeasured on real production traffic, so
+# deploying the code alone changes nothing until explicitly turned on.
+DOC_AUTO_CROP = config("DOC_AUTO_CROP", default=False, cast=bool)
 
 # ── Handwriting recognition (consultation scratchpad) ───────────────────────
 # The consult-pad QR flow photographs a handwritten SOAP note; a vision model
@@ -439,8 +452,17 @@ DOC_CLASSIFIER_LLM_BASE  = config("DOC_CLASSIFIER_LLM_BASE", default="https://ap
 DOC_CLASSIFIER_LLM_MODEL = config("DOC_CLASSIFIER_LLM_MODEL", default="openai/gpt-oss-20b")
 DOC_CLASSIFIER_LLM_KEY   = config("DOC_CLASSIFIER_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
 
-# Vision layer — OFF unless a MODEL is set (Groq currently has no VLM; point
-# this at a local vLLM/Ollama VLM, or OpenRouter gemini-2.0-flash / gpt-4o).
+# NOTE (2026-09-22): the vision layer was removed from the document-TYPE
+# classifier (core/doc_classifier.py no longer calls core/doc_classifier_vision.py
+# at all — it was the step most likely to turn a photographed pharmacy bill
+# into a false "prescription", plus per-call cost and third-party image
+# upload). These three settings are kept only because
+# core/lab_value_extractor.py's LAB_EXTRACTOR_VISION_* settings below fall
+# back to them, and that module still imports helpers directly from
+# core/doc_classifier_vision.py (a separate, still-shipped feature: reading
+# the actual test VALUES off a report photo — unrelated to sorting a
+# document into a folder). Leave these as-is unless lab value extraction's
+# vision path is also being retired.
 DOC_CLASSIFIER_VISION_BASE  = config("DOC_CLASSIFIER_VISION_BASE", default="https://api.groq.com/openai/v1")
 DOC_CLASSIFIER_VISION_MODEL = config("DOC_CLASSIFIER_VISION_MODEL", default="")
 DOC_CLASSIFIER_VISION_KEY   = (config("DOC_CLASSIFIER_VISION_KEY", default="")

@@ -9,6 +9,17 @@ Engine order comes from ``settings.DOC_OCR_ENGINE``:
     "auto"      (default) — RapidOCR (the PP-OCR / PaddleOCR detection +
                 recognition models running on ONNX Runtime; pip-only, CPU,
                 no system package) when importable, otherwise Tesseract.
+    "both"      — run RapidOCR AND Tesseract unconditionally and concatenate
+                their text (see _run_combined). Measured 2026-09-22 on 16
+                real/near-real photos: RapidOCR alone 15/16 correct (missed
+                one clean printed form — small-print date it doesn't surface),
+                Tesseract alone (psm 6) 15/16 (missed one handwritten-font
+                report), combined 16/16 — the two engines miss different
+                documents, so neither backend's mistakes propagate. Costs
+                the sum of both engines' time per document (~2.4s avg in
+                that test) instead of one, and keeps RapidOCR's models
+                resident in memory even for documents Tesseract alone could
+                have solved — evaluate on your own traffic before deploying.
     "rapidocr"  — force RapidOCR.
     "paddleocr" — force the full PaddleOCR package (needs ``paddlepaddle``).
     "tesseract" — force Tesseract (needs the ``tesseract-ocr`` binary).
@@ -19,7 +30,11 @@ copes with skew, perspective, glare and low contrast where Tesseract's line
 model fragments. RapidOCR ships the same models as PaddleOCR but drops the
 heavy ``paddlepaddle`` runtime, so it installs cleanly on a plain server.
 Tesseract stays as the always-available fallback and for the born-digital
-PDF path (which needs no OCR at all).
+PDF path (which needs no OCR at all). Tesseract runs in ``--psm 6``
+("assume a single uniform block of text") rather than its own default
+(``--psm 3``, automatic layout) — psm 3 read essentially nothing off two
+real prescription photos (32 chars each, OCR'd as "other"); psm 6 fixed
+both. Override with ``settings.DOC_OCR_TESSERACT_PSM``.
 
 Nothing here is imported at module load: every backend is imported lazily
 and any failure degrades to the next engine, then to an empty string. The
@@ -74,6 +89,7 @@ def _engine_pref() -> str:
 
 _ORDER = {
     "auto":      ("rapidocr", "tesseract"),
+    "both":      ("rapidocr", "tesseract"),   # combined specially in run(), not a fallback chain
     "rapidocr":  ("rapidocr",),
     "paddleocr": ("paddleocr", "tesseract"),
     "tesseract": ("tesseract",),
@@ -85,6 +101,8 @@ def run(image_bytes: bytes) -> OcrResult:
     """OCR a single image (JPEG/PNG bytes). Never raises."""
     if not image_bytes:
         return OcrResult()
+    if _engine_pref() == "both":
+        return _run_combined(image_bytes)
     for name in _ORDER.get(_engine_pref(), _ORDER["auto"]):
         fn = _BACKENDS.get(name)
         if not fn:
@@ -101,8 +119,38 @@ def run(image_bytes: bytes) -> OcrResult:
     return OcrResult()
 
 
+def _run_combined(image_bytes: bytes) -> OcrResult:
+    """DOC_OCR_ENGINE=both — always run every backend and concatenate their
+    text, instead of stopping at the first one that returns something. See
+    the module docstring for the measurement that justified this."""
+    texts, confs, used = [], [], []
+    for name in ("rapidocr", "tesseract"):
+        fn = _BACKENDS.get(name)
+        try:
+            text, conf = fn(image_bytes)
+        except _Unavailable:
+            continue
+        except Exception:
+            logger.warning("core.ocr: %s backend failed in combined mode", name, exc_info=True)
+            continue
+        if (text or "").strip():
+            texts.append(text.strip())
+            used.append(name)
+            if conf is not None:
+                confs.append(conf)
+    if not texts:
+        return OcrResult()
+    return OcrResult(
+        text="\n".join(texts),
+        conf=(sum(confs) / len(confs)) if confs else None,
+        engine="+".join(used),
+    )
+
+
 def available() -> str:
     """Name of the backend that would be used right now (for logs / /doctor)."""
+    if _engine_pref() == "both":
+        return "rapidocr+tesseract"
     for name in _ORDER.get(_engine_pref(), _ORDER["auto"]):
         try:
             _probe(name)
@@ -234,6 +282,14 @@ def _locate_tesseract() -> None:
         pass
 
 
+def _tesseract_psm() -> int:
+    try:
+        from django.conf import settings
+        return int(getattr(settings, "DOC_OCR_TESSERACT_PSM", 6) or 6)
+    except Exception:
+        return 6
+
+
 def _tesseract(image_bytes: bytes):
     try:
         import pytesseract
@@ -242,13 +298,20 @@ def _tesseract(image_bytes: bytes):
         raise _Unavailable(str(e))
     _locate_tesseract()
     not_found = getattr(pytesseract, "TesseractNotFoundError", None)
+    # --psm 6 ("assume a single uniform block of text") beat pytesseract's
+    # own default (--psm 3, automatic page-layout analysis) on real phone
+    # photos of prescriptions/forms — psm 3's layout step was misreading the
+    # page as having no text at all (32 chars back, vs. hundreds with psm 6)
+    # on two real prescription photos. Measured 2026-09-22; see core/ocr.py
+    # module docstring.
+    cfg = f"--psm {_tesseract_psm()}"
     try:
         try:
             img = Image.open(io.BytesIO(image_bytes))
         except Exception:
             return "", None
         try:
-            data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+            data = pytesseract.image_to_data(img, config=cfg, output_type=pytesseract.Output.DICT)
             words, confs = [], []
             for tok, c in zip(data.get("text", []), data.get("conf", [])):
                 tok = (tok or "").strip()
@@ -263,7 +326,7 @@ def _tesseract(image_bytes: bytes):
                 return " ".join(words), (sum(confs) / len(confs) / 100.0) if confs else None
         except Exception:
             pass
-        return pytesseract.image_to_string(img), None
+        return pytesseract.image_to_string(img, config=cfg), None
     except Exception as e:
         if not_found is not None and isinstance(e, not_found):
             raise _Unavailable("tesseract binary not found")
