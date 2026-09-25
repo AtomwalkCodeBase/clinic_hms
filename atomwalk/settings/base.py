@@ -406,24 +406,13 @@ PLATFORM_ADMIN_SECRET = config("PLATFORM_ADMIN_SECRET", default="change-this")
 # value — this feature is new, so there are no live QRs to invalidate yet.
 DOC_QR_SECRET = config("DOC_QR_SECRET", default="") or SECRET_KEY
 
-# OCR engine for no-QR document classification (core/ocr.py):
-#   "auto" (default) — RapidOCR (PaddleOCR's PP-OCR models on ONNX Runtime;
-#     pip-only, CPU, no system package) when installed, else Tesseract.
-#   "both" — always run RapidOCR AND Tesseract, concatenate their text (see
-#     core/ocr.py module docstring for the accuracy measurement).
-#   "rapidocr" | "paddleocr" | "tesseract" — force one.  "none" — disable OCR.
-DOC_OCR_ENGINE = config("DOC_OCR_ENGINE", default="auto")
-
-# Path to the tesseract binary — only used when DOC_OCR_ENGINE falls back to
-# Tesseract. Leave blank on Linux where `tesseract` is on PATH (apt install
-# tesseract-ocr); set it only if the binary lives somewhere non-standard
-# (some Windows dev machines) — core/ocr.py also auto-probes the usual paths.
-TESSERACT_CMD = config("TESSERACT_CMD", default="")
-
-# Tesseract page-segmentation mode. 6 ("assume a single uniform block of
-# text") measured far better than Tesseract's own default of 3 (automatic
-# layout analysis) on real phone photos — see core/ocr.py module docstring.
-DOC_OCR_TESSERACT_PSM = config("DOC_OCR_TESSERACT_PSM", default=6, cast=int)
+# OCR engine for no-QR document classification (core/ocr.py): RapidOCR only
+# (PaddleOCR's PP-OCR models on ONNX Runtime; pip-only, CPU, no system package).
+#   "rapidocr" (default) or "auto" — RapidOCR.
+#   "paddleocr" — force the full PaddleOCR package (not installed by default).
+#   "none" — disable OCR.
+# One engine keeps reading time and memory low on the 1-CPU server. Tesseract was removed.
+DOC_OCR_ENGINE = config("DOC_OCR_ENGINE", default="rapidocr")
 
 # Auto-crop/straighten a photographed document (find the page, flatten its
 # perspective) before quality-gate measurement and OCR — see core/doc_crop.py.
@@ -516,8 +505,12 @@ CELERY_TASK_TIME_LIMIT = config("CELERY_TASK_TIME_LIMIT", default=360, cast=int)
 # Recycle a worker child after N tasks — OCR / PDF libraries hold memory.
 CELERY_WORKER_MAX_TASKS_PER_CHILD = config("CELERY_WORKER_MAX_TASKS_PER_CHILD", default=50, cast=int)
 # Redis re-delivers an un-acked task after this many seconds; must exceed the
-# longest task (acks_late).
-CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 3600}
+# longest task (acks_late). Redis only: the Postgres (sqla+postgresql) broker hands
+# transport options straight to SQLAlchemy's create_engine(), which rejects this key
+# and would stop the worker from starting.
+CELERY_BROKER_TRANSPORT_OPTIONS = (
+    {"visibility_timeout": 3600} if CELERY_BROKER_URL.startswith(("redis://", "rediss://")) else {}
+)
 # Everything that talks to the LLM runs on its own queue, consumed by a
 # single-concurrency worker in production (deploy/systemd/hms-celery-llm.service),
 # so LLM work is strictly one-after-the-other and never blocks uploads.
@@ -546,16 +539,17 @@ FLOWER_URL = config("FLOWER_URL", default="") or f"http://localhost:{FLOWER_PORT
 FLOWER_BASIC_AUTH = config("FLOWER_BASIC_AUTH", default="")
 
 # NOTE (2026-09-22): the vision layer was removed from the document-TYPE
-# classifier (core/doc_classifier.py no longer calls core/doc_classifier_vision.py
-# at all — it was the step most likely to turn a photographed pharmacy bill
-# into a false "prescription", plus per-call cost and third-party image
-# upload). These three settings are kept only because
+# classifier (core/doc_classifier.py no longer calls a vision model at all —
+# it was the step most likely to turn a photographed pharmacy bill into a
+# false "prescription", plus per-call cost and third-party image upload;
+# core/doc_classifier_vision.py itself was deleted 2026-09-23, its shared
+# JSON-parse/image-prep helpers moved into core/lab_value_extractor.py, the
+# only remaining caller). These three settings are kept only because
 # core/lab_value_extractor.py's LAB_EXTRACTOR_VISION_* settings below fall
-# back to them, and that module still imports helpers directly from
-# core/doc_classifier_vision.py (a separate, still-shipped feature: reading
-# the actual test VALUES off a report photo — unrelated to sorting a
-# document into a folder). Leave these as-is unless lab value extraction's
-# vision path is also being retired.
+# back to them (a separate, still-shipped feature: reading the actual test
+# VALUES off a report photo — unrelated to sorting a document into a
+# folder). Leave these as-is unless lab value extraction's vision path is
+# also being retired.
 DOC_CLASSIFIER_VISION_BASE  = config("DOC_CLASSIFIER_VISION_BASE", default="https://api.groq.com/openai/v1")
 DOC_CLASSIFIER_VISION_MODEL = config("DOC_CLASSIFIER_VISION_MODEL", default="")
 DOC_CLASSIFIER_VISION_KEY   = (config("DOC_CLASSIFIER_VISION_KEY", default="")
@@ -609,6 +603,26 @@ CACHES = {
         "OPTIONS": {"MAX_ENTRIES": 100_000, "CULL_FREQUENCY": 4},
     },
 }
+
+# ── Mobile upload-and-extract (apps/registry/tasks.py) ──────────────────────────
+# Runs on the Celery setup above, the same way the My Reports bulk pipeline does: the
+# database is the queue (ExtractionBatch / ExtractionItem), and two scheduled jobs on the
+# default "celery" queue do the work (apps/registry/tasks.py). They ignore results and set
+# their own time limits on the task decorators.
+# Publishing must still fail fast: web requests do publish (core.celery_runtime.send, e.g. to
+# wake the AI queue), and they run inside a gunicorn worker (only a handful exist), so an
+# unreachable broker has to become a quick error, not a hang.
+CELERY_TASK_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_PUBLISH_RETRY_POLICY = {"max_retries": 1, "interval_start": 0, "interval_step": 0.2, "interval_max": 0.5}
+if CELERY_BROKER_URL.startswith(("redis://", "rediss://")):
+    # Redis (production): give up quickly on a dead connection instead of waiting.
+    CELERY_BROKER_TRANSPORT_OPTIONS = {**CELERY_BROKER_TRANSPORT_OPTIONS,
+                                       "socket_connect_timeout": 3, "socket_timeout": 5}
+
+# Total bytes allowed in one bulk extraction batch (on top of the per-file
+# caps already enforced in portal_extraction_views.py).
+EXTRACTION_BATCH_MAX_BYTES = config("EXTRACTION_BATCH_MAX_BYTES", default=175 * 1024 * 1024, cast=int)
 
 # ── License tier constants ───────────────────────────────────────────────────
 class LicenseTier:

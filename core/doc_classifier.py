@@ -207,7 +207,7 @@ def _pdf_text(raw: bytes) -> str:
     try:
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(raw))
-        return "\n".join((page.extract_text() or "") for page in reader.pages[:8])
+        return "\n".join((page.extract_text() or "") for page in reader.pages[:30])
     except Exception:
         logger.warning("doc_classifier: pdf text extraction failed", exc_info=True)
         return ""
@@ -221,22 +221,17 @@ def _pdf_encrypted(raw: bytes) -> bool:
         return False
 
 
-def _locate_tesseract():
-    """Back-compat re-export; the real implementation lives in core.ocr."""
-    ocr._locate_tesseract()
-
-
 def _ocr_text(raw: bytes, mime_type: str):
     """
     Returns (text, mean_confidence 0..100 or None) — the 0..100 scale is kept
-    for classify()'s low-confidence check. The engine (RapidOCR / PaddleOCR /
-    Tesseract) is chosen by core.ocr per settings.DOC_OCR_ENGINE.
+    for classify()'s low-confidence check. The engine (RapidOCR) is chosen by
+    core.ocr per settings.DOC_OCR_ENGINE.
 
     Image-only PDFs are now rasterised (PyMuPDF) and OCR'd page by page
     instead of being skipped.
     """
     if mime_type == "application/pdf":
-        pages = ocr.pdf_page_images(raw, max_pages=3)
+        pages = ocr.pdf_page_images(raw, max_pages=30)
         if not pages:
             return "", None
         texts, confs = [], []
@@ -252,6 +247,79 @@ def _ocr_text(raw: bytes, mime_type: str):
 
     r = ocr.run(raw)
     return r.text, (r.conf * 100.0 if r.conf is not None else None)
+
+
+def _pdf_page_count(raw: bytes) -> int:
+    try:
+        from pypdf import PdfReader
+        return len(PdfReader(io.BytesIO(raw)).pages)
+    except Exception:
+        return 0
+
+
+class ExtractionError(Exception):
+    """Raised by extract_text() when a file can't be opened at all (not a classification concern)."""
+
+    def __init__(self, code: str, message: str):
+        self.code, self.message = code, message
+        super().__init__(message)
+
+
+def extract_document(raw: bytes, mime_type: str) -> dict:
+    """
+    Extraction-only entry point for the upload-and-extract mobile flow: no
+    kind classification, no panel matching, no date extraction, no blur/
+    quality "retake" gate — those are classification-adjacent concerns
+    deliberately deferred to a later phase. Kept independent of classify()
+    (reusing only the same private _pdf_text/_ocr_text helpers) so neither
+    pipeline can be perturbed by future changes to the other.
+
+    Returns the structured result that gets stored as JSON on the item (and
+    is what the later classification stage will read):
+        {version, text, char_count, page_count, confidence, method, mime_type,
+         extracted_at, duration_ms}
+    `method` says how the text was obtained: "pdf_text" (text layer only),
+    "ocr" (no usable text layer / an image), or "pdf_text+ocr" (both).
+    `confidence` is the OCR confidence 0..100, None when OCR never ran.
+
+    Raises ExtractionError for an encrypted PDF — the one pre-extraction
+    guard kept, as crash prevention rather than a classification/quality check.
+    """
+    import time
+    from datetime import datetime, timezone
+
+    started = time.monotonic()
+    is_pdf = mime_type == "application/pdf"
+    if is_pdf and _pdf_encrypted(raw):
+        raise ExtractionError("encrypted", "This PDF is password-protected and couldn't be read.")
+
+    layer_text = _pdf_text(raw).strip() if is_pdf else ""
+    conf = None
+    if len(layer_text) < _MIN_TEXT:
+        ocr_text, conf = _ocr_text(raw, mime_type)
+        ocr_text = (ocr_text or "").strip()
+        text = (layer_text + "\n" + ocr_text).strip() if layer_text else ocr_text
+        method = "pdf_text+ocr" if (layer_text and ocr_text) else ("ocr" if ocr_text or not layer_text else "pdf_text")
+    else:
+        text, method = layer_text, "pdf_text"
+
+    return {
+        "version": 1,
+        "text": text,
+        "char_count": len(text),
+        "page_count": _pdf_page_count(raw) if is_pdf else None,
+        "confidence": conf,
+        "method": method,
+        "mime_type": mime_type,
+        "extracted_at": datetime.now(timezone.utc).isoformat(),
+        "duration_ms": int((time.monotonic() - started) * 1000),
+    }
+
+
+def extract_text(raw: bytes, mime_type: str) -> "tuple[str, float | None]":
+    """(text, ocr_confidence_0_to_100_or_None) — the tuple view of extract_document()."""
+    r = extract_document(raw, mime_type)
+    return r["text"], r["confidence"]
 
 
 # ── kind scoring ────────────────────────────────────────────────────────

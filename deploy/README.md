@@ -156,3 +156,36 @@ rules are unsure about.
   Run `hms-celery-beat` on **one** server only.
 - Separate queues (e.g. `documents` for uploads, `jobs` for scheduled work):
   set `CELERY_QUEUES` per worker and route tasks to them.
+
+## 10. Mobile upload-and-extract (patient app)
+
+The patient app's upload flow (`/api/v1/portal/documents/extract/…`,
+`apps/registry/tasks.py`) follows the same design as My Reports (section 8) and runs on this
+same Celery setup, on the default `celery` queue — no extra service. It only reads the text
+(no classifying or filing yet).
+
+- **Instant / bulk:** the same "Sort instantly up to" setting (Background Jobs → Settings,
+  default 3) decides. Up to that many files are read inside the request. Bigger uploads go to S3
+  first; **Start only marks the batch `queued` in the database** and the scheduled job
+  **"Process mobile bulk uploads"** (every minute) reads the oldest queued files, at most
+  "bulk_batch_limit" (default 25) per run, one after another. The app reads the limit from
+  `GET /portal/documents/extract/config/`.
+- **If Celery isn't running** (no fresh worker or Beat heartbeat) and "inline_fallback" is on,
+  Start reads the batch inside the web server, exactly like My Reports bulk uploads.
+- **Production must use Redis** (`CELERY_BROKER_URL=redis://127.0.0.1:6379/0`) for the queue
+  that carries the scheduled jobs. Start itself no longer depends on Redis being up.
+- **Memory:** every concurrent worker slot loads its own OCR model (~135 MB idle,
+  ~424 MB while reading). On a 2 GB server keep `CELERY_CONCURRENCY=1` in
+  `/etc/hms/celery.env`; the 2 in the example is for an 8 GB `t3.large`. Only one run reads
+  files at a time (a database lock), so overlapping runs or the fallback never add up.
+- **Scheduled jobs:** migration `0061` adds "Process mobile bulk uploads" (every minute) and
+  "Recover mobile uploads" (every 5 minutes; closes stalled batches and fails files stuck in
+  processing). Both are editable on Background Jobs. Beat must be running
+  (`hms-celery-beat`).
+- The files it reads are kept in S3 under `extraction-files/` — never put an expiry
+  rule on that prefix.
+- **Upgrading a database that already has the old-numbered mobile migrations**
+  (0045–0051 from before the merge; they are now 0054–0060): delete those 7 names from
+  `django_migrations`, run `migrate registry 0053`, then
+  `migrate registry 0060_extractionitem_dispatch_tracking --fake`, then `migrate`.
+  A fresh database needs only `migrate`.

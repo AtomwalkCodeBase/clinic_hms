@@ -8,8 +8,8 @@ kind/panel/date). This module is the "read the number" step, run later and
 asynchronously via `manage.py extract_lab_values`, never inline with a
 document upload.
 
-Same conventions as core/doc_classifier_llm.py and core/doc_classifier_vision.py
-on purpose — this is the same kind of call, just a different question:
+Same conventions as core/doc_classifier_llm.py on purpose — this is the same
+kind of call, just a different question:
   - No SDK: a raw OpenAI-compatible /chat/completions POST.
   - A labeller, never a calculator: the prompt forbids inferring, rounding,
     converting, or computing anything not printed. Copy, don't interpret.
@@ -34,9 +34,12 @@ result, not just which document, needs a human's eyes.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import io
 import json
 import logging
+import re
 import time
 
 import requests
@@ -44,21 +47,60 @@ from django.conf import settings
 from django.core.cache import caches
 
 from core import report_types
-from core.doc_classifier_vision import _loads, _prep  # reuse the same tolerant-JSON parse + image downscale/encode
 
 logger = logging.getLogger(__name__)
 
 _MAX_CHARS = 8000          # a results table can run longer than the header text doc_classifier_llm needs
 _MAX_VALUES = 40           # bounds payload size and guards against a hallucinated runaway list
 _CACHE_TTL_TEXT = 60 * 60 * 24 * 30    # 30 days — matches doc_classifier_llm's text TTL
-_CACHE_TTL_VISION = 60 * 60 * 24 * 60  # 60 days — matches doc_classifier_vision's TTL
+_CACHE_TTL_VISION = 60 * 60 * 24 * 60  # 60 days
 _MAX_TRIES = 4
 _MAX_IMAGES = 2
+_MAX_EDGE = 1600  # px, long side — plenty for printed text, keeps the payload small
 # An array of up to _MAX_VALUES analyte objects needs materially more output
 # budget than classification's single flat object (doc_classifier_llm.py's
-# _MAX_TOKENS=1024 / doc_classifier_vision.py's =1024) — start higher, tune
-# against core/extractor_eval_corpus.py if outputs truncate.
+# _MAX_TOKENS=1024) — start higher, tune against core/extractor_eval_corpus.py
+# if outputs truncate.
 _MAX_TOKENS = 2048
+
+
+def _loads(text: str) -> dict:
+    """Parse a model's reply into a dict, tolerating ```json fences and any
+    prose the model wrapped around the object."""
+    s = (text or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```(?:json)?\s*|\s*```$", "", s, flags=re.IGNORECASE).strip()
+    try:
+        obj = json.loads(s)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        pass
+    m = re.search(r"\{.*\}", s, re.DOTALL)
+    if m:
+        try:
+            obj = json.loads(m.group(0))
+            return obj if isinstance(obj, dict) else {}
+        except Exception:
+            pass
+    return {}
+
+
+def _prep(image_bytes: bytes) -> str | None:
+    """PNG/JPEG bytes -> a downscaled 'data:image/jpeg;base64,...' URL."""
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(image_bytes))
+        im = im.convert("RGB")
+        w, h = im.size
+        if max(w, h) > _MAX_EDGE:
+            f = _MAX_EDGE / max(w, h)
+            im = im.resize((max(1, int(w * f)), max(1, int(h * f))))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=82)
+        return "data:image/jpeg;base64," + base64.standard_b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        logger.warning("lab_value_extractor: image prep failed", exc_info=True)
+        return None
 
 _SYSTEM = (
     "You read the RESULTS TABLE of a medical lab report and extract every "

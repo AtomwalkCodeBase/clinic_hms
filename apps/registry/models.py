@@ -612,6 +612,153 @@ class DocumentUploadItem(models.Model):
         return f"item {self.id} [{self.status}] {self.original_filename}"
 
 
+class ExtractionBatch(models.Model):
+    """
+    One bulk (3+ file) upload-and-extract-only batch from the mobile app's
+    Celery upload flow. Deliberately decoupled from DocumentUploadBatch
+    (the unrelated, zero-traffic web folder-upload feature above) and from
+    SharedDocument. Once a file has been read, extraction.file_into_reports() hands its
+    text to a shared_document row (ExtractionItem.document), which then goes through
+    the same keyword rules + AI check as any other My Reports upload.
+    """
+    STATUS_CHOICES = [
+        ("pending", "Pending"),       # created, presigned URLs issued, waiting for client PUTs
+        ("queued", "Queued"),         # client called .../start/; waits in the database for the scheduled job (or the web-server fallback)
+        ("processing", "Processing"),
+        ("done", "Done"),             # every file extracted
+        ("partial", "Partial"),       # finished: some extracted, some failed
+        ("failed", "Failed"),         # finished: nothing extracted
+        ("cancelled", "Cancelled"),   # closed before finishing (abandoned upload, timed out, nothing arrived)
+    ]
+    ACTIVE_STATUSES = ("pending", "queued", "processing")
+    id           = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    awpid        = models.CharField(max_length=30, db_index=True)
+    # The logged-in account that started the upload — usually == awpid, but
+    # differs when uploading on behalf of a linked family member (the
+    # records are filed under the family member's awpid, but the completion
+    # push notification has to reach the device that's actually logged in,
+    # i.e. this account, not the family member who has no app session).
+    initiated_by_awpid = models.CharField(max_length=30, db_index=True, blank=True)
+    total_files  = models.IntegerField(default=0)
+    completed    = models.IntegerField(default=0)
+    failed       = models.IntegerField(default=0)
+    status       = models.CharField(max_length=12, choices=STATUS_CHOICES, default="pending", db_index=True)
+    created_at   = models.DateTimeField(auto_now_add=True)
+    queued_at    = models.DateTimeField(null=True, blank=True)   # /start/ accepted; waiting for the scheduled job
+    started_at   = models.DateTimeField(null=True, blank=True)   # the first file of this batch began
+    finished_at  = models.DateTimeField(null=True, blank=True)
+    # When a file of THIS batch last finished (or the batch was queued/started).
+    # Together with system-wide worker activity it tells a healthy-but-waiting
+    # batch apart from a genuinely stuck one — see tasks.reconcile_stale_batches.
+    last_progress_at = models.DateTimeField(null=True, blank=True)
+    # Set when Start could not check S3. The files stay in S3 and the batch goes
+    # back to "pending" so Start can simply be retried.
+    start_failed_at  = models.DateTimeField(null=True, blank=True)
+
+    # Stored (not computed) so they can be queried and read straight from the row.
+    # Kept in step by apps/registry/tasks.py every time an item finishes.
+    processed        = models.IntegerField(default=0)             # completed + failed — files finished either way
+    progress_percent = models.PositiveSmallIntegerField(default=0)  # 0..100
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "extraction_batch"
+        indexes = [models.Index(fields=["awpid", "status"], name="extract_batch_awpid_status_idx")]
+
+    def __str__(self):
+        return f"extraction batch {self.id} [{self.status}] {self.awpid}"
+
+
+class ExtractionItem(models.Model):
+    """One file within an ExtractionBatch (bulk), or a standalone audit row for a sync upload."""
+    STATUS_CHOICES = [
+        ("uploading", "Uploading"),    # bulk only: waiting for client S3 PUT
+        ("queued", "Queued"),
+        ("processing", "Processing"),
+        ("done", "Done"),
+        ("failed", "Failed"),
+    ]
+    id                = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    batch             = models.ForeignKey(ExtractionBatch, null=True, blank=True,
+                                          on_delete=models.CASCADE, related_name="items")
+    awpid             = models.CharField(max_length=30, db_index=True)  # set even for sync (batch=None)
+    original_filename = models.CharField(max_length=255, blank=True)
+    mime_type         = models.CharField(max_length=100, blank=True)
+    declared_size     = models.IntegerField(default=0)   # bulk: from the manifest; sync: same as file_size
+    file_size         = models.IntegerField(default=0)   # actual bytes of the stored file
+    # Permanent S3 key of the original file, on BOTH paths. Instant path: set
+    # only after the file passed validation. Bulk path: assigned up front (the
+    # phone uploads straight to it) and cleared again if the worker rejects the
+    # file or it never arrives — a file that fails validation is never kept.
+    # (Prefix extraction-files/ is deliberately not a temp/"incoming" prefix:
+    # nothing may put an expiry lifecycle rule on it.)
+    file_key          = models.CharField(max_length=255, blank=True)
+    status            = models.CharField(max_length=12, choices=STATUS_CHOICES, default="uploading", db_index=True)
+    reason            = models.CharField(max_length=160, blank=True)
+    extracted_text    = models.TextField(blank=True)
+    extraction_confidence = models.FloatField(null=True, blank=True)   # 0..100, from OCR; null for pure PDF-text
+    page_count        = models.PositiveSmallIntegerField(null=True, blank=True)
+    # The full structured extraction result (see doc_classifier.extract_document)
+    # — what the later classification stage reads. Includes the text too;
+    # extracted_text is kept as its own column for simple querying.
+    extraction_json   = models.JSONField(null=True, blank=True)
+    # Times a worker has claimed this item. A worker may only write the result
+    # of the attempt it claimed, so a slow/duplicate/late worker can never
+    # overwrite a newer attempt or a state recovery already closed out.
+    attempts          = models.PositiveSmallIntegerField(default=0)
+    started_at        = models.DateTimeField(null=True, blank=True)   # extraction began
+    processed_at      = models.DateTimeField(null=True, blank=True)   # extraction finished (done or failed)
+    created_at        = models.DateTimeField(auto_now_add=True)
+    # The patient hid this finished item from their "Extracted reports" list. Only
+    # hides it: the file, text and row are kept (the later classification stage
+    # reads them). NULL = still showing.
+    dismissed_at      = models.DateTimeField(null=True, blank=True, db_index=True)
+    # The My Reports row (shared_document) this file was handed to once its text was read
+    # (apps/registry/extraction.py: file_into_reports). It carries the second status — the
+    # keyword rules and the AI check (llm_status) — that the phone shows after "Read".
+    # NULL until then, or when the hand-off failed (the text is still kept on this row).
+    document          = models.ForeignKey("registry.SharedDocument", null=True, blank=True,
+                                          on_delete=models.SET_NULL, related_name="extraction_items")
+    # LEGACY, no longer written. The flow used to put one Celery ticket per file on
+    # the queue and re-sent lost ones; now the database IS the queue (see
+    # apps/registry/tasks.py: process_bulk_extractions), so there are no tickets.
+    # Kept because dispatch_count is NOT NULL in databases that already ran
+    # migration 0060 — drop both in a later cleanup migration.
+    dispatched_at     = models.DateTimeField(null=True, blank=True)
+    dispatch_count    = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "extraction_item"
+        indexes = [models.Index(fields=["batch", "status"], name="extract_item_batch_status_idx")]
+
+    def __str__(self):
+        return f"extraction item {self.id} [{self.status}] {self.original_filename}"
+
+
+class PushDeviceToken(models.Model):
+    """
+    One mobile device's Expo push token, for OS-level notifications (bulk
+    extraction batch completion, for now — see apps/registry/tasks.py). Keyed
+    on the token itself: a device switching which patient account is logged
+    in re-registers the same token under the new awpid rather than piling up
+    stale rows.
+    """
+    token      = models.CharField(max_length=200, primary_key=True)
+    awpid      = models.CharField(max_length=30, db_index=True)
+    platform   = models.CharField(max_length=10, blank=True)  # ios | android
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "push_device_token"
+        indexes = [models.Index(fields=["awpid"], name="push_token_awpid_idx")]
+
+    def __str__(self):
+        return f"push token for {self.awpid} ({self.platform})"
+
+
 class SharedVital(models.Model):
     """
     Sanitized vital snapshot written on finalization.

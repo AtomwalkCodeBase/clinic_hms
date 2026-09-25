@@ -364,6 +364,26 @@ def presigned_put_url(key: str, *, mime_type: str, expires_in: int = None) -> st
         return ""
 
 
+def head_size(key: str):
+    """
+    Size in bytes of the object at `key`, or None if it isn't there — WITHOUT
+    downloading it. Lets callers refuse an oversize object before reading it
+    into memory (a presigned PUT can't cap size). The app's IAM user has no
+    s3:ListBucket, so S3 answers a HEAD for a missing key with 403 rather than
+    404; both mean "not there". Any other error (network, throttling) is
+    raised — it says nothing about whether the object exists.
+    """
+    from botocore.exceptions import ClientError
+
+    client = _client()
+    try:
+        return client.head_object(Bucket=settings.AWS_S3_BUCKET, Key=key)["ContentLength"]
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in ("404", "403", "NoSuchKey", "NotFound"):
+            return None
+        raise
+
+
 def get_bytes(key: str) -> bytes:
     """Read an object's full body. Raises StorageError if storage is unset."""
     client = _client()

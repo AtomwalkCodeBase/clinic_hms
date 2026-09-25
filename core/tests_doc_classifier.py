@@ -8,7 +8,7 @@ DB-independent tests for the outside-document classifier:
   * multi-panel  (a health-package PDF -> categories[])
   * image gate   (blur / dark / tiny -> unreadable)
 
-The sample text mimics what pypdf / Tesseract would hand back for a real
+The sample text mimics what pypdf / RapidOCR would hand back for a real
 Indian lab report or prescription — headers, analyte names, "Sample
 Collected On" lines. No real patient data.
 
@@ -557,7 +557,7 @@ class PdfPathTests(_Det):
 
 
 class OcrEngineTests(SimpleTestCase):
-    """core.ocr — the pluggable OCR layer (RapidOCR primary, Tesseract fallback)."""
+    """core.ocr — the pluggable OCR layer (RapidOCR only)."""
 
     def test_empty_bytes(self):
         r = ocr.run(b"")
@@ -592,66 +592,19 @@ class OcrEngineTests(SimpleTestCase):
             self.assertEqual(ocr.warmup(), "")   # no-op second call, no raise
         ocr._WARMED = False
 
-    def test_tesseract_psm_defaults_to_6(self):
-        self.assertEqual(ocr._tesseract_psm(), 6)
-
-    def test_tesseract_psm_is_configurable(self):
-        with self.settings(DOC_OCR_TESSERACT_PSM=11):
-            self.assertEqual(ocr._tesseract_psm(), 11)
-
-
-@override_settings(DOC_OCR_ENGINE="both")
-class OcrCombinedModeTests(SimpleTestCase):
-    """DOC_OCR_ENGINE="both" — run every backend and concatenate their text,
-    instead of stopping at the first one that returns something (2026-09-22:
-    measured 16/16 vs. 15/16 for either engine alone on real photos — the
-    two backends miss different documents)."""
-
-    def test_both_texts_are_concatenated(self):
+    def test_removed_engine_names_fall_back_to_rapidocr(self):
+        # "tesseract" and "both" no longer exist: they behave like "auto" (RapidOCR only)
         import unittest.mock as mock
-        with mock.patch.dict(ocr._BACKENDS, {
-            "rapidocr": lambda raw: ("rapid saw this", 0.9),
-            "tesseract": lambda raw: ("tess saw this", 0.8),
-        }):
-            r = ocr.run(b"\x89PNG\r\n")
-        self.assertIn("rapid saw this", r.text)
-        self.assertIn("tess saw this", r.text)
-        self.assertEqual(r.engine, "rapidocr+tesseract")
-        self.assertAlmostEqual(r.conf, 0.85)
+        for pref in ("tesseract", "both"):
+            with self.settings(DOC_OCR_ENGINE=pref):
+                with mock.patch.dict(ocr._BACKENDS, {"rapidocr": lambda raw: ("rapid text", 0.9)}):
+                    r = ocr.run(b"\x89PNG\r\n")
+                self.assertEqual(r.text, "rapid text")
+                self.assertEqual(r.engine, "rapidocr")
 
-    def test_one_backend_empty_still_returns_the_other(self):
-        import unittest.mock as mock
-        with mock.patch.dict(ocr._BACKENDS, {
-            "rapidocr": lambda raw: ("", None),
-            "tesseract": lambda raw: ("only tesseract read this", 0.7),
-        }):
-            r = ocr.run(b"\x89PNG\r\n")
-        self.assertEqual(r.text, "only tesseract read this")
-        self.assertEqual(r.engine, "tesseract")
-
-    def test_one_backend_unavailable_does_not_break_the_other(self):
-        import unittest.mock as mock
-        def _raise(raw):
-            raise ocr._Unavailable("not installed")
-        with mock.patch.dict(ocr._BACKENDS, {
-            "rapidocr": _raise,
-            "tesseract": lambda raw: ("tesseract text", 0.6),
-        }):
-            r = ocr.run(b"\x89PNG\r\n")
-        self.assertEqual(r.text, "tesseract text")
-
-    def test_both_empty_gives_empty_result(self):
-        import unittest.mock as mock
-        with mock.patch.dict(ocr._BACKENDS, {
-            "rapidocr": lambda raw: ("", None),
-            "tesseract": lambda raw: ("", None),
-        }):
-            r = ocr.run(b"\x89PNG\r\n")
-        self.assertEqual(r.text, "")
-        self.assertEqual(r.engine, "")
-
-    def test_available_reports_both(self):
-        self.assertEqual(ocr.available(), "rapidocr+tesseract")
+    def test_tesseract_is_gone(self):
+        self.assertFalse(hasattr(ocr, "_tesseract"))
+        self.assertNotIn("tesseract", ocr._BACKENDS)
 
 
 @override_settings(DOC_CLASSIFIER_LLM="")

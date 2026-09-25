@@ -27,7 +27,11 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "atomwalk.settings.development")
 
 app = Celery("atomwalk")
 app.config_from_object("django.conf:settings", namespace="CELERY")
-app.autodiscover_tasks(["core"], related_name="tasks")
+# core/tasks.py: the My Reports document pipeline and scheduled jobs.
+# apps/registry/tasks.py: the mobile upload-and-extract scheduled jobs
+# (process_bulk_extractions every minute, periodic_reconcile every 5 minutes).
+# Both run on the same worker (default "celery" queue).
+app.autodiscover_tasks(["core", "apps.registry"], related_name="tasks")
 
 _HEARTBEAT = 10
 _stop = threading.Event()

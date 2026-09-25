@@ -20,6 +20,12 @@ from .portal_views import (
     PortalHealthTimelineView, PortalNotificationsView, PortalNotificationMarkReadView,
     PortalEmergencyTokenView,
 )
+from .portal_extraction_views import (
+    PortalExtractSyncView, PortalExtractBulkCreateView,
+    PortalExtractBulkStartView, PortalExtractBulkStatusView, PortalExtractConfigView,
+    PortalPushTokenRegisterView,
+    PortalExtractedItemsView, PortalExtractedItemDetailView, PortalExtractedItemsDismissView,
+)
 from .records_share_views import (
     RecordsShareCreateView, RecordsShareDecisionView, RecordsShareEndView,
     RecordsShareDownloadDecisionView, RecordsShareMineView,
@@ -49,6 +55,15 @@ urlpatterns = [
     path("documents/zip/",                  PortalDocumentZipView.as_view(), name="portal-documents-zip"),
     path("documents/status/",               PortalDocumentStatusView.as_view(), name="portal-documents-status"),
     path("documents/review/",               PortalDocumentReviewView.as_view(), name="portal-documents-review"),
+    path("documents/extract/config/",       PortalExtractConfigView.as_view(), name="portal-extract-config"),
+    path("documents/extract/sync/",         PortalExtractSyncView.as_view(), name="portal-extract-sync"),
+    path("documents/extract/bulk/",         PortalExtractBulkCreateView.as_view(), name="portal-extract-bulk"),
+    path("documents/extract/bulk/<uuid:batch_id>/start/", PortalExtractBulkStartView.as_view(), name="portal-extract-bulk-start"),
+    path("documents/extract/bulk/<uuid:batch_id>/status/", PortalExtractBulkStatusView.as_view(), name="portal-extract-bulk-status"),
+    path("documents/extract/items/",                PortalExtractedItemsView.as_view(), name="portal-extract-items"),
+    path("documents/extract/items/dismiss/",        PortalExtractedItemsDismissView.as_view(), name="portal-extract-items-dismiss"),
+    path("documents/extract/items/<uuid:item_id>/", PortalExtractedItemDetailView.as_view(), name="portal-extract-item-detail"),
+    path("push-token/",                     PortalPushTokenRegisterView.as_view(), name="portal-push-token-register"),
     path("documents/<int:doc_id>/",         PortalDocumentDetailView.as_view(), name="portal-document-detail"),
     path("documents/<int:doc_id>/lab-values/", PortalDocumentLabValuesView.as_view(), name="portal-document-lab-values"),
     path("lab-orders/",                     PortalLabOrderListView.as_view(), name="portal-lab-orders"),

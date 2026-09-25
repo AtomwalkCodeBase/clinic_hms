@@ -70,8 +70,7 @@ _CACHE_TTL = 60 * 60 * 24 * 30   # a given OCR text always classifies the same
 # an internal scratchpad before the answer; 300 was too tight and Groq was
 # returning 400 json_validate_failed ("max completion tokens reached before
 # generating a valid document") on some inputs — silently caught and treated
-# as "LLM unavailable", not surfaced. Matches doc_classifier_vision.py's
-# _MAX_TOKENS, which hit the same failure mode for the same reason.
+# as "LLM unavailable", not surfaced.
 _MAX_TOKENS = 1024
 
 _SYSTEM = (

@@ -41,6 +41,20 @@ TASK_CATALOG = {
         "tenant_aware": False,
         "schedulable": True,
     },
+    "apps.registry.tasks.process_bulk_extractions": {
+        "label": "Process mobile bulk uploads",
+        "description": "Reads the oldest queued files of the patient app's bulk uploads and hands each text to My Reports, at most 'bulk_batch_limit' files per run.",
+        "kwargs": {"limit": None, "budget_seconds": 240},
+        "tenant_aware": False,
+        "schedulable": True,
+    },
+    "apps.registry.tasks.periodic_reconcile": {
+        "label": "Recover mobile uploads",
+        "description": "Closes stalled or abandoned mobile bulk uploads and fails files stuck in processing.",
+        "kwargs": {},
+        "tenant_aware": False,
+        "schedulable": True,
+    },
     "core.generate_reminders": {
         "label": "Appointment & follow-up reminders",
         "description": "In-app reminders. All hospitals, or one hospital when scoped.",
