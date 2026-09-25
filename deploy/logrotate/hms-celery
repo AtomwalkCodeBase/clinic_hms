@@ -1,0 +1,12 @@
+# /etc/logrotate.d/hms-celery — rotate the Celery + document-pipeline logs daily, keep 14.
+# copytruncate: the running worker/beat keep their file handle.
+@APP_DIR@/logs/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su @APP_USER@ @APP_USER@
+}

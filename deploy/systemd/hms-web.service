@@ -1,0 +1,25 @@
+# OPTIONAL — Django behind gunicorn, if the web app isn't already run some
+# other way on the server. install.sh only installs this with --with-web.
+# nginx (TLS, static files) proxies to 127.0.0.1:8000.
+[Unit]
+Description=HMS Django (gunicorn)
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@APP_USER@
+Group=@APP_USER@
+WorkingDirectory=@APP_DIR@
+Environment=DJANGO_SETTINGS_MODULE=atomwalk.settings.production
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/hms/celery.env
+ExecStart=@APP_DIR@/venv/bin/gunicorn atomwalk.wsgi:application \
+    --bind 127.0.0.1:8000 --workers ${GUNICORN_WORKERS} --timeout 120 \
+    --access-logfile - --error-logfile -
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

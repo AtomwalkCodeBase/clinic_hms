@@ -1571,6 +1571,55 @@ _MAX_DOC_BASE64_CHARS = 15_500_000  # ≈11MB raw file — a modern phone photo 
 #                                     under DATA_UPLOAD_MAX_MEMORY_SIZE (settings) and the
 #                                     proxy's client_max_body_size.
 
+def _pipeline_fields(d):
+    """Background-pipeline + classifier-verdict fields shared by the list and
+    status endpoints (see SharedDocument, HMS-DOC-ASYNC)."""
+    return {
+        "processing_status": d.processing_status,
+        "processing_error": d.processing_error,
+        "classification_status": d.classification_status,
+        "classification_confidence": d.classification_confidence,
+        "rule_doc_type": d.rule_doc_type,
+        "rule_confidence": d.rule_confidence,
+        "llm_doc_type": d.llm_doc_type,
+        "llm_confidence": d.llm_confidence,
+        "human_doc_type": d.human_doc_type,
+        "human_action": d.human_action,
+        "folder": d.folder,
+        "llm_status": d.llm_status,
+        "processing_route": d.processing_route,
+    }
+
+
+def _machine_type(doc):
+    """The type the machine proposed — what the verify screen pre-fills. An
+    unsorted row is stored as "other", so its proposal is the LLM's or the
+    rules' guess when they had one."""
+    from apps.registry.models import SharedDocument
+    real = {k for k, _ in SharedDocument.DOC_TYPE_CHOICES} - {"other", *SharedDocument.STAFF_ONLY_DOC_TYPES}
+    # Same rule as the screen (reportMeta.suggestedType): a confident "not
+    # medical" from the AI is proposed as Other, whatever the keywords said.
+    if doc.llm_doc_type == "not_medical" and (doc.llm_confidence or 0) >= 0.8:
+        return "other"
+    if doc.doc_type in real:
+        return doc.doc_type
+    for guess in (doc.llm_doc_type, doc.rule_doc_type):
+        if guess in real:
+            return guess
+    return doc.doc_type or "other"
+
+
+def _record_human_label(doc, action, doc_type):
+    """Store the person's verdict (the ground truth the rule/LLM verdicts are
+    scored against) and close the classification. Caller saves."""
+    from django.utils import timezone
+    doc.human_action = action
+    doc.human_doc_type = doc_type
+    doc.human_at = timezone.now()
+    doc.classification_status = "closed" if action != "rejected" else "partial"
+    return ["human_action", "human_doc_type", "human_at", "classification_status"]
+
+
 class PortalDocumentListCreateView(APIView):
     """
     GET  /api/v1/portal/documents/  — patient's own uploaded documents (no file_data)
@@ -1620,7 +1669,13 @@ class PortalDocumentListCreateView(APIView):
               .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
               .exclude(id__in=linked_hw_ids)
               .order_by("-created_at"))
-        page_items, meta = paginate_queryset(request, qs)
+        # ?to_verify=1 — every upload still waiting for its one human check
+        # (the organize/review screen loads them all at once, 100+ included).
+        to_verify = (request.query_params.get("to_verify") or "") in ("1", "true")
+        if to_verify:
+            qs = (qs.filter(uploaded_by="patient", classification_status__in=("pending", "partial"))
+                    .exclude(verification_status="verified"))
+        page_items, meta = paginate_queryset(request, qs, max_page_size=1000 if to_verify else 100)
         results = [{
             "id":         d.id,
             "title":      d.title,
@@ -1644,6 +1699,7 @@ class PortalDocumentListCreateView(APIView):
             "doctor_label": d.doctor_label,
             "source_tenant_id": d.source_tenant_id,
             "handwritten_doc_id": hw_by_base.get(d.source_ref),
+            **_pipeline_fields(d),
         } for d in page_items]
         return Response({"results": results, "pagination": meta})
 
@@ -1693,9 +1749,15 @@ class PortalDocumentListCreateView(APIView):
             target_identity = PatientIdentity.objects.using("default").filter(awpid=target_awpid).first()
             target_full_name = target_identity.full_name if target_identity else acct.full_name
 
-        # ── My Reports pipeline: QR verify → dedup → classify → PDF ──────────
+        # ── My Reports pipeline: QR verify → dedup → store → route ───────────
+        # Up to instant_max_files files uploaded together are sorted inside
+        # this request (the response carries the result). A bigger upload is
+        # left "queued" for the periodic "Process bulk uploads" job, and the
+        # page polls /portal/documents/status/ for its progress. The LLM check
+        # always follows on its own queue (core/pipeline/llm_queue.py).
         import base64, hashlib
-        from core import qr_token as _qt, doc_classifier as _dc, normalise as _nz
+        from core import qr_token as _qt
+        from core.pipeline import log as plog, routing, processing
 
         try:
             raw = base64.b64decode(file_data.split(",", 1)[1]) if "," in file_data else b""
@@ -1704,18 +1766,12 @@ class PortalDocumentListCreateView(APIView):
         content_hash = hashlib.sha256(raw).hexdigest() if raw else ""
 
         public_document_id = ""
-        verification_status = "unverified"
+        verification_status = "needs_review"
         classification_method = ""
-        classification_confidence = None
-        document_date = None
-        review_state = "filed"
-        report_categories = []
-        category_method = ""
-        category_confidence = None
-        collection_date = None
-        date_source = ""
-        cr = None
-        review_needs = []           # subset of kind|category|date|file — see SharedDocument.review_needs
+        classification_status = "pending"
+        # Hidden from other hospitals (get_shared_history skips "unsorted")
+        # until the pipeline has filed it.
+        review_state = "unsorted"
 
         # 1. QR path — the phone decoded the hospital QR and posted the token.
         qr_tok = (d.get("qr_token") or "").strip()
@@ -1728,6 +1784,33 @@ class PortalDocumentListCreateView(APIView):
                 public_document_id = v.public_document_id
                 verification_status = "verified"
                 classification_method = "qr"
+                classification_status = "closed"
+                review_state = "filed"
+
+        # 1b. "Organize manually" — the patient already chose the type (and
+        #     optionally panel / date / folder) before uploading. Final: no
+        #     OCR, no rules, no LLM; the worker only converts it to PDF.
+        manual = str(d.get("manual") or "").strip().lower() in ("1", "true", "yes")
+        report_categories, document_date, folder = [], None, (str(d.get("folder") or "").strip()[:60])
+        if manual and classification_method != "qr":
+            from datetime import date as _date
+            from core import report_types as _rt
+            if doc_type not in dict(SharedDocument.DOC_TYPE_CHOICES) or doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
+                return error("Pick a type for this document.", errors={"doc_type": "Required."})
+            if doc_type == "lab_report":
+                report_categories = [c for c in (d.get("report_categories") or []) if c in _rt.PANELS_BY_SLUG]
+            if d.get("document_date"):
+                try:
+                    y, m, day = (int(x) for x in str(d["document_date"])[:10].split("-"))
+                    document_date = _date(y, m, day)
+                except Exception:
+                    return error("document_date must be YYYY-MM-DD.")
+                if document_date > _date.today():
+                    return error("That date is in the future.")
+            classification_method = "patient_manual"
+            classification_status = "closed"
+            verification_status = "unverified"
+            review_state = "filed"
 
         # 2. De-duplication — by hospital id (QR path) or exact content hash.
         force = str(d.get("force") or "").strip().lower() in ("1", "true", "yes")
@@ -1747,69 +1830,8 @@ class PortalDocumentListCreateView(APIView):
                 "existing_doc_type": existing.doc_type,
             }, status=200)
 
-        # 3. No QR — quality gate, then classify kind + panel + date from the
-        #    page text (OCR when there's no text layer). Anything the
-        #    classifier isn't sure of lands in the review tray, which asks the
-        #    patient only for the field(s) that failed.
-        quality_reason = ""
-        quality_message = ""
-        if classification_method != "qr":
-            try:
-                cr = _dc.classify(raw, mime_type)
-                # Clearly not a medical document — don't save it at all.
-                if getattr(cr, "non_medical", False):
-                    return Response({
-                        "skipped": True,
-                        "kind": "not_medical",
-                        "reason": "This doesn't look like a medical document, so it "
-                                  "wasn't saved. My Reports is for prescriptions, lab "
-                                  "reports and scans.",
-                    }, status=200)
-                classification_method = cr.method
-                classification_confidence = cr.confidence
-                document_date = cr.doc_date
-                collection_date = cr.collection_date
-                date_source = cr.date_source
-                if cr.unreadable:
-                    # keep the file, classify nothing — Retake / Enter details.
-                    # Carry the SPECIFIC reason (password-protected / blurry /
-                    # dark / low-res) through to the patient, not a generic one.
-                    doc_type = "other"
-                    review_state = "unsorted"
-                    verification_status = "needs_review"
-                    quality_reason = cr.quality_reason
-                    quality_message = cr.quality_message
-                    review_needs = ["file"]
-                elif cr.confident:
-                    doc_type = cr.doc_type
-                    review_state = "filed" if not cr.needs else "unsorted"
-                    if cr.needs:
-                        verification_status = "needs_review"
-                        review_needs = list(cr.needs)
-                    if cr.doc_type == "lab_report":
-                        report_categories = list(cr.categories)
-                        category_confidence = cr.category_confidence
-                        category_method = "keyword" if cr.method == "ocr_keyword" else cr.method
-                else:
-                    doc_type = "other"
-                    review_state = "unsorted"
-                    verification_status = "needs_review"
-                    review_needs = list(cr.needs) or ["kind"]
-            except Exception:
-                logger.exception("doc classify failed; parking upload in Unsorted")
-                doc_type = "other"
-                review_state = "unsorted"
-                verification_status = "needs_review"
-                classification_method = "ocr_keyword"
-                review_needs = ["kind"]
-
-        # 4. Normalise every upload to a PDF (images become a single-page PDF).
-        try:
-            pdf_bytes, mime_type = _nz.to_pdf(raw, mime_type)
-            file_data = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
-        except Exception:
-            logger.exception("PDF normalise failed; storing the original file")
-
+        # 3. Store the ORIGINAL bytes; the worker classifies from them and
+        #    swaps in the normalised PDF when it's done.
         identity = blob_storage.identity_slug(name=target_full_name, identifier=target_awpid)
         try:
             file_key = blob_storage.upload_data_uri(
@@ -1829,34 +1851,50 @@ class PortalDocumentListCreateView(APIView):
             detail=title, name=target_full_name, identifier=target_awpid,
         )
 
+        # Small upload → sorted right here, the result goes back in this
+        # response. Big upload (more files than instant_max_files sent
+        # together) → the periodic "Process bulk uploads" job sorts it.
+        route = routing.route_for(d.get("batch_size"), manual=classification_method == "patient_manual",
+                              qr_verified=classification_method == "qr")
+
         doc = SharedDocument.objects.using("default").create(
             awpid=target_awpid, title=title, doc_type=doc_type,
             file_name=file_name, mime_type=mime_type, file_data=file_key,
             uploaded_by="patient", source_tenant_id=None, source_ref=source_ref,
             public_document_id=public_document_id, content_hash=content_hash,
             classification_method=classification_method,
-            classification_confidence=classification_confidence,
             verification_status=verification_status, review_state=review_state,
-            document_date=document_date, collection_date=collection_date,
-            date_source=date_source, report_categories=report_categories,
-            category_method=category_method, category_confidence=category_confidence,
-            review_notes=quality_message, review_needs=review_needs,
+            processing_status="queued", classification_status=classification_status,
+            processing_route=route,
+            report_categories=report_categories, document_date=document_date, folder=folder,
+            **({"date_source": "patient", "category_method": "patient_confirmed" if report_categories else "",
+                "human_doc_type": doc_type, "human_action": "manual", "human_at": timezone.now()}
+               if classification_method == "patient_manual" else {}),
         )
+        plog.event(doc.id, "UPLOADED", f'"{title}" · batch of {d.get("batch_size") or 1} · route={route}'
+                                       + (" · filed by the patient" if classification_method == "patient_manual" else ""))
+        if route == "instant":
+            processing.process_document(doc.id)   # read + rules + file, now (the LLM check stays queued)
+            doc.refresh_from_db()
+        else:
+            # "Process bulk uploads" picks it up — or, with Celery down, the
+            # in-process fallback does.
+            routing.bulk_fallback(doc.id)
         return Response({
             "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,
             "file_name": doc.file_name, "mime_type": doc.mime_type,
             "source_ref": doc.source_ref, "created_at": doc.created_at,
-            "review_state": doc.review_state,
+            "review_state": doc.review_state, "review_needs": doc.review_needs or [],
+            "report_categories": doc.report_categories or [],
+            "document_date": doc.document_date,
             "verification_status": doc.verification_status,
             "classification_method": doc.classification_method,
-            "report_categories": doc.report_categories,
-            "document_date": doc.document_date,
-            "needs": review_needs,
-            "review_needs": review_needs,
-            "unreadable": bool(quality_reason),
-            "quality_reason": quality_reason,
-            "quality_message": quality_message,
-        }, status=201)
+            "processing_status": doc.processing_status,
+            "processing_route": route,
+            "classification_status": doc.classification_status,
+            "rule_doc_type": doc.rule_doc_type, "rule_confidence": doc.rule_confidence,
+            "llm_status": doc.llm_status,
+        }, status=201 if doc.processing_status == "done" else 202)
 
 
 class PortalDocumentDetailView(APIView):
@@ -1958,6 +1996,9 @@ class PortalDocumentDetailView(APIView):
 
         d = request.data
         fields = ["review_state", "verification_status", "classification_method"]
+        if doc.processing_status in ("queued", "extracting", "classifying"):
+            return error("This file is still being processed — try again in a moment.", status=409)
+        auto_type = _machine_type(doc)
 
         new_type = (d.get("doc_type") or "").strip()
         if new_type:
@@ -2011,6 +2052,9 @@ class PortalDocumentDetailView(APIView):
         doc.verification_status = "unverified" if not still_needs else "needs_review"
         doc.classification_method = "patient_confirmed"
         fields += ["review_needs"]
+        if new_type:
+            # Keeping the machine's guess = a thumbs-up; anything else = a change.
+            fields += _record_human_label(doc, "accepted" if new_type == auto_type else "changed", new_type)
         doc.save(using="default", update_fields=list(dict.fromkeys(fields)))
         return success(data={
             "id": doc.id, "doc_type": doc.doc_type,
@@ -2061,6 +2105,181 @@ class PortalDocumentDetailView(APIView):
                 t.deleted_at = now
                 t.save(using="default", update_fields=["deleted_at"])
         return success(data={"id": doc.id, "deleted": True})
+
+
+class PortalDocumentStatusView(APIView):
+    """
+    GET /api/v1/portal/documents/status/?ids=1,2,3
+
+    Cheap poll for the upload progress bar: the pipeline state of the given
+    documents (or, with no ids, of every one still in flight for the selected
+    patient). Returns {items: [...], in_flight: <count>}.
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request):
+        from apps.registry.models import SharedDocument
+        from core.pipeline.processing import IN_FLIGHT
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        base = SharedDocument.objects.using("default").filter(
+            awpid=target_awpid, deleted_at__isnull=True,
+        ).exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
+
+        raw_ids = (request.query_params.get("ids") or "").strip()
+        if raw_ids:
+            ids = [int(x) for x in raw_ids.split(",") if x.strip().isdigit()][:300]
+            qs = base.filter(id__in=ids)
+        else:
+            qs = base.filter(processing_status__in=IN_FLIGHT)
+        rows = list(qs.order_by("id")[:300])
+        # Place in line for queued files ("3 ahead"), across all patients —
+        # the worker takes them oldest first.
+        queued = list(SharedDocument.objects.using("default")
+                      .filter(processing_status="queued", deleted_at__isnull=True)
+                      .order_by("id").values_list("id", flat=True)[:2000])
+        busy = SharedDocument.objects.using("default").filter(
+            processing_status__in=("extracting", "classifying")).count()
+        pos = {doc_id: i for i, doc_id in enumerate(queued)}
+        items = [{
+            "id": d.id, "title": d.title, "doc_type": d.doc_type,
+            "review_state": d.review_state, "review_needs": d.review_needs or [],
+            "report_categories": d.report_categories or [],
+            "review_notes": d.review_notes,
+            "queue_ahead": (pos[d.id] + busy) if d.id in pos else None,
+            **_pipeline_fields(d),
+        } for d in rows]
+        return success(data={
+            "items": items,
+            "in_flight": base.filter(processing_status__in=IN_FLIGHT).count(),
+        })
+
+
+class PortalDocumentReviewView(APIView):
+    """
+    POST /api/v1/portal/documents/review/
+      { "items": [ {"id": 12, "action": "accept"},
+                   {"id": 13, "action": "change", "doc_type": "lab_report",
+                    "report_categories": ["cbc"], "document_date": "2026-09-01"},
+                   {"id": 14, "action": "reject"} ] }
+
+    The patient's verdict on the automatic classification, many rows in one
+    commit:
+      accept — thumbs up: keep the type shown (optionally `doc_type` = the
+               suggestion the screen displayed for an unsorted row)
+      change — the type (and panel/date) the patient says it really is
+      reject — "not a medical record": removed (soft-deleted), verdict kept
+    accept/change close the classification (classification_status=closed)
+    and store human_doc_type — the label the rule/LLM verdicts are scored
+    against. Hospital-verified (QR) rows and rows still processing are
+    skipped and reported back.
+    """
+    permission_classes = [IsPatient]
+
+    def post(self, request):
+        from datetime import date as _date
+
+        from apps.registry.models import SharedDocument
+        from core import report_types as _rt
+        from core.pipeline.processing import IN_FLIGHT
+
+        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        items = request.data.get("items") or []
+        if not isinstance(items, list) or not items:
+            return error("items is required.")
+        if len(items) > 300:
+            return error("At most 300 documents per review.")
+
+        valid_types = dict(SharedDocument.DOC_TYPE_CHOICES)
+        by_id = {int(i.get("id")): i for i in items
+                 if isinstance(i, dict) and str(i.get("id") or "").isdigit()}
+        docs = {d.id: d for d in SharedDocument.objects.using("default").filter(
+            pk__in=list(by_id), awpid=target_awpid, deleted_at__isnull=True,
+        ).exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)}
+
+        results = []
+        for doc_id, it in by_id.items():
+            doc = docs.get(doc_id)
+            action = str(it.get("action") or "").strip().lower()
+            if doc is None:
+                results.append({"id": doc_id, "ok": False, "reason": "not found"}); continue
+            if doc.verification_status == "verified":
+                results.append({"id": doc_id, "ok": False, "reason": "set by the issuing hospital"}); continue
+            if doc.processing_status in IN_FLIGHT:
+                results.append({"id": doc_id, "ok": False, "reason": "still processing"}); continue
+            if action not in ("accept", "change", "reject"):
+                results.append({"id": doc_id, "ok": False, "reason": "unknown action"}); continue
+
+            fields = ["review_state", "verification_status", "review_needs", "classification_method"]
+            needs = list(doc.review_needs or [])
+
+            if action == "reject":
+                # Thumbs-down on the verify screen = "this isn't a medical
+                # record, don't keep it". Soft-deleted like any removal; the
+                # row (with the human verdict) stays for the agreement report.
+                fields += _record_human_label(doc, "rejected", "not_medical")
+                doc.classification_status = "closed"
+                doc.deleted_at = timezone.now()
+                fields += ["deleted_at"]
+                doc.save(using="default", update_fields=list(dict.fromkeys(fields)))
+                results.append({"id": doc_id, "ok": True, "removed": True}); continue
+
+            # What the machine said, frozen before any edit — the verdict is
+            # decided by comparing against it, not by which button was hit:
+            # nothing changed = the machine was right (accepted); any edit to
+            # type, panel or date = a human correction (changed).
+            machine = (_machine_type(doc), sorted(doc.report_categories or []), doc.document_date)
+
+            new_type = str(it.get("doc_type") or "").strip() or machine[0]
+            if new_type not in valid_types or new_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
+                results.append({"id": doc_id, "ok": False, "reason": "unknown document type"}); continue
+            if new_type != doc.doc_type:
+                doc.doc_type = new_type
+                fields.append("doc_type")
+
+            if "report_categories" in it and isinstance(it.get("report_categories"), list):
+                doc.report_categories = [c for c in it["report_categories"] if c in _rt.PANELS_BY_SLUG]
+                doc.category_method, doc.category_confidence = "patient_confirmed", 1.0
+                fields += ["report_categories", "category_method", "category_confidence"]
+            if doc.doc_type != "lab_report" and doc.report_categories:
+                doc.report_categories = []
+                fields.append("report_categories")
+
+            if it.get("document_date"):
+                try:
+                    y, m, day = (int(x) for x in str(it["document_date"])[:10].split("-"))
+                    dt = _date(y, m, day)
+                except Exception:
+                    results.append({"id": doc_id, "ok": False, "reason": "bad date"}); continue
+                if dt > _date.today():
+                    results.append({"id": doc_id, "ok": False, "reason": "future date"}); continue
+                doc.document_date, doc.date_source = dt, "patient"
+                fields += ["document_date", "date_source"]
+                needs = [n for n in needs if n != "date"]
+
+            if "folder" in it:
+                doc.folder = str(it.get("folder") or "").strip()[:60]
+                fields.append("folder")
+            # A person has looked at it and confirmed — that files it, even
+            # without a date (lists fall back to the upload date) or a panel
+            # (it sits under "Other lab reports").
+            needs = []
+            doc.review_needs = needs
+            doc.review_state = "filed" if not needs else "unsorted"
+            doc.verification_status = "unverified" if not needs else "needs_review"
+            doc.classification_method = "patient_confirmed"
+            edited = (doc.doc_type, sorted(doc.report_categories or []), doc.document_date) != machine
+            fields += _record_human_label(doc, "changed" if edited else "accepted", doc.doc_type)
+            doc.save(using="default", update_fields=list(dict.fromkeys(fields)))
+            results.append({"id": doc_id, "ok": True, "review_state": doc.review_state,
+                            "review_needs": needs, "human_action": doc.human_action})
+
+        done = sum(1 for r in results if r["ok"])
+        return success(data={"updated": done, "skipped": len(results) - done, "results": results})
 
 
 # ── My Reports: folder / multi-file upload (batch) ───────────────────────────
@@ -4120,6 +4339,32 @@ class PortalNotificationsView(APIView):
                     })
         except Exception as e:
             logger.warning("notifications: skipped vaccination-due (%s)", e)
+
+        # ── My Reports waiting for the patient's check — computed live ──
+        # Every auto-sorted upload waits for one human verification (the
+        # Verify tab). Not stored: it disappears as soon as they're checked.
+        try:
+            from apps.registry.models import SharedDocument
+            from core.pipeline.processing import IN_FLIGHT
+            docs = SharedDocument.objects.using("default").filter(
+                awpid=target_awpid, deleted_at__isnull=True, hidden_at__isnull=True,
+                uploaded_by="patient", classification_status__in=("pending", "partial"),
+            ).exclude(verification_status="verified")
+            ready = docs.exclude(processing_status__in=IN_FLIGHT).count()
+            if ready:
+                sorting = docs.filter(processing_status__in=IN_FLIGHT).count()
+                results.append({
+                    "id":         "reports:verify",
+                    "type":       "reports_to_verify",
+                    "hospital":   None,
+                    "body":       (f"{ready} uploaded report{'s are' if ready != 1 else ' is'} sorted and "
+                                   f"waiting for you to check{f' ({sorting} still sorting)' if sorting else ''}."),
+                    "date":       timezone.localdate().isoformat(),
+                    "created_at": None,
+                    "read":       False,
+                })
+        except Exception as e:
+            logger.warning("notifications: skipped reports-to-verify (%s)", e)
 
         results.sort(key=lambda r: r["date"], reverse=True)
         return success(data={

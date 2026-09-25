@@ -18,6 +18,7 @@ import { ROUTES }    from "../../config/routes.config";
 import APP_CONFIG    from "../../config/app.config";
 import { PatientContext } from "../../context/PatientContext";
 import { ThemeSwitcher } from "./ThemeSwitcher";
+import { UploadChip } from "./UploadChip";
 // New Front Desk sidebar icon set (Lucide) — kept separate from the
 // hand-rolled path-based ICONS map below (used by every other role) rather
 // than redrawing these seven shapes as single-path SVGs. See LUCIDE_ICONS.
@@ -160,6 +161,8 @@ const NAV_BY_ROLE = {
     { type: "link",  label: "Subscriptions",  iconKey: "subscriptions", to: ROUTES.PLATFORM.SUBSCRIPTIONS },
     { type: "link",  label: "Users",          iconKey: "users",         to: ROUTES.PLATFORM.USERS },
     { type: "link",  label: "Vaccination Templates", iconKey: "vaccination", to: ROUTES.PLATFORM.VACCINATION_TEMPLATES },
+    { type: "link",  label: "Document Classifier", iconKey: "ai", to: ROUTES.PLATFORM.DOC_CLASSIFIER },
+    { type: "link",  label: "Background Jobs", iconKey: "compliance", to: ROUTES.PLATFORM.BACKGROUND_JOBS },
   ],
 
   [ROLES.HOSPITAL_ADMIN]: [
@@ -858,6 +861,7 @@ export function AppShell({ children }) {
               also carries Sign Out/Collapse right next to it), so it isn't
               repeated here too. */}
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {user?.role === ROLES.PATIENT && <UploadChip />}
             <div style={{
               fontSize: 12, color: "var(--color-hero-muted)",
               maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",

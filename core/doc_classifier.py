@@ -32,7 +32,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 
-from core import doc_dates, image_quality, ocr, report_types
+from core import doc_dates, doc_rules, image_quality, ocr, report_types
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,9 @@ CONFIDENT = 0.75          # kind gate
 _MIN_TEXT = 40            # chars below which there's nothing to classify on
 
 # ── kind vocabulary ─────────────────────────────────────────────────────
+# Built-in defaults only. The live vocabulary is the doc_classification_rule
+# table (platform admin → Classification rules), read through core.doc_rules;
+# these tuples seeded that table and are the fallback when it is empty.
 _LAB_HINTS = (
     "reference range", "reference interval", "ref. range", "ref range", "bio. ref",
     "normal range", "biological reference", "haemoglobin", "hemoglobin", "platelet",
@@ -151,6 +154,12 @@ class ClassResult:
                                                    # (_NON_MEDICAL_STRONG) — lets a confident text-AI
                                                    # "not medical" verdict override even a keyword-
                                                    # confident real-kind result (see _apply_opinion)
+    # ── per-classifier verdicts, kept separately for the agreement report ──
+    text: str = ""                                # the page text classified
+    rule_kind: str = ""                           # keyword pass verdict (not_medical possible)
+    rule_conf: float = 0.0
+    rule_scores: dict = field(default_factory=dict)   # core.doc_rules.score() output
+    llm_out: dict = field(default_factory=dict)       # raw sanitised text-LLM answer
 
     @property
     def kind(self) -> str:
@@ -252,11 +261,11 @@ def _score(text_lower: str, hints) -> int:
 
 def _classify_kind(lower: str):
     """Returns (doc_type, confidence)."""
-    lab = _score(lower, _LAB_HINTS)
-    rx = _score(lower, _RX_HINTS)
-    img = _score(lower, _IMG_HINTS)
-    dis = _score(lower, _DISCHARGE_HINTS)
-    non = _score(lower, _NON_MEDICAL_HINTS)
+    lab = _score(lower, doc_rules.hints("lab_report"))
+    rx = _score(lower, doc_rules.hints("prescription"))
+    img = _score(lower, doc_rules.hints("scan"))
+    dis = _score(lower, doc_rules.hints("discharge_summary"))
+    non = _score(lower, doc_rules.hints("not_medical"))
 
     # A results table with a reference-range column is the single strongest
     # "this is a lab report" signal; drug lines with a dose pattern the same
@@ -408,7 +417,7 @@ def _apply_opinion(res: "ClassResult", out: dict, src: str) -> None:
             pass
 
 
-def _llm_refine(text: str, res: "ClassResult") -> "ClassResult":
+def _llm_refine(text: str, res: "ClassResult", llm="auto") -> "ClassResult":
     """
     Text-LLM layer — resolves the uncertain tail from the OCR text, and now
     also double-checks a document the keyword pass otherwise considered
@@ -422,7 +431,16 @@ def _llm_refine(text: str, res: "ClassResult") -> "ClassResult":
     `fn(text) -> dict`; a blank API key makes that callable a no-op. Never
     raises.
     """
-    if res.unreadable or res.non_medical or (not res.needs and not res._bill_signal):
+    # llm: "auto" = call the configured LLM for the unsure tail, "off" = skip
+    # (the background pipeline queues it separately — core/pipeline/llm_queue.py),
+    # a dict = a verdict that was already fetched (the queued LLM task) — fold it in.
+    if isinstance(llm, dict):
+        if not llm:
+            return res
+        res.llm_out = dict(llm)
+        _apply_opinion(res, llm, "llm")
+        return res
+    if llm == "off" or res.unreadable or res.non_medical or (not res.needs and not res._bill_signal):
         return res
     try:
         from django.conf import settings
@@ -434,12 +452,13 @@ def _llm_refine(text: str, res: "ClassResult") -> "ClassResult":
     except Exception:
         logger.exception("doc_classifier: text-LLM refine failed; keeping earlier result")
         return res
+    res.llm_out = dict(out)
     _apply_opinion(res, out, "llm")
     return res
 
 
 # ── public API ─────────────────────────────────────────────────────────
-def classify_text(text: str) -> ClassResult:
+def classify_text(text: str, llm="auto") -> ClassResult:
     """
     Deterministic keyword pass + the text-LLM refine. Callers that only have
     text (tests, the QR-less single-page path) use this; `classify()` wraps
@@ -455,8 +474,8 @@ def classify_text(text: str) -> ClassResult:
     res = ClassResult(doc_type=kind, confidence=kconf, method="ocr_keyword", text_len=len(text))
     res._det_conf = kconf
     res._medical_signal = bool(
-        _score(lower, _LAB_HINTS) or _score(lower, _RX_HINTS)
-        or _score(lower, _IMG_HINTS) or _score(lower, _DISCHARGE_HINTS)
+        _score(lower, doc_rules.hints("lab_report")) or _score(lower, doc_rules.hints("prescription"))
+        or _score(lower, doc_rules.hints("scan")) or _score(lower, doc_rules.hints("discharge_summary"))
     )
     if res.confident:
         res.sources["kind"] = "keyword"
@@ -465,10 +484,11 @@ def classify_text(text: str) -> ClassResult:
     # Two tiers: 2+ STRONG commerce/billing tokens force it regardless of
     # _medical_signal (catches a pharmacy bill that also lists drug names —
     # see _NON_MEDICAL_STRONG); otherwise the older, more cautious rule of
-    # 2+ of ANY non-medical hint with zero medical signal at all.
+    # 2+ of ANY non-medical hint (the rules table's "not_medical" keywords)
+    # with zero medical signal at all.
     non_strong = _score(lower, _NON_MEDICAL_STRONG)
     res._bill_signal = non_strong >= 1
-    if non_strong >= 2 or (_score(lower, _NON_MEDICAL_HINTS) >= 2 and not res._medical_signal):
+    if non_strong >= 2 or (_score(lower, doc_rules.hints("not_medical")) >= 2 and not res._medical_signal):
         res.non_medical = True
         res.doc_type = "other"
         res.sources["kind"] = "keyword"
@@ -492,6 +512,12 @@ def classify_text(text: str) -> ClassResult:
             if res.confident:
                 res.sources.setdefault("kind", "keyword")
 
+    # The rule-based verdict, frozen before any LLM/vision layer can move it.
+    res.text = text
+    res.rule_kind = "not_medical" if res.non_medical else res.doc_type
+    res.rule_conf = round(res.confidence, 2)
+    res.rule_scores = doc_rules.score(lower)
+
     dr = doc_dates.extract(text)
     res.doc_date = dr.report_date
     res.collection_date = dr.collection_date
@@ -500,27 +526,28 @@ def classify_text(text: str) -> ClassResult:
     if dr.report_date is not None and dr.confidence >= 0.5:
         res.sources["date"] = "keyword"
 
-    return _llm_refine(text, res)
+    return _llm_refine(text, res, llm)
 
 
-def classify(raw: bytes, mime_type: str, *, check_quality: bool = True) -> ClassResult:
+@dataclass
+class Extracted:
+    text: str = ""
+    thin_text: bool = False
+    early: "ClassResult | None" = None   # set when extraction already decided (unreadable…)
+
+
+def extract(raw: bytes, mime_type: str, *, check_quality: bool = True) -> Extracted:
     """
-    Full pipeline. `raw` is the ORIGINAL uploaded bytes, `mime_type` the
-    verified type ("application/pdf" | "image/jpeg" | "image/png").
+    Stage 1 of classify(), exposed so the background pipeline can report
+    "extracting" and "classifying" as separate steps:
 
-      auto-crop/straighten (images, if enabled) → quality gate →
-      encrypted check → text (PDF layer / OCR) →
-      deterministic keyword pass → text-LLM → verdict
+      auto-crop/straighten (images, if DOC_AUTO_CROP) → quality gate →
+      encrypted check → text (PDF layer / OCR)
 
-    No vision/image-model stage (removed 2026-09-22 — it was the layer most
-    likely to turn a photographed pharmacy bill into a false "prescription",
-    it cost real money/latency per call, and it sent full page images to a
-    third party). A blurry/dark image that fails the quality gate now always
-    goes straight to "retake" — there is no automated second look.
-
-    The ORIGINAL bytes (not the cropped version) are what the caller goes
-    on to store — cropping only feeds a cleaner image into quality-gate
-    measurement and OCR; it never replaces what's saved to the vault.
+    No vision/image-model stage (removed 2026-09-22): a blurry/dark image
+    that fails the quality gate goes straight to "retake". The ORIGINAL bytes
+    (not the cropped version) are what the caller stores — cropping only
+    feeds a cleaner image into the quality gate and OCR.
     """
     if check_quality and mime_type in ("image/jpeg", "image/png"):
         try:
@@ -536,18 +563,18 @@ def classify(raw: bytes, mime_type: str, *, check_quality: bool = True) -> Class
     if check_quality:
         q = image_quality.assess(raw, mime_type)
         if not q.ok:
-            return ClassResult(
+            return Extracted(early=ClassResult(
                 doc_type="other", confidence=0.0, method="unreadable",
                 unreadable=True, quality_reason=q.reason, quality_message=q.message,
-            )
+            ))
 
     if mime_type == "application/pdf" and _pdf_encrypted(raw):
-        return ClassResult(
+        return Extracted(early=ClassResult(
             doc_type="other", confidence=0.0, method="unreadable", unreadable=True,
             quality_reason="encrypted",
             quality_message="This PDF is password-protected, so it couldn't be read. "
                             "Remove the password and upload it again.",
-        )
+        ))
 
     text = _pdf_text(raw) if mime_type == "application/pdf" else ""
     ocr_conf = None
@@ -562,9 +589,28 @@ def classify(raw: bytes, mime_type: str, *, check_quality: bool = True) -> Class
         or (mime_type in ("image/jpeg", "image/png") and ocr_conf is not None
             and ocr_conf < 45 and len(text) < 120)
     )
+    return Extracted(text=text, thin_text=thin_text)
 
-    res = classify_text(text) if len(text) >= _MIN_TEXT else \
-        ClassResult(doc_type="other", confidence=0.0, text_len=len(text))
+
+def classify(raw: bytes, mime_type: str, *, check_quality: bool = True,
+             extracted: "Extracted | None" = None, llm="auto") -> ClassResult:
+    """
+    Full pipeline. `raw` is the ORIGINAL uploaded bytes, `mime_type` the
+    verified type ("application/pdf" | "image/jpeg" | "image/png").
+
+      extract() [auto-crop → quality gate → encrypted check → text] →
+      deterministic keyword pass → text-LLM (unless llm="off") → verdict
+
+    Pass `extracted` (from extract()) to skip stage 1. The background
+    pipeline calls this with llm="off" and queues the LLM separately.
+    """
+    ex = extracted if extracted is not None else extract(raw, mime_type, check_quality=check_quality)
+    if ex.early is not None:
+        return ex.early
+    text, thin_text = ex.text, ex.thin_text
+
+    res = classify_text(text, llm) if len(text) >= _MIN_TEXT else \
+        ClassResult(doc_type="other", confidence=0.0, text_len=len(text), text=text)
 
     # An IMAGE we couldn't read anything usable from → "retake", not a blind
     # "Other". (A PDF can't be retaken — it just falls to the review tray.)

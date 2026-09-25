@@ -30,8 +30,14 @@ logger = logging.getLogger(__name__)
 
 # Overridable via settings.DOC_IMAGE_QUALITY = {"min_edge": 1000, ...}
 _DEFAULTS = {
-    "min_edge": 900,          # px, longest side
-    "min_pixels": 480_000,    # ~800x600
+    # Only reject images too small to hold legible text at all. Forwarded
+    # WhatsApp photos and web screenshots of prescriptions are routinely
+    # ~460x650 and OCR cleanly; the old 900px / 480k floor turned every one of
+    # them away as "too small" without ever trying. Anything above this goes
+    # to OCR, and the classifier's own thin-text check catches the truly
+    # unreadable ones.
+    "min_edge": 400,          # px, longest side
+    "min_pixels": 120_000,    # ~400x300
     "dark_mean": 26,          # 0..255 grayscale mean below this -> too dark
     # A bright white lab-report/prescription page routinely averages 236-248
     # with plenty of contrast (dark ink against the paper) — that's a normal

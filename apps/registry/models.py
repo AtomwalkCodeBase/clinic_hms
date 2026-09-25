@@ -392,6 +392,60 @@ class SharedDocument(models.Model):
     extraction_values_confident = models.PositiveSmallIntegerField(default=0)
     extracted_at        = models.DateTimeField(null=True, blank=True)
 
+    # ── Background classification pipeline (HMS-DOC-ASYNC) ────────────────
+    # An upload is stored and answered straight away; a Celery task
+    # (core/pipeline/processing.py) does text extraction and
+    # classification afterwards. Two statuses, deliberately NOT combined:
+    #
+    # processing_status — where the file is in the machine pipeline:
+    #   queued | extracting | classifying | done | failed
+    # classification_status — how settled its label is:
+    #   pending  — nothing has classified it yet
+    #   partial  — rules and/or the LLM have labelled it, no human yet
+    #   closed   — a person accepted/changed it, or the QR made it authoritative
+    # Default "closed": rows written by hospital/staff code paths are
+    # authoritative; the patient-upload path sets "pending" explicitly.
+    PROCESSING_STATUSES = ("queued", "extracting", "classifying", "done", "failed")
+    processing_status     = models.CharField(max_length=12, default="done", db_index=True)
+    # How it gets processed: "instant" (a small upload — sorted inside the
+    # upload request, result returned at once), "bulk" (a big upload — waits
+    # for the periodic "Process bulk uploads" job, a batch per run) or "queue"
+    # (sent straight to the Celery worker). See CeleryRuntimeConfig.instant_max_files.
+    processing_route      = models.CharField(max_length=8, blank=True, db_index=True)
+    processing_error      = models.CharField(max_length=200, blank=True)
+    processing_started_at = models.DateTimeField(null=True, blank=True)
+    processed_at          = models.DateTimeField(null=True, blank=True)
+    classification_status = models.CharField(max_length=10, default="closed", db_index=True)
+    # The page text the classifiers saw (PDF text layer or OCR), capped —
+    # kept so the rules can be re-run after the keyword table changes.
+    extracted_text        = models.TextField(blank=True)
+    # Each classifier's verdict, stored side by side so they can be compared
+    # (platform "classification agreement" report). *_scores = per-type map.
+    rule_doc_type         = models.CharField(max_length=20, blank=True)
+    rule_confidence       = models.FloatField(null=True, blank=True)
+    rule_scores           = models.JSONField(default=dict, blank=True)
+    llm_doc_type          = models.CharField(max_length=20, blank=True)
+    llm_confidence        = models.FloatField(null=True, blank=True)
+    llm_scores            = models.JSONField(default=dict, blank=True)
+    llm_model             = models.CharField(max_length=80, blank=True)
+    # The LLM check is its own queue (core/pipeline/llm_queue.py): the
+    # rules file the document at once, the LLM verdict follows when the LLM
+    # server (local Ollama or the production GPU server) gets to it.
+    #   "" not needed | queued | running | done | failed
+    llm_status            = models.CharField(max_length=10, blank=True, db_index=True)
+    llm_queued_at         = models.DateTimeField(null=True, blank=True)
+    # The human label — the ground truth the others are scored against.
+    # human_action: accepted (thumbs up) | changed | rejected
+    human_doc_type        = models.CharField(max_length=20, blank=True)
+    # accepted | changed | rejected (verified a machine verdict) | manual
+    # (the patient organised it themselves at upload — no machine verdict)
+    human_action          = models.CharField(max_length=10, blank=True)
+    human_at              = models.DateTimeField(null=True, blank=True)
+    # The patient's own folder ("Dental", "Mom's cardiology") — a personal
+    # label ON TOP of doc_type, which stays the medical type doctors, filters
+    # and the classifier report use. Blank = only in its type's folder.
+    folder                = models.CharField(max_length=60, blank=True, db_index=True)
+
     class Meta:
         app_label = "registry"
         db_table  = "shared_document"
@@ -404,6 +458,47 @@ class SharedDocument(models.Model):
 
     def __str__(self):
         return f"{self.awpid} — {self.title}"
+
+
+class DocumentClassificationRule(models.Model):
+    """
+    Keyword rules for the rule-based document classifier, maintained from the
+    platform-admin screen so adding/removing a keyword needs no code change.
+    core.doc_rules reads the active rows (cached briefly) and scores each
+    document type as  hits / required_hits  (capped at 100%) — 4 of 5
+    required keywords present = 80%.
+
+    doc_type "not_medical" holds the NEGATIVE patterns (invoices, ID cards…).
+    Several rows may share a doc_type; the best-scoring row wins for it.
+    """
+    DOC_TYPE_CHOICES = [
+        ("prescription",      "Prescription"),
+        ("lab_report",        "Lab Report"),
+        ("scan",              "Scan / Imaging"),
+        ("discharge_summary", "Discharge Summary"),
+        ("not_medical",       "Not medical (negative)"),
+    ]
+
+    doc_type      = models.CharField(max_length=20, choices=DOC_TYPE_CHOICES, db_index=True)
+    name          = models.CharField(max_length=80)
+    # Pipe-separated, matched case-insensitively as substrings of the page text.
+    keywords      = models.TextField()
+    required_hits = models.PositiveSmallIntegerField(default=5)
+    is_active     = models.BooleanField(default=True)
+    updated_by    = models.CharField(max_length=120, blank=True)
+    created_at    = models.DateTimeField(auto_now_add=True)
+    updated_at    = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "doc_classification_rule"
+        ordering  = ["doc_type", "name"]
+
+    def keyword_list(self):
+        return [k.strip().lower() for k in (self.keywords or "").split("|") if k.strip()]
+
+    def __str__(self):
+        return f"{self.doc_type} — {self.name}"
 
 
 class ExtractedLabValue(models.Model):
@@ -927,6 +1022,11 @@ class PatientAccount(models.Model):
     is_active     = models.BooleanField(default=True)
     created_at    = models.DateTimeField(auto_now_add=True)
     last_login    = models.DateTimeField(null=True, blank=True)
+    # Per-account login lockout — see core/login_lockout.py. Same fields and
+    # policy as apps.org.StaffUser; separate from (and in addition to) the
+    # per-IP "login" rate-throttle scope.
+    failed_login_attempts = models.PositiveSmallIntegerField(default=0)
+    locked_until           = models.DateTimeField(null=True, blank=True)
     # Account-level emergency contact — asked once, applies across every
     # hospital this account books at (unlike Patient.emergency_contact_*,
     # which is per-tenant and only exists once a local Patient row is
@@ -1388,4 +1488,60 @@ class RecordsPrivacy(models.Model):
     @classmethod
     def for_awpid(cls, awpid):
         obj, _ = cls.objects.using("default").get_or_create(awpid=awpid)
+        return obj
+
+
+class CeleryRuntimeConfig(models.Model):
+    """
+    Single-row settings for the background-job processes, edited from
+    platform admin → Background Jobs (core.celery_runtime). The worker and
+    Beat are started with these values; changing them takes effect on the
+    next start / restart — no code change.
+
+    Also the liveness record: each process writes *_heartbeat_at every few
+    seconds (atomwalk/celery.py signal hooks). That works on any broker —
+    the default Postgres broker can't answer Celery's broadcast `inspect`.
+    """
+    POOLS = ("solo", "threads", "prefork")
+    LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+
+    # blank = settings.CELERY_BROKER_URL (the registry Postgres DB)
+    broker_url         = models.CharField(max_length=300, blank=True)
+    worker_pool        = models.CharField(max_length=10, default="solo")
+    # "Workers" on the settings page: files sorted at the same time. The
+    # pool (solo / threads / prefork) is derived from it — worker_pool is
+    # no longer used.
+    worker_concurrency = models.PositiveSmallIntegerField(default=1)
+    worker_queues      = models.CharField(max_length=200, default="celery,llm")   # comma-separated; "llm" = the LLM queue
+    worker_loglevel    = models.CharField(max_length=10, default="INFO")
+    # In-process fallback for document uploads when no worker is alive
+    # (heartbeat stale) — uploads never sit in "queued" with nobody to run them.
+    inline_fallback    = models.BooleanField(default=True)
+    # Upload routing: an upload of up to this many files is sorted at once
+    # (inside the request); a bigger one goes to the periodic bulk job,
+    # which sorts at most bulk_batch_limit files per run.
+    instant_max_files  = models.PositiveSmallIntegerField(default=3)
+    bulk_batch_limit   = models.PositiveSmallIntegerField(default=25)
+
+    worker_pid          = models.IntegerField(null=True, blank=True)
+    worker_started_at   = models.DateTimeField(null=True, blank=True)
+    worker_heartbeat_at = models.DateTimeField(null=True, blank=True)
+    worker_hostname     = models.CharField(max_length=120, blank=True)
+    beat_pid            = models.IntegerField(null=True, blank=True)
+    beat_started_at     = models.DateTimeField(null=True, blank=True)
+    beat_heartbeat_at   = models.DateTimeField(null=True, blank=True)
+    # Flower (monitoring dashboard) — liveness is its own /healthcheck, not a heartbeat.
+    flower_pid          = models.IntegerField(null=True, blank=True)
+    flower_started_at   = models.DateTimeField(null=True, blank=True)
+
+    updated_by = models.CharField(max_length=120, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "registry"
+        db_table  = "celery_runtime_config"
+
+    @classmethod
+    def get(cls):
+        obj, _ = cls.objects.using("default").get_or_create(pk=1)
         return obj

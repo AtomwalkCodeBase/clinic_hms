@@ -18,6 +18,7 @@ import { ROUTES }  from "./config/routes.config";
 import { ROLES, ACTS_AS_PRIORITY } from "./constants/roles";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import { PatientProvider } from "./context/PatientContext";
+import { UploadProvider } from "./context/UploadContext";
 
 // ── Lazy-loaded pages ─────────────────────────────────────────────────────────
 // Each role has its own folder; import pages here as they are built.
@@ -41,6 +42,8 @@ const PlatformSubscriptions = lazy(() => import("./pages/platform-admin/Subscrip
 const PlatformUsers      = lazy(() => import("./pages/platform-admin/UsersPage"));
 const PlatformVaccinationTemplates = lazy(() => import("./pages/platform-admin/VaccinationTemplatesPage"));
 const PlatformMilestoneTemplates = lazy(() => import("./pages/platform-admin/MilestoneTemplatesPage"));
+const PlatformDocClassifier = lazy(() => import("./pages/platform-admin/DocClassifierPage"));
+const PlatformBackgroundJobs = lazy(() => import("./pages/platform-admin/BackgroundJobsPage"));
 
 // Hospital Admin
 const AdminDashboard = lazy(() => import("./pages/hospital-admin/DashboardPage"));
@@ -208,6 +211,8 @@ export default function App() {
   return (
     <ErrorBoundary>
     <BrowserRouter>
+      {/* Above the routes so a My Reports upload keeps going on any page. */}
+      <UploadProvider>
       <Suspense fallback={<PageLoader />}>
         <Routes>
           {/* Root → role-based redirect */}
@@ -242,6 +247,10 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformVaccinationTemplates /></ProtectedRoute>} />
           <Route path={ROUTES.PLATFORM.MILESTONE_TEMPLATES}
             element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformMilestoneTemplates /></ProtectedRoute>} />
+          <Route path={ROUTES.PLATFORM.DOC_CLASSIFIER}
+            element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformDocClassifier /></ProtectedRoute>} />
+          <Route path={ROUTES.PLATFORM.BACKGROUND_JOBS}
+            element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformBackgroundJobs /></ProtectedRoute>} />
 
           {/* Hospital Admin */}
           <Route path={ROUTES.ADMIN.DASHBOARD}
@@ -413,6 +422,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>
+      </UploadProvider>
     </BrowserRouter>
     </ErrorBoundary>
   );

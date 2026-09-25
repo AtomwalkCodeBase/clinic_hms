@@ -29,7 +29,15 @@ Config (settings / .env):
                               points here; a blank KEY below disables it.
     DOC_CLASSIFIER_LLM_BASE   OpenAI-compatible base URL (default: Groq)
     DOC_CLASSIFIER_LLM_MODEL  text model id (default: llama-3.3-70b-versatile)
-    DOC_CLASSIFIER_LLM_KEY    api key; falls back to GROQ_API_KEY
+    DOC_CLASSIFIER_LLM_KEY    api key; falls back to GROQ_API_KEY. Not needed
+                              for a local server (Ollama: BASE=http://localhost:11434/v1).
+    DOC_CLASSIFIER_LLM_TIMEOUT seconds per call (a local 7B model is slower)
+    LLM_MODE                  local (the settings above) | production (the GPU
+                              server's gateway, LLM_GATEWAY_URL) — see core.llm_client
+
+In the background pipeline this runs as its own task on the "llm" Celery
+queue (core/pipeline/llm_queue.py, task core.llm_drain): one document at a time, and while
+the server is unreachable the task waits and retries instead of failing.
 """
 
 from __future__ import annotations
@@ -37,9 +45,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import time
 
-import requests
 from django.conf import settings
 from django.core.cache import caches
 
@@ -60,7 +66,6 @@ _KINDS = {"prescription", "lab_report", "scan", "discharge_summary", "other", "n
 _DATE_SRC = {"collection", "report", "received", "issue", "consult", "bare"}
 _MAX_CHARS = 6000        # the identifying part of any report is near the top
 _CACHE_TTL = 60 * 60 * 24 * 30   # a given OCR text always classifies the same
-_MAX_TRIES = 4
 # Reasoning-tier models (openai/gpt-oss-20b included) spend output tokens on
 # an internal scratchpad before the answer; 300 was too tight and Groq was
 # returning 400 json_validate_failed ("max completion tokens reached before
@@ -113,36 +118,36 @@ _SYSTEM = (
     "document (e.g. an OP bill with three billing markers, or a textbook lab "
     "report) can be 0.95-1.0, but a page you are inferring from thin or "
     "conflicting evidence should score well below that.\n"
+    "- scores: your probability 0..1 for EVERY kind (prescription, lab_report, "
+    "scan, discharge_summary, other, not_medical); they should sum to about 1.\n"
     'Respond exactly: {{"kind": "...", "categories": [...], "report_date": '
-    '"YYYY-MM-DD" or null, "date_source": "...", "confidence": 0.0}}'
+    '"YYYY-MM-DD" or null, "date_source": "...", "confidence": 0.0, '
+    '"scores": {{"prescription": 0.0, "lab_report": 0.0, "scan": 0.0, '
+    '"discharge_summary": 0.0, "other": 0.0, "not_medical": 0.0}}}}'
 )
 
 
+def _is_local(base: str) -> bool:
+    return any(h in (base or "") for h in ("://localhost", "://127.0.0.1", "://host.docker.internal"))
+
+
 def _enabled() -> bool:
-    return bool(getattr(settings, "DOC_CLASSIFIER_LLM_KEY", "")
-               and getattr(settings, "DOC_CLASSIFIER_LLM_BASE", "")
+    from core import llm_client
+    if llm_client.mode() == "production":
+        return bool(getattr(settings, "LLM_GATEWAY_URL", ""))
+    base = getattr(settings, "DOC_CLASSIFIER_LLM_BASE", "")
+    return bool((getattr(settings, "DOC_CLASSIFIER_LLM_KEY", "") or _is_local(base))
+               and base
                and getattr(settings, "DOC_CLASSIFIER_LLM_MODEL", ""))
 
 
-def _post(payload: dict) -> str:
-    key = settings.DOC_CLASSIFIER_LLM_KEY
-    url = settings.DOC_CLASSIFIER_LLM_BASE.rstrip("/") + "/chat/completions"
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    resp = None
-    for attempt in range(_MAX_TRIES):
-        resp = requests.post(url, json=payload, headers=headers, timeout=45)
-        if resp.status_code == 400 and "response_format" in resp.text:
-            payload.pop("response_format", None)
-            continue
-        if resp.status_code in (429, 413, 500, 502, 503) and attempt < _MAX_TRIES - 1:
-            wait = min(20, int(resp.headers.get("retry-after") or 0) or 4 * (attempt + 1))
-            logger.warning("doc_classifier_llm: %s from provider — retry %d in %ss",
-                           resp.status_code, attempt + 1, wait)
-            time.sleep(wait)
-            continue
-        break
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+def model_name() -> str:
+    from core import llm_client
+    if not _enabled():
+        return ""
+    if llm_client.mode() == "production":
+        return (getattr(settings, "LLM_GATEWAY_MODEL", "") or "gpu-server")[:80]
+    return getattr(settings, "DOC_CLASSIFIER_LLM_MODEL", "")
 
 
 def _sanitise(raw) -> dict:
@@ -175,44 +180,74 @@ def _sanitise(raw) -> dict:
         out["confidence"] = max(0.0, min(1.0, c))
     except (TypeError, ValueError):
         pass
+    sc = raw.get("scores")
+    if isinstance(sc, dict):
+        scores = {}
+        for k, v in sc.items():
+            k = str(k).strip().lower()
+            try:
+                if k in _KINDS:
+                    scores[k] = round(max(0.0, min(1.0, float(v))), 3)
+            except (TypeError, ValueError):
+                continue
+        if scores:
+            out["scores"] = scores
+            if "kind" not in out:
+                out["kind"] = max(scores, key=scores.get)
     return out
 
 
-def classify(text: str) -> dict:
-    """Text (OCR / PDF layer) -> label dict. Best-effort; never raises."""
+def _parse_json(content: str) -> dict:
+    """The GPU gateway has no JSON mode — take the first {...} object in the reply."""
+    content = (content or "").strip()
+    try:
+        return json.loads(content)
+    except ValueError:
+        start, end = content.find("{"), content.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(content[start:end + 1])
+        raise
+
+
+def classify(text: str, *, raise_unavailable: bool = False) -> dict:
+    """
+    Text (OCR / PDF layer) -> label dict, via core.llm_client (local Ollama or
+    the production GPU server — LLM_MODE). Best-effort: returns {} on any
+    problem, except that with raise_unavailable=True an unreachable/busy
+    server raises llm_client.LLMUnavailable so a queued task can retry later.
+    """
+    from core import llm_client
     text = (text or "").strip()
     if not text or not _enabled():
         return {}
-    text = text[:_MAX_CHARS]
+    # What identifies a document is near the top; the budget depends on the
+    # server (a local 7B on CPU slows steeply with length — 4.3k chars 77 s vs
+    # 2.5k 16 s, same verdict; the GPU server has a 32k context).
+    text = text[:llm_client.max_chars()]
 
-    ck = "docllm:" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:40]
+    ck = f"docllm3:{llm_client.mode()}:" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:40]
     _c = _cache()
     hit = _c.get(ck)
     if hit is not None:
         return hit
 
     sys_prompt = _SYSTEM.format(slugs=", ".join(report_types.SLUGS))
-    payload = {
-        "model": settings.DOC_CLASSIFIER_LLM_MODEL,
-        "temperature": 0,
-        "max_tokens": _MAX_TOKENS,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": "OCR TEXT:\n" + text},
-        ],
-    }
     try:
-        content = _post(payload)
-        data = json.loads(content)
+        out = llm_client.complete(sys_prompt, "OCR TEXT:\n" + text, temperature=0,
+                                  max_tokens=_MAX_TOKENS, json_mode=True)
+        data = _parse_json(out["content"])
+    except llm_client.LLMUnavailable:
+        if raise_unavailable:
+            raise
+        logger.warning("doc_classifier_llm: LLM unavailable; keeping deterministic result")
+        return {}
     except Exception:
-        logger.warning("doc_classifier_llm: call failed; keeping deterministic result",
-                       exc_info=True)
+        logger.warning("doc_classifier_llm: call failed; keeping deterministic result", exc_info=True)
         return {}
 
     result = _sanitise(data)
     _c.set(ck, result, _CACHE_TTL)
-    logger.info("doc_classifier_llm: kind=%s cats=%s date=%s conf=%s",
-                result.get("kind"), result.get("categories"),
-                result.get("report_date"), result.get("confidence"))
+    logger.info("doc_classifier_llm: kind=%s cats=%s date=%s conf=%s (%s, %ss)",
+                result.get("kind"), result.get("categories"), result.get("report_date"),
+                result.get("confidence"), llm_client.mode(), out.get("generation_time"))
     return result

@@ -55,6 +55,8 @@ export const ROUTES = {
     USAGE:              "/platform/usage",
     VACCINATION_TEMPLATES: "/platform/vaccination-templates",
     MILESTONE_TEMPLATES: "/platform/milestone-templates",
+    DOC_CLASSIFIER:     "/platform/document-classifier",
+    BACKGROUND_JOBS:    "/platform/background-jobs",
   },
 
   // Hospital Admin

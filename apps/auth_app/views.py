@@ -26,6 +26,9 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.throttling import ScopedRateThrottle
 
 from core.response import success, error
+from core.login_lockout import (
+    is_locked, lockout_minutes_remaining, record_failed_attempt, record_successful_login,
+)
 from apps.tenants.models import Tenant, Subscription
 from apps.tenants.constants import TIER_FEATURE_DEFAULTS
 from apps.org.models import StaffUser
@@ -47,10 +50,15 @@ def _make_tokens(payload: dict) -> dict:
     Create access + refresh JWT pair from a claims payload.
     Every token gets a unique jti so it can be individually revoked via
     BlacklistedToken (see LogoutView below and core/authentication.py).
+
+    Lifetimes come from settings.SIMPLE_JWT (JWT_ACCESS_TOKEN_LIFETIME_MINUTES /
+    JWT_REFRESH_TOKEN_LIFETIME_DAYS env vars) — previously hardcoded here and
+    silently ignoring that settings block entirely, so the env vars had no
+    actual effect despite being documented/settable.
     """
     now         = timezone.now()
-    access_exp  = now + timedelta(minutes=60)
-    refresh_exp = now + timedelta(days=7)
+    access_exp  = now + settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"]
+    refresh_exp = now + settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"]
 
     access_payload  = {**payload, "exp": access_exp,  "token_type": "access",  "jti": secrets.token_hex(16)}
     refresh_payload = {**payload, "exp": refresh_exp, "token_type": "refresh", "jti": secrets.token_hex(16)}
@@ -159,8 +167,18 @@ class StaffLoginView(APIView):
                 status=403,
             )
 
+        if is_locked(staff):
+            mins = lockout_minutes_remaining(staff)
+            return error(
+                f"Too many failed attempts. Try again in {mins} minute{'s' if mins != 1 else ''}.",
+                status=403,
+            )
+
         if not staff.check_password(d["password"]):
+            record_failed_attempt(staff, db_name)
             return error("Invalid credentials.")
+
+        record_successful_login(staff, db_name)
 
         # ── Step 6: Get subscription ───────────────────────────────────────────
         try:
@@ -283,8 +301,18 @@ class PatientLoginView(APIView):
         except PatientAccount.DoesNotExist:
             return error("Invalid credentials.")
 
+        if is_locked(acct):
+            mins = lockout_minutes_remaining(acct)
+            return error(
+                f"Too many failed attempts. Try again in {mins} minute{'s' if mins != 1 else ''}.",
+                status=403,
+            )
+
         if not acct.check_password(password):
+            record_failed_attempt(acct, "default")
             return error("Invalid credentials.")
+
+        record_successful_login(acct, "default")
 
         acct.last_login = timezone.now()
         acct.save(using="default", update_fields=["last_login"])

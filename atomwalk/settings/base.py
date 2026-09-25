@@ -91,6 +91,8 @@ THIRD_PARTY_APPS = [
     "corsheaders",
     "django_filters",
     "drf_spectacular",
+    "django_celery_beat",      # scheduled jobs (platform admin → Background Jobs)
+    "django_celery_results",   # task run history
 ]
 
 LOCAL_APPS = [
@@ -290,9 +292,15 @@ REST_FRAMEWORK = {
 }
 
 # ── JWT ──────────────────────────────────────────────────────────────────────
+# NOTE: actually consumed by apps.auth_app.views._make_tokens() (custom PyJWT
+# minting, not rest_framework_simplejwt — see core/authentication.py's own
+# docstring). Default dropped from 60 to 30 minutes for the access token —
+# refresh is silent/automatic on the frontend (see api.client.js's 401
+# interceptor), so a shorter access-token window costs no UX and just
+# shrinks how long a leaked access token stays usable.
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(
-        minutes=config("JWT_ACCESS_TOKEN_LIFETIME_MINUTES", default=60, cast=int)
+        minutes=config("JWT_ACCESS_TOKEN_LIFETIME_MINUTES", default=30, cast=int)
     ),
     "REFRESH_TOKEN_LIFETIME": timedelta(
         days=config("JWT_REFRESH_TOKEN_LIFETIME_DAYS", default=7, cast=int)
@@ -451,6 +459,91 @@ DOC_CLASSIFIER_LLM       = config("DOC_CLASSIFIER_LLM", default="core.doc_classi
 DOC_CLASSIFIER_LLM_BASE  = config("DOC_CLASSIFIER_LLM_BASE", default="https://api.groq.com/openai/v1")
 DOC_CLASSIFIER_LLM_MODEL = config("DOC_CLASSIFIER_LLM_MODEL", default="openai/gpt-oss-20b")
 DOC_CLASSIFIER_LLM_KEY   = config("DOC_CLASSIFIER_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
+# ── Which LLM server: the local/production toggle (core.llm_client) ─────────
+#   LLM_MODE=local       → the OpenAI-compatible server below (your Ollama)
+#   LLM_MODE=production  → the GPU server's gateway at LLM_GATEWAY_URL
+#                          (POST {url}/ask/, GET {url}/status/)
+# Every LLM job goes through the "llm" Celery queue: one at a time, and while
+# the server is down jobs wait and resume on their own once it's back.
+LLM_MODE = config("LLM_MODE", default="local")
+LLM_GATEWAY_URL = config("LLM_GATEWAY_URL", default="")        # e.g. http://10.0.1.25:8000/llm_api
+LLM_GATEWAY_TOKEN = config("LLM_GATEWAY_TOKEN", default="")    # sent as "Authorization: Bearer …" if set
+LLM_GATEWAY_TIMEOUT = config("LLM_GATEWAY_TIMEOUT", default=300, cast=int)
+LLM_GATEWAY_MODEL = config("LLM_GATEWAY_MODEL", default="gpu-server")   # label stored with each verdict
+# The GPU server runs with a 32k-token context (LLM_NUM_CTX=32768), so it can
+# take much more page text than a local CPU model.
+LLM_GATEWAY_MAX_CHARS = config("LLM_GATEWAY_MAX_CHARS", default=12000, cast=int)
+
+# Local servers (Ollama: BASE=http://localhost:11434/v1, MODEL=qwen2.5-coder:7b)
+# need no KEY; they do need a longer timeout than a hosted API.
+DOC_CLASSIFIER_LLM_TIMEOUT = config("DOC_CLASSIFIER_LLM_TIMEOUT", default=45, cast=int)
+# How much of the page text the LLM sees (the identifying part is at the top).
+# ~2500 keeps a local 7B model around 15 s per document.
+DOC_CLASSIFIER_LLM_MAX_CHARS = config("DOC_CLASSIFIER_LLM_MAX_CHARS", default=6000, cast=int)
+# True -> the background pipeline asks the LLM about EVERY upload (not just the
+# ones the rules are unsure of) and stores its answer next to the rule verdict,
+# for the rule-vs-LLM-vs-human agreement report. The filing decision is still
+# rules-first; this only adds data.
+DOC_PIPELINE_LLM_ALWAYS = config("DOC_PIPELINE_LLM_ALWAYS", default=False, cast=bool)
+
+# ── Celery — background jobs ─────────────────────────────────────────────────
+# Workers and the Beat scheduler are started, stopped and configured from
+# platform admin → Background Jobs (core.celery_runtime); the settings below
+# are only the defaults that screen starts from.
+#
+# Broker: the registry Postgres DB by default (kombu's SQLAlchemy transport —
+# no Redis needed). Point CELERY_BROKER_URL (or the Background Jobs screen)
+# at redis://… in production. Postgres can't broadcast, so worker liveness
+# is tracked with a heartbeat in celery_runtime_config instead of `inspect`.
+def _pg_broker_url():
+    from urllib.parse import quote
+    db = DATABASES["default"]
+    return (f"sqla+postgresql://{quote(db['USER'])}:{quote(db['PASSWORD'])}"
+            f"@{db['HOST']}:{db['PORT']}/{db['NAME']}")
+
+
+CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="") or _pg_broker_url()
+CELERY_RESULT_BACKEND = "django-db"          # django_celery_results.TaskResult
+CELERY_RESULT_EXTENDED = True                # keep task name / args for the history view
+CELERY_TASK_TRACK_STARTED = True
+CELERY_RESULT_EXPIRES = 60 * 60 * 24 * 14    # history kept 14 days
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+CELERY_TASK_ACKS_LATE = True
+# A task that hangs (stuck OCR, unresponsive LLM) is interrupted, not left
+# holding a worker forever. process_document normally takes seconds–~1 min.
+CELERY_TASK_SOFT_TIME_LIMIT = config("CELERY_TASK_SOFT_TIME_LIMIT", default=300, cast=int)
+CELERY_TASK_TIME_LIMIT = config("CELERY_TASK_TIME_LIMIT", default=360, cast=int)
+# Recycle a worker child after N tasks — OCR / PDF libraries hold memory.
+CELERY_WORKER_MAX_TASKS_PER_CHILD = config("CELERY_WORKER_MAX_TASKS_PER_CHILD", default=50, cast=int)
+# Redis re-delivers an un-acked task after this many seconds; must exceed the
+# longest task (acks_late).
+CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 3600}
+# Everything that talks to the LLM runs on its own queue, consumed by a
+# single-concurrency worker in production (deploy/systemd/hms-celery-llm.service),
+# so LLM work is strictly one-after-the-other and never blocks uploads.
+CELERY_TASK_ROUTES = {"core.llm_*": {"queue": "llm"}}
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cast=bool)
+CELERY_BROKER_CONNECTION_TIMEOUT = 2
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_TIMEZONE = "Asia/Kolkata"
+DJANGO_CELERY_BEAT_TZ_AWARE = True
+# Let the Background Jobs screen start/stop worker & beat processes on this
+# machine. Turn off where a process manager (systemd/supervisor) owns them —
+# the screen then only monitors.
+CELERY_UI_PROCESS_CONTROL = config("CELERY_UI_PROCESS_CONTROL", default=True, cast=bool)
+CELERY_LOG_DIR = config("CELERY_LOG_DIR", default="") or str(BASE_DIR / "logs")
+# Task events for Flower's live view (workers are also started with -E).
+CELERY_WORKER_SEND_TASK_EVENTS = True
+CELERY_TASK_SEND_SENT_EVENT = True
+# Flower — Celery's monitoring dashboard, started from Background Jobs. It
+# shows task arguments, so it listens on localhost only unless changed; set
+# FLOWER_BASIC_AUTH="user:password" before exposing it anywhere else.
+# Needs a broadcast-capable broker (Redis/RabbitMQ), not the Postgres one.
+FLOWER_ADDRESS = config("FLOWER_ADDRESS", default="127.0.0.1")
+FLOWER_PORT = config("FLOWER_PORT", default=5555, cast=int)
+FLOWER_URL = config("FLOWER_URL", default="") or f"http://localhost:{FLOWER_PORT}"
+FLOWER_BASIC_AUTH = config("FLOWER_BASIC_AUTH", default="")
 
 # NOTE (2026-09-22): the vision layer was removed from the document-TYPE
 # classifier (core/doc_classifier.py no longer calls core/doc_classifier_vision.py

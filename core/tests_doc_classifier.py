@@ -459,7 +459,7 @@ class ImageQualityTests(SimpleTestCase):
 
     def test_tiny_image_flagged(self):
         from PIL import Image
-        r = image_quality.assess(_png(Image.new("L", (300, 400), 200)), "image/png")
+        r = image_quality.assess(_png(Image.new("L", (200, 300), 200)), "image/png")
         self.assertFalse(r.ok)
         self.assertEqual(r.reason, "too_small")
 

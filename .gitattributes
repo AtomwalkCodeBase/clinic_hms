@@ -1,0 +1,4 @@
+# Server-side files must keep LF line endings even when committed from
+# Windows (core.autocrlf) — bash and systemd choke on CRLF.
+deploy/** text eol=lf
+*.sh text eol=lf

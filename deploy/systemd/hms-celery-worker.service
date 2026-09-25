@@ -1,0 +1,29 @@
+# HMS Celery worker — runs the background tasks (My Reports document
+# pipeline, scheduled jobs). Installed by deploy/install.sh, which fills in
+# @APP_DIR@ / @APP_USER@. Tunables live in /etc/hms/celery.env.
+[Unit]
+Description=HMS Celery worker
+After=network-online.target redis-server.service postgresql.service
+Wants=network-online.target redis-server.service
+
+[Service]
+Type=simple
+User=@APP_USER@
+Group=@APP_USER@
+WorkingDirectory=@APP_DIR@
+Environment=DJANGO_SETTINGS_MODULE=atomwalk.settings.production
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/hms/celery.env
+# -E: task events for Flower. %%h = hostname (systemd needs %% for a literal %).
+ExecStart=@APP_DIR@/venv/bin/celery -A atomwalk worker -E \
+    -l ${CELERY_LOGLEVEL} -P prefork -c ${CELERY_CONCURRENCY} -Q ${CELERY_QUEUES} \
+    -n hms@%%h --logfile=@APP_DIR@/logs/celery-worker.log
+# Warm shutdown: stop taking new tasks, let running ones finish.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

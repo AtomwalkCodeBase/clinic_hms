@@ -1,0 +1,27 @@
+# HMS LLM worker — consumes ONLY the "llm" queue with concurrency 1, so every
+# request to the LLM server (the GPU gateway in production) goes strictly one
+# after the other. While the LLM server is down, queued work waits; Beat's
+# "Run the AI queue" job restarts it every minute once the server is back.
+[Unit]
+Description=HMS Celery LLM worker (one-at-a-time)
+After=network-online.target redis-server.service postgresql.service
+Wants=network-online.target redis-server.service
+
+[Service]
+Type=simple
+User=@APP_USER@
+Group=@APP_USER@
+WorkingDirectory=@APP_DIR@
+Environment=DJANGO_SETTINGS_MODULE=atomwalk.settings.production
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/hms/celery.env
+ExecStart=@APP_DIR@/venv/bin/celery -A atomwalk worker -E \
+    -l ${CELERY_LOGLEVEL} -P prefork -c 1 -Q llm \
+    -n hms-llm@%%h --logfile=@APP_DIR@/logs/celery-llm.log
+KillSignal=SIGTERM
+TimeoutStopSec=660
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

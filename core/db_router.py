@@ -31,6 +31,8 @@ REGISTRY_APPS = frozenset(
         "contenttypes",    # Django framework
         "sessions",        # Django sessions
         "admin",           # Django admin
+        "django_celery_beat",     # scheduled jobs (one scheduler for the platform)
+        "django_celery_results",  # task run history
     ]
 )
 

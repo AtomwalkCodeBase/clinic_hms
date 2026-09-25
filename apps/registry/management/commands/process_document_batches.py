@@ -275,6 +275,17 @@ class Command(BaseCommand):
             collection_date=collection_date, date_source=date_source,
             report_categories=report_categories, category_method=category_method,
             category_confidence=category_confidence,
+            # background-pipeline bookkeeping (see core/pipeline): this
+            # drain already classified it, so it is done and awaiting a person.
+            processing_status="done", processed_at=timezone.now(),
+            classification_status="partial" if cr is not None else "pending",
+            extracted_text=((cr.text if cr is not None else "") or "")[:20000],
+            rule_doc_type=(cr.rule_kind if cr is not None else ""),
+            rule_confidence=(cr.rule_conf if cr is not None and cr.rule_kind else None),
+            rule_scores=(cr.rule_scores if cr is not None else {}),
+            llm_doc_type=str((cr.llm_out or {}).get("kind") or "")[:20] if cr is not None else "",
+            llm_confidence=(cr.llm_out or {}).get("confidence") if cr is not None else None,
+            llm_scores=(cr.llm_out or {}).get("scores") or {} if cr is not None else {},
         )
         item.status = "filed" if review_state == "filed" else "unsorted"
         if review_state == "filed":

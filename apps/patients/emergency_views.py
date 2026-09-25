@@ -231,8 +231,23 @@ class EmergencySummaryView(APIView):
 
         contact = _resolve_emergency_contact(awpid)
         vaccinations = _vaccination_history(awpid)
-        birth_history = _birth_history(awpid)
-        milestone_concerns = _milestone_concerns(awpid)
+        # Newest additions to this endpoint — wrapped defensively so a
+        # problem here (e.g. a deploy where this migration hasn't landed on
+        # every environment yet) degrades to "not available" rather than
+        # taking down the whole summary. Everything above this line is the
+        # long-standing, load-bearing part of the page and deliberately
+        # isn't wrapped the same way — a real failure there should surface
+        # loudly, not be silently swallowed on a safety-critical screen.
+        try:
+            birth_history = _birth_history(awpid)
+        except Exception:
+            logger.exception("Emergency summary: birth history lookup failed for awpid=%s", awpid)
+            birth_history = None
+        try:
+            milestone_concerns = _milestone_concerns(awpid)
+        except Exception:
+            logger.exception("Emergency summary: milestone concerns lookup failed for awpid=%s", awpid)
+            milestone_concerns = []
 
         xff = request.META.get("HTTP_X_FORWARDED_FOR")
         ip_address = xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR")
