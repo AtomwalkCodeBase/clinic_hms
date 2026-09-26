@@ -3012,11 +3012,7 @@ export default function EncounterPage() {
   const navigate = useNavigate();
   const { toastSuccess, toastError, toastApiError } = useToast();
 
-  // pollMs: 0 — `enc` is seeded straight into the editable consult form
-  // below (the "Seed form from server data" effect keyed on [enc]); a
-  // background poll would silently overwrite whatever the doctor is
-  // mid-typing. `refetch()` is still called explicitly after a save.
-  const { data: enc, isLoading, refetch } = useApi(API_ENDPOINTS.OPD.ENCOUNTER(id), { pollMs: 0 });
+  const { data: enc, isLoading, refetch } = useApi(API_ENDPOINTS.OPD.ENCOUNTER(id));
 
   // Cross-hospital history — lifted up from the sidebar so the compact
   // clinical summary header can also read from it (allergies, active

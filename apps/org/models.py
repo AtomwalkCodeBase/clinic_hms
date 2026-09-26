@@ -138,12 +138,6 @@ class StaffUser(models.Model):
     must_change_password = models.BooleanField(default=False)
     date_joined         = models.DateTimeField(auto_now_add=True)
     last_login          = models.DateTimeField(null=True, blank=True)
-    # Per-account login lockout — see core/login_lockout.py. Separate from
-    # (and in addition to) the per-IP "login" rate-throttle scope; this is
-    # what actually stops repeated wrong-password guesses against ONE staff
-    # account regardless of which IP they come from.
-    failed_login_attempts = models.PositiveSmallIntegerField(default=0)
-    locked_until           = models.DateTimeField(null=True, blank=True)
 
     # Self-service profile photo — common to every staff role (doctor, nurse,
     # front desk, lab tech, pharmacist, hospital admin). Stored as a base64

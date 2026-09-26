@@ -164,7 +164,8 @@ class Command(BaseCommand):
                 "reportlab is not installed. Run: pip install reportlab"))
             return
 
-        from apps.registry.models import PatientIdentity, SharedVaccination, SharedDocument
+        from apps.registry.models import PatientIdentity, SharedVaccination
+        from apps.records.models import SharedDocument
         from core import storage as blob_storage
 
         with transaction.atomic(using="default"):
@@ -237,10 +238,12 @@ class Command(BaseCommand):
                 if SharedDocument.objects.using("default").filter(awpid=awpid, title=title, deleted_at__isnull=True).exists():
                     self.stdout.write(f"  (already exists) {title}")
                     return
+                data_uri = fields.pop("file_data")
+                s3_key = blob_storage.upload_data_uri(data_uri, prefix="patient-documents", mime_type=fields["mime_type"],
+                                                      category="patient-document", identity=awpid.lower())
                 SharedDocument.objects.using("default").create(
                     awpid=awpid, title=title, uploaded_by="patient", source_tenant_id=None,
-                    verification_status="unverified", review_state="filed",
-                    classification_method="keyword", **fields,
+                    s3_key=s3_key, method="rule", score=100, **fields,
                 )
                 self.stdout.write(self.style.SUCCESS(f"  + {title}"))
 
@@ -267,7 +270,7 @@ class Command(BaseCommand):
             _ensure_doc(
                 LAKSHMI_AWPID, "Chest X-Ray Report — 20 Aug 2026",
                 doc_type="scan", file_name="chest_xray_20aug2026.pdf", mime_type="application/pdf",
-                file_data=xray_pdf, document_date=date(2026, 8, 20), date_source="report",
+                file_data=xray_pdf, document_date=date(2026, 8, 20),
                 hospital_label="Apollo Diagnostic Centre", doctor_label="Dr. Rohan Kapoor",
             )
 
@@ -285,8 +288,7 @@ class Command(BaseCommand):
             _ensure_doc(
                 DIYA_AWPID, "Complete Blood Count — 10 Jul 2026",
                 doc_type="lab_report", file_name="diya_cbc_10jul2026.pdf", mime_type="application/pdf",
-                file_data=diya_cbc, document_date=date(2026, 7, 10), date_source="report",
-                report_categories=["cbc"], category_method="keyword",
+                file_data=diya_cbc, document_date=date(2026, 7, 10),
                 hospital_label="Lakeview Multispecialty Hospital", doctor_label="Dr. Ananya Iyer",
             )
 
@@ -312,7 +314,7 @@ class Command(BaseCommand):
             _ensure_doc(
                 AARAV_AWPID, "Prescription — 05 Aug 2026",
                 doc_type="prescription", file_name="aarav_rx_05aug2026.pdf", mime_type="application/pdf",
-                file_data=aarav_rx, document_date=date(2026, 8, 5), date_source="report",
+                file_data=aarav_rx, document_date=date(2026, 8, 5),
                 hospital_label="Lakeview Multispecialty Hospital", doctor_label="Dr. Ananya Iyer",
             )
             aarav_vitd = _pdf_lab_report(
@@ -326,8 +328,7 @@ class Command(BaseCommand):
             _ensure_doc(
                 AARAV_AWPID, "Vitamin D (25-OH) — 05 Aug 2026",
                 doc_type="lab_report", file_name="aarav_vitd_05aug2026.pdf", mime_type="application/pdf",
-                file_data=aarav_vitd, document_date=date(2026, 8, 5), date_source="report",
-                report_categories=["vitamin"], category_method="keyword",
+                file_data=aarav_vitd, document_date=date(2026, 8, 5),
                 hospital_label="Lakeview Multispecialty Hospital", doctor_label="Dr. Ananya Iyer",
             )
 

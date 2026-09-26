@@ -15,45 +15,30 @@
  *     usePaginatedList(API_ENDPOINTS.PORTAL.MY_RECORDS, { pageSize: 20 });
  *
  * Options:
- *   pollMs — re-fetches page 1 on this interval to keep the list live (e.g.
- *            a new booking/prescription appearing without a manual
- *            refresh). Defaults to DEFAULT_POLL_MS so every list
- *            auto-updates out of the box; pass 0 to disable. Skipped while
- *            the user has loaded additional pages (page > 1), so a
- *            background tick never discards "Load more" progress, and
- *            paused while the tab is hidden.
- *
- * Same silent-background-retry behavior as useApi (see that file's own
- * docstring) — a transient-looking failure (network drop, timeout, 5xx)
- * quietly retries every RETRY_DELAY_MS until it succeeds, no visible
- * "retrying…" state; a real 4xx is left alone rather than retried forever.
+ *   pollMs — if set, silently re-fetches page 1 on this interval to keep
+ *            the list live (e.g. a new booking/prescription appearing
+ *            without a manual refresh). Skipped while the user has loaded
+ *            additional pages (page > 1), so a background tick never
+ *            discards "Load more" progress, and paused while the tab is
+ *            hidden.
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import apiClient from "../services/api.client";
 
-const RETRY_DELAY_MS = 5000;
-const DEFAULT_POLL_MS = 30000;
-
-function isRetryableError(err) {
-  return err?.status == null || err.status >= 500;
-}
-
-export function usePaginatedList(url, { pageSize = 20, params = {}, pollMs = DEFAULT_POLL_MS } = {}) {
+export function usePaginatedList(url, { pageSize = 20, params = {}, pollMs = 0 } = {}) {
   const [items,         setItems]         = useState([]);
   const [page,          setPage]          = useState(1);
   const [pagination,    setPagination]    = useState(null);
   const [isLoading,     setIsLoading]     = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error,         setError]         = useState(null);
-  const retryTimer = useRef(null);
 
   const paramsKey = JSON.stringify(params);
 
   const fetchPage = useCallback(async (targetPage, append, opts = {}) => {
     if (!url) return;
     const { silent = false } = opts;
-    if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null; }
     if (!silent) {
       if (append) setIsLoadingMore(true); else setIsLoading(true);
       setError(null);
@@ -67,14 +52,10 @@ export function usePaginatedList(url, { pageSize = 20, params = {}, pollMs = DEF
       setPagination(payload?.pagination || null);
       setItems(prev => (append ? [...prev, ...newItems] : newItems));
       setPage(targetPage);
-      setError(null);
     } catch (err) {
       if (!silent) {
         setError(err);
         if (!append) setItems([]);
-      }
-      if (isRetryableError(err)) {
-        retryTimer.current = setTimeout(() => fetchPage(targetPage, append, { silent: true }), RETRY_DELAY_MS);
       }
     } finally {
       if (!silent) {
@@ -86,7 +67,6 @@ export function usePaginatedList(url, { pageSize = 20, params = {}, pollMs = DEF
 
   useEffect(() => {
     fetchPage(1, false);
-    return () => { if (retryTimer.current) clearTimeout(retryTimer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, paramsKey]);
 

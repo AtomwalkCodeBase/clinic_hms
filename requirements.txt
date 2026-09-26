@@ -25,11 +25,9 @@ pypdf==6.15.0
 # ── OCR for no-QR document classification (core/ocr.py) ──
 rapidocr-onnxruntime==1.3.24  # primary engine: PaddleOCR's PP-OCR models on ONNX Runtime — pip-only, CPU, no system package (pulls opencv-python-headless, numpy, onnxruntime)
 pymupdf==1.24.10              # rasterise image-only / scanned PDFs so they can be OCR'd
-# ── Background jobs: My Reports pipeline (core.celery_runtime) + mobile upload-and-extract (apps/registry/tasks.py) ──
+pytesseract==0.3.13           # fallback engine; only used if rapidocr is absent. needs the tesseract-ocr system package
+
+# Background jobs (apps/records tasks) — broker is Redis (CELERY_BROKER_URL)
 celery==5.3.6
-django-celery-beat==2.7.0
-django-celery-results==2.5.1
-SQLAlchemy==2.0.36            # kombu's Postgres broker transport (local dev, no Redis needed)
-redis==5.0.8                  # Redis broker client: production sets CELERY_BROKER_URL=redis://127.0.0.1:6379/0
-psutil==6.1.0                 # start/stop/monitor worker & beat processes
-flower==2.0.1                 # Celery monitoring dashboard (needs a Redis/RabbitMQ broker)
+redis==5.0.3
+django-celery-beat==2.7.0     # DB-backed Beat schedule — apps.records.models.SweepConfig keeps it in sync

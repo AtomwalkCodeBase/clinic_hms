@@ -329,7 +329,7 @@ class PatientHistoryView(APIView):
             # pipeline lives. So they stay visible even without HIE consent
             # (source_tenant_id pins them to us; patient-uploaded docs have it
             # null). Everything else stays gated.
-            from apps.registry.models import SharedDocument
+            from apps.records.models import SharedDocument
             own_notes = list(
                 SharedDocument.objects.using("default")
                 .filter(awpid=patient.awpid, source_tenant_id=request.tenant_id)
@@ -355,7 +355,7 @@ class PatientHistoryView(APIView):
 class PatientDocumentDetailView(APIView):
     """
     GET /api/v1/patients/documents/<doc_id>/
-    Full content (including file_data) for one document referenced from the
+    Full content (a signed file URL) for one document referenced from the
     lightweight list inside get_shared_history(). Split out into its own
     endpoint so the history payload itself stays small — a doctor only pays
     for the full base64 file when they actually open one.
@@ -363,7 +363,7 @@ class PatientDocumentDetailView(APIView):
     permission_classes = [IsAuthenticated, IsDoctorOrNurse]
 
     def get(self, request, doc_id):
-        from apps.registry.models import SharedDocument
+        from apps.records.models import SharedDocument
         try:
             doc = SharedDocument.objects.using("default").get(pk=doc_id)
         except SharedDocument.DoesNotExist:
@@ -397,11 +397,7 @@ class PatientDocumentDetailView(APIView):
         # client-side (utils/fileViewer.downloadFile).
         want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
         dl_name = doc.file_name or f"{doc.title or 'document'}.pdf"
-        raw = doc.file_data or ""
-        if raw.startswith("data:"):
-            file_data = raw
-        else:
-            file_data = blob_storage.signed_url(raw, download_name=dl_name if want_download else None)
+        file_data = blob_storage.signed_url(doc.s3_key, download_name=dl_name if want_download else None)
 
         return success(data={
             "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,

@@ -27,12 +27,12 @@ REGISTRY_APPS = frozenset(
     [
         "tenants",         # Tenant, Subscription, NextNumber (registry-side)
         "registry",        # PatientIdentity, shared HIE tables
+        "records",         # UploadBatch, SharedDocument, ClassificationRule
         "auth",            # Django's built-in auth (registry-side users)
         "contenttypes",    # Django framework
         "sessions",        # Django sessions
         "admin",           # Django admin
-        "django_celery_beat",     # scheduled jobs (one scheduler for the platform)
-        "django_celery_results",  # task run history
+        "django_celery_beat",  # PeriodicTask/IntervalSchedule — kept in sync by records.SweepConfig
     ]
 )
 

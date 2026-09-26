@@ -39,10 +39,10 @@ from core.response import success, error
 from core.permissions import IsPatient
 from core import storage as blob_storage
 from apps.registry.models import (
-    PatientIdentity, PatientAccount,
-    SharedDocument, SharedVaccination,
+    PatientIdentity, PatientAccount, SharedVaccination,
     EmergencyAccessLog, RecordsShareRequest, RecordsPrivacy,
 )
+from apps.records.models import SharedDocument
 from apps.patients.portal_views import EMERGENCY_SHARE_CATEGORIES, _render_qr_data_uri
 
 logger = logging.getLogger(__name__)
@@ -159,8 +159,7 @@ def _vault_documents(awpid, limit=200):
         .filter(awpid=awpid, hidden_at__isnull=True, deleted_at__isnull=True)
         .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
         .exclude(id__in=linked_hw_ids)
-        .exclude(review_state="unsorted")
-        .exclude(verification_status="needs_review")
+        .filter(processing_status="completed")
         .order_by("-created_at")[:limit]
     )
     return [{
@@ -171,11 +170,7 @@ def _vault_documents(awpid, limit=200):
         "mime_type":         d.mime_type,
         "uploaded_by":       d.uploaded_by,
         "created_at":        d.created_at,
-        "review_state":      d.review_state,
-        "verification_status": d.verification_status,
         "document_date":     d.document_date,
-        "collection_date":   d.collection_date,
-        "report_categories": d.report_categories or [],
         "public_document_id": d.public_document_id,
         "hospital_label":    d.hospital_label,
         "doctor_label":      d.doctor_label,
@@ -200,7 +195,7 @@ def _privacy_hidden_ids(awpid, docs, privacy=None):
     """
     docs = the dicts returned by _vault_documents(awpid). Returns the set of
     SharedDocument ids the patient's standing privacy hides from a doctor —
-    the union of hide_all, the live category / kind rules, and individually
+    the union of hide_all, the live kind rules, and individually
     locked ids. Per-visit reveals are added back by the caller.
     """
     p = privacy if privacy is not None else _privacy_for(awpid)
@@ -208,15 +203,12 @@ def _privacy_hidden_ids(awpid, docs, privacy=None):
         return set()
     if p.hide_all:
         return {d["id"] for d in docs}
-    cats = set(p.hidden_categories or [])
     kinds = set(p.hidden_kinds or [])
     hidden = set(p.hidden_doc_ids or [])
     for d in docs:
         if d["id"] in hidden:
             continue
         if d["doc_type"] in kinds:
-            hidden.add(d["id"])
-        elif cats and (set(d.get("report_categories") or []) & cats):
             hidden.add(d["id"])
     return hidden
 
@@ -544,7 +536,7 @@ class RecordsShareDownloadView(APIView):
             return error("That document isn't part of this patient's records.", status=404)
 
         if doc_id in (grant.download_unlocked_ids or []):
-            return success(data={"state": "unlocked", "file_url": blob_storage.signed_url(doc.file_data)})
+            return success(data={"state": "unlocked", "file_url": blob_storage.signed_url(doc.s3_key)})
 
         RecordsShareRequest.objects.using("default").filter(pk=grant.pk).update(
             pending_download_id=doc_id)
@@ -599,12 +591,7 @@ class RecordsShareDocumentViewView(APIView):
             import base64
             from core import ocr as _ocr
 
-            raw = doc.file_data or ""
-            if raw.startswith("data:"):
-                file_bytes = base64.b64decode(raw.split(",", 1)[1])
-            else:
-                file_bytes = blob_storage.get_bytes(raw)
-            pages = _ocr.pdf_page_images(file_bytes, max_pages=12, dpi=150)
+            pages = _ocr.pdf_page_images(blob_storage.get_bytes(doc.s3_key), max_pages=12, dpi=150)
             if not pages:
                 return error("Couldn't render this document for viewing.", status=500)
             return success(data={
@@ -612,7 +599,7 @@ class RecordsShareDocumentViewView(APIView):
                 "pages": [f"data:image/png;base64,{base64.b64encode(p).decode()}" for p in pages],
             })
 
-        return success(data={"mime_type": doc.mime_type, "file_url": blob_storage.signed_url(doc.file_data)})
+        return success(data={"mime_type": doc.mime_type, "file_url": blob_storage.signed_url(doc.s3_key)})
 
 
 class RecordsShareCloseView(APIView):
@@ -858,10 +845,10 @@ class RecordsShareMineView(APIView):
 
 # ─────────────────────────────────────────────── patient: standing privacy
 #
-# The dedicated privacy screen shows the whole vault, grouped by lab-report
-# panel (CBC / Lipid / Thyroid …) with the uncategorised kinds after. It can
+# The dedicated privacy screen shows the whole vault, grouped by document
+# type (lab reports, prescriptions, imaging …). It can
 # run to hundreds of rows, so the list is paged — but the screen's headline
-# numbers (the "shown / total" readout, Hide-all / Show-all, the per-category
+# numbers (the "shown / total" readout, Hide-all / Show-all, the per-type
 # facet counts) all speak for the *whole* vault, so those travel in `summary`
 # while `documents` carries just one page. Pages break on category
 # boundaries: a group is never split across pages, and a group larger than
@@ -869,9 +856,7 @@ class RecordsShareMineView(APIView):
 # client renders is accurate for what's on screen.
 
 from collections import Counter
-from core.report_types import SLUGS as _PANEL_SLUGS, label_for as _panel_label
 
-_PANEL_RANK = {s: i for i, s in enumerate(_PANEL_SLUGS)}
 _KIND_ORDER = ["lab_report", "prescription", "scan", "discharge_summary", "other"]
 _KIND_LABEL = {
     "lab_report": "Lab reports", "prescription": "Prescriptions", "scan": "Imaging",
@@ -888,11 +873,7 @@ def _row_date_key(d):
 
 
 def _bucket_of(row):
-    """(key, label, rank) — the one panel/kind bucket a row is grouped under."""
-    cats = [c for c in (row.get("report_categories") or []) if c in _PANEL_RANK]
-    if cats:
-        first = min(cats, key=lambda c: _PANEL_RANK[c])
-        return f"c:{first}", _panel_label(first), _PANEL_RANK[first]
+    """(key, label, rank) — the document-type bucket a row is grouped under."""
     k = row.get("doc_type") or "other"
     rank = 100 + (_KIND_ORDER.index(k) if k in _KIND_ORDER else 99)
     return f"k:{k}", _KIND_LABEL.get(k, "Documents"), rank
@@ -977,7 +958,6 @@ class RecordsPrivacyView(APIView):
             "id":                d["id"],
             "title":             d["title"],
             "doc_type":          d["doc_type"],
-            "report_categories": d.get("report_categories") or [],
             "document_date":     d.get("document_date"),
             "created_at":        d["created_at"],
             "hospital_label":    d.get("hospital_label"),
@@ -988,7 +968,7 @@ class RecordsPrivacyView(APIView):
         } for d in docs]
 
         # ── whole-vault aggregates (the readout + Hide-all/Show-all + facets) ─
-        cat_counts, kind_counts, months = Counter(), Counter(), set()
+        kind_counts, months = Counter(), set()
         shown_ct = visit_ct = private_ct = 0
         showable_ids, hideable_ids = [], []
         for r in rows:
@@ -1002,9 +982,6 @@ class RecordsPrivacyView(APIView):
             if r["private"] and not r["private_by_rule"]:
                 showable_ids.append(r["id"])
             hideable_ids.append(r["id"])
-            for c in r["report_categories"]:
-                if c in _PANEL_RANK:
-                    cat_counts[c] += 1
             kind_counts[r["doc_type"]] += 1
             mk = _row_date_key(r)[:7]
             if mk:
@@ -1012,13 +989,10 @@ class RecordsPrivacyView(APIView):
 
         # ── filter (server-authoritative; the client no longer filters) ──────
         q = (request.query_params.get("q") or "").strip().lower()
-        cats_f = {s for s in (request.query_params.get("category") or "").split(",") if s}
         kinds_f = {s for s in (request.query_params.get("kind") or "").split(",") if s}
         month_f = (request.query_params.get("month") or "").strip()
 
         def _keep(r):
-            if cats_f and not (set(r["report_categories"]) & cats_f):
-                return False
             if kinds_f and r["doc_type"] not in kinds_f:
                 return False
             if month_f and _row_date_key(r)[:7] != month_f:
@@ -1061,9 +1035,7 @@ class RecordsPrivacyView(APIView):
                 "showable_ids":    showable_ids,
                 "hideable_ids":    hideable_ids,
                 "filtered_ids":    [r["id"] for r in filtered],
-                "category_counts": dict(cat_counts),
                 "kind_counts":     dict(kind_counts),
-                "category_labels": {c: _panel_label(c) for c in cat_counts},
                 "kind_labels":     {k: _KIND_LABEL.get(k, "Documents") for k in kind_counts},
                 "months":          sorted(months, reverse=True),
                 "truncated":       len(docs) >= _PRIVACY_VAULT_MAX,

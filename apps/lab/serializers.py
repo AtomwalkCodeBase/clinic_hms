@@ -142,7 +142,7 @@ class LabRequestSerializer(serializers.ModelSerializer):
             awpid = obj.patient.awpid
         except Exception:
             return None
-        from apps.registry.models import SharedDocument
+        from apps.records.models import SharedDocument
         doc = (SharedDocument.objects.using("default")
                .filter(awpid=awpid, source_ref=f"labreq:{db}:{obj.id}")
                .order_by("-created_at").first())
