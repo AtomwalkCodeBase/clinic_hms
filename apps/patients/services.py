@@ -17,8 +17,9 @@ from apps.org.models     import Branch
 from apps.registry.models import (
     PatientIdentity, PatientRelationship,
     SharedDiagnosis, SharedVital, SharedAllergy,
-    SharedLabResult, SharedPrescription, SharedDocument,
+    SharedLabResult, SharedPrescription,
 )
+from apps.records.models import SharedDocument
 from .models import Patient, Allergy
 
 logger = logging.getLogger(__name__)
@@ -771,8 +772,7 @@ class PatientService:
         documents = list(
             SharedDocument.objects.using("default")
             .filter(awpid=awpid, hidden_at__isnull=True, deleted_at__isnull=True)
-            .exclude(review_state="unsorted")
-            .exclude(verification_status="needs_review")
+            .filter(processing_status="completed")
             .values("id", "title", "doc_type", "file_name", "mime_type", "uploaded_by", "created_at")
             .order_by("-created_at")[:50]
         )

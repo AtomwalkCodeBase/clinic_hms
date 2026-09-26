@@ -11,6 +11,8 @@ from django.http import JsonResponse
 from django.db import connections
 from django.db.utils import OperationalError
 
+from apps.records.views import LLMAskView, LLMChatView, LLMStatusView
+
 
 def health(request):
     """
@@ -39,6 +41,12 @@ urlpatterns = [
     path("api/v1/ipd/",          include("apps.ipd.urls")),  # Phase 1 — admission intake only
     path("api/v1/patients/",     include("apps.patients.urls")),
     path("api/v1/portal/",       include("apps.patients.portal_urls")),
+    path("api/v1/records/",      include("apps.records.urls")),
+    # Deliberately its own top-level prefix, not /api/v1/ — the given API contract. Views live in
+    # apps/records/views.py (LLM_MODE local/production routing is apps/records/services.py::llm_complete()).
+    path("llm_api/ask/",         LLMAskView.as_view(),    name="llm-ask"),
+    path("llm_api/chat/",        LLMChatView.as_view(),   name="llm-chat"),
+    path("llm_api/status/",      LLMStatusView.as_view(), name="llm-status"),
     # Deliberately its own top-level prefix, not nested under /portal/ — that
     # prefix implies patient-JWT auth everywhere else; this is the one
     # intentionally public, unauthenticated endpoint (see

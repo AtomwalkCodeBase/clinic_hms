@@ -23,7 +23,7 @@
  * prescription still active" flag), the section simply doesn't claim one,
  * rather than showing a plausible-looking but fabricated badge.
  */
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { publicClient } from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
@@ -63,15 +63,6 @@ const DELIVERY_MODE_LABEL = {
   normal: "Normal vaginal delivery", c_section: "C-section",
   assisted: "Assisted (forceps/vacuum)", unknown: "Unknown",
 };
-
-// A 400/404 here is our own backend deliberately saying "this token is
-// invalid/expired/gone" — that will never succeed on retry, so auto-retry
-// would just be misleading. Anything else (a 500, a network blip, a
-// moment where a backend deploy hasn't fully rolled out yet) genuinely
-// might resolve on its own, which is exactly the case this page is for —
-// someone standing at a bedside shouldn't have to keep tapping refresh.
-const PERMANENT_ERROR_STATUSES = new Set([400, 404]);
-const RETRY_DELAY_MS = 5000;
 
 // Colour identity per priority section — a left accent bar + a numbered
 // badge in the same colour, same visual language throughout.
@@ -174,37 +165,16 @@ function DataTable({ columns, rows }) {
 
 export default function EmergencyViewPage() {
   const { token } = useParams();
-  const [state, setState] = useState({ loading: true, data: null, error: null, errorStatus: null });
+  const [state, setState] = useState({ loading: true, data: null, error: null });
   const [loadedAt] = useState(() => new Date());
-  const retryTimer = useRef(null);
-
-  const fetchSummary = useCallback((opts = {}) => {
-    const { silent = false } = opts;
-    if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null; }
-    if (!silent) setState(s => ({ ...s, loading: true }));
-    publicClient.get(API_ENDPOINTS.EMERGENCY.SUMMARY(token))
-      .then(({ data: res }) => setState({ loading: false, data: res.data, error: null, errorStatus: null }))
-      .catch((err) => {
-        setState({
-          loading: false, data: null,
-          error: err.message || "This code is invalid or has expired.",
-          errorStatus: err.status,
-        });
-        // Silent background retry for anything that plausibly resolves on
-        // its own (network blip, 5xx, a backend mid-deploy) — no visible
-        // countdown, the page just quietly gets its data the moment the
-        // backend is reachable again. A 400/404 means the token itself is
-        // invalid/expired, which retrying can never fix.
-        if (!PERMANENT_ERROR_STATUSES.has(err.status)) {
-          retryTimer.current = setTimeout(() => fetchSummary({ silent: true }), RETRY_DELAY_MS);
-        }
-      });
-  }, [token]);
 
   useEffect(() => {
-    fetchSummary();
-    return () => { if (retryTimer.current) clearTimeout(retryTimer.current); };
-  }, [fetchSummary]);
+    let cancelled = false;
+    publicClient.get(API_ENDPOINTS.EMERGENCY.SUMMARY(token))
+      .then(({ data: res }) => { if (!cancelled) setState({ loading: false, data: res.data, error: null }); })
+      .catch((err) => { if (!cancelled) setState({ loading: false, data: null, error: err.message || "This code is invalid or has expired." }); });
+    return () => { cancelled = true; };
+  }, [token]);
 
   const { loading, data, error } = state;
 
@@ -214,6 +184,7 @@ export default function EmergencyViewPage() {
       padding: "16px 12px 32px", fontFamily: "system-ui, -apple-system, sans-serif",
     }}>
       <div style={{ width: "100%", maxWidth: 720 }}>
+
         {/* ── Header ─────────────────────────────────────────────── */}
         <div style={{
           display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12,

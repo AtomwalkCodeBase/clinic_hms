@@ -329,61 +329,6 @@ def delete(key: str) -> None:
         logger.warning("S3 delete failed for key=%s", key, exc_info=True)
 
 
-# ── My Reports: direct-to-S3 upload (folder / multi-file flow) ──────────────
-# The bulk flow does NOT push bytes through Django. The client asks for a
-# presigned PUT per file, uploads straight to the `incoming/` staging prefix,
-# then the process_document_batches command reads each object back, validates,
-# classifies and copies it into `patients/…` (see that command).
-
-def presigned_put_url(key: str, *, mime_type: str, expires_in: int = None) -> str:
-    """
-    Short-lived presigned PUT URL. The client MUST send exactly these headers:
-    Content-Type: <mime_type>  and  x-amz-server-side-encryption: AES256.
-    Returns "" if storage isn't configured (callers treat that as 503).
-    """
-    if not key:
-        return ""
-    try:
-        client = _client()
-    except StorageError:
-        return ""
-    expires_in = expires_in or settings.AWS_S3_URL_EXPIRY
-    try:
-        return client.generate_presigned_url(
-            "put_object",
-            Params={
-                "Bucket": settings.AWS_S3_BUCKET,
-                "Key": key,
-                "ContentType": mime_type,
-                "ServerSideEncryption": "AES256",
-            },
-            ExpiresIn=expires_in,
-        )
-    except Exception:
-        logger.error("S3 presign PUT failed for key=%s", key, exc_info=True)
-        return ""
-
-
-def head_size(key: str):
-    """
-    Size in bytes of the object at `key`, or None if it isn't there — WITHOUT
-    downloading it. Lets callers refuse an oversize object before reading it
-    into memory (a presigned PUT can't cap size). The app's IAM user has no
-    s3:ListBucket, so S3 answers a HEAD for a missing key with 403 rather than
-    404; both mean "not there". Any other error (network, throttling) is
-    raised — it says nothing about whether the object exists.
-    """
-    from botocore.exceptions import ClientError
-
-    client = _client()
-    try:
-        return client.head_object(Bucket=settings.AWS_S3_BUCKET, Key=key)["ContentLength"]
-    except ClientError as exc:
-        if exc.response.get("Error", {}).get("Code") in ("404", "403", "NoSuchKey", "NotFound"):
-            return None
-        raise
-
-
 def get_bytes(key: str) -> bytes:
     """Read an object's full body. Raises StorageError if storage is unset."""
     client = _client()

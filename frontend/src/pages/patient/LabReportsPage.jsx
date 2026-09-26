@@ -422,7 +422,7 @@ function MyDocumentsList({ docs, isLoading }) {
   // Lab work only — a prescription (or an unsorted upload still awaiting the
   // patient's confirmation) is not a lab report and belongs on My Reports.
   const shown = docs.filter(
-    d => LAB_PAGE_DOC_TYPES.has(d.doc_type) && d.review_state !== "unsorted",
+    d => LAB_PAGE_DOC_TYPES.has(d.doc_type) && d.processing_status === "completed",
   );
   if (isLoading || shown.length === 0) return null;
   return (

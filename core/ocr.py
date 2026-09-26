@@ -2,28 +2,39 @@
 core/ocr.py
 -----------
 One entry point for turning an image — or a rasterised scanned-PDF page —
-into text with a confidence score, for core.doc_classifier.
+into text with a confidence score, for apps/records/services.py.
 
-Engine comes from ``settings.DOC_OCR_ENGINE``:
+Engine order comes from ``settings.DOC_OCR_ENGINE``:
 
-    "rapidocr"  (default) — RapidOCR (the PP-OCR / PaddleOCR detection +
+    "auto"      (default) — RapidOCR (the PP-OCR / PaddleOCR detection +
                 recognition models running on ONNX Runtime; pip-only, CPU,
-                no system package). This is the only engine in use.
-    "auto"      — same as "rapidocr".
-    "paddleocr" — force the full PaddleOCR package (needs ``paddlepaddle``,
-                which is not installed by default).
+                no system package) when importable, otherwise Tesseract.
+    "both"      — run RapidOCR AND Tesseract unconditionally and concatenate
+                their text (see _run_combined). Measured 2026-09-22 on 16
+                real/near-real photos: RapidOCR alone 15/16 correct (missed
+                one clean printed form — small-print date it doesn't surface),
+                Tesseract alone (psm 6) 15/16 (missed one handwritten-font
+                report), combined 16/16 — the two engines miss different
+                documents, so neither backend's mistakes propagate. Costs
+                the sum of both engines' time per document (~2.4s avg in
+                that test) instead of one, and keeps RapidOCR's models
+                resident in memory even for documents Tesseract alone could
+                have solved — evaluate on your own traffic before deploying.
+    "rapidocr"  — force RapidOCR.
+    "paddleocr" — force the full PaddleOCR package (needs ``paddlepaddle``).
+    "tesseract" — force Tesseract (needs the ``tesseract-ocr`` binary).
     "none"      — disable OCR entirely.
 
-Any other value (including the removed "tesseract" and "both") behaves like
-"auto", i.e. RapidOCR.
-
-Why RapidOCR: on real phone photos a deep-learning text detector copes with
-skew, perspective, glare and low contrast. RapidOCR ships the same models as
-PaddleOCR but drops the heavy ``paddlepaddle`` runtime, so it installs cleanly
-on a plain server. One engine also costs roughly half the reading time and
-memory of running a second one on the 1-CPU server. Tesseract was removed: it
-was only ever a fallback / an experimental "both" mode. A born-digital PDF
-needs no OCR at all.
+Why RapidOCR by default: on real phone photos a deep-learning text detector
+copes with skew, perspective, glare and low contrast where Tesseract's line
+model fragments. RapidOCR ships the same models as PaddleOCR but drops the
+heavy ``paddlepaddle`` runtime, so it installs cleanly on a plain server.
+Tesseract stays as the always-available fallback and for the born-digital
+PDF path (which needs no OCR at all). Tesseract runs in ``--psm 6``
+("assume a single uniform block of text") rather than its own default
+(``--psm 3``, automatic layout) — psm 3 read essentially nothing off two
+real prescription photos (32 chars each, OCR'd as "other"); psm 6 fixed
+both. Override with ``settings.DOC_OCR_TESSERACT_PSM``.
 
 Nothing here is imported at module load: every backend is imported lazily
 and any failure degrades to the next engine, then to an empty string. The
@@ -34,6 +45,8 @@ from __future__ import annotations
 
 import io
 import logging
+import os
+import shutil
 import threading
 from dataclasses import dataclass
 
@@ -75,9 +88,11 @@ def _engine_pref() -> str:
 
 
 _ORDER = {
-    "auto":      ("rapidocr",),
+    "auto":      ("rapidocr", "tesseract"),
+    "both":      ("rapidocr", "tesseract"),   # combined specially in run(), not a fallback chain
     "rapidocr":  ("rapidocr",),
-    "paddleocr": ("paddleocr",),
+    "paddleocr": ("paddleocr", "tesseract"),
+    "tesseract": ("tesseract",),
     "none":      (),
 }
 
@@ -86,6 +101,8 @@ def run(image_bytes: bytes) -> OcrResult:
     """OCR a single image (JPEG/PNG bytes). Never raises."""
     if not image_bytes:
         return OcrResult()
+    if _engine_pref() == "both":
+        return _run_combined(image_bytes)
     for name in _ORDER.get(_engine_pref(), _ORDER["auto"]):
         fn = _BACKENDS.get(name)
         if not fn:
@@ -102,8 +119,38 @@ def run(image_bytes: bytes) -> OcrResult:
     return OcrResult()
 
 
+def _run_combined(image_bytes: bytes) -> OcrResult:
+    """DOC_OCR_ENGINE=both — always run every backend and concatenate their
+    text, instead of stopping at the first one that returns something. See
+    the module docstring for the measurement that justified this."""
+    texts, confs, used = [], [], []
+    for name in ("rapidocr", "tesseract"):
+        fn = _BACKENDS.get(name)
+        try:
+            text, conf = fn(image_bytes)
+        except _Unavailable:
+            continue
+        except Exception:
+            logger.warning("core.ocr: %s backend failed in combined mode", name, exc_info=True)
+            continue
+        if (text or "").strip():
+            texts.append(text.strip())
+            used.append(name)
+            if conf is not None:
+                confs.append(conf)
+    if not texts:
+        return OcrResult()
+    return OcrResult(
+        text="\n".join(texts),
+        conf=(sum(confs) / len(confs)) if confs else None,
+        engine="+".join(used),
+    )
+
+
 def available() -> str:
     """Name of the backend that would be used right now (for logs / /doctor)."""
+    if _engine_pref() == "both":
+        return "rapidocr+tesseract"
     for name in _ORDER.get(_engine_pref(), _ORDER["auto"]):
         try:
             _probe(name)
@@ -114,7 +161,7 @@ def available() -> str:
 
 
 class _Unavailable(Exception):
-    """The backend's libraries aren't installed on this host."""
+    """The backend's libraries (or binary) aren't installed on this host."""
 
 
 def _probe(name: str) -> None:
@@ -128,6 +175,23 @@ def _probe(name: str) -> None:
             import paddleocr  # noqa: F401
         except Exception as e:
             raise _Unavailable(str(e))
+    elif name == "tesseract":
+        try:
+            import pytesseract  # noqa: F401
+        except Exception as e:
+            raise _Unavailable(str(e))
+        _locate_tesseract()
+        try:
+            import pytesseract
+            if not (getattr(pytesseract.pytesseract, "tesseract_cmd", "") and
+                    (shutil.which(pytesseract.pytesseract.tesseract_cmd)
+                     or os.path.exists(pytesseract.pytesseract.tesseract_cmd))) \
+               and not shutil.which("tesseract"):
+                raise _Unavailable("tesseract binary not found")
+        except _Unavailable:
+            raise
+        except Exception:
+            pass
 
 
 # ── RapidOCR (PP-OCR models on ONNX Runtime) ───────────────────────────
@@ -186,14 +250,98 @@ def _paddleocr(image_bytes: bytes):
     return text, conf
 
 
+# ── Tesseract (fallback) ──────────────────────────────────────────────
+_TESSERACT_LOCATED = False
+
+
+def _locate_tesseract() -> None:
+    """Point pytesseract at the binary. Linux: on PATH (no-op). Windows dev:
+    probe the usual install paths. Override with settings.TESSERACT_CMD."""
+    global _TESSERACT_LOCATED
+    if _TESSERACT_LOCATED:
+        return
+    _TESSERACT_LOCATED = True
+    try:
+        import pytesseract
+        from django.conf import settings
+
+        override = getattr(settings, "TESSERACT_CMD", "") or ""
+        if override:
+            pytesseract.pytesseract.tesseract_cmd = override
+            return
+        if shutil.which("tesseract"):
+            return
+        for cand in (
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ):
+            if os.path.exists(cand):
+                pytesseract.pytesseract.tesseract_cmd = cand
+                return
+    except Exception:
+        pass
+
+
+def _tesseract_psm() -> int:
+    try:
+        from django.conf import settings
+        return int(getattr(settings, "DOC_OCR_TESSERACT_PSM", 6) or 6)
+    except Exception:
+        return 6
+
+
+def _tesseract(image_bytes: bytes):
+    try:
+        import pytesseract
+        from PIL import Image
+    except Exception as e:
+        raise _Unavailable(str(e))
+    _locate_tesseract()
+    not_found = getattr(pytesseract, "TesseractNotFoundError", None)
+    # --psm 6 ("assume a single uniform block of text") beat pytesseract's
+    # own default (--psm 3, automatic page-layout analysis) on real phone
+    # photos of prescriptions/forms — psm 3's layout step was misreading the
+    # page as having no text at all (32 chars back, vs. hundreds with psm 6)
+    # on two real prescription photos. Measured 2026-09-22; see core/ocr.py
+    # module docstring.
+    cfg = f"--psm {_tesseract_psm()}"
+    try:
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+        except Exception:
+            return "", None
+        try:
+            data = pytesseract.image_to_data(img, config=cfg, output_type=pytesseract.Output.DICT)
+            words, confs = [], []
+            for tok, c in zip(data.get("text", []), data.get("conf", [])):
+                tok = (tok or "").strip()
+                try:
+                    c = float(c)
+                except (TypeError, ValueError):
+                    c = -1
+                if tok and c >= 0:
+                    words.append(tok)
+                    confs.append(c)
+            if words:
+                return " ".join(words), (sum(confs) / len(confs) / 100.0) if confs else None
+        except Exception:
+            pass
+        return pytesseract.image_to_string(img, config=cfg), None
+    except Exception as e:
+        if not_found is not None and isinstance(e, not_found):
+            raise _Unavailable("tesseract binary not found")
+        raise
+
+
 _BACKENDS = {
     "rapidocr": _rapidocr,
     "paddleocr": _paddleocr,
+    "tesseract": _tesseract,
 }
 
 
 # ── scanned-PDF rasterisation ─────────────────────────────────────────
-def pdf_page_images(raw: bytes, *, max_pages: int = 30, dpi: int = 200) -> list[bytes]:
+def pdf_page_images(raw: bytes, *, max_pages: int = 3, dpi: int = 200) -> list[bytes]:
     """
     Render the first `max_pages` pages of an image-only PDF to PNG bytes so
     they can be OCR'd. Needs PyMuPDF (`pymupdf`); returns [] if it isn't
@@ -220,37 +368,3 @@ def pdf_page_images(raw: bytes, *, max_pages: int = 30, dpi: int = 200) -> list[
     finally:
         doc.close()
     return out
-
-
-# ── warm-up ───────────────────────────────────────────────────────────
-_WARMED = False
-
-
-def warmup() -> str:
-    """
-    Build the active engine's model now so the first real upload doesn't eat
-    the ~3–4 s cold start. Safe to call many times (no-op after the first),
-    from any thread, and a no-op when the engine is "none" or unavailable.
-    Returns the engine it warmed ("" if nothing).
-    """
-    global _WARMED
-    if _WARMED:
-        return ""
-    _WARMED = True
-    name = available()
-    if name in ("", "none"):
-        return ""
-    # A small but real page — a degenerate 1x1 can send the detector's resize
-    # path pathological on some builds, so give it something normal to chew.
-    try:
-        import io as _io
-        from PIL import Image, ImageDraw
-        im = Image.new("RGB", (320, 110), "white")
-        ImageDraw.Draw(im).text((12, 40), "warm up 12/09/2026", fill=(20, 20, 20))
-        b = _io.BytesIO()
-        im.save(b, "PNG")
-        run(b.getvalue())
-        logger.info("core.ocr: %s model warmed", name)
-    except Exception:
-        logger.warning("core.ocr: warmup failed for %s", name, exc_info=True)
-    return name

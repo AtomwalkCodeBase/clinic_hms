@@ -14,15 +14,12 @@ import { useApi }    from "../../hooks/useApi";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { usePatientContext } from "../../context/PatientContext";
-import { Calendar, Stethoscope, Syringe, Building2, CircleCheck, FileCheck } from "lucide-react";
-import { useNavigate } from "react-router-dom";
-import { ROUTES } from "../../config/routes.config";
+import { Calendar, Stethoscope, Syringe, Building2, CircleCheck } from "lucide-react";
 
 const TYPE_META = {
   appointment_reminder: { label: "Appointment", icon: Calendar,    color: "var(--color-primary)", bg: "var(--color-primary-light)" },
   followup_reminder:    { label: "Follow-up",    icon: Stethoscope, color: "var(--color-info)",     bg: "var(--color-info-light)" },
   vaccination_due:      { label: "Vaccination",  icon: Syringe,     color: "var(--color-warning)",  bg: "#FFF8E1" },
-  reports_to_verify:    { label: "My Reports",   icon: FileCheck,   color: "var(--color-primary)", bg: "var(--color-primary-light)" },
 };
 
 function relativeDate(dateStr) {
@@ -48,7 +45,6 @@ export default function NotificationsPage() {
     { params: notifFor ? { patient_awpid: notifFor } : {} },
   );
   const [markingId, setMarkingId] = useState(null);
-  const navigate = useNavigate();
   const notifications = data?.results || [];
   const unreadCount = data?.unread_count ?? 0;
 
@@ -56,8 +52,6 @@ export default function NotificationsPage() {
     // Only real NotificationLog rows ("<tenant_db>:<log_id>") can be marked
     // read — vaccination-due items are computed live with no backing row.
     const sepIndex = n.id.indexOf(":");
-    // Computed live — opening it takes the patient to the Verify tab.
-    if (n.type === "reports_to_verify") { navigate(`${ROUTES.PATIENT.MY_REPORTS}?tab=verify`); return; }
     if (sepIndex === -1 || n.type === "vaccination_due") return;
     const tenantDb = n.id.slice(0, sepIndex);
     const logId = n.id.slice(sepIndex + 1);
@@ -114,7 +108,7 @@ export default function NotificationsPage() {
               {notifications.map(n => {
                 const meta = TYPE_META[n.type] || TYPE_META.appointment_reminder;
                 const Icon = meta.icon;
-                const clickable = n.type === "reports_to_verify" || (n.type !== "vaccination_due" && !n.read);
+                const clickable = n.type !== "vaccination_due" && !n.read;
                 return (
                   <div key={n.id}
                     onClick={() => clickable && markRead(n)}

@@ -91,14 +91,14 @@ THIRD_PARTY_APPS = [
     "corsheaders",
     "django_filters",
     "drf_spectacular",
-    "django_celery_beat",      # scheduled jobs (platform admin → Background Jobs)
-    "django_celery_results",   # task run history
+    "django_celery_beat",   # DB-backed Beat schedule; kept in sync by apps.records.models.SweepConfig
 ]
 
 LOCAL_APPS = [
     # Registry DB apps (live in 'default' DB)
     "apps.tenants",
     "apps.registry",
+    "apps.records",
     # Per-tenant apps
     "apps.auth_app",
     "apps.org",
@@ -189,7 +189,7 @@ TENANT_DB_CONFIG_TEMPLATE = {
     "CONN_MAX_AGE": 60,
     "TIME_ZONE": None,
     "OPTIONS": {},
-    "TEST": {},
+    "TEST": {"MIRROR": None},   # Django's test runner reads this for every alias
     "AUTOCOMMIT": True,
     "ATOMIC_REQUESTS": False,
 }
@@ -292,15 +292,9 @@ REST_FRAMEWORK = {
 }
 
 # ── JWT ──────────────────────────────────────────────────────────────────────
-# NOTE: actually consumed by apps.auth_app.views._make_tokens() (custom PyJWT
-# minting, not rest_framework_simplejwt — see core/authentication.py's own
-# docstring). Default dropped from 60 to 30 minutes for the access token —
-# refresh is silent/automatic on the frontend (see api.client.js's 401
-# interceptor), so a shorter access-token window costs no UX and just
-# shrinks how long a leaked access token stays usable.
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(
-        minutes=config("JWT_ACCESS_TOKEN_LIFETIME_MINUTES", default=30, cast=int)
+        minutes=config("JWT_ACCESS_TOKEN_LIFETIME_MINUTES", default=60, cast=int)
     ),
     "REFRESH_TOKEN_LIFETIME": timedelta(
         days=config("JWT_REFRESH_TOKEN_LIFETIME_DAYS", default=7, cast=int)
@@ -406,19 +400,24 @@ PLATFORM_ADMIN_SECRET = config("PLATFORM_ADMIN_SECRET", default="change-this")
 # value — this feature is new, so there are no live QRs to invalidate yet.
 DOC_QR_SECRET = config("DOC_QR_SECRET", default="") or SECRET_KEY
 
-# OCR engine for no-QR document classification (core/ocr.py): RapidOCR only
-# (PaddleOCR's PP-OCR models on ONNX Runtime; pip-only, CPU, no system package).
-#   "rapidocr" (default) or "auto" — RapidOCR.
-#   "paddleocr" — force the full PaddleOCR package (not installed by default).
-#   "none" — disable OCR.
-# One engine keeps reading time and memory low on the 1-CPU server. Tesseract was removed.
-DOC_OCR_ENGINE = config("DOC_OCR_ENGINE", default="rapidocr")
+# OCR engine for no-QR document classification (core/ocr.py):
+#   "auto" (default) — RapidOCR (PaddleOCR's PP-OCR models on ONNX Runtime;
+#     pip-only, CPU, no system package) when installed, else Tesseract.
+#   "both" — always run RapidOCR AND Tesseract, concatenate their text (see
+#     core/ocr.py module docstring for the accuracy measurement).
+#   "rapidocr" | "paddleocr" | "tesseract" — force one.  "none" — disable OCR.
+DOC_OCR_ENGINE = config("DOC_OCR_ENGINE", default="auto")
 
-# Auto-crop/straighten a photographed document (find the page, flatten its
-# perspective) before quality-gate measurement and OCR — see core/doc_crop.py.
-# Default False: this is new and unmeasured on real production traffic, so
-# deploying the code alone changes nothing until explicitly turned on.
-DOC_AUTO_CROP = config("DOC_AUTO_CROP", default=False, cast=bool)
+# Path to the tesseract binary — only used when DOC_OCR_ENGINE falls back to
+# Tesseract. Leave blank on Linux where `tesseract` is on PATH (apt install
+# tesseract-ocr); set it only if the binary lives somewhere non-standard
+# (some Windows dev machines) — core/ocr.py also auto-probes the usual paths.
+TESSERACT_CMD = config("TESSERACT_CMD", default="")
+
+# Tesseract page-segmentation mode. 6 ("assume a single uniform block of
+# text") measured far better than Tesseract's own default of 3 (automatic
+# layout analysis) on real phone photos — see core/ocr.py module docstring.
+DOC_OCR_TESSERACT_PSM = config("DOC_OCR_TESSERACT_PSM", default=6, cast=int)
 
 # ── Handwriting recognition (consultation scratchpad) ───────────────────────
 # The consult-pad QR flow photographs a handwritten SOAP note; a vision model
@@ -434,195 +433,47 @@ CONSULT_PAD_LLM_MODEL = config("CONSULT_PAD_LLM_MODEL", default="qwen/qwen3.8-27
 # Falls back to GROQ_API_KEY so an existing Groq key already in .env just works.
 CONSULT_PAD_LLM_KEY   = config("CONSULT_PAD_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
 
-# ── Document classifier — LLM / vision fallback for the uncertain tail ──────
-# The pipeline (core.doc_classifier) runs three layers, cheapest first:
-#   1. deterministic keyword pass       — free, instant, handles the bulk
-#   2. TEXT LLM on the OCR text          — resolves garbled / sparse text
-#   3. VISION LLM on the page image      — resolves bad OCR / odd layouts / disagreement
-# Each layer only runs on what the previous one wasn't sure about. Every layer
-# is a labeller: kind / panel / date only, NEVER test values. Any layer with a
-# blank KEY (and no GROQ_API_KEY) is skipped and the deterministic result +
-# review tray stand. A confident keyword verdict is never overridden by an LLM;
-# genuine cross-layer disagreement goes to the patient.
-DOC_CLASSIFIER_LLM       = config("DOC_CLASSIFIER_LLM", default="core.doc_classifier_llm.classify")
-DOC_CLASSIFIER_LLM_BASE  = config("DOC_CLASSIFIER_LLM_BASE", default="https://api.groq.com/openai/v1")
-DOC_CLASSIFIER_LLM_MODEL = config("DOC_CLASSIFIER_LLM_MODEL", default="openai/gpt-oss-20b")
-DOC_CLASSIFIER_LLM_KEY   = config("DOC_CLASSIFIER_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
-# ── Which LLM server: the local/production toggle (core.llm_client) ─────────
-#   LLM_MODE=local       → the OpenAI-compatible server below (your Ollama)
-#   LLM_MODE=production  → the GPU server's gateway at LLM_GATEWAY_URL
-#                          (POST {url}/ask/, GET {url}/status/)
-# Every LLM job goes through the "llm" Celery queue: one at a time, and while
-# the server is down jobs wait and resume on their own once it's back.
+# ── Records: document classification LLM (apps/records/services.py) ────────
+# Asked only when the keyword rules score a document under 75. Any
+# OpenAI-compatible endpoint; locally Ollama: BASE=http://localhost:11434/v1
+# MODEL=qwen2.5-coder:7b (no key needed).
+DOC_CLASSIFIER_LLM_BASE    = config("DOC_CLASSIFIER_LLM_BASE", default="http://localhost:11434/v1")
+DOC_CLASSIFIER_LLM_MODEL   = config("DOC_CLASSIFIER_LLM_MODEL", default="qwen2.5-coder:7b")
+DOC_CLASSIFIER_LLM_KEY     = config("DOC_CLASSIFIER_LLM_KEY", default="")
+DOC_CLASSIFIER_LLM_TIMEOUT = config("DOC_CLASSIFIER_LLM_TIMEOUT", default=180, cast=int)
+
+# apps/records/services.py::llm_complete() — both modes are Ollama (OpenAI-compatible
+# /chat/completions), so they share one implementation; only the server config below differs.
+# No fallback between the two: LLM_MODE must be exactly "local" or "production" (anything else is a
+# hard error — see llm_mode()), and a failure in the selected mode is an error, never a silent switch.
+#   local       DOC_CLASSIFIER_LLM_* above (this machine's Ollama) — also what llm_classify() uses.
+#   production  sir's GPU server (also Ollama).
 LLM_MODE = config("LLM_MODE", default="local")
-LLM_GATEWAY_URL = config("LLM_GATEWAY_URL", default="")        # e.g. http://10.0.1.25:8000/llm_api
-LLM_GATEWAY_TOKEN = config("LLM_GATEWAY_TOKEN", default="")    # sent as "Authorization: Bearer …" if set
-LLM_GATEWAY_TIMEOUT = config("LLM_GATEWAY_TIMEOUT", default=300, cast=int)
-LLM_GATEWAY_MODEL = config("LLM_GATEWAY_MODEL", default="gpu-server")   # label stored with each verdict
-# The GPU server runs with a 32k-token context (LLM_NUM_CTX=32768), so it can
-# take much more page text than a local CPU model.
-LLM_GATEWAY_MAX_CHARS = config("LLM_GATEWAY_MAX_CHARS", default=12000, cast=int)
+LLM_PRODUCTION_URL = config("LLM_PRODUCTION_URL", default="")
+LLM_PRODUCTION_MODEL = config("LLM_PRODUCTION_MODEL", default="qwen2.5-coder:7b")
+LLM_PRODUCTION_TOKEN = config("LLM_PRODUCTION_TOKEN", default="")
+LLM_PRODUCTION_TIMEOUT = config("LLM_PRODUCTION_TIMEOUT", default=300, cast=int)
+LLM_NUM_CTX = config("LLM_NUM_CTX", default=32768, cast=int)
 
-# Local servers (Ollama: BASE=http://localhost:11434/v1, MODEL=qwen2.5-coder:7b)
-# need no KEY; they do need a longer timeout than a hosted API.
-DOC_CLASSIFIER_LLM_TIMEOUT = config("DOC_CLASSIFIER_LLM_TIMEOUT", default=45, cast=int)
-# How much of the page text the LLM sees (the identifying part is at the top).
-# ~2500 keeps a local 7B model around 15 s per document.
-DOC_CLASSIFIER_LLM_MAX_CHARS = config("DOC_CLASSIFIER_LLM_MAX_CHARS", default=6000, cast=int)
-# True -> the background pipeline asks the LLM about EVERY upload (not just the
-# ones the rules are unsure of) and stores its answer next to the rule verdict,
-# for the rule-vs-LLM-vs-human agreement report. The filing decision is still
-# rules-first; this only adds data.
-DOC_PIPELINE_LLM_ALWAYS = config("DOC_PIPELINE_LLM_ALWAYS", default=False, cast=bool)
+# All three sweep settings (instant-upload file limit, per-run dispatch limit, and how often the
+# sweep runs) are Platform Admin-editable at runtime — apps.records.models.SweepConfig, via
+# apps/platform_admin/classification_rule_views.py. No env vars, no restart, for any of them: the
+# interval is DB-backed (django_celery_beat's DatabaseScheduler below), kept in sync by
+# SweepConfig.save() creating/updating its PeriodicTask + IntervalSchedule rows.
 
-# ── Celery — background jobs ─────────────────────────────────────────────────
-# Workers and the Beat scheduler are started, stopped and configured from
-# platform admin → Background Jobs (core.celery_runtime); the settings below
-# are only the defaults that screen starts from.
-#
-# Broker: the registry Postgres DB by default (kombu's SQLAlchemy transport —
-# no Redis needed). Point CELERY_BROKER_URL (or the Background Jobs screen)
-# at redis://… in production. Postgres can't broadcast, so worker liveness
-# is tracked with a heartbeat in celery_runtime_config instead of `inspect`.
-def _pg_broker_url():
-    from urllib.parse import quote
-    db = DATABASES["default"]
-    return (f"sqla+postgresql://{quote(db['USER'])}:{quote(db['PASSWORD'])}"
-            f"@{db['HOST']}:{db['PORT']}/{db['NAME']}")
-
-
-CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="") or _pg_broker_url()
-CELERY_RESULT_BACKEND = "django-db"          # django_celery_results.TaskResult
-CELERY_RESULT_EXTENDED = True                # keep task name / args for the history view
-CELERY_TASK_TRACK_STARTED = True
-CELERY_RESULT_EXPIRES = 60 * 60 * 24 * 14    # history kept 14 days
-CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
-CELERY_TASK_ACKS_LATE = True
-# A task that hangs (stuck OCR, unresponsive LLM) is interrupted, not left
-# holding a worker forever. process_document normally takes seconds–~1 min.
-CELERY_TASK_SOFT_TIME_LIMIT = config("CELERY_TASK_SOFT_TIME_LIMIT", default=300, cast=int)
-CELERY_TASK_TIME_LIMIT = config("CELERY_TASK_TIME_LIMIT", default=360, cast=int)
-# Recycle a worker child after N tasks — OCR / PDF libraries hold memory.
-CELERY_WORKER_MAX_TASKS_PER_CHILD = config("CELERY_WORKER_MAX_TASKS_PER_CHILD", default=50, cast=int)
-# Redis re-delivers an un-acked task after this many seconds; must exceed the
-# longest task (acks_late). Redis only: the Postgres (sqla+postgresql) broker hands
-# transport options straight to SQLAlchemy's create_engine(), which rejects this key
-# and would stop the worker from starting.
-CELERY_BROKER_TRANSPORT_OPTIONS = (
-    {"visibility_timeout": 3600} if CELERY_BROKER_URL.startswith(("redis://", "rediss://")) else {}
-)
-# Everything that talks to the LLM runs on its own queue, consumed by a
-# single-concurrency worker in production (deploy/systemd/hms-celery-llm.service),
-# so LLM work is strictly one-after-the-other and never blocks uploads.
-CELERY_TASK_ROUTES = {"core.llm_*": {"queue": "llm"}}
-CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+# ── Celery (atomwalk/celery.py) ──────────────────────────────────────────────
+#   worker: celery -A atomwalk worker --loglevel=info --pool=solo
+#   beat:   celery -A atomwalk beat --loglevel=info
+CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
 CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cast=bool)
-CELERY_BROKER_CONNECTION_TIMEOUT = 2
-CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
-CELERY_TIMEZONE = "Asia/Kolkata"
-DJANGO_CELERY_BEAT_TZ_AWARE = True
-# Let the Background Jobs screen start/stop worker & beat processes on this
-# machine. Turn off where a process manager (systemd/supervisor) owns them —
-# the screen then only monitors.
-CELERY_UI_PROCESS_CONTROL = config("CELERY_UI_PROCESS_CONTROL", default=True, cast=bool)
-CELERY_LOG_DIR = config("CELERY_LOG_DIR", default="") or str(BASE_DIR / "logs")
-# Task events for Flower's live view (workers are also started with -E).
-CELERY_WORKER_SEND_TASK_EVENTS = True
-CELERY_TASK_SEND_SENT_EVENT = True
-# Flower — Celery's monitoring dashboard, started from Background Jobs. It
-# shows task arguments, so it listens on localhost only unless changed; set
-# FLOWER_BASIC_AUTH="user:password" before exposing it anywhere else.
-# Needs a broadcast-capable broker (Redis/RabbitMQ), not the Postgres one.
-FLOWER_ADDRESS = config("FLOWER_ADDRESS", default="127.0.0.1")
-FLOWER_PORT = config("FLOWER_PORT", default=5555, cast=int)
-FLOWER_URL = config("FLOWER_URL", default="") or f"http://localhost:{FLOWER_PORT}"
-FLOWER_BASIC_AUTH = config("FLOWER_BASIC_AUTH", default="")
+# Beat reads its schedule from the DB (django_celery_beat), not from a fixed dict here, so
+# SweepConfig can change the sweep interval live with no restart.
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
-# NOTE (2026-09-22): the vision layer was removed from the document-TYPE
-# classifier (core/doc_classifier.py no longer calls a vision model at all —
-# it was the step most likely to turn a photographed pharmacy bill into a
-# false "prescription", plus per-call cost and third-party image upload;
-# core/doc_classifier_vision.py itself was deleted 2026-09-23, its shared
-# JSON-parse/image-prep helpers moved into core/lab_value_extractor.py, the
-# only remaining caller). These three settings are kept only because
-# core/lab_value_extractor.py's LAB_EXTRACTOR_VISION_* settings below fall
-# back to them (a separate, still-shipped feature: reading the actual test
-# VALUES off a report photo — unrelated to sorting a document into a
-# folder). Leave these as-is unless lab value extraction's vision path is
-# also being retired.
-DOC_CLASSIFIER_VISION_BASE  = config("DOC_CLASSIFIER_VISION_BASE", default="https://api.groq.com/openai/v1")
-DOC_CLASSIFIER_VISION_MODEL = config("DOC_CLASSIFIER_VISION_MODEL", default="")
-DOC_CLASSIFIER_VISION_KEY   = (config("DOC_CLASSIFIER_VISION_KEY", default="")
-                               or config("DOC_CLASSIFIER_LLM_KEY", default="")
-                               or config("GROQ_API_KEY", default=""))
-
-# Lab value extraction (HMS-INSIGHTS) — a separate pipeline stage from
-# classification above, run async via `manage.py extract_lab_values`, never
-# inline with an upload. A labeller too (reads what's printed; never
-# computes), just extracting numbers instead of kind/panel/date. Falls back
-# to the classifier's own LLM/vision config so a zero-config deployment
-# "just works" against the same provider/key; set the LAB_EXTRACTOR_* vars
-# explicitly to point extraction at a different model independently later.
-LAB_EXTRACTOR_LLM_BASE    = config("LAB_EXTRACTOR_LLM_BASE", default="") or DOC_CLASSIFIER_LLM_BASE
-LAB_EXTRACTOR_LLM_MODEL   = config("LAB_EXTRACTOR_LLM_MODEL", default="") or DOC_CLASSIFIER_LLM_MODEL
-LAB_EXTRACTOR_LLM_KEY     = config("LAB_EXTRACTOR_LLM_KEY", default="") or DOC_CLASSIFIER_LLM_KEY
-LAB_EXTRACTOR_VISION_BASE  = config("LAB_EXTRACTOR_VISION_BASE", default="") or DOC_CLASSIFIER_VISION_BASE
-LAB_EXTRACTOR_VISION_MODEL = config("LAB_EXTRACTOR_VISION_MODEL", default="") or DOC_CLASSIFIER_VISION_MODEL
-LAB_EXTRACTOR_VISION_KEY   = config("LAB_EXTRACTOR_VISION_KEY", default="") or DOC_CLASSIFIER_VISION_KEY
-
-# "AI Trends" narrative (core/health_insight.py) — a third, on-demand stage,
-# gated behind an explicit patient tap (never auto-run on page load, unlike
-# the two above). Writes a short paragraph over already-extracted
-# ExtractedLabValue points; never re-reads a document or touches an LLM to
-# extract numbers itself. Same zero-config fallback pattern as extraction.
-HEALTH_INSIGHT_LLM_BASE  = config("HEALTH_INSIGHT_LLM_BASE", default="") or DOC_CLASSIFIER_LLM_BASE
-HEALTH_INSIGHT_LLM_MODEL = config("HEALTH_INSIGHT_LLM_MODEL", default="") or DOC_CLASSIFIER_LLM_MODEL
-HEALTH_INSIGHT_LLM_KEY   = config("HEALTH_INSIGHT_LLM_KEY", default="") or DOC_CLASSIFIER_LLM_KEY
-
-# Persistent, worker-shared cache for the classifier's LLM/vision answers —
-# a given OCR text (or image) always classifies the same, so we store it once
-# and never pay Groq / the VLM again for a re-upload, a backfill, or a retry.
-# Needs `manage.py createcachetable` (migration 0032 runs it). The app's other
-# uses of the cache framework keep the default local-memory backend.
-# "lab_extract" is the same idea for lab_value_extractor's answers (migration
-# 0038) — a separate alias/table from doc_classify since the two pipelines'
-# cache keys, TTLs and payloads (a category label vs. a list of values) don't
-# overlap and shouldn't compete for the same table's CULL_FREQUENCY eviction.
 CACHES = {
     "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
-    "doc_classify": {
-        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
-        "LOCATION": "doc_classify_cache",
-        "TIMEOUT": 60 * 60 * 24 * 60,   # 60 days
-        "OPTIONS": {"MAX_ENTRIES": 100_000, "CULL_FREQUENCY": 4},
-    },
-    "lab_extract": {
-        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
-        "LOCATION": "lab_extract_cache",
-        "TIMEOUT": 60 * 60 * 24 * 60,   # 60 days
-        "OPTIONS": {"MAX_ENTRIES": 100_000, "CULL_FREQUENCY": 4},
-    },
 }
-
-# ── Mobile upload-and-extract (apps/registry/tasks.py) ──────────────────────────
-# Runs on the Celery setup above, the same way the My Reports bulk pipeline does: the
-# database is the queue (ExtractionBatch / ExtractionItem), and two scheduled jobs on the
-# default "celery" queue do the work (apps/registry/tasks.py). They ignore results and set
-# their own time limits on the task decorators.
-# Publishing must still fail fast: web requests do publish (core.celery_runtime.send, e.g. to
-# wake the AI queue), and they run inside a gunicorn worker (only a handful exist), so an
-# unreachable broker has to become a quick error, not a hang.
-CELERY_TASK_SERIALIZER = "json"
-CELERY_ACCEPT_CONTENT = ["json"]
-CELERY_TASK_PUBLISH_RETRY_POLICY = {"max_retries": 1, "interval_start": 0, "interval_step": 0.2, "interval_max": 0.5}
-if CELERY_BROKER_URL.startswith(("redis://", "rediss://")):
-    # Redis (production): give up quickly on a dead connection instead of waiting.
-    CELERY_BROKER_TRANSPORT_OPTIONS = {**CELERY_BROKER_TRANSPORT_OPTIONS,
-                                       "socket_connect_timeout": 3, "socket_timeout": 5}
-
-# Total bytes allowed in one bulk extraction batch (on top of the per-file
-# caps already enforced in portal_extraction_views.py).
-EXTRACTION_BATCH_MAX_BYTES = config("EXTRACTION_BATCH_MAX_BYTES", default=175 * 1024 * 1024, cast=int)
 
 # ── License tier constants ───────────────────────────────────────────────────
 class LicenseTier:

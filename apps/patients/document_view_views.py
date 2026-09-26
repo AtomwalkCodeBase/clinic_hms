@@ -47,7 +47,7 @@ class DocumentViewView(APIView):
         if not v.ok or not v.awpid or not v.public_document_id:
             return error(message="This code is invalid.", status=400)
 
-        from apps.registry.models import SharedDocument
+        from apps.records.models import SharedDocument
 
         doc = (
             SharedDocument.objects.using("default")
@@ -64,7 +64,7 @@ class DocumentViewView(APIView):
             return error(message="This document could not be found.", status=404)
 
         try:
-            file_url = blob_storage.signed_url(doc.file_data, download_name=doc.file_name or None)
+            file_url = blob_storage.signed_url(doc.s3_key, download_name=doc.file_name or None)
         except Exception:
             logger.exception("view-report: signed_url failed for SharedDocument id=%s", doc.id)
             return error(message="This document could not be opened right now. Please try again.", status=500)

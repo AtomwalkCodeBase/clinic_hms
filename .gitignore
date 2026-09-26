@@ -19,8 +19,6 @@ static_root/
 .env
 .env.local
 .env.*.local
-.env.*backup*
-.env.check_backup
 EMPLOYEE_LOGIN_CODES.md
 INVESTOR_DEMO_CREDENTIALS.md
 # Frontend
@@ -42,13 +40,6 @@ Thumbs.db
 *.bak
 *.tmp
 
-# Runtime output — logs (celery-*.log, doc-pipeline.log), Celery/Flower state
-/logs/
-celerybeat-schedule*
-celerybeat.pid
-*.pid
-flower.db*
-
 # Internal planning docs (not meant for the repo)
 /Atomwalk_HMS_Knowledge_Map.docx
 /Atomwalk_HMS_Knowledge_Map.md
@@ -66,3 +57,5 @@ flower.db*
 /Claude outputs/
 /docs/
 /.claude/
+# Celery Beat local schedule file
+celerybeat-schedule*
