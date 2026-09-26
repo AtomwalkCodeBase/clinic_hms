@@ -57,3 +57,5 @@ Thumbs.db
 /Claude outputs/
 /docs/
 /.claude/
+# Celery Beat local schedule file
+celerybeat-schedule*

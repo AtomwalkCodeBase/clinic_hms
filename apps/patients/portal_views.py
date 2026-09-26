@@ -1565,653 +1565,127 @@ class PortalRescheduleBookingView(APIView):
 
 
 # ── My documents ─────────────────────────────────────────────────────────────
+# Uploading is POST /api/v1/records/upload/ (apps/records). These are the
+# patient's read / delete / zip endpoints over apps.records.SharedDocument.
 
-_MAX_DOC_BASE64_CHARS = 15_500_000  # ≈11MB raw file — a modern phone photo runs ~8-11MB;
-#                                     base64 inflates ~4/3, so ~15.4M chars. Keep the request
-#                                     under DATA_UPLOAD_MAX_MEMORY_SIZE (settings) and the
-#                                     proxy's client_max_body_size.
+def _handwritten_siblings(awpid):
+    """The consult pad's raw handwritten Rx ("encounter:<id>:handwritten:rx")
+    hangs off its typeset prescription instead of being its own row.
+    Returns ({typeset source_ref: handwriting doc id}, [handwriting ids to hide])."""
+    from apps.records.models import SharedDocument
+    docs = SharedDocument.objects.using("default").filter(awpid=awpid, source_ref__startswith="encounter:")
+    typeset = set(docs.exclude(source_ref__contains=":handwritten:").values_list("source_ref", flat=True))
+    by_base = {}
+    for hid, ref in docs.filter(source_ref__endswith=":handwritten:rx").values_list("id", "source_ref"):
+        base = ref.rsplit(":handwritten:rx", 1)[0]
+        if base in typeset:
+            by_base[base] = hid
+    return by_base, list(by_base.values())
+
+
+def _document_row(d, handwritten_doc_id=None):
+    return {
+        "id": d.id, "title": d.title, "doc_type": d.doc_type,
+        "file_name": d.file_name, "mime_type": d.mime_type,
+        "uploaded_by": d.uploaded_by, "created_at": d.created_at,
+        "document_date": d.document_date, "public_document_id": d.public_document_id,
+        "hospital_label": d.hospital_label, "doctor_label": d.doctor_label,
+        "source_tenant_id": d.source_tenant_id,
+        "processing_status": d.processing_status, "score": d.score, "method": d.method,
+        "error": d.error if d.processing_status == "failed" else "",
+        "batch_id": d.batch_id, "handwritten_doc_id": handwritten_doc_id,
+    }
+
+
+def _own_document(request, doc_id):
+    """(doc, None) if the caller (or a linked family member) owns it, else (None, error)."""
+    from apps.records.models import SharedDocument
+    target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+    if err:
+        return None, err
+    doc = SharedDocument.objects.using("default").filter(pk=doc_id, awpid=target_awpid).first()
+    if not doc or doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
+        return None, error("Document not found.", status=404)
+    return doc, None
+
 
 class PortalDocumentListCreateView(APIView):
     """
-    GET  /api/v1/portal/documents/  — patient's own uploaded documents (no file_data)
-    POST /api/v1/portal/documents/  — attach a report (base64 data URI)
-
-    Written to the registry (not a tenant DB) keyed by awpid, same as the
-    other Shared* HIE tables, so any hospital's doctor sees it via
-    get_shared_history() regardless of which hospital the patient uploaded
-    it from.
+    GET /api/v1/portal/documents/?status=queued,ocr   — the patient's documents,
+    newest first, with each one's processing_status / type / score / method.
     """
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.registry.models import SharedDocument
+        from apps.records.models import SharedDocument
 
         target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
         if err:
             return err
-
-        # The consult-pad's raw handwritten prescription is archived as its own
-        # SharedDocument (source_ref "encounter:<id>:handwritten:rx"). When the
-        # typeset prescription for the same encounter also exists, that
-        # handwriting is NOT a second entry in My Reports — it hangs off the
-        # typeset row as `handwritten_doc_id`, opened from the detail sheet.
-        # A handwriting row with NO typeset sibling (doctor wrote the script by
-        # hand and added no structured items) stays as its own row.
-        hw_rows = list(
-            SharedDocument.objects.using("default")
-            .filter(awpid=target_awpid, source_ref__endswith=":handwritten:rx")
-            .values_list("id", "source_ref")
-        )
-        base_refs = set(
-            SharedDocument.objects.using("default")
-            .filter(awpid=target_awpid, source_ref__startswith="encounter:")
-            .exclude(source_ref__contains=":handwritten:")
-            .values_list("source_ref", flat=True)
-        )
-        hw_by_base, linked_hw_ids = {}, []
-        for hid, ref in hw_rows:
-            base = ref.rsplit(":handwritten:rx", 1)[0]
-            if base in base_refs:
-                hw_by_base[base] = hid
-                linked_hw_ids.append(hid)
-
+        hw_by_base, linked_hw_ids = _handwritten_siblings(target_awpid)
         qs = (SharedDocument.objects.using("default")
               .filter(awpid=target_awpid, hidden_at__isnull=True, deleted_at__isnull=True)
               .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
               .exclude(id__in=linked_hw_ids)
               .order_by("-created_at"))
+        statuses = [s for s in (request.query_params.get("status") or "").split(",") if s]
+        if statuses:
+            qs = qs.filter(processing_status__in=statuses)
         page_items, meta = paginate_queryset(request, qs)
-        results = [{
-            "id":         d.id,
-            "title":      d.title,
-            "doc_type":   d.doc_type,
-            "file_name":  d.file_name,
-            "mime_type":  d.mime_type,
-            "uploaded_by": d.uploaded_by,
-            "created_at": d.created_at,
-            "review_state": d.review_state,
-            "verification_status": d.verification_status,
-            "classification_method": d.classification_method,
-            "review_notes": d.review_notes,
-            "review_needs": d.review_needs or [],
-            "document_date": d.document_date,
-            "collection_date": d.collection_date,
-            "date_source": d.date_source,
-            "report_categories": d.report_categories or [],
-            "category_confidence": d.category_confidence,
-            "public_document_id": d.public_document_id,
-            "hospital_label": d.hospital_label,
-            "doctor_label": d.doctor_label,
-            "source_tenant_id": d.source_tenant_id,
-            "handwritten_doc_id": hw_by_base.get(d.source_ref),
-        } for d in page_items]
-        return Response({"results": results, "pagination": meta})
-
-    def post(self, request):
-        from apps.registry.models import SharedDocument
-
-        d = request.data
-        title     = (d.get("title") or "").strip()
-        doc_type  = d.get("doc_type") or "other"
-        file_data = d.get("file_data") or ""
-        file_name = (d.get("file_name") or "").strip()
-        mime_type = (d.get("mime_type") or "").strip()
-
-        if not title:
-            return error("Title is required.", errors={"title": "Required."})
-        if not file_data:
-            return error("No file provided.", errors={"file_data": "Required."})
-        if len(file_data) > _MAX_DOC_BASE64_CHARS:
-            return error("File is too large. Please upload a smaller file (under ~11MB).")
-        # Verify the payload's real magic bytes match an allowed type instead
-        # of trusting the client-supplied mime_type — this file gets shared
-        # across every hospital the patient consents to via the HIE flow, so
-        # a mislabeled upload would follow it everywhere.
-        try:
-            mime_type = validate_data_uri(file_data)
-        except FileValidationError as exc:
-            return error(str(exc), errors={"file_data": str(exc)})
-        if doc_type not in dict(SharedDocument.DOC_TYPE_CHOICES):
-            doc_type = "other"
-
-        # Optional — set when this upload is attaching the outside report for
-        # a specific doctor-ordered test, so that order's card can show the
-        # attachment inline instead of only in the generic documents list.
-        source_ref = (d.get("source_ref") or "").strip()
-
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-
-        # Documents attach to whichever patient the app has selected — self
-        # or a linked family member — not always the logged-in account. Same
-        # ownership check the GET on this view already uses.
-        target_awpid, _target_dob, err = _resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-        if target_awpid == acct.awpid:
-            target_full_name = acct.full_name
-        else:
-            target_identity = PatientIdentity.objects.using("default").filter(awpid=target_awpid).first()
-            target_full_name = target_identity.full_name if target_identity else acct.full_name
-
-        # ── My Reports pipeline: QR verify → dedup → classify → PDF ──────────
-        import base64, hashlib
-        from core import qr_token as _qt, doc_classifier as _dc, normalise as _nz
-
-        try:
-            raw = base64.b64decode(file_data.split(",", 1)[1]) if "," in file_data else b""
-        except Exception:
-            raw = b""
-        content_hash = hashlib.sha256(raw).hexdigest() if raw else ""
-
-        public_document_id = ""
-        verification_status = "unverified"
-        classification_method = ""
-        classification_confidence = None
-        document_date = None
-        review_state = "filed"
-        report_categories = []
-        category_method = ""
-        category_confidence = None
-        collection_date = None
-        date_source = ""
-        cr = None
-        review_needs = []           # subset of kind|category|date|file — see SharedDocument.review_needs
-
-        # 1. QR path — the phone decoded the hospital QR and posted the token.
-        qr_tok = (d.get("qr_token") or "").strip()
-        if qr_tok:
-            v = _qt.verify(qr_tok)
-            if v.ok and v.awpid and v.awpid != target_awpid:
-                return error("This document belongs to another patient.", status=403)
-            if v.ok:
-                doc_type = v.doc_type
-                public_document_id = v.public_document_id
-                verification_status = "verified"
-                classification_method = "qr"
-
-        # 2. De-duplication — by hospital id (QR path) or exact content hash.
-        force = str(d.get("force") or "").strip().lower() in ("1", "true", "yes")
-        dup_qs = SharedDocument.objects.using("default").filter(
-            awpid=target_awpid, deleted_at__isnull=True,
-        )
-        existing = None
-        if public_document_id:
-            existing = dup_qs.filter(public_document_id=public_document_id).first()
-        if existing is None and content_hash:
-            existing = dup_qs.filter(content_hash=content_hash).first()
-        if existing is not None and not force:
-            return Response({
-                "duplicate": True,
-                "existing_id": existing.id,
-                "existing_title": existing.title,
-                "existing_doc_type": existing.doc_type,
-            }, status=200)
-
-        # 3. No QR — quality gate, then classify kind + panel + date from the
-        #    page text (OCR when there's no text layer). Anything the
-        #    classifier isn't sure of lands in the review tray, which asks the
-        #    patient only for the field(s) that failed.
-        quality_reason = ""
-        quality_message = ""
-        if classification_method != "qr":
-            try:
-                cr = _dc.classify(raw, mime_type)
-                # Clearly not a medical document — don't save it at all.
-                if getattr(cr, "non_medical", False):
-                    return Response({
-                        "skipped": True,
-                        "kind": "not_medical",
-                        "reason": "This doesn't look like a medical document, so it "
-                                  "wasn't saved. My Reports is for prescriptions, lab "
-                                  "reports and scans.",
-                    }, status=200)
-                classification_method = cr.method
-                classification_confidence = cr.confidence
-                document_date = cr.doc_date
-                collection_date = cr.collection_date
-                date_source = cr.date_source
-                if cr.unreadable:
-                    # keep the file, classify nothing — Retake / Enter details.
-                    # Carry the SPECIFIC reason (password-protected / blurry /
-                    # dark / low-res) through to the patient, not a generic one.
-                    doc_type = "other"
-                    review_state = "unsorted"
-                    verification_status = "needs_review"
-                    quality_reason = cr.quality_reason
-                    quality_message = cr.quality_message
-                    review_needs = ["file"]
-                elif cr.confident:
-                    doc_type = cr.doc_type
-                    review_state = "filed" if not cr.needs else "unsorted"
-                    if cr.needs:
-                        verification_status = "needs_review"
-                        review_needs = list(cr.needs)
-                    if cr.doc_type == "lab_report":
-                        report_categories = list(cr.categories)
-                        category_confidence = cr.category_confidence
-                        category_method = "keyword" if cr.method == "ocr_keyword" else cr.method
-                else:
-                    doc_type = "other"
-                    review_state = "unsorted"
-                    verification_status = "needs_review"
-                    review_needs = list(cr.needs) or ["kind"]
-            except Exception:
-                logger.exception("doc classify failed; parking upload in Unsorted")
-                doc_type = "other"
-                review_state = "unsorted"
-                verification_status = "needs_review"
-                classification_method = "ocr_keyword"
-                review_needs = ["kind"]
-
-        # 4. Normalise every upload to a PDF (images become a single-page PDF).
-        try:
-            pdf_bytes, mime_type = _nz.to_pdf(raw, mime_type)
-            file_data = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
-        except Exception:
-            logger.exception("PDF normalise failed; storing the original file")
-
-        identity = blob_storage.identity_slug(name=target_full_name, identifier=target_awpid)
-        try:
-            file_key = blob_storage.upload_data_uri(
-                file_data, prefix="patient-documents", mime_type=mime_type,
-                category="patient-document", identity=identity,
-            )
-        except blob_storage.StorageError as exc:
-            return error(str(exc), errors={"file_data": str(exc)})
-
-        # file_name is named after the upload category plus the patient's
-        # own title and identity, not whatever the phone/scanner called the
-        # file — title itself (above, stored separately) stays exactly as
-        # the patient wrote it; this is just what the downloaded file is
-        # called, so it's recognizable outside this app too.
-        file_name = blob_storage.display_file_name(
-            "patient-document", mime_type,
-            detail=title, name=target_full_name, identifier=target_awpid,
-        )
-
-        doc = SharedDocument.objects.using("default").create(
-            awpid=target_awpid, title=title, doc_type=doc_type,
-            file_name=file_name, mime_type=mime_type, file_data=file_key,
-            uploaded_by="patient", source_tenant_id=None, source_ref=source_ref,
-            public_document_id=public_document_id, content_hash=content_hash,
-            classification_method=classification_method,
-            classification_confidence=classification_confidence,
-            verification_status=verification_status, review_state=review_state,
-            document_date=document_date, collection_date=collection_date,
-            date_source=date_source, report_categories=report_categories,
-            category_method=category_method, category_confidence=category_confidence,
-            review_notes=quality_message, review_needs=review_needs,
-        )
-        return Response({
-            "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,
-            "file_name": doc.file_name, "mime_type": doc.mime_type,
-            "source_ref": doc.source_ref, "created_at": doc.created_at,
-            "review_state": doc.review_state,
-            "verification_status": doc.verification_status,
-            "classification_method": doc.classification_method,
-            "report_categories": doc.report_categories,
-            "document_date": doc.document_date,
-            "needs": review_needs,
-            "review_needs": review_needs,
-            "unreadable": bool(quality_reason),
-            "quality_reason": quality_reason,
-            "quality_message": quality_message,
-        }, status=201)
+        return Response({"results": [_document_row(d, hw_by_base.get(d.source_ref)) for d in page_items],
+                         "pagination": meta})
 
 
 class PortalDocumentDetailView(APIView):
     """
-    GET /api/v1/portal/documents/<doc_id>/
-
-    Full content for one of the patient's own documents — the download path
-    for the list above (which is metadata-only). Returns `file_data` as a
-    short-lived signed URL when it's an object-storage key, or the inline
-    `data:` URI for older/local rows.
-
-    Gated three ways: the doc must belong to the caller's own AWPID (or a
-    linked family member), and its type must not be one of
-    SharedDocument.STAFF_ONLY_DOC_TYPES (the handwritten internal note never
-    leaves the clinician side).
+    GET    /api/v1/portal/documents/<id>/[?download=1]  — metadata + a short-lived signed file URL
+    DELETE /api/v1/portal/documents/<id>/               — remove it from My Reports and from
+           other hospitals' view (patient uploads: deleted_at; hospital-issued: hidden_at, the
+           issuing hospital keeps its copy). A prescription's handwriting sibling goes with it.
     """
     permission_classes = [IsPatient]
 
     def get(self, request, doc_id):
-        from apps.registry.models import SharedDocument
-
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        from apps.records.models import SharedDocument
+        doc, err = _own_document(request, doc_id)
         if err:
             return err
-
-        doc = SharedDocument.objects.using("default").filter(pk=doc_id).first()
-        if not doc or doc.awpid != target_awpid:
-            return error("Document not found.", status=404)
-        if doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
-            # Not the patient's to see — 404, not 403, so its existence isn't
-            # even confirmed.
-            return error("Document not found.", status=404)
-
-        # ?download=1 -> "Save As" instead of inline view (S3 URL gets a
-        # Content-Disposition override; a "data:" URI is saved client-side).
         want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
         dl_name = doc.file_name or f"{doc.title or 'document'}.pdf"
-        raw = doc.file_data or ""
-        if raw.startswith("data:"):
-            file_data = raw
-        else:
-            file_data = blob_storage.signed_url(raw, download_name=dl_name if want_download else None)
-        # A typeset prescription may have the doctor's raw handwriting archived
-        # as a sibling row — surfaced here so the detail sheet can offer
-        # "view / download handwritten" without it being a second My Reports entry.
-        handwritten_doc_id = None
-        if doc.doc_type == "prescription" and (doc.source_ref or "").startswith("encounter:") \
+        hw_id = None
+        if doc.doc_type == "prescription" and doc.source_ref.startswith("encounter:") \
                 and ":handwritten:" not in doc.source_ref:
-            handwritten_doc_id = (
-                SharedDocument.objects.using("default")
-                .filter(awpid=doc.awpid, source_ref=f"{doc.source_ref}:handwritten:rx")
-                .values_list("id", flat=True).first()
-            )
-
+            hw_id = (SharedDocument.objects.using("default")
+                     .filter(awpid=doc.awpid, source_ref=f"{doc.source_ref}:handwritten:rx")
+                     .values_list("id", flat=True).first())
         return success(data={
-            "id": doc.id,
-            "title": doc.title,
-            "doc_type": doc.doc_type,
-            "file_name": doc.file_name,
-            "mime_type": doc.mime_type,
-            "created_at": doc.created_at,
-            "document_date": doc.document_date,
-            "report_categories": doc.report_categories or [],
-            "review_state": doc.review_state,
-            "review_needs": doc.review_needs or [],
-            "verification_status": doc.verification_status,
-            "public_document_id": doc.public_document_id,
-            "classification_method": doc.classification_method,
-            "hospital_label": doc.hospital_label,
-            "doctor_label": doc.doctor_label,
-            "handwritten_doc_id": handwritten_doc_id,
-            "file_data": file_data,
+            **_document_row(doc, hw_id),
+            "file_data": blob_storage.signed_url(doc.s3_key, download_name=dl_name if want_download else None),
             "download": want_download,
         })
 
-    def patch(self, request, doc_id):
-        """
-        The review-tray confirmation. Body (all optional — send what the
-        classifier asked for):
-          { "doc_type": "lab_report",
-            "report_categories": ["lipid"],      # lab reports only
-            "document_date": "2026-09-02" }
-        Files an Unsorted / unreadable row. A QR-verified hospital document is
-        authoritative and cannot be re-typed.
-        """
-        from datetime import date as _date
-
-        from apps.registry.models import SharedDocument
-        from core import report_types as _rt
-
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-        doc = SharedDocument.objects.using("default").filter(pk=doc_id).first()
-        if not doc or doc.awpid != target_awpid or doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
-            return error("Document not found.", status=404)
-        if doc.verification_status == "verified":
-            return error("This document's type is set by the issuing hospital.", status=409)
-
-        d = request.data
-        fields = ["review_state", "verification_status", "classification_method"]
-
-        new_type = (d.get("doc_type") or "").strip()
-        if new_type:
-            if new_type not in dict(SharedDocument.DOC_TYPE_CHOICES):
-                return error("Unknown document type.", errors={"doc_type": "Unknown."})
-            doc.doc_type = new_type
-            fields.append("doc_type")
-
-        if "report_categories" in d:
-            cats = d.get("report_categories") or []
-            if not isinstance(cats, list):
-                return error("report_categories must be a list of category slugs.")
-            cats = [c for c in cats if c in _rt.PANELS_BY_SLUG]
-            doc.report_categories = cats if doc.doc_type == "lab_report" else []
-            doc.category_method = "patient_confirmed"
-            doc.category_confidence = 1.0
-            fields += ["report_categories", "category_method", "category_confidence"]
-        elif doc.doc_type != "lab_report" and doc.report_categories:
-            doc.report_categories = []
-            fields.append("report_categories")
-
-        if d.get("document_date"):
-            try:
-                y, m, day = (int(x) for x in str(d["document_date"])[:10].split("-"))
-                dt = _date(y, m, day)
-            except Exception:
-                return error("document_date must be YYYY-MM-DD.", errors={"document_date": "Invalid."})
-            if dt > _date.today():
-                return error("That date is in the future.", errors={"document_date": "Future date."})
-            doc.document_date = dt
-            doc.date_source = "patient"
-            fields += ["document_date", "date_source"]
-
-        # Recompute what's still open rather than assuming this one PATCH
-        # settled everything — a client may send fields one at a time (pick a
-        # type now, get asked for the panel next) as well as all at once.
-        still_needs = list(doc.review_needs or [])
-        if new_type:
-            # picking a type (even for a previously-unreadable row) settles both.
-            still_needs = [n for n in still_needs if n not in ("kind", "file")]
-        if d.get("document_date"):
-            still_needs = [n for n in still_needs if n != "date"]
-        if doc.doc_type == "lab_report" and not doc.report_categories:
-            if "category" not in still_needs:
-                still_needs.append("category")
-        else:
-            still_needs = [n for n in still_needs if n != "category"]
-
-        doc.review_needs = still_needs
-        doc.review_state = "filed" if not still_needs else "unsorted"
-        doc.verification_status = "unverified" if not still_needs else "needs_review"
-        doc.classification_method = "patient_confirmed"
-        fields += ["review_needs"]
-        doc.save(using="default", update_fields=list(dict.fromkeys(fields)))
-        return success(data={
-            "id": doc.id, "doc_type": doc.doc_type,
-            "report_categories": doc.report_categories,
-            "document_date": doc.document_date, "review_state": doc.review_state,
-            "review_needs": doc.review_needs,
-        })
-
     def delete(self, request, doc_id):
-        """
-        Remove a document from the patient's My Reports and from everything a
-        DIFFERENT hospital can pull (HIE history + emergency QR) — both the
-        hidden_at and deleted_at markers are filtered out of every such query.
-
-        Patient upload   -> deleted_at (soft-deleted, purged later).
-        Hospital-issued  -> hidden_at; the hospital that created it keeps its
-                            own copy in its own chart (medical-retention), but
-                            it is gone from the patient's reports and from
-                            other hospitals.
-
-        A typeset prescription and its handwritten sibling are removed together.
-        """
-        from apps.registry.models import SharedDocument
-        from django.utils import timezone
-
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        from apps.records.models import SharedDocument
+        doc, err = _own_document(request, doc_id)
         if err:
             return err
-        doc = SharedDocument.objects.using("default").filter(pk=doc_id).first()
-        if not doc or doc.awpid != target_awpid or doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
-            return error("Document not found.", status=404)
-
-        now = timezone.now()
         targets = [doc]
-        if doc.doc_type == "prescription" and (doc.source_ref or "").startswith("encounter:") \
+        if doc.doc_type == "prescription" and doc.source_ref.startswith("encounter:") \
                 and ":handwritten:" not in doc.source_ref:
-            sib = (SharedDocument.objects.using("default")
-                   .filter(awpid=doc.awpid, source_ref=f"{doc.source_ref}:handwritten:rx")
-                   .first())
-            if sib:
-                targets.append(sib)
-
+            targets += list(SharedDocument.objects.using("default")
+                            .filter(awpid=doc.awpid, source_ref=f"{doc.source_ref}:handwritten:rx"))
+        now = timezone.now()
         for t in targets:
-            if t.source_tenant_id:
-                t.hidden_at = now
-                t.save(using="default", update_fields=["hidden_at"])
-            else:
-                t.deleted_at = now
-                t.save(using="default", update_fields=["deleted_at"])
+            field = "hidden_at" if t.source_tenant_id else "deleted_at"
+            setattr(t, field, now)
+            t.save(using="default", update_fields=[field])
         return success(data={"id": doc.id, "deleted": True})
-
-
-# ── My Reports: folder / multi-file upload (batch) ───────────────────────────
-
-_BATCH_MAX_FILES = 100
-_BATCH_MAX_BYTES = 300 * 1024 * 1024   # 300 MB
-_ITEM_MAX_BYTES = 20 * 1024 * 1024     # 20 MB per file
-_EXT_BY_MIME_NAME = {"pdf": "pdf", "jpg": "jpg", "jpeg": "jpg", "png": "png"}
-
-
-class PortalDocumentBatchView(APIView):
-    """
-    POST /api/v1/portal/documents/batch/
-        body: { method?, files: [ {name, size, sha256?}, ... ] }
-        -> creates a DocumentUploadBatch + one DocumentUploadItem per accepted
-           file and returns a presigned S3 PUT url for each. Non-document
-           extensions are dropped from the manifest (client should pre-filter
-           too). The client PUTs each file straight to S3, then calls
-           .../batch/<id>/process/. The process_document_batches command
-           (cron) does the actual validation + classification + filing.
-
-    GET  /api/v1/portal/documents/batch/?batch_id=<uuid>
-        -> { batch: {...counters, status}, items: [{id, filename, status, reason}] }
-    """
-    permission_classes = [IsPatient]
-
-    def get(self, request):
-        from apps.registry.models import DocumentUploadBatch
-
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-        batch_id = (request.query_params.get("batch_id") or "").strip()
-        if not batch_id:
-            return error("batch_id is required.")
-        b = DocumentUploadBatch.objects.using("default").filter(pk=batch_id, awpid=target_awpid).first()
-        if not b:
-            return error("Batch not found.", status=404)
-        items = list(b.items.values("id", "original_filename", "status", "reason",
-                                    "classified_as", "result_document_id"))
-        return success(data={
-            "batch": {
-                "id": str(b.id), "status": b.status, "method": b.method,
-                "total_files": b.total_files, "accepted": b.accepted,
-                "unsorted": b.unsorted, "ignored": b.ignored, "failed": b.failed,
-                "created_at": b.created_at, "finished_at": b.finished_at,
-            },
-            "items": [{**it, "id": str(it["id"]),
-                       "result_document_id": it["result_document_id"]} for it in items],
-        })
-
-    def post(self, request):
-        from apps.registry.models import DocumentUploadBatch, DocumentUploadItem
-
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-        if target_awpid == acct.awpid:
-            target_full_name = acct.full_name
-        else:
-            target_identity = PatientIdentity.objects.using("default").filter(awpid=target_awpid).first()
-            target_full_name = target_identity.full_name if target_identity else acct.full_name
-        method = (request.data.get("method") or "files").strip()
-        if method not in ("folder", "files", "photo"):
-            method = "files"
-        files = request.data.get("files") or []
-        if not isinstance(files, list) or not files:
-            return error("files list is required.")
-
-        # one active batch per patient at a time
-        if (DocumentUploadBatch.objects.using("default")
-                .filter(awpid=target_awpid, status__in=("pending", "processing")).exists()):
-            return error("You already have an upload in progress. Please wait for it to finish.")
-
-        accepted, ignored, total_bytes = [], 0, 0
-        for f in files:
-            name = str((f or {}).get("name") or "").strip()
-            size = int((f or {}).get("size") or 0)
-            ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-            if ext not in _EXT_BY_MIME_NAME:
-                ignored += 1
-                continue
-            if size and size > _ITEM_MAX_BYTES:
-                ignored += 1
-                continue
-            total_bytes += size
-            accepted.append({"name": name, "size": size,
-                             "sha256": str((f or {}).get("sha256") or ""),
-                             "ext": _EXT_BY_MIME_NAME[ext]})
-
-        if not accepted:
-            return error("None of the selected files are PDFs or images.")
-        if len(accepted) > _BATCH_MAX_FILES:
-            return error(f"Too many files. Upload at most {_BATCH_MAX_FILES} at a time.")
-        if total_bytes > _BATCH_MAX_BYTES:
-            return error("This folder is over the 300 MB per-upload limit. Split it into two.")
-
-        slug = blob_storage.identity_slug(name=target_full_name, identifier=target_awpid)
-        batch = DocumentUploadBatch.objects.using("default").create(
-            awpid=target_awpid, initiated_by="patient", method=method,
-            total_files=len(accepted), ignored=ignored, status="pending",
-        )
-        out = []
-        for a in accepted:
-            item = DocumentUploadItem.objects.using("default").create(
-                batch=batch, original_filename=a["name"], declared_size=a["size"],
-                content_hash=a["sha256"], status="uploading",
-            )
-            key = f"incoming/{slug}/{batch.id}/{item.id}.{a['ext']}"
-            item.staging_key = key
-            item.save(using="default", update_fields=["staging_key"])
-            mime = {"pdf": "application/pdf", "jpg": "image/jpeg", "png": "image/png"}[a["ext"]]
-            out.append({
-                "item_id": str(item.id),
-                "filename": a["name"],
-                "put_url": blob_storage.presigned_put_url(key, mime_type=mime),
-                "content_type": mime,
-            })
-        return success(data={"batch_id": str(batch.id), "ignored": ignored, "items": out}, status=201)
-
-
-class PortalDocumentBatchProcessView(APIView):
-    """
-    POST /api/v1/portal/documents/batch/<batch_id>/process/
-    Marks the batch ready for the drain once the client has finished PUTting
-    every file to S3. The process_document_batches command picks it up.
-    """
-    permission_classes = [IsPatient]
-
-    def post(self, request, batch_id):
-        from apps.registry.models import DocumentUploadBatch
-
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-        b = DocumentUploadBatch.objects.using("default").filter(pk=batch_id, awpid=target_awpid).first()
-        if not b:
-            return error("Batch not found.", status=404)
-        if b.status == "pending":
-            b.status = "processing"
-            b.save(using="default", update_fields=["status"])
-        return success(data={"batch_id": str(b.id), "status": b.status})
 
 
 class PortalDocumentZipView(APIView):
     """
-    POST /api/v1/portal/documents/zip/   body: { ids: [<doc_id>, ...] }
-    Bundles the selected documents into a single ZIP. Every id must belong to
-    the caller (or a linked family member). Capped so a request can't pull an
-    unbounded amount from S3.
+    POST /api/v1/portal/documents/zip/   body: { ids: [<doc_id>, ...] }  (max 100)
+    Bundles the caller's selected documents into one ZIP.
     """
     permission_classes = [IsPatient]
     _MAX_IDS = 100
@@ -2219,54 +1693,39 @@ class PortalDocumentZipView(APIView):
     def post(self, request, *args, **kwargs):
         import io
         import zipfile
-        import base64 as _b64
         from django.http import HttpResponse
-        from apps.registry.models import SharedDocument
+        from apps.records.models import SharedDocument
 
         target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
         if err:
             return err
-
         ids = request.data.get("ids") or []
         if not isinstance(ids, list) or not ids:
             return error("Select at least one document.")
         if len(ids) > self._MAX_IDS:
             return error(f"Select at most {self._MAX_IDS} documents.")
+        docs = (SharedDocument.objects.using("default")
+                .filter(pk__in=ids, awpid=target_awpid, deleted_at__isnull=True)
+                .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES))
 
-        docs = list(
-            SharedDocument.objects.using("default")
-            .filter(pk__in=ids, awpid=target_awpid, deleted_at__isnull=True)
-            .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
-        )
-        if not docs:
-            return error("Nothing to download.", status=404)
-
-        buf = io.BytesIO()
-        used = set()
+        buf, used = io.BytesIO(), set()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for d in docs:
-                raw = d.file_data or ""
                 try:
-                    if raw.startswith("data:"):
-                        content = _b64.b64decode(raw.split(",", 1)[1])
-                    else:
-                        content = blob_storage.get_bytes(raw)
+                    content = blob_storage.get_bytes(d.s3_key)
                 except Exception:
                     logger.warning("zip: could not read document %s", d.id, exc_info=True)
                     continue
-                name = d.file_name or f"{(d.title or 'document')}-{d.id}.pdf"
+                name = d.file_name or f"{d.title or 'document'}-{d.id}.pdf"
                 if name in used:
                     name = f"{d.id}-{name}"
                 used.add(name)
                 zf.writestr(name, content)
-
         if not used:
             return error("Could not read the selected documents.", status=502)
 
         resp = HttpResponse(buf.getvalue(), content_type="application/zip")
-        resp["Content-Disposition"] = (
-            f'attachment; filename="my-reports-{timezone.now().date()}.zip"'
-        )
+        resp["Content-Disposition"] = f'attachment; filename="my-reports-{timezone.now().date()}.zip"'
         return resp
 
 
@@ -2336,7 +1795,7 @@ class PortalLabOrderListView(APIView):
 
                     attached_doc = None
                     if r.patient_choice == "outside":
-                        from apps.registry.models import SharedDocument
+                        from apps.records.models import SharedDocument
                         doc = (SharedDocument.objects.using("default")
                                .filter(awpid=target_awpid, source_ref=f"labreq:{db}:{r.id}")
                                .order_by("-created_at").first())
@@ -2452,7 +1911,7 @@ class PortalPrescriptionListView(APIView):
         from apps.opd.models import Appointment, OPDEncounter, Prescription
         from apps.org.models import StaffUser
         from apps.patients.models import Patient
-        from apps.registry.models import SharedDocument
+        from apps.records.models import SharedDocument
         import uuid as _uuid
 
         target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
@@ -3060,415 +2519,6 @@ class PortalHealthSummaryView(APIView):
         })
 
 
-def _months_ago(n):
-    """Exact calendar month subtraction (not a *30/*31 approximation) —
-    clamps the day-of-month for a target month shorter than today's day
-    (e.g. Aug 31 minus 6 months -> Feb 28/29, not an invalid Feb 31)."""
-    import calendar
-    today = date.today()
-    total = today.month - 1 - n
-    year = today.year + total // 12
-    month = total % 12 + 1
-    day = min(today.day, calendar.monthrange(year, month)[1])
-    return date(year, month, day)
-
-
-class PortalHealthInsightsView(APIView):
-    """
-    GET /api/v1/portal/health-insights/?patient_awpid=&range=3m|6m|12m|all
-
-    Most of this is aggregated counts/dates from SharedDocument alone — but
-    flagged_variations and reports_needing_review below DO read actual
-    extracted test values, via core.lab_variation.compute_flags() over
-    core.lab_value_extractor's stored ExtractedLabValue rows (a separate
-    pipeline stage from classification, run async by
-    `manage.py extract_lab_values`, never inline with an upload). A
-    confidence gate (core.lab_variation.CONFIDENCE_GATE) applies before any
-    value is ever compared or shown — see that module's docstring for the
-    full design (both-directions flagging, reference-range-aware when the
-    report printed one else a flat % delta, a unit-mismatch guard, and
-    direction-aware wording for common analytes).
-
-    Powers the patient portal's Health Insights dashboard (embedded in My
-    Reports): summary counts, the report-type distribution, an
-    upload-activity-by-month series, recent-reports / recent-prescriptions
-    lists, flagged value changes, a review-needed list, checkup reminders,
-    and pattern insights. `range` filters by document_date (falling back to
-    created_at for the handful of rows with no printed date) so the numbers
-    describe the document's own timeframe, not just when it was added to
-    the vault — reports_needing_review and checkup_reminders are the two
-    exceptions, deliberately NOT range-scoped: one's a persistent backlog to
-    clear, the other needs the patient's full history to know when their
-    last routine screening of a given type actually was.
-    """
-    permission_classes = [IsPatient]
-    RANGE_MONTHS = {"3m": 3, "6m": 6, "12m": 12}
-
-    def get(self, request):
-        from apps.registry.models import SharedDocument
-        from core import lab_variation
-        from core import report_types
-        from core.report_types import label_for
-
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-
-        range_key = (request.query_params.get("range") or "12m").strip().lower()
-        months = self.RANGE_MONTHS.get(range_key)
-        effective_range = range_key if months is not None else "all"
-        range_cutoff = _months_ago(months) if months is not None else None
-
-        rows = list(
-            SharedDocument.objects.using("default")
-            .filter(awpid=target_awpid, review_state="filed", hidden_at__isnull=True, deleted_at__isnull=True)
-            .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
-            .values("id", "doc_type", "title", "document_date", "created_at",
-                     "report_categories", "hospital_label", "doctor_label")
-        )
-
-        def eff_date(row):
-            if row["document_date"]:
-                return row["document_date"]
-            return row["created_at"].date() if row["created_at"] else None
-
-        # Checkup reminders read the patient's FULL history, deliberately
-        # computed before the range filter below reassigns `rows` — "it's
-        # been 8 months since your last Lipid Profile" shouldn't disappear
-        # just because the tab happens to be showing "Last 3 Months" right
-        # now. Same reasoning as reports_needing_review's range exemption.
-        panel_last_seen = {}
-        for r in rows:
-            d = eff_date(r)
-            if not d or r["doc_type"] != "lab_report":
-                continue
-            for slug in (r["report_categories"] or []):
-                if slug not in report_types.ROUTINE_SCREENING_PANELS:
-                    continue
-                if slug not in panel_last_seen or d > panel_last_seen[slug]:
-                    panel_last_seen[slug] = d
-
-        if months is not None:
-            cutoff = _months_ago(months)
-            rows = [r for r in rows if (eff_date(r) or date.min) >= cutoff]
-
-        total_documents = len(rows)
-        total_reports = sum(1 for r in rows if r["doc_type"] == "lab_report")
-        total_prescriptions = sum(1 for r in rows if r["doc_type"] == "prescription")
-
-        panel_counts = {}
-        for r in rows:
-            for slug in (r["report_categories"] or []):
-                panel_counts[slug] = panel_counts.get(slug, 0) + 1
-        report_distribution = sorted(
-            ({"slug": slug, "label": label_for(slug), "count": n} for slug, n in panel_counts.items()),
-            key=lambda p: (-p["count"], p["label"]),
-        )
-        most_common_panel = report_distribution[0]["label"] if report_distribution else None
-
-        month_counts = {}
-        for r in rows:
-            d = eff_date(r)
-            if not d:
-                continue
-            key = f"{d.year:04d}-{d.month:02d}"
-            month_counts[key] = month_counts.get(key, 0) + 1
-        upload_activity = [{"month": k, "count": v} for k, v in sorted(month_counts.items())]
-
-        dated_rows = [r for r in rows if eff_date(r)]
-        latest_date = max((eff_date(r) for r in dated_rows), default=None)
-
-        def _recent(doc_type, extra=None):
-            top = sorted(
-                (r for r in rows if r["doc_type"] == doc_type),
-                key=lambda r: eff_date(r) or date.min, reverse=True,
-            )[:5]
-            return [{
-                "id": r["id"],
-                "title": r["title"],
-                "date": eff_date(r),
-                "hospital_label": r["hospital_label"],
-                "doctor_label": r["doctor_label"],
-                **({k: fn(r) for k, fn in (extra or {}).items()}),
-            } for r in top]
-
-        flagged_variations = lab_variation.compute_flags(target_awpid, range_cutoff)
-
-        reports_needing_review = list(
-            SharedDocument.objects.using("default")
-            .filter(awpid=target_awpid, doc_type="lab_report", review_state="filed",
-                     hidden_at__isnull=True, deleted_at__isnull=True,
-                     extraction_status__in=["needs_review", "failed"])
-            .order_by("-document_date", "-created_at")
-            .values("id", "title", "document_date", "extraction_status",
-                     "extraction_values_total", "extraction_values_confident")[:10]
-        )
-        for r in reports_needing_review:
-            if r["extraction_status"] == "failed":
-                r["reason"] = "Couldn't read this report automatically."
-            elif r["extraction_values_total"] == 0:
-                r["reason"] = "No test values found in this report."
-            else:
-                shaky = r["extraction_values_total"] - r["extraction_values_confident"]
-                r["reason"] = f"{shaky} of {r['extraction_values_total']} result{'s' if r['extraction_values_total'] != 1 else ''} need checking."
-
-        # Checkup reminders — "it's been N months since your last X", not
-        # range-scoped (see panel_last_seen above). General wellness
-        # framing only (report_types.ROUTINE_CHECKUP_INTERVAL_MONTHS's own
-        # docstring explains why this is one uniform number, not a
-        # differentiated per-panel guideline table this app has no source
-        # to back up) — never phrased as a specific clinical directive.
-        today = date.today()
-        checkup_reminders = []
-        for slug, last_date in panel_last_seen.items():
-            months_since = (today.year - last_date.year) * 12 + (today.month - last_date.month)
-            if months_since < report_types.ROUTINE_CHECKUP_INTERVAL_MONTHS:
-                continue
-            label = label_for(slug)
-            checkup_reminders.append({
-                "panel_slug": slug,
-                "panel_label": label,
-                "last_date": last_date,
-                "months_since": months_since,
-                "message": (
-                    f"It's been about {months_since} months since your last {label} — "
-                    "many people repeat this roughly once a year as part of general "
-                    "health monitoring. Worth asking your doctor if you're due for one."
-                ),
-            })
-        checkup_reminders.sort(key=lambda r: -r["months_since"])
-
-        # Pattern insights — plain facts about THIS range's own distribution
-        # (report_distribution above), phrased as a sentence rather than a
-        # bar. Deliberately just describes what's there; a raised count on
-        # its own isn't evidence of anything, so this never speculates about
-        # why a panel was repeated — only a real extracted-value change
-        # (flagged_variations above) gets an opinion attached to it.
-        pattern_insights = [
-            f"You've had {p['count']} {p['label']} report{'s' if p['count'] != 1 else ''} on file"
-            + (" in this period." if effective_range != "all" else ".")
-            for p in report_distribution[:3] if p["count"] >= 2
-        ]
-
-        return success(data={
-            "range": effective_range,
-            "total_documents": total_documents,
-            "total_reports": total_reports,
-            "total_prescriptions": total_prescriptions,
-            "most_common_panel": most_common_panel,
-            "latest_report_date": latest_date,
-            "report_distribution": report_distribution,
-            "upload_activity": upload_activity,
-            "recent_prescriptions": _recent("prescription"),
-            "recent_reports": _recent("lab_report", extra={
-                "report_categories": lambda r: [{"slug": s, "label": label_for(s)} for s in (r["report_categories"] or [])],
-            }),
-            "flagged_variations": flagged_variations,
-            "reports_needing_review": reports_needing_review,
-            "checkup_reminders": checkup_reminders,
-            "pattern_insights": pattern_insights,
-        })
-
-
-class PortalLabTrendsView(APIView):
-    """
-    GET /api/v1/portal/health-insights/trends/?patient_awpid=&range=3m|6m|12m|all
-
-    Per-analyte time series over the patient's own ExtractedLabValue history
-    — the "Detailed Trend View" that Health Insights' overview tab
-    deliberately doesn't try to cram in (see HealthInsightsPanel.jsx's
-    module docstring). Reuses core.lab_variation's confidence gate and
-    unit-normalization table so a trend line never mixes a shaky extraction
-    or silently jumps because two labs printed the same analyte in
-    different units. A parameter only appears once it has at least
-    `min_points` confident, same-unit points within the selected range
-    (default 2 — a single reading has nothing to trend against; the mobile
-    app's parameter picker passes min_points=1 instead, so a test the
-    patient has only had once still shows up as selectable with a "needs
-    one more reading" state rather than not appearing at all).
-    """
-    permission_classes = [IsPatient]
-    RANGE_MONTHS = {"3m": 3, "6m": 6, "12m": 12}
-
-    def get(self, request):
-        from core import lab_variation
-
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-
-        range_key = (request.query_params.get("range") or "12m").strip().lower()
-        months = self.RANGE_MONTHS.get(range_key)
-        effective_range = range_key if months is not None else "all"
-        cutoff = _months_ago(months) if months is not None else None
-
-        try:
-            min_points = max(1, int(request.query_params.get("min_points") or 2))
-        except (TypeError, ValueError):
-            min_points = 2
-
-        parameters = lab_variation.build_trend_parameters(target_awpid, cutoff, min_points=min_points)
-
-        return success(data={"range": effective_range, "parameters": parameters})
-
-
-class PortalHealthInsightNarrativeView(APIView):
-    """
-    POST /api/v1/portal/health-insights/narrate/
-    Body: {"parameter_slug": "hemoglobin", "range": "12m"}  — both optional;
-    omitted parameter_slug picks the same "most-tracked analyte" default
-    PortalLabTrendsView's own ordering would show first.
-
-    The "AI trends" gadget — explicitly patient-triggered (POST, never a
-    passive GET/page-load), gated behind a confirm step in the app ("see
-    what your previous records have to say?"). Writes a short narrative
-    paragraph over the same already-extracted, already confidence-gated
-    points PortalLabTrendsView draws its chart from (core.health_insight —
-    never re-reads a document, never extracts a new number).
-
-    A trend with fewer than 2 confident points, or a disabled/failing LLM
-    layer, returns success with narrative=null rather than an error — the
-    app shows "not enough data yet" / "couldn't generate this right now"
-    either way, and a flaky provider shouldn't 500 an otherwise-working
-    screen (core.health_insight itself never raises).
-    """
-    permission_classes = [IsPatient]
-    RANGE_MONTHS = {"3m": 3, "6m": 6, "12m": 12}
-
-    def post(self, request):
-        from core import lab_variation, health_insight
-
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-
-        range_key = (request.data.get("range") or "12m").strip().lower()
-        months = self.RANGE_MONTHS.get(range_key)
-        cutoff = _months_ago(months) if months is not None else None
-
-        parameters = lab_variation.build_trend_parameters(target_awpid, cutoff)
-        if not parameters:
-            return success(data={"parameter": None, "narrative": None})
-
-        wanted_slug = (request.data.get("parameter_slug") or "").strip()
-        param = next((p for p in parameters if p["slug"] == wanted_slug), None) if wanted_slug else parameters[0]
-        if param is None:
-            return error("No trend data for that parameter.", status=404)
-
-        narrative = health_insight.generate_trend_narrative(
-            parameter_label=param["label"], unit=param["unit"],
-            points=[{"date": str(p["date"]), "value": p["value"], "status": p["status"]} for p in param["points"]],
-            concern=param["concern"],
-        )
-
-        return success(data={
-            "parameter": {k: v for k, v in param.items()},
-            "narrative": narrative,
-        })
-
-
-class PortalDocumentLabValuesView(APIView):
-    """
-    GET /api/v1/portal/documents/<int:doc_id>/lab-values/
-
-    "Key Parameters" for one lab report — the extracted values behind this
-    document, each checked against its own printed reference range and
-    against the most recent EARLIER confident reading of the same analyte
-    (any document, not just one sharing this document's panel) so opening a
-    single report still shows it in context.
-
-    Deliberately doesn't reuse core.lab_variation.compute_flags(): that
-    function only returns pairs that already cleared its "worth flagging"
-    threshold, whereas this table shows every confident value's prior
-    comparison, flagged-worthy or not. Same confidence gate and
-    unit-normalization table either way, so the two views never disagree
-    about what counts as a usable reading.
-    """
-    permission_classes = [IsPatient]
-
-    def get(self, request, doc_id):
-        from apps.registry.models import SharedDocument, ExtractedLabValue
-        from core import lab_variation
-
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-
-        doc = SharedDocument.objects.using("default").filter(pk=doc_id).first()
-        if not doc or doc.awpid != target_awpid:
-            return error("Document not found.", status=404)
-        if doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
-            return error("Document not found.", status=404)
-
-        current_rows = list(
-            ExtractedLabValue.objects.using("default")
-            .filter(document_id=doc_id, confidence__gte=lab_variation.CONFIDENCE_GATE)
-            .order_by("parameter_label")
-            .values("parameter_slug", "parameter_label", "value_numeric", "unit",
-                     "reference_range_text", "reference_low", "reference_high")
-        )
-        if not current_rows:
-            return success(data={"document_id": doc.id, "title": doc.title,
-                                  "document_date": doc.document_date, "values": []})
-
-        # One query for every analyte's most recent EARLIER confident
-        # reading, rather than N — matched to the current rows in Python.
-        prior_rows = list(
-            ExtractedLabValue.objects.using("default")
-            .filter(awpid=target_awpid, confidence__gte=lab_variation.CONFIDENCE_GATE,
-                     parameter_slug__in=[r["parameter_slug"] for r in current_rows])
-            .exclude(document_id=doc_id)
-            .order_by("parameter_slug", "-document_date")
-            .values("parameter_slug", "document_id", "document_date", "value_numeric", "unit")
-        )
-        prior_by_slug = {}
-        this_date = doc.document_date
-        for r in prior_rows:
-            if r["parameter_slug"] in prior_by_slug:
-                continue  # first hit per slug, thanks to -document_date ordering, is the most recent
-            if this_date and r["document_date"] and r["document_date"] >= this_date:
-                continue  # not strictly earlier than this document — never compare sideways/backwards
-            prior_by_slug[r["parameter_slug"]] = r
-
-        values = []
-        for row in current_rows:
-            slug = row["parameter_slug"]
-            status = lab_variation.status_for(row["value_numeric"], row["reference_low"], row["reference_high"])
-
-            previous = None
-            prior = prior_by_slug.get(slug)
-            if prior:
-                conv_cur = lab_variation.to_common_unit(slug, row["value_numeric"], row["unit"])
-                conv_prev = lab_variation.to_common_unit(slug, prior["value_numeric"], prior["unit"])
-                if conv_cur and conv_prev and conv_cur[1] == conv_prev[1] and conv_prev[0] != 0:
-                    pct_delta = (conv_cur[0] - conv_prev[0]) / abs(conv_prev[0]) * 100.0
-                    previous = {
-                        "document_id": prior["document_id"],
-                        "document_date": prior["document_date"],
-                        "value": conv_prev[0],
-                        "direction": "up" if conv_cur[0] > conv_prev[0] else ("down" if conv_cur[0] < conv_prev[0] else "same"),
-                        "pct_delta": round(pct_delta, 1),
-                    }
-
-            values.append({
-                "parameter_slug": slug,
-                "parameter_label": row["parameter_label"],
-                "value": row["value_numeric"],
-                "unit": row["unit"],
-                "reference_range_text": row["reference_range_text"],
-                "status": status,
-                "concern": lab_variation.PARAMETER_DIRECTION.get(slug, "neutral"),
-                "previous": previous,
-            })
-
-        return success(data={
-            "document_id": doc.id,
-            "title": doc.title,
-            "document_date": doc.document_date,
-            "values": values,
-        })
-
-
 # ── Growth ───────────────────────────────────────────────────────────────────
 
 class PortalGrowthView(APIView):
@@ -3884,7 +2934,8 @@ class PortalHealthTimelineView(APIView):
         from apps.patients.models import Patient
         from apps.opd.models import Appointment, OPDEncounter
         from apps.lab.models import LabRequest
-        from apps.registry.models import SharedVital, SharedDocument
+        from apps.registry.models import SharedVital
+        from apps.records.models import SharedDocument
         from apps.registry.vaccine_schedule import build_roadmap
 
         target_awpid, dob, err = _resolve_target_awpid_and_dob(request)

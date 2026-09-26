@@ -384,7 +384,7 @@ class AppointmentHistoryView(APIView):
         # recorded" instead of just an empty space.
         enc_ids = [row["encounter"]["id"] for row in data if row.get("encounter")]
         if enc_ids:
-            from apps.registry.models import SharedDocument
+            from apps.records.models import SharedDocument
             encs = {
                 str(e.id): e for e in OPDEncounter.objects.using(db)
                 .filter(id__in=enc_ids)
@@ -1107,8 +1107,7 @@ def _store_prescription_pdf(enc, db, tenant_id):
     """After sign: mirror the prescription to a registry
     SharedDocument(doc_type='prescription') so it shows in the doctor's
     history and the patient's My Reports. Delegates to
-    apps.opd.archive.store_prescription_document, which the
-    backfill_documents_from_records command reuses for existing rows."""
+    apps.opd.archive.store_prescription_document."""
     rx = Prescription.objects.using(db).filter(encounter_id=enc.id).first()
     if rx is None:
         return
@@ -1140,7 +1139,8 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
         from apps.opd.pdf import images_to_pdf
         from apps.patients.models import Patient
         from apps.tenants.models import Tenant
-        from apps.registry.models import SharedDocument, ConsultSession
+        from apps.registry.models import ConsultSession
+        from apps.records.models import SharedDocument
         from core import storage as blob_storage
 
         sess = ConsultSession.objects.using("default").filter(id=session_id).first()
@@ -1181,17 +1181,14 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
             if not pdf_bytes:
                 continue
             pdf_uri = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
-            try:
-                file_ref = blob_storage.upload_data_uri(
-                    pdf_uri, prefix=prefix, mime_type="application/pdf",
-                    category=category, identity=slug,
-                )
-            except blob_storage.StorageError:
-                file_ref = pdf_uri  # local dev / no S3 — inline
+            s3_key = blob_storage.upload_data_uri(
+                pdf_uri, prefix=prefix, mime_type="application/pdf",
+                category=category, identity=slug,
+            )
             SharedDocument.objects.using("default").create(
                 awpid=getattr(patient, "awpid", ""), title=title, doc_type=doc_type,
-                file_name=f"{title}.pdf", mime_type="application/pdf", file_data=file_ref,
-                uploaded_by="staff", source_tenant_id=tenant_id, source_ref=ref,
+                file_name=f"{title}.pdf", mime_type="application/pdf", s3_key=s3_key,
+                uploaded_by="staff", source_tenant_id=tenant_id, source_ref=ref, method="staff",
             )
             cleared[tab] = True
 

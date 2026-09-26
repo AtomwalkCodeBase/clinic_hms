@@ -91,12 +91,14 @@ THIRD_PARTY_APPS = [
     "corsheaders",
     "django_filters",
     "drf_spectacular",
+    "django_celery_beat",   # DB-backed Beat schedule; kept in sync by apps.records.models.SweepConfig
 ]
 
 LOCAL_APPS = [
     # Registry DB apps (live in 'default' DB)
     "apps.tenants",
     "apps.registry",
+    "apps.records",
     # Per-tenant apps
     "apps.auth_app",
     "apps.org",
@@ -187,7 +189,7 @@ TENANT_DB_CONFIG_TEMPLATE = {
     "CONN_MAX_AGE": 60,
     "TIME_ZONE": None,
     "OPTIONS": {},
-    "TEST": {},
+    "TEST": {"MIRROR": None},   # Django's test runner reads this for every alias
     "AUTOCOMMIT": True,
     "ATOMIC_REQUESTS": False,
 }
@@ -417,12 +419,6 @@ TESSERACT_CMD = config("TESSERACT_CMD", default="")
 # layout analysis) on real phone photos — see core/ocr.py module docstring.
 DOC_OCR_TESSERACT_PSM = config("DOC_OCR_TESSERACT_PSM", default=6, cast=int)
 
-# Auto-crop/straighten a photographed document (find the page, flatten its
-# perspective) before quality-gate measurement and OCR — see core/doc_crop.py.
-# Default False: this is new and unmeasured on real production traffic, so
-# deploying the code alone changes nothing until explicitly turned on.
-DOC_AUTO_CROP = config("DOC_AUTO_CROP", default=False, cast=bool)
-
 # ── Handwriting recognition (consultation scratchpad) ───────────────────────
 # The consult-pad QR flow photographs a handwritten SOAP note; a vision model
 # transcribes it and splits it into S/O/A/P. Any OpenAI-compatible chat
@@ -437,84 +433,46 @@ CONSULT_PAD_LLM_MODEL = config("CONSULT_PAD_LLM_MODEL", default="qwen/qwen3.8-27
 # Falls back to GROQ_API_KEY so an existing Groq key already in .env just works.
 CONSULT_PAD_LLM_KEY   = config("CONSULT_PAD_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
 
-# ── Document classifier — LLM / vision fallback for the uncertain tail ──────
-# The pipeline (core.doc_classifier) runs three layers, cheapest first:
-#   1. deterministic keyword pass       — free, instant, handles the bulk
-#   2. TEXT LLM on the OCR text          — resolves garbled / sparse text
-#   3. VISION LLM on the page image      — resolves bad OCR / odd layouts / disagreement
-# Each layer only runs on what the previous one wasn't sure about. Every layer
-# is a labeller: kind / panel / date only, NEVER test values. Any layer with a
-# blank KEY (and no GROQ_API_KEY) is skipped and the deterministic result +
-# review tray stand. A confident keyword verdict is never overridden by an LLM;
-# genuine cross-layer disagreement goes to the patient.
-DOC_CLASSIFIER_LLM       = config("DOC_CLASSIFIER_LLM", default="core.doc_classifier_llm.classify")
-DOC_CLASSIFIER_LLM_BASE  = config("DOC_CLASSIFIER_LLM_BASE", default="https://api.groq.com/openai/v1")
-DOC_CLASSIFIER_LLM_MODEL = config("DOC_CLASSIFIER_LLM_MODEL", default="openai/gpt-oss-20b")
-DOC_CLASSIFIER_LLM_KEY   = config("DOC_CLASSIFIER_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
+# ── Records: document classification LLM (apps/records/services.py) ────────
+# Asked only when the keyword rules score a document under 75. Any
+# OpenAI-compatible endpoint; locally Ollama: BASE=http://localhost:11434/v1
+# MODEL=qwen2.5-coder:7b (no key needed).
+DOC_CLASSIFIER_LLM_BASE    = config("DOC_CLASSIFIER_LLM_BASE", default="http://localhost:11434/v1")
+DOC_CLASSIFIER_LLM_MODEL   = config("DOC_CLASSIFIER_LLM_MODEL", default="qwen2.5-coder:7b")
+DOC_CLASSIFIER_LLM_KEY     = config("DOC_CLASSIFIER_LLM_KEY", default="")
+DOC_CLASSIFIER_LLM_TIMEOUT = config("DOC_CLASSIFIER_LLM_TIMEOUT", default=180, cast=int)
 
-# NOTE (2026-09-22): the vision layer was removed from the document-TYPE
-# classifier (core/doc_classifier.py no longer calls core/doc_classifier_vision.py
-# at all — it was the step most likely to turn a photographed pharmacy bill
-# into a false "prescription", plus per-call cost and third-party image
-# upload). These three settings are kept only because
-# core/lab_value_extractor.py's LAB_EXTRACTOR_VISION_* settings below fall
-# back to them, and that module still imports helpers directly from
-# core/doc_classifier_vision.py (a separate, still-shipped feature: reading
-# the actual test VALUES off a report photo — unrelated to sorting a
-# document into a folder). Leave these as-is unless lab value extraction's
-# vision path is also being retired.
-DOC_CLASSIFIER_VISION_BASE  = config("DOC_CLASSIFIER_VISION_BASE", default="https://api.groq.com/openai/v1")
-DOC_CLASSIFIER_VISION_MODEL = config("DOC_CLASSIFIER_VISION_MODEL", default="")
-DOC_CLASSIFIER_VISION_KEY   = (config("DOC_CLASSIFIER_VISION_KEY", default="")
-                               or config("DOC_CLASSIFIER_LLM_KEY", default="")
-                               or config("GROQ_API_KEY", default=""))
+# apps/records/services.py::llm_complete() — both modes are Ollama (OpenAI-compatible
+# /chat/completions), so they share one implementation; only the server config below differs.
+# No fallback between the two: LLM_MODE must be exactly "local" or "production" (anything else is a
+# hard error — see llm_mode()), and a failure in the selected mode is an error, never a silent switch.
+#   local       DOC_CLASSIFIER_LLM_* above (this machine's Ollama) — also what llm_classify() uses.
+#   production  sir's GPU server (also Ollama).
+LLM_MODE = config("LLM_MODE", default="local")
+LLM_PRODUCTION_URL = config("LLM_PRODUCTION_URL", default="")
+LLM_PRODUCTION_MODEL = config("LLM_PRODUCTION_MODEL", default="qwen2.5-coder:7b")
+LLM_PRODUCTION_TOKEN = config("LLM_PRODUCTION_TOKEN", default="")
+LLM_PRODUCTION_TIMEOUT = config("LLM_PRODUCTION_TIMEOUT", default=300, cast=int)
+LLM_NUM_CTX = config("LLM_NUM_CTX", default=32768, cast=int)
 
-# Lab value extraction (HMS-INSIGHTS) — a separate pipeline stage from
-# classification above, run async via `manage.py extract_lab_values`, never
-# inline with an upload. A labeller too (reads what's printed; never
-# computes), just extracting numbers instead of kind/panel/date. Falls back
-# to the classifier's own LLM/vision config so a zero-config deployment
-# "just works" against the same provider/key; set the LAB_EXTRACTOR_* vars
-# explicitly to point extraction at a different model independently later.
-LAB_EXTRACTOR_LLM_BASE    = config("LAB_EXTRACTOR_LLM_BASE", default="") or DOC_CLASSIFIER_LLM_BASE
-LAB_EXTRACTOR_LLM_MODEL   = config("LAB_EXTRACTOR_LLM_MODEL", default="") or DOC_CLASSIFIER_LLM_MODEL
-LAB_EXTRACTOR_LLM_KEY     = config("LAB_EXTRACTOR_LLM_KEY", default="") or DOC_CLASSIFIER_LLM_KEY
-LAB_EXTRACTOR_VISION_BASE  = config("LAB_EXTRACTOR_VISION_BASE", default="") or DOC_CLASSIFIER_VISION_BASE
-LAB_EXTRACTOR_VISION_MODEL = config("LAB_EXTRACTOR_VISION_MODEL", default="") or DOC_CLASSIFIER_VISION_MODEL
-LAB_EXTRACTOR_VISION_KEY   = config("LAB_EXTRACTOR_VISION_KEY", default="") or DOC_CLASSIFIER_VISION_KEY
+# All three sweep settings (instant-upload file limit, per-run dispatch limit, and how often the
+# sweep runs) are Platform Admin-editable at runtime — apps.records.models.SweepConfig, via
+# apps/platform_admin/classification_rule_views.py. No env vars, no restart, for any of them: the
+# interval is DB-backed (django_celery_beat's DatabaseScheduler below), kept in sync by
+# SweepConfig.save() creating/updating its PeriodicTask + IntervalSchedule rows.
 
-# "AI Trends" narrative (core/health_insight.py) — a third, on-demand stage,
-# gated behind an explicit patient tap (never auto-run on page load, unlike
-# the two above). Writes a short paragraph over already-extracted
-# ExtractedLabValue points; never re-reads a document or touches an LLM to
-# extract numbers itself. Same zero-config fallback pattern as extraction.
-HEALTH_INSIGHT_LLM_BASE  = config("HEALTH_INSIGHT_LLM_BASE", default="") or DOC_CLASSIFIER_LLM_BASE
-HEALTH_INSIGHT_LLM_MODEL = config("HEALTH_INSIGHT_LLM_MODEL", default="") or DOC_CLASSIFIER_LLM_MODEL
-HEALTH_INSIGHT_LLM_KEY   = config("HEALTH_INSIGHT_LLM_KEY", default="") or DOC_CLASSIFIER_LLM_KEY
+# ── Celery (atomwalk/celery.py) ──────────────────────────────────────────────
+#   worker: celery -A atomwalk worker --loglevel=info --pool=solo
+#   beat:   celery -A atomwalk beat --loglevel=info
+CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
+CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cast=bool)
+# Beat reads its schedule from the DB (django_celery_beat), not from a fixed dict here, so
+# SweepConfig can change the sweep interval live with no restart.
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
-# Persistent, worker-shared cache for the classifier's LLM/vision answers —
-# a given OCR text (or image) always classifies the same, so we store it once
-# and never pay Groq / the VLM again for a re-upload, a backfill, or a retry.
-# Needs `manage.py createcachetable` (migration 0032 runs it). The app's other
-# uses of the cache framework keep the default local-memory backend.
-# "lab_extract" is the same idea for lab_value_extractor's answers (migration
-# 0038) — a separate alias/table from doc_classify since the two pipelines'
-# cache keys, TTLs and payloads (a category label vs. a list of values) don't
-# overlap and shouldn't compete for the same table's CULL_FREQUENCY eviction.
 CACHES = {
     "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
-    "doc_classify": {
-        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
-        "LOCATION": "doc_classify_cache",
-        "TIMEOUT": 60 * 60 * 24 * 60,   # 60 days
-        "OPTIONS": {"MAX_ENTRIES": 100_000, "CULL_FREQUENCY": 4},
-    },
-    "lab_extract": {
-        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
-        "LOCATION": "lab_extract_cache",
-        "TIMEOUT": 60 * 60 * 24 * 60,   # 60 days
-        "OPTIONS": {"MAX_ENTRIES": 100_000, "CULL_FREQUENCY": 4},
-    },
 }
 
 # ── License tier constants ───────────────────────────────────────────────────

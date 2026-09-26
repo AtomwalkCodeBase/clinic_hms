@@ -53,9 +53,10 @@ from core import storage as blob_storage
 from core.emergency_access import decode_emergency_token, EmergencyTokenError
 from apps.registry.models import (
     PatientIdentity, PatientAccount, PatientRelationship,
-    SharedDocument, SharedLabResult, SharedVaccination,
+    SharedLabResult, SharedVaccination,
     EmergencyAccessLog,
 )
+from apps.records.models import SharedDocument
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +224,7 @@ class EmergencySummaryView(APIView):
 
         doc_ids = [d["id"] for d in history["documents"]]
         doc_files = {
-            d.id: blob_storage.signed_url(d.file_data)
+            d.id: blob_storage.signed_url(d.s3_key)
             for d in SharedDocument.objects.using("default").filter(id__in=doc_ids)
         }
         for d in history["documents"]:

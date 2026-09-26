@@ -33,6 +33,9 @@ export const API_ENDPOINTS = {
     PATIENT_FORGOT_PASSWORD_RESET: `${API_V1}/auth/forgot-password/patient/reset/`,
   },
 
+  RECORDS: {
+    UPLOAD: `${API_V1}/records/upload/`,   // multipart, apps/records
+  },
   PLATFORM: {
     TENANTS:          `${API_V1}/platform/tenants/`,
     TENANT:     (id) => `${API_V1}/platform/tenants/${id}/`,
@@ -50,6 +53,11 @@ export const API_ENDPOINTS = {
     VACCINATION_TEMPLATE: (id) => `${API_V1}/platform/vaccination-templates/${id}/`,
     MILESTONE_TEMPLATES:      `${API_V1}/platform/milestone-templates/`,
     MILESTONE_TEMPLATE: (id) => `${API_V1}/platform/milestone-templates/${id}/`,
+    CLASSIFICATION_RULES:       `${API_V1}/platform/classification-rules/`,
+    CLASSIFICATION_RULE: (id) => `${API_V1}/platform/classification-rules/${id}/`,
+    RECORDS_SWEEP_CONFIG: `${API_V1}/platform/records/sweep-config/`,
+    RECORDS_REPORT:       `${API_V1}/platform/records/report/`,
+    RECORDS_REPORT_ITEM: (id) => `${API_V1}/platform/records/report/${id}/`,
   },
 
   ORG: {
@@ -181,9 +189,6 @@ export const API_ENDPOINTS = {
     INVOICE_RECEIPT: (tenantDb, id) => `${API_V1}/portal/invoices/${tenantDb}/${id}/receipt/`,
     DOCUMENTS:             `${API_V1}/portal/documents/`,
     DOCUMENT: (id) =>       `${API_V1}/portal/documents/${id}/`,
-    DOCUMENT_LAB_VALUES: (id) => `${API_V1}/portal/documents/${id}/lab-values/`,
-    DOCUMENTS_BATCH:        `${API_V1}/portal/documents/batch/`,
-    DOCUMENTS_BATCH_PROCESS: (id) => `${API_V1}/portal/documents/batch/${id}/process/`,
     DOCUMENTS_ZIP:         `${API_V1}/portal/documents/zip/`,
     LAB_ORDERS:            `${API_V1}/portal/lab-orders/`,
     LAB_ORDER_CHOICE:      `${API_V1}/portal/lab-orders/choice/`,
@@ -199,9 +204,6 @@ export const API_ENDPOINTS = {
     FAMILY:                 `${API_V1}/portal/family/`,
     FAMILY_DETAIL:  (awpid) => `${API_V1}/portal/family/${awpid}/`,
     HEALTH_SUMMARY:         `${API_V1}/portal/health-summary/`,
-    HEALTH_INSIGHTS:               `${API_V1}/portal/health-insights/`,
-    HEALTH_INSIGHTS_TRENDS:        `${API_V1}/portal/health-insights/trends/`,
-    HEALTH_INSIGHTS_NARRATE:       `${API_V1}/portal/health-insights/narrate/`,
     VACCINATIONS:           `${API_V1}/portal/vaccinations/`,
     VACCINATION_UPLOAD:     `${API_V1}/portal/vaccinations/upload/`,
     VACCINATION_FILE: (recordId) => `${API_V1}/portal/vaccinations/${recordId}/file/`,

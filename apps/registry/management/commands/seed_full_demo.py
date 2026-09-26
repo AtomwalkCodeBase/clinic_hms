@@ -43,7 +43,9 @@ from apps.tenants.models import Tenant, Subscription
 from apps.tenants.utils import create_tenant_database, run_tenant_migrations, _make_db_config
 from apps.tenants.management.commands.provision_tenant import TIER_FEATURE_DEFAULTS
 from apps.org.models import Branch, StaffUser, DoctorProfile, NextNumber
-from apps.registry.models import StaffMobileIndex, PatientAccount, PortalBooking, SharedDocument
+from apps.registry.models import StaffMobileIndex, PatientAccount, PortalBooking
+from apps.records.models import SharedDocument
+from core import storage as blob_storage
 from apps.patients.models import Patient, Allergy
 from apps.patients.services import PatientService
 from apps.opd.models import Appointment, Vitals, OPDEncounter, Prescription, PrescriptionItem
@@ -692,7 +694,9 @@ class Command(BaseCommand):
         SharedDocument.objects.using("default").create(
             awpid=patient.awpid, title="Discharge Summary — Apollo Chennai (2024)",
             doc_type="discharge_summary", file_name="discharge_summary_2024.pdf",
-            mime_type="application/pdf", file_data=doc_uri, uploaded_by="patient", source_tenant_id=None,
+            mime_type="application/pdf", uploaded_by="patient", source_tenant_id=None, method="rule", score=100,
+            s3_key=blob_storage.upload_data_uri(doc_uri, prefix="patient-documents", mime_type="application/pdf",
+                                                category="patient-document", identity=patient.awpid.lower()),
         )
 
         account = PatientAccount(

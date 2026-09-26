@@ -1,21 +1,19 @@
 /**
  * pages/patient/MyReportsPage.jsx
  * -------------------------------
- * One place for every prescription and lab report. Uploads are classified
- * automatically on the server (QR / page text) — the patient never picks a
- * type. Anything the classifier is unsure about lands in the Unsorted tray
- * for a one-tap confirmation.
+ * Every prescription, lab report and scan in one list.
  *
- * Backend: apps/patients/portal_views.py
- *   GET/POST  /portal/documents/         list (metadata) + single upload
- *   GET/PATCH/DELETE /portal/documents/<id>/   view file / re-categorise / hide|delete
- *   POST      /portal/documents/zip/     bundle selected
+ *   Upload   POST /records/upload/ (apps/records) — one request for the whole
+ *            selection; each file is then read (RapidOCR) and classified
+ *            (keyword rules, Ollama when they score under 75) in the
+ *            background. The list refreshes itself while any file is still
+ *            being processed.
+ *   Read     GET/DELETE /portal/documents/[<id>/], POST /portal/documents/zip/
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  FileText, Pill, FlaskConical, HelpCircle, ShieldCheck, X, Download,
-  Tag, Trash2, PenLine, Camera, QrCode, Upload, FolderUp, Plus, Search, CheckSquare, SlidersHorizontal,
-  Lock, Unlock, Clock, TrendingUp, TrendingDown, Sparkles, ChevronDown, ChevronUp,
+  FileText, Pill, FlaskConical, ScanLine, X, Download, Trash2, PenLine, Camera,
+  Upload, FolderUp, Plus, Search, CheckSquare, Lock, Unlock, Clock,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { AppShell } from "../../components/layout/AppShell";
@@ -27,58 +25,33 @@ import API_ENDPOINTS from "../../config/api.config";
 import ROUTES from "../../config/routes.config";
 import { usePatientContext } from "../../context/PatientContext";
 import { openDataUrlInNewTab } from "../../utils/fileViewer";
-import HealthInsightsPanel from "./components/HealthInsightsPanel";
 
-const MAX_FILE_BYTES = 11 * 1024 * 1024; // matches the backend's single-upload guard (a modern phone photo runs ~8-11 MB)
-const OK_EXT = /\.(pdf|jpe?g|png)$/i;
-// Folder upload uses the OS "pick a directory" dialog, which happily lets you
-// choose a whole drive. These bound what the modal will actually take on:
-// past HARD_PICK_LIMIT it's a drive, not a reports folder; the others cap one
-// Add session so the browser isn't asked to base64 hundreds of MB in a loop.
-const HARD_PICK_LIMIT = 1500;
-const MAX_UPLOAD_FILES = 200;
+const MAX_FILE_BYTES = 12 * 1024 * 1024;   // same limits as POST /records/upload/ (apps/records/serializers.py)
 const MAX_TOTAL_BYTES = 200 * 1024 * 1024;
+const MAX_UPLOAD_FILES = 200;
+const HARD_PICK_LIMIT = 1500;              // a folder pick past this is a whole drive, not a reports folder
+const OK_EXT = /\.(pdf|jpe?g|png)$/i;
 
 const TYPE_META = {
-  prescription: { tag: "RX", label: "Prescription", Icon: Pill },
-  lab_report:   { tag: "LAB", label: "Lab report", Icon: FlaskConical },
-  scan:         { tag: "SCAN", label: "Scan", Icon: FileText },
+  prescription:      { tag: "RX", label: "Prescription", Icon: Pill },
+  lab_report:        { tag: "LAB", label: "Lab report", Icon: FlaskConical },
+  scan:              { tag: "SCAN", label: "Scan", Icon: ScanLine },
   discharge_summary: { tag: "DISCH", label: "Discharge summary", Icon: FileText },
-  other:        { tag: "DOC", label: "Document", Icon: FileText },
+  other:             { tag: "DOC", label: "Document", Icon: FileText },
 };
+const typeMeta = (t) => TYPE_META[t] || { ...TYPE_META.other, tag: (t || "doc").slice(0, 5).toUpperCase(), label: (t || "Document").replace(/_/g, " ") };
+const TABS = [["all", "All"], ["prescription", "Prescriptions"], ["lab_report", "Lab reports"], ["scan", "Scans"], ["other", "Other"]];
+const IN_PROGRESS = new Set(["queued", "ocr", "classifying"]);
+const STATUS_LABEL = { queued: "Waiting to be read…", ocr: "Reading the page…", classifying: "Classifying…", failed: "Couldn’t process this file" };
 
-// Lab-report panel slugs -> label. Mirrors core/report_types.py; kept short
-// here because the row only ever shows the label the server already chose.
-const CATEGORY_LABELS = {
-  cbc: "Complete Blood Count", lipid: "Lipid Profile", lft: "Liver Function Test",
-  kft: "Kidney Function Test", thyroid: "Thyroid Profile", diabetes: "Blood Sugar & HbA1c",
-  urine: "Urine Routine", electrolytes: "Serum Electrolytes", vitamin: "Vitamin & Mineral",
-  inflammation: "Inflammatory Markers", cardiac: "Cardiac Markers", coagulation: "Coagulation Profile",
-  hormone: "Hormone Panel", infection: "Infection Serology", culture: "Culture & Sensitivity",
-};
-const CATEGORY_ORDER = Object.keys(CATEGORY_LABELS);
-const catLabel = (slug) => CATEGORY_LABELS[slug] || slug;
-
-// Which folder(s) a document belongs in on the category-grouped Reports view.
-// A lab report goes under each of its panels; a health-package under all of
-// them. Everything else gets a single non-panel bucket.
-const NONPANEL = { prescription: "Prescriptions", scan: "Imaging", discharge_summary: "Discharge summaries", other: "Other" };
-function sectionsFor(doc) {
-  if (doc.doc_type === "lab_report") {
-    const cats = (doc.report_categories || []).filter((c) => CATEGORY_LABELS[c]);
-    return cats.length ? cats.map((c) => ({ key: `cat:${c}`, label: catLabel(c) })) : [{ key: "cat:_lab", label: "Other lab reports" }];
-  }
-  const b = NONPANEL[doc.doc_type] || "Other";
-  return [{ key: `t:${doc.doc_type}`, label: b }];
+function fmtDate(iso) {
+  return iso ? new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "";
 }
-const SECTION_RANK = (key) => {
-  if (key.startsWith("cat:")) {
-    const s = key.slice(4);
-    const i = CATEGORY_ORDER.indexOf(s);
-    return i === -1 ? 90 : i;                       // panels first, in catalogue order
-  }
-  return { "t:prescription": 100, "t:scan": 110, "t:discharge_summary": 120, "t:other": 130 }[key] ?? 95;
-};
+function classifiedBy(doc) {
+  if (doc.method === "staff") return "Issued by the hospital";
+  const who = { rule: "Keyword rules", llm: "AI (Ollama)" }[doc.method];
+  return who ? `${who}${doc.score != null ? ` · ${Math.round(doc.score)}%` : ""}` : "";
+}
 
 function isMobile() {
   try {
@@ -87,393 +60,55 @@ function isMobile() {
   } catch { return false; }
 }
 
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result);
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
-}
-
-async function tryDecodeQR(file) {
-  try {
-    if (!("BarcodeDetector" in window)) return "";
-    const det = new window.BarcodeDetector({ formats: ["qr_code"] });
-    const bmp = await createImageBitmap(file);
-    const codes = await det.detect(bmp);
-    return codes?.[0]?.rawValue || "";
-  } catch { return ""; }
-}
-
-function fmtDate(iso) {
-  if (!iso) return "";
-  return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-}
-function fmtShort(iso) {
-  if (!iso) return "";
-  return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-}
-function monthOf(iso) {
-  const d = new Date(iso);
-  if (isNaN(d)) return { key: "0000-00", label: "—" };
-  return {
-    key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-    label: d.toLocaleDateString("en-IN", { month: "long", year: "numeric" }),
-  };
-}
-function inRange(iso, from, to) {
-  if (!from && !to) return true;
-  const d = new Date(iso);
-  if (isNaN(d)) return true;
-  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  if (from && day < from) return false;
-  if (to && day > to) return false;
-  return true;
-}
-const ymKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-function ymLabel(key) {
-  const [y, m] = key.split("-").map(Number);
-  return new Date(y, m - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
-}
-function ymShort(key) {
-  const [y, m] = key.split("-").map(Number);
-  return new Date(y, m - 1, 1).toLocaleDateString("en-IN", { month: "short", year: "numeric" });
-}
-const lastCompletedMonthKey = () => {
-  const n = new Date();
-  return ymKey(new Date(n.getFullYear(), n.getMonth() - 1, 1));
-};
-// Every month from the newest report (or this month, whichever is later) back
-// to the oldest report — so the picker is a continuous list, gaps and all.
-function monthOptions(docs) {
-  const keys = docs
-    .filter(d => d.review_state !== "unsorted")
-    .map(d => { const dt = new Date(d.document_date || d.created_at); return isNaN(dt) ? null : ymKey(dt); })
-    .filter(Boolean);
-  const nowK = ymKey(new Date());
-  const newest = keys.reduce((a, b) => (a > b ? a : b), nowK);
-  const oldest = keys.reduce((a, b) => (a < b ? a : b), nowK);
-  const [oy, om] = oldest.split("-").map(Number);
-  let [y, m] = newest.split("-").map(Number);
-  const has = new Set(keys);
-  const out = [];
-  for (let i = 0; i < 60; i++) {
-    const k = `${y}-${String(m).padStart(2, "0")}`;
-    out.push({ key: k, label: ymLabel(k), has: has.has(k) });
-    if (y < oy || (y === oy && m <= om)) break;
-    m -= 1; if (m === 0) { m = 12; y -= 1; }
-  }
-  return out;
-}
-
-/* ─────────────────────────────────────────────────────────── one row */
-function DocRow({ doc, picking, selected, onToggle, onOpen, showCat, priv, onLock }) {
-  const m = TYPE_META[doc.doc_type] || TYPE_META.other;
-  const unsorted = doc.review_state === "unsorted";
-  const rxWithDr = doc.doc_type === "prescription" && doc.doctor_label;
-  const cats = doc.doc_type === "lab_report" ? (doc.report_categories || []).filter((c) => CATEGORY_LABELS[c]) : [];
-  const sub = unsorted
-    ? "Not yet filed — tell us what this is"
-    : (showCat && cats.length)
-      ? cats.map(catLabel).join(" · ")
-      : rxWithDr
-        ? (doc.hospital_label || "Issued by your hospital")
-        : [doc.doctor_label, doc.hospital_label].filter(Boolean).join(" · ")
-          || (doc.uploaded_by === "staff" ? "Issued by your hospital" : "Uploaded by you");
-
+/* ─────────────────────────────────────────────────────────── row */
+function DocRow({ doc, picking, selected, onToggle, onOpen, priv, onLock }) {
+  const m = typeMeta(doc.doc_type);
+  const busy = IN_PROGRESS.has(doc.processing_status);
+  const failed = doc.processing_status === "failed";
+  const locked = priv?.private && !priv?.revealed_for_visit;
+  const meta = [
+    fmtDate(doc.document_date || doc.created_at), doc.hospital_label,
+    busy || failed ? STATUS_LABEL[doc.processing_status] : (doc.method === "staff" ? "" : classifiedBy(doc)),
+  ].filter(Boolean).join(" · ");
   return (
-    <div
-      className="card"
-      style={{
-        padding: "12px 14px", marginBottom: 8, cursor: picking || unsorted ? "default" : "pointer",
-        borderLeft: selected ? "3px solid var(--color-primary)" : "3px solid transparent",
-        background: selected ? "var(--color-primary-light)" : undefined,
-      }}
-      onClick={() => { if (picking) onToggle(); else if (!unsorted) onOpen(); }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        {picking && (
-          <input type="checkbox" checked={selected} onChange={onToggle} onClick={e => e.stopPropagation()} />
-        )}
-        <m.Icon size={17} style={{ color: "var(--color-text-muted)", flexShrink: 0 }} />
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {doc.doc_type === "prescription" && doc.doctor_label ? `Prescription · ${doc.doctor_label}` : doc.title}
-          </div>
-          <div style={{ fontSize: 12, color: "var(--color-text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-            {sub}
-          </div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-          <span style={{
-            fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", color: "var(--color-text-muted)",
-            border: "1px solid var(--color-border)", borderRadius: 5, padding: "2px 6px",
-          }}>{unsorted ? "REVIEW" : m.tag}</span>
-          {doc.verification_status === "verified" && (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 600, color: "#166534" }}>
-              <ShieldCheck size={13} /> Verified
-            </span>
-          )}
-          <span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--color-text-muted)" }}>
-            {fmtShort(doc.document_date || doc.created_at)}
-          </span>
-          {!unsorted && priv && onLock && (() => {
-            const state = priv.revealed_for_visit ? "visit" : priv.private ? "private" : "shared";
-            const Icon = state === "shared" ? Unlock : Lock;
-            return (
-              <button
-                onClick={(e) => { e.stopPropagation(); onLock(doc); }}
-                title={
-                  state === "visit" ? "Shown for this visit only — tap to change"
-                  : state === "private" ? "Private — hidden from shared records. Tap to change."
-                  : "Visible when you share records. Tap to make private."
-                }
-                aria-label={`Sharing privacy for ${doc.title}`}
-                style={{
-                  width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
-                  cursor: "pointer",
-                  border: `1px solid ${state === "shared" ? "var(--color-border)" : "var(--color-primary)"}`,
-                  background: state === "shared" ? "transparent" : "var(--color-primary-light, rgba(21,119,74,.10))",
-                  color: state === "shared" ? "var(--color-text-muted)" : "var(--color-primary)",
-                }}
-              >
-                <Icon size={14} />
-              </button>
-            );
-          })()}
-        </div>
+    <div className="card" onClick={() => (picking ? onToggle() : onOpen())}
+      style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", marginBottom: 8, cursor: "pointer",
+               borderColor: selected ? "var(--color-primary)" : undefined }}>
+      {picking && <input type="checkbox" checked={selected} readOnly />}
+      <span style={{ width: 36, height: 36, borderRadius: 8, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                     background: "var(--color-bg)", color: "var(--color-primary)" }}>
+        {busy ? <Clock size={17} /> : <m.Icon size={17} />}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{doc.title}</div>
+        <div style={{ fontSize: 12, color: failed ? "var(--color-error)" : "var(--color-text-muted)" }}>{meta}</div>
       </div>
-      {priv && (priv.private || priv.revealed_for_visit) && (
-        <div style={{ marginTop: 6, fontSize: 10, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", color: "var(--color-primary)", display: "inline-flex", alignItems: "center", gap: 4 }}>
-          {priv.revealed_for_visit ? <><Clock size={10} /> Shown this visit</> : <><Lock size={10} /> Private{priv.private_by_rule ? " · by rule" : ""}</>}
-        </div>
+      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".05em", padding: "3px 7px", borderRadius: 6,
+                     background: "var(--color-bg)", color: "var(--color-text-muted)" }}>{busy ? "…" : m.tag}</span>
+      {priv && onLock && !busy && (
+        <button title={locked ? "Private — hidden from doctors" : "Shown to doctors you share with"} style={iconBtn}
+          onClick={(e) => { e.stopPropagation(); onLock(doc); }}>
+          {locked ? <Lock size={15} /> : <Unlock size={15} />}
+        </button>
       )}
     </div>
   );
 }
 
-/* ────────────────────────────────────── review row (Unsorted tray) */
-// One card per file the classifier couldn't file. It asks ONLY the field(s)
-// that are missing — type, and for a lab report the panel and the date — and
-// shows a plain "retake" for a photo it couldn't read at all. The original
-// file is untouched throughout.
-function ReviewRow({ doc, onFile, onRemove }) {
-  const unreadable = doc.classification_method === "unreadable";
-  // review_needs (when present) says precisely which field is unresolved —
-  // "other" can be a real, confirmed kind (a discharge summary, say), not
-  // just the placeholder for "unknown". Legacy rows with no review_needs
-  // stored fall back to the old heuristic.
-  const needs = doc.review_needs && doc.review_needs.length ? doc.review_needs : null;
-  const kindUnknown = needs ? needs.includes("kind") || needs.includes("file") : (doc.doc_type === "other" || unreadable);
-  const [kind, setKind] = useState(kindUnknown ? "" : doc.doc_type);
-  const [cats, setCats] = useState((doc.report_categories || []).filter((c) => CATEGORY_LABELS[c]));
-  const [dateStr, setDateStr] = useState((doc.document_date || "").slice(0, 10));
-  const [busy, setBusy] = useState(false);
-  const [manual, setManual] = useState(!unreadable);
-
-  const needCat = kind === "lab_report";
-  const canFile = kind && (!needCat || cats.length > 0) && dateStr;
-
-  async function file() {
-    setBusy(true);
-    try {
-      await onFile(doc, {
-        doc_type: kind,
-        ...(needCat ? { report_categories: cats } : {}),
-        ...(dateStr ? { document_date: dateStr } : {}),
-      });
-    } finally { setBusy(false); }
-  }
-
-  return (
-    <div className="card" style={{ padding: "12px 14px", marginBottom: 8, borderLeft: `3px solid var(--color-warning)` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <HelpCircle size={17} style={{ color: "var(--color-warning)", flexShrink: 0 }} />
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{doc.title}</div>
-          <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
-            {unreadable
-              ? (doc.review_notes || "We couldn’t read this clearly")
-              : "Filed automatically — check the details below"}
-          </div>
-        </div>
-        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", color: "var(--color-warning)", border: "1px solid var(--color-border)", borderRadius: 5, padding: "2px 6px" }}>
-          {unreadable ? "UNREADABLE" : "REVIEW"}
-        </span>
-      </div>
-
-      {unreadable && !manual && (
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--color-border)", fontSize: 12.5, color: "var(--color-text-muted)" }}>
-          Retake it in good light with the whole page flat and in frame, then upload again — or enter the details by hand.
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button className="btn-outline" style={{ fontSize: 12, padding: "5px 12px" }} onClick={() => setManual(true)}>Enter details</button>
-            <button style={{ fontSize: 12, padding: "5px 12px", background: "none", border: "1px solid var(--color-border)", borderRadius: 6, color: "var(--color-text-muted)", cursor: "pointer" }} onClick={() => onRemove(doc)}>Remove</button>
-          </div>
-        </div>
-      )}
-
-      {manual && (
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--color-border)", display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <span style={{ fontSize: 12, color: "var(--color-text-muted)", width: 70 }}>Type</span>
-            {[["prescription", "Prescription"], ["lab_report", "Lab report"], ["scan", "Imaging"], ["discharge_summary", "Discharge summary"], ["other", "Other"]].map(([v, l]) => (
-              <button key={v} onClick={() => setKind(v)} className={kind === v ? "btn-primary" : "btn-outline"}
-                style={{ fontSize: 12, padding: "4px 11px" }}>{l}</button>
-            ))}
-          </div>
-          {needCat && (
-            <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: "var(--color-text-muted)" }}>
-              <span style={{ width: 70 }}>Panel</span>
-              <select className="form-input" style={{ padding: "6px 10px", maxWidth: 260 }}
-                value={cats[0] || ""} onChange={e => setCats(e.target.value ? [e.target.value] : [])}>
-                <option value="">Choose a panel…</option>
-                {CATEGORY_ORDER.map(s => <option key={s} value={s}>{CATEGORY_LABELS[s]}</option>)}
-              </select>
-            </label>
-          )}
-          <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: "var(--color-text-muted)" }}>
-            <span style={{ width: 70 }}>Date</span>
-            <input type="date" className="form-input" style={{ padding: "6px 10px", maxWidth: 200 }}
-              max={new Date().toISOString().slice(0, 10)}
-              value={dateStr} onChange={e => setDateStr(e.target.value)} />
-          </label>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn-primary" style={{ fontSize: 12.5, padding: "6px 14px" }} disabled={!canFile || busy} onClick={file}>
-              {busy ? "Filing…" : "File it"}
-            </button>
-            <button style={{ fontSize: 12, padding: "6px 12px", background: "none", border: "1px solid var(--color-border)", borderRadius: 6, color: "var(--color-text-muted)", cursor: "pointer" }} onClick={() => onRemove(doc)}>Not medical — remove</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-const LAB_STATUS_COLOR = { high: "var(--color-error)", low: "var(--color-error)", normal: "var(--color-success, #1F8F6E)" };
-const LAB_STATUS_LABEL = { high: "High", low: "Low", normal: "Normal" };
-
-function fmtLabDate(value) {
-  if (!value) return "—";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-}
-
-/** Key Parameters + Comparison with Previous Report — the per-document
- * drill-down for the extraction pipeline's stored values (core.lab_value_
- * extractor -> ExtractedLabValue), fetched from
- * PortalDocumentLabValuesView. Read-only, lab_report documents only; a
- * document with nothing confidently extracted renders nothing (it already
- * surfaces in Health Insights' "Reports Needing Review" instead). */
-function LabValuesSection({ docId, patientAwpid }) {
-  const [values, setValues] = useState(null); // null = loading, [] = none
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setValues(null); setFailed(false);
-    apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT_LAB_VALUES(docId), { params: patientAwpid ? { patient_awpid: patientAwpid } : {} })
-      .then(res => { if (!cancelled) setValues((res.data?.data || res.data)?.values || []); })
-      .catch(() => { if (!cancelled) setFailed(true); });
-    return () => { cancelled = true; };
-  }, [docId, patientAwpid]);
-
-  if (failed || (values && values.length === 0)) return null;
-  if (values === null) {
-    return <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 16 }}>Loading key parameters…</div>;
-  }
-
-  const withPrevious = values.filter(v => v.previous);
-
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <div className="dot-label dot-label--blue" style={{ marginBottom: 10 }}>Key Parameters</div>
-      <div style={{ overflowX: "auto", marginBottom: withPrevious.length ? 16 : 0 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-          <thead>
-            <tr style={{ textAlign: "left", color: "var(--color-text-muted)" }}>
-              <th style={{ padding: "5px 7px", fontWeight: 600 }}>Parameter</th>
-              <th style={{ padding: "5px 7px", fontWeight: 600 }}>Value</th>
-              <th style={{ padding: "5px 7px", fontWeight: 600 }}>Reference Range</th>
-              <th style={{ padding: "5px 7px", fontWeight: 600 }}>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {values.map(v => (
-              <tr key={v.parameter_slug} style={{ borderTop: "1px solid var(--color-border)" }}>
-                <td style={{ padding: "7px" }}>{v.parameter_label}</td>
-                <td style={{ padding: "7px", fontWeight: 700 }}>{v.value}{v.unit}</td>
-                <td style={{ padding: "7px", color: "var(--color-text-muted)" }}>{v.reference_range_text || "—"}</td>
-                <td style={{ padding: "7px" }}>
-                  {v.status
-                    ? <span style={{ fontSize: 11, fontWeight: 700, color: LAB_STATUS_COLOR[v.status] }}>{LAB_STATUS_LABEL[v.status]}</span>
-                    : "—"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {withPrevious.length > 0 && (
-        <>
-          <div className="dot-label dot-label--gold" style={{ marginBottom: 10 }}>Comparison with Previous Report</div>
-          <div style={{ display: "grid", gap: 6 }}>
-            {withPrevious.map(v => {
-              const Icon = v.previous.direction === "up" ? TrendingUp : v.previous.direction === "down" ? TrendingDown : null;
-              const concerning = (v.concern === "higher_is_concern" && v.previous.direction === "up")
-                || (v.concern === "lower_is_concern" && v.previous.direction === "down");
-              return (
-                <div key={v.parameter_slug} style={{
-                  display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
-                  padding: "8px 10px", borderRadius: 8, border: "1px solid var(--color-border)", fontSize: 12.5,
-                }}>
-                  <span style={{ fontWeight: 600 }}>{v.parameter_label}</span>
-                  <span style={{ display: "flex", alignItems: "center", gap: 6, color: concerning ? "var(--color-error)" : "var(--color-text-secondary)" }}>
-                    {v.previous.value}{v.unit} <span style={{ color: "var(--color-text-muted)" }}>→</span> {v.value}{v.unit}
-                    {Icon && <Icon size={14} />}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/* ─────────────────────────────────────────────────────────── detail modal */
+/* ─────────────────────────────────────────────────────────── detail */
 function DetailModal({ doc, patientAwpid, onClose, onChanged }) {
   const { toastSuccess, toastApiError } = useToast();
   const [busy, setBusy] = useState(false);
-  const [recat, setRecat] = useState(false);
-  const m = TYPE_META[doc.doc_type] || TYPE_META.other;
   const hospital = !!doc.source_tenant_id || doc.uploaded_by === "staff";
   const awpidParam = patientAwpid ? { patient_awpid: patientAwpid } : {};
 
-  async function view(download, docId = doc.id) {
+  async function view(docId = doc.id) {
     const win = window.open("", "_blank");
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(docId), { params: { ...(download ? { download: 1 } : {}), ...awpidParam } });
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(docId), { params: awpidParam });
       const fd = (res.data?.data || res.data)?.file_data;
       if (fd) openDataUrlInNewTab(win, fd); else win?.close();
     } catch (err) { win?.close(); toastApiError(err, "Could not open the file."); }
-  }
-  const hasHandwritten = !!doc.handwritten_doc_id;
-  async function move(type) {
-    setBusy(true);
-    try {
-      if (type === "__remove__") {
-        await apiClient.delete(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { params: awpidParam });
-        toastSuccess("Removed.");
-      } else {
-        await apiClient.patch(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { doc_type: type, ...awpidParam });
-        toastSuccess(`Moved to ${type === "prescription" ? "Prescriptions" : "Lab reports"}.`);
-      }
-      onChanged(); onClose();
-    } catch (err) { toastApiError(err, "Could not update."); } finally { setBusy(false); }
   }
   async function remove() {
     setBusy(true);
@@ -485,64 +120,41 @@ function DetailModal({ doc, patientAwpid, onClose, onChanged }) {
   }
 
   const rows = [
-    ["Type", m.label],
+    ["Type", IN_PROGRESS.has(doc.processing_status) ? STATUS_LABEL[doc.processing_status] : typeMeta(doc.doc_type).label],
+    ["Classified by", classifiedBy(doc) || "—"],
     ["Document date", fmtDate(doc.document_date) || "—"],
     ["Doctor", doc.doctor_label || "—"],
-    ["Hospital / lab", doc.hospital_label || (hospital ? "Your hospital" : "—")],
+    ["Hospital / lab", doc.hospital_label || "—"],
     ["Source", hospital ? "Issued by hospital" : "Uploaded by you"],
     ["Document ID", doc.public_document_id || "—"],
     ["Added on", fmtDate(doc.created_at)],
-    ["Status", doc.verification_status === "verified" ? "Verified · QR authenticated" : "Not verified"],
+    ...(doc.processing_status === "failed" ? [["Problem", doc.error || STATUS_LABEL.failed]] : []),
   ];
 
   return (
-    <div className="modal-backdrop" style={backdrop} onClick={onClose}>
+    <div style={backdrop} onClick={onClose}>
       <div className="card" style={sheet} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 14 }}>
-          <div style={{ flex: 1, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 16 }}>
-            {doc.doc_type === "prescription" && doc.doctor_label ? `Prescription · ${doc.doctor_label}` : doc.title}
-          </div>
+          <div style={{ flex: 1, ...h3 }}>{doc.title}</div>
           <button onClick={onClose} style={iconBtn}><X size={18} /></button>
         </div>
-
-        <div style={{ display: "grid", gap: 0, marginBottom: 16 }}>
-          {rows.map(([k, v]) => (
-            <div key={k} style={{ display: "grid", gridTemplateColumns: "130px 1fr", gap: 12, padding: "9px 0", borderTop: "1px solid var(--color-border)", fontSize: 13 }}>
-              <span style={{ color: "var(--color-text-muted)" }}>{k}</span>
-              <span style={{ fontWeight: 500 }}>{v}</span>
-            </div>
-          ))}
-        </div>
-
-        {doc.doc_type === "lab_report" && <LabValuesSection docId={doc.id} patientAwpid={patientAwpid} />}
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn-primary" style={{ flex: 1 }} onClick={() => view(false)}>
-              <Download size={15} /> {hasHandwritten ? "View / Download prescription" : "View / Download"}
-            </button>
-            {doc.verification_status !== "verified" && (
-              <button className="btn-outline" style={{ flex: 1 }} disabled={busy} onClick={() => setRecat(v => !v)}><Tag size={15} /> Re-categorise</button>
-            )}
+        {rows.map(([k, v]) => (
+          <div key={k} style={{ display: "grid", gridTemplateColumns: "130px 1fr", gap: 12, padding: "9px 0", borderTop: "1px solid var(--color-border)", fontSize: 13 }}>
+            <span style={{ color: "var(--color-text-muted)" }}>{k}</span>
+            <span style={{ fontWeight: 500, wordBreak: "break-word" }}>{v}</span>
           </div>
-          {hasHandwritten && (
-            <button className="btn-outline" onClick={() => view(false, doc.handwritten_doc_id)}>
-              <PenLine size={15} /> View / Download handwritten
-            </button>
-          )}
-          {recat && (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: 10, background: "var(--color-bg)", borderRadius: 8 }}>
-              <span style={{ width: "100%", fontSize: 12, color: "var(--color-text-muted)" }}>Move to</span>
-              <button className="btn-outline" style={{ fontSize: 12, padding: "4px 10px" }} disabled={busy} onClick={() => move("prescription")}>Prescription</button>
-              <button className="btn-outline" style={{ fontSize: 12, padding: "4px 10px" }} disabled={busy} onClick={() => move("lab_report")}>Lab report</button>
-            </div>
+        ))}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 16 }}>
+          <button className="btn-primary" onClick={() => view()}><Download size={15} /> View / Download</button>
+          {doc.handwritten_doc_id && (
+            <button className="btn-outline" onClick={() => view(doc.handwritten_doc_id)}><PenLine size={15} /> View handwritten prescription</button>
           )}
           <button className="btn-outline" style={{ color: "var(--color-danger)", borderColor: "var(--color-danger)" }} disabled={busy} onClick={remove}>
             <Trash2 size={15} /> Delete from my reports
           </button>
           {hospital && (
             <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
-              Your hospital keeps its own copy for its records. This removes it from your reports and from other hospitals that could otherwise see it.
+              Your hospital keeps its own copy. This removes it from your reports and from other hospitals.
             </div>
           )}
         </div>
@@ -585,7 +197,7 @@ function AddModal({ onClose, onDone, patientAwpid }) {
   const [phase, setPhase] = useState("pick");        // pick | choose | stage | upload | done
   const [items, setItems] = useState([]);            // {file, name, size, skip}
   const [prog, setProg] = useState({ done: 0, total: 0, name: "" });
-  const [result, setResult] = useState({ rx: 0, lab: 0, unsorted: 0, dup: 0, failed: 0, notMedical: 0, files: [] });
+  const [result, setResult] = useState({ sent: 0, skipped: 0, error: "" });
   const [dragOver, setDragOver] = useState(false);
   const filesRef = useRef(null);
   const folderRef = useRef(null);
@@ -616,14 +228,14 @@ function AddModal({ onClose, onDone, patientAwpid }) {
       return {
         file: f, name: f.name || "photo.jpg", size: f.size,
         skip: badType || tooBig,
-        reason: badType ? "not a PDF/image" : tooBig ? "over 11 MB" : "",
+        reason: badType ? "not a PDF/image" : tooBig ? "over 12 MB" : "",
       };
     });
 
     const keptSoFar = items.filter(i => !i.skip);
     const newKept = arr.filter(a => !a.skip);
     if (!newKept.length) {
-      toastError("None of those are PDFs or images under 11 MB.");
+      toastError("None of those are PDFs or images under 12 MB.");
       return;
     }
     if (keptSoFar.length + newKept.length > MAX_UPLOAD_FILES) {
@@ -642,63 +254,27 @@ function AddModal({ onClose, onDone, patientAwpid }) {
 
   async function run() {
     const ready = items.filter(i => !i.skip);
-    const preSkipped = items.filter(i => i.skip);
-    if (!ready.length && !preSkipped.length) { toastError("Nothing to upload."); return; }
+    if (!ready.length) { toastError("Nothing to upload."); return; }
     setPhase("upload");
-    const r = { rx: 0, lab: 0, unsorted: 0, dup: 0, failed: 0, notMedical: 0, files: [] };
-
-    for (const it of preSkipped) {
-      r.failed++;
-      r.files.push({ name: it.name, outcome: "failed", reason: `not uploaded — ${it.reason || "not a PDF/image under 11 MB"}` });
+    setProg({ done: 0, total: ready.length, name: "" });
+    // One request for the whole selection: the server checks every file first
+    // (12 MB each, 200 MB total) and rejects the lot if any one is invalid.
+    const form = new FormData();
+    ready.forEach(it => form.append("files", it.file, it.name));
+    if (patientAwpid) form.append("patient_awpid", patientAwpid);
+    try {
+      const res = await apiClient.post(API_ENDPOINTS.RECORDS.UPLOAD, form, {
+        // apiClient defaults to JSON; multipart makes axios send the files with their boundary
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 0,
+        onUploadProgress: (e) => setProg({ done: e.total ? Math.round((e.loaded / e.total) * ready.length) : 0, total: ready.length, name: "" }),
+      });
+      const docs = (res.data?.data || res.data)?.documents || [];
+      setResult({ sent: docs.length, skipped: items.length - ready.length, error: "" });
+    } catch (e) {
+      const errs = e?.response?.data?.errors?.files;
+      setResult({ sent: 0, skipped: 0, error: (Array.isArray(errs) ? errs.join(" ") : "") || e?.response?.data?.message || "Upload failed — try again." });
     }
-
-    for (let i = 0; i < ready.length; i++) {
-      const it = ready[i];
-      setProg({ done: i, total: ready.length, name: it.name });
-      try {
-        if (it.size > MAX_FILE_BYTES) {
-          r.failed++;
-          r.files.push({ name: it.name, outcome: "failed", reason: "over 11 MB" });
-          continue;
-        }
-        const dataUrl = await fileToDataUrl(it.file);
-        const qr = it.file.type.startsWith("image/") ? await tryDecodeQR(it.file) : "";
-        const res = await apiClient.post(API_ENDPOINTS.PORTAL.DOCUMENTS, {
-          title: it.name.replace(OK_EXT, ""),
-          file_data: dataUrl, file_name: it.name, mime_type: it.file.type || "application/pdf",
-          ...(qr ? { qr_token: qr } : {}),
-          ...(patientAwpid ? { patient_awpid: patientAwpid } : {}),
-        });
-        const d = res.data?.data || res.data;
-        if (res.status === 200 && d?.duplicate) {
-          r.dup++;
-          r.files.push({ name: it.name, outcome: "duplicate", reason: "already in your reports" });
-        } else if (res.status === 200 && d?.skipped) {
-          r.notMedical++;
-          r.files.push({ name: it.name, outcome: "not_medical", reason: "not a medical document — not saved" });
-        } else if (d?.unreadable) {
-          r.unsorted++;
-          r.files.push({ name: it.name, outcome: "unreadable", reason: (d.quality_message || "we couldn't read it clearly").replace(/\s+/g, " ").trim() });
-        } else if (d?.review_state === "unsorted") {
-          r.unsorted++;
-          r.files.push({ name: it.name, outcome: "review", reason: "in the Review tab — needs a quick check" });
-        } else if (d?.doc_type === "prescription") {
-          r.rx++;
-          r.files.push({ name: it.name, outcome: "filed", reason: "filed as Prescription" });
-        } else if (d?.doc_type === "lab_report") {
-          r.lab++;
-          r.files.push({ name: it.name, outcome: "filed", reason: "filed as Lab report" });
-        } else {
-          r.unsorted++;
-          r.files.push({ name: it.name, outcome: "review", reason: "in the Review tab" });
-        }
-      } catch (e) {
-        r.failed++;
-        r.files.push({ name: it.name, outcome: "failed", reason: (e?.response?.data?.message || "upload failed — try again").slice(0, 120) });
-      }
-    }
-    setProg({ done: ready.length, total: ready.length, name: "" });
-    setResult(r);
     setPhase("done");
   }
 
@@ -715,10 +291,9 @@ function AddModal({ onClose, onDone, patientAwpid }) {
         {phase === "pick" && (
           <>
             <h3 style={h3}>Add to My Reports</h3>
-            <p style={sub}>We read the QR or the page text and file each one for you.</p>
+            <p style={sub}>We read each page and file it for you.</p>
             {mob && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 6 }}>
-                <Method Icon={QrCode} title="Scan QR" desc="Point at the code on a hospital document" onClick={() => camRef.current?.click()} />
+              <div style={{ marginTop: 6 }}>
                 <Method Icon={Camera} title="Take photo" desc="Capture a printed document" onClick={() => camRef.current?.click()} />
               </div>
             )}
@@ -767,7 +342,7 @@ function AddModal({ onClose, onDone, patientAwpid }) {
         {phase === "stage" && (
           <>
             <h3 style={h3}>Review {ready.length} file{ready.length !== 1 ? "s" : ""}</h3>
-            <p style={sub}>{ready.length} ready{skipped ? ` · ${skipped} skipped (not a PDF/image, or over 11 MB)` : ""}</p>
+            <p style={sub}>{ready.length} ready{skipped ? ` · ${skipped} skipped (not a PDF/image, or over 12 MB)` : ""}</p>
             <div style={{ maxHeight: 300, overflowY: "auto", border: "1px solid var(--color-border)", borderRadius: 8, padding: 4, margin: "10px 0" }}>
               {items.map((it, idx) => (
                 <div key={idx} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", fontSize: 12.5, opacity: it.skip ? 0.5 : 1 }}>
@@ -803,40 +378,18 @@ function AddModal({ onClose, onDone, patientAwpid }) {
 
         {phase === "done" && (
           <>
-            <h3 style={h3}>Upload complete</h3>
-            <div style={{ display: "grid", gap: 0, margin: "10px 0" }}>
-              {result.rx > 0 && <SumRow label="Prescriptions added" n={result.rx} ok />}
-              {result.lab > 0 && <SumRow label="Lab reports added" n={result.lab} ok />}
-              {result.unsorted > 0 && <SumRow label="Need your review" n={result.unsorted} />}
-              {result.dup > 0 && <SumRow label="Already in your reports (skipped)" n={result.dup} />}
-              {result.notMedical > 0 && <SumRow label="Not medical documents — not saved" n={result.notMedical} />}
-              {result.failed > 0 && <SumRow label="Not uploaded (too large / unreadable / failed)" n={result.failed} />}
-            </div>
-
-            {result.files?.some(f => f.outcome !== "filed") && (
-              <div style={{ marginTop: 12, borderTop: "1px solid var(--color-border)", paddingTop: 10 }}>
-                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--color-text-muted)", marginBottom: 8 }}>
-                  Files needing attention
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 230, overflowY: "auto" }}>
-                  {result.files.filter(f => f.outcome !== "filed").map((f, i) => (
-                    <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 12, lineHeight: 1.4 }}>
-                      <span style={{ ...OUTCOME_TAG, ...OUTCOME_TAG_COLOR[f.outcome] }}>{OUTCOME_LABEL[f.outcome]}</span>
-                      <span style={{ minWidth: 0, flex: 1 }}>
-                        <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 11, color: "var(--color-text)", wordBreak: "break-all" }}>{f.name}</span>
-                        <span style={{ color: "var(--color-text-muted)" }}> — {f.reason}</span>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {result.unsorted > 0 && (
-              <p style={sub}>The {result.unsorted} we weren’t sure about wait in the Review tab — each one asks only for what’s missing (its type, panel, or date).</p>
+            <h3 style={h3}>{result.error ? "Upload rejected" : "Uploaded"}</h3>
+            {result.error ? (
+              <p style={{ ...sub, color: "var(--color-error)" }}>{result.error} Nothing was saved — fix or remove that file and try again.</p>
+            ) : (
+              <>
+                <SumRow label="Files uploaded" n={result.sent} ok />
+                {result.skipped > 0 && <SumRow label="Skipped (not a PDF/image, or over 12 MB)" n={result.skipped} />}
+                <p style={sub}>Each one is being read and classified now — its type appears in your list in a moment. You can leave this page.</p>
+              </>
             )}
             <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-              <button className="btn-primary" style={{ flex: 1 }} onClick={() => { onDone(result.unsorted > 0 ? "unsorted" : "all"); }}>Done</button>
+              <button className="btn-primary" style={{ flex: 1 }} onClick={() => onDone("all")}>Done</button>
             </div>
           </>
         )}
@@ -875,12 +428,20 @@ function SumRow({ label, n, ok }) {
 export default function MyReportsPage() {
   const { selectedPatient } = usePatientContext();
   const patientAwpid = selectedPatient?.awpid || "";
-  const { toastSuccess, toastApiError, toastError } = useToast();
+  const { toastApiError, toastError } = useToast();
 
   const { items: docs, isLoading, hasMore, loadMore, refetch } = usePaginatedList(
     API_ENDPOINTS.PORTAL.DOCUMENTS,
     { pageSize: 50, params: patientAwpid ? { patient_awpid: patientAwpid } : {} },
   );
+
+  // Files still being read / classified → refresh every 4 s until they're done.
+  const processing = docs.some(d => IN_PROGRESS.has(d.processing_status));
+  useEffect(() => {
+    if (!processing) return undefined;
+    const t = setInterval(refetch, 4000);
+    return () => clearInterval(t);
+  }, [processing, refetch]);
 
   // ── shared-records privacy: the per-report lock ────────────────────────
   // Only for the patient's own reports (a family member's are managed from
@@ -955,154 +516,33 @@ export default function MyReportsPage() {
   }
 
   const [tab, setTab] = useState("all");
-  const [insightsOpen, setInsightsOpen] = useState(false);
   const [q, setQ] = useState("");
   const [picking, setPicking] = useState(false);
   const [sel, setSel] = useState(() => new Set());
   const [addOpen, setAddOpen] = useState(false);
   const [detail, setDetail] = useState(null);
-  const [showFilter, setShowFilter] = useState(false);
-  // Filter has three modes. "month" is the default — doctors and patients
-  // both scan month-by-month first (recent months), and only drop to exact
-  // dates when they need a narrow window.
-  const [filterMode, setFilterMode] = useState("month");   // month | dates | all
-  const [filterMonth, setFilterMonth] = useState("");        // "YYYY-MM"
-  const [dFrom, setDFrom] = useState("");
-  const [dTo, setDTo] = useState("");
-  // Second, independent filter: which report categories to show. Empty = all.
-  // Prescriptions have no category, so this control is hidden on that tab.
-  const [catSel, setCatSel] = useState(() => new Set());
-  const [showCatMenu, setShowCatMenu] = useState(false);
 
-  const monthOpts = useMemo(() => monthOptions(docs), [docs]);
-  // Land on the last *completed* month once reports load (clamped to a month
-  // that actually has reports); if everything is in the current month, use the
-  // newest option so nothing is hidden.
-  useEffect(() => {
-    if (filterMonth || !monthOpts.length) return;
-    const lc = lastCompletedMonthKey();
-    const pick = monthOpts.find(o => o.key === lc && o.has)
-      || monthOpts.find(o => o.key <= lc && o.has)
-      || monthOpts.find(o => o.has)
-      || monthOpts[0];
-    setFilterMonth(pick.key);
-    // Nothing on file yet — don't greet a new patient with "No reports in September".
-    if (!monthOpts.some(o => o.has)) setFilterMode("all");
-  }, [monthOpts, filterMonth]);
-
-  const dateFilterOn = !!(dFrom || dTo);
-  const filtered = filterMode === "month" ? !!filterMonth
-    : filterMode === "dates" ? dateFilterOn
-    : false;
-  const filterSummary = filterMode === "month" ? (filterMonth ? ymShort(filterMonth) : "Month")
-    : filterMode === "dates" ? "Dates" : "";
-
+  const tabOf = (d) => (TYPE_META[d.doc_type] && d.doc_type !== "discharge_summary" ? d.doc_type : "other");
   const counts = useMemo(() => {
-    const c = { all: 0, prescription: 0, lab_report: 0, unsorted: 0 };
-    docs.forEach(d => {
-      if (d.review_state === "unsorted") c.unsorted++;
-      else { c.all++; if (d.doc_type === "prescription") c.prescription++; if (d.doc_type === "lab_report") c.lab_report++; }
-    });
+    const c = { all: docs.length };
+    docs.forEach(d => { c[tabOf(d)] = (c[tabOf(d)] || 0) + 1; });
     return c;
   }, [docs]);
-
-  // Full transparency on WHY each row is in review — grouped by the exact
-  // combination of missing fields, not one flat count. A row uploaded before
-  // review_needs existed has none stored, so it falls back to the old
-  // assumption (type unknown).
-  const reviewSummary = useMemo(() => {
-    const REASON_LABEL = {
-      "file": "too blurry to read",
-      "kind": "couldn't be classified",
-      "kind,date": "couldn't be classified, and the date's unclear too",
-      "category": "are lab reports missing their panel",
-      "category,date": "are lab reports missing their panel and date",
-      "date": "just need a date confirmed",
-    };
-    const ORDER = ["kind", "category", "date"];
-    const groups = new Map();
-    docs.filter(d => d.review_state === "unsorted").forEach(d => {
-      const needs = (d.review_needs && d.review_needs.length) ? d.review_needs : ["kind"];
-      const key = needs.includes("file") ? "file" : ORDER.filter(n => needs.includes(n)).join(",");
-      groups.set(key, (groups.get(key) || 0) + 1);
-    });
-    return [...groups.entries()].map(([key, n]) => `${n} ${REASON_LABEL[key] || "need a quick check"}`);
-  }, [docs]);
-
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return docs
-      .filter(d => (tab === "all" ? d.review_state !== "unsorted" : tab === "unsorted" ? d.review_state === "unsorted" : d.doc_type === tab && d.review_state !== "unsorted"))
-      .filter(d => !needle || [d.title, d.hospital_label, d.doctor_label, d.public_document_id].join(" ").toLowerCase().includes(needle))
-      .filter(d => {
-        if (tab === "unsorted" || filterMode === "all") return true;
-        const iso = d.document_date || d.created_at;
-        if (filterMode === "dates") return inRange(iso, dFrom, dTo);
-        const dt = new Date(iso);
-        return !isNaN(dt) && ymKey(dt) === filterMonth;
-      });
-  }, [docs, tab, q, filterMode, filterMonth, dFrom, dTo]);
-
-  // Prescriptions / Unsorted: a flat, date-sorted list (month sub-headers when
-  // the date filter isn't already "one month").
-  const monthGroups = useMemo(() => {
-    const map = new Map();
-    shown.forEach(d => {
-      const { key, label } = monthOf(d.document_date || d.created_at);
-      if (!map.has(key)) map.set(key, { label, list: [] });
-      map.get(key).list.push(d);
-    });
-    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([, v]) => v);
-  }, [shown]);
-
-  // Reports (All / Lab reports): grouped category by category, newest first
-  // within each. A health-package lab report shows under every panel it holds.
-  const catGroups = useMemo(() => {
-    const map = new Map();
-    shown.forEach(d => {
-      sectionsFor(d).forEach(({ key, label }) => {
-        if (!map.has(key)) map.set(key, { key, label, list: [] });
-        map.get(key).list.push(d);
-      });
-    });
-    let secs = [...map.values()];
-    if (catSel.size) {
-      secs = secs.filter(s => s.key.startsWith("cat:") && catSel.has(s.key.slice(4)));
-    }
-    secs.forEach(s => s.list.sort((a, b) =>
-      String(b.document_date || b.created_at).localeCompare(String(a.document_date || a.created_at))));
-    secs.sort((a, b) => SECTION_RANK(a.key) - SECTION_RANK(b.key));
-    return secs;
-  }, [shown, catSel]);
-
-  const catMode = tab === "all" || tab === "lab_report";
+    return docs.filter(d => (tab === "all" || tabOf(d) === tab)
+      && (!needle || `${d.title} ${d.hospital_label || ""} ${d.doctor_label || ""}`.toLowerCase().includes(needle)));
+  }, [docs, tab, q]);
 
   function toggleSel(id) {
     setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   }
-  async function fileDoc(doc, patch) {
-    try {
-      await apiClient.patch(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { ...patch, ...(patientAwpid ? { patient_awpid: patientAwpid } : {}) });
-      const where = patch.doc_type === "prescription" ? "Prescriptions"
-        : patch.doc_type === "lab_report" ? (patch.report_categories?.length ? catLabel(patch.report_categories[0]) : "Lab reports")
-        : "your reports";
-      toastSuccess(`Filed under ${where}.`);
-      refetch();
-    } catch (err) { toastApiError(err, "Could not file this."); }
-  }
-  async function removeDoc(doc) {
-    try {
-      await apiClient.delete(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { params: patientAwpid ? { patient_awpid: patientAwpid } : {} });
-      toastSuccess("Removed.");
-      refetch();
-    } catch (err) { toastApiError(err, "Could not remove."); }
-  }
   async function downloadSelected() {
     const ids = [...sel];
     if (!ids.length) return;
-    if (ids.length === 1) { setDetail(docs.find(d => d.id === ids[0])); return; }
     try {
-      const res = await apiClient.post(API_ENDPOINTS.PORTAL.DOCUMENTS_ZIP, { ids, ...(patientAwpid ? { patient_awpid: patientAwpid } : {}) }, { responseType: "blob" });
+      const res = await apiClient.post(API_ENDPOINTS.PORTAL.DOCUMENTS_ZIP,
+        { ids, ...(patientAwpid ? { patient_awpid: patientAwpid } : {}) }, { responseType: "blob" });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement("a");
       a.href = url; a.download = `my-reports-${new Date().toISOString().slice(0, 10)}.zip`;
@@ -1110,12 +550,6 @@ export default function MyReportsPage() {
       setPicking(false); setSel(new Set());
     } catch { toastError("Could not build the ZIP."); }
   }
-
-  const TABS = [
-    ["all", "All", counts.all],
-    ["prescription", "Prescriptions", counts.prescription],
-    ["lab_report", "Lab reports", counts.lab_report],
-  ];
 
   return (
     <AppShell>
@@ -1141,243 +575,60 @@ export default function MyReportsPage() {
             </Link>
           </div>
         )}
-        {/* ── Health Insights (collapsed by default) ─────────────────── */}
-        <div className="card" style={{ marginBottom: 14, overflow: "hidden" }}>
-          <button
-            type="button" onClick={() => setInsightsOpen(v => !v)}
-            style={{
-              width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-              padding: "12px 16px", background: "none", border: "none", cursor: "pointer", textAlign: "left",
-            }}
-          >
-            <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 700, color: "var(--color-text)" }}>
-              <Sparkles size={15} color="var(--color-primary)" /> Health Insights
-            </span>
-            {insightsOpen ? <ChevronUp size={16} color="var(--color-text-muted)" /> : <ChevronDown size={16} color="var(--color-text-muted)" />}
-          </button>
-          {insightsOpen && (
-            <div style={{ padding: "0 16px 18px" }}>
-              <HealthInsightsPanel
-                patientAwpid={patientAwpid}
-                onOpenDocument={(id) => {
-                  const d = docs.find(x => x.id === id);
-                  if (d) setDetail(d);
-                }}
-              />
-            </div>
-          )}
-        </div>
 
         {/* toolbar */}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
-          <div style={{
-            display: "flex", border: "1px solid var(--color-border)", borderRadius: 9,
-            overflowX: "auto", WebkitOverflowScrolling: "touch", maxWidth: "100%",
-          }}>
-            {TABS.map(([id, label, n]) => (
-              <button key={id} onClick={() => setTab(id)}
-                style={{ padding: "7px 13px", fontSize: 13, border: "none", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5,
-                  flexShrink: 0, whiteSpace: "nowrap",
-                  background: tab === id ? "var(--color-primary)" : "transparent",
-                  color: tab === id ? "#fff" : "var(--color-text-secondary)", fontWeight: tab === id ? 600 : 400 }}>
-                {label} {n !== null && <span style={{ opacity: 0.7, fontFamily: "monospace", fontSize: 11 }}>{n}</span>}
-              </button>
+          <div style={{ display: "flex", border: "1px solid var(--color-border)", borderRadius: 9, overflowX: "auto", maxWidth: "100%" }}>
+            {TABS.map(([id, label]) => (
+              <button key={id} onClick={() => setTab(id)} style={{
+                padding: "7px 13px", fontSize: 13, border: "none", cursor: "pointer", whiteSpace: "nowrap",
+                background: tab === id ? "var(--color-primary)" : "transparent",
+                color: tab === id ? "#fff" : "var(--color-text-secondary)", fontWeight: tab === id ? 600 : 400,
+              }}>{label} {counts[id] ? `(${counts[id]})` : ""}</button>
             ))}
           </div>
-          <>
-              <label className="form-input" style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 180, padding: "6px 10px" }}>
-                <Search size={15} style={{ color: "var(--color-text-muted)" }} />
-                <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name, hospital, doctor, ID"
-                  style={{ border: "none", outline: "none", background: "none", width: "100%" }} />
-              </label>
-              <button className="btn-outline" onClick={() => setShowFilter(v => !v)}
-                style={filtered ? { borderColor: "var(--color-primary)", color: "var(--color-primary)" } : undefined}>
-                <SlidersHorizontal size={14} /> {filtered ? filterSummary : "Date"}
-              </button>
-              {catMode && (
-                <div style={{ position: "relative" }}>
-                  <button className="btn-outline" onClick={() => setShowCatMenu(v => !v)}
-                    style={catSel.size ? { borderColor: "var(--color-primary)", color: "var(--color-primary)" } : undefined}>
-                    <Tag size={14} /> {catSel.size ? (catSel.size === 1 ? catLabel([...catSel][0]) : `${catSel.size} categories`) : "All categories"}
-                  </button>
-                  {showCatMenu && (
-                    <div className="card" style={{ position: "absolute", zIndex: 20, top: "calc(100% + 6px)", left: 0, minWidth: 240, padding: 6, maxHeight: 340, overflowY: "auto" }}>
-                      <button onClick={() => { setCatSel(new Set()); }}
-                        style={{ display: "flex", width: "100%", gap: 9, alignItems: "center", padding: "8px 9px", fontSize: 12.5, background: catSel.size ? "transparent" : "var(--color-primary-light)", border: "none", borderRadius: 7, cursor: "pointer", fontWeight: 600 }}>
-                        All categories
-                      </button>
-                      <div style={{ height: 1, background: "var(--color-border)", margin: "5px 2px" }} />
-                      {CATEGORY_ORDER.map(s => (
-                        <label key={s} style={{ display: "flex", gap: 9, alignItems: "center", padding: "7px 9px", fontSize: 12.5, borderRadius: 7, cursor: "pointer" }}>
-                          <input type="checkbox" checked={catSel.has(s)}
-                            onChange={() => setCatSel(prev => { const n = new Set(prev); n.has(s) ? n.delete(s) : n.add(s); return n; })} />
-                          {CATEGORY_LABELS[s]}
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-              {tab !== "unsorted" && (
-                <button className="btn-outline" onClick={() => { setPicking(p => !p); setSel(new Set()); }}>
-                  <CheckSquare size={14} /> {picking ? "Cancel" : "Select"}
-                </button>
-              )}
+          <div style={{ flex: 1, minWidth: 180, display: "flex", alignItems: "center", gap: 6, border: "1px solid var(--color-border)", borderRadius: 9, padding: "6px 10px" }}>
+            <Search size={14} color="var(--color-text-muted)" />
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search title, hospital, doctor"
+              style={{ border: "none", outline: "none", flex: 1, fontSize: 13, background: "transparent" }} />
+          </div>
+          {picking ? (
+            <>
+              <button className="btn-primary" disabled={!sel.size} onClick={downloadSelected}><Download size={14} /> Download {sel.size || ""}</button>
+              <button className="btn-outline" onClick={() => { setPicking(false); setSel(new Set()); }}>Cancel</button>
             </>
+          ) : (
+            <button className="btn-outline" onClick={() => setPicking(true)}><CheckSquare size={14} /> Select</button>
+          )}
         </div>
 
-        <>
-        {showFilter && (
-          <div className="card" style={{ padding: "12px 14px", marginBottom: 12, display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ display: "inline-flex", border: "1px solid var(--color-border)", borderRadius: 8, overflow: "hidden", alignSelf: "flex-start" }}>
-              {[["month", "By month"], ["dates", "By dates"], ["all", "All reports"]].map(([m, l]) => (
-                <button key={m} onClick={() => setFilterMode(m)}
-                  style={{ padding: "6px 13px", fontSize: 12.5, border: "none", cursor: "pointer",
-                    background: filterMode === m ? "var(--color-primary)" : "transparent",
-                    color: filterMode === m ? "#fff" : "var(--color-text-secondary)", fontWeight: filterMode === m ? 600 : 400 }}>
-                  {l}
-                </button>
-              ))}
-            </div>
-
-            {filterMode === "month" && (
-              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--color-text-muted)", maxWidth: 260 }}>
-                Month
-                <select className="form-input" value={filterMonth} onChange={e => setFilterMonth(e.target.value)} style={{ padding: "7px 10px" }}>
-                  {monthOpts.map(o => (
-                    <option key={o.key} value={o.key}>{o.label}{o.has ? "" : " — no reports"}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            {filterMode === "dates" && (
-              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
-                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--color-text-muted)" }}>
-                  Date from
-                  <input type="date" className="form-input" value={dFrom} max={dTo || undefined}
-                    onChange={e => setDFrom(e.target.value)} style={{ padding: "6px 10px" }} />
-                </label>
-                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--color-text-muted)" }}>
-                  Date to
-                  <input type="date" className="form-input" value={dTo} min={dFrom || undefined}
-                    onChange={e => setDTo(e.target.value)} style={{ padding: "6px 10px" }} />
-                </label>
-                {dateFilterOn && (
-                  <button className="btn-outline" style={{ fontSize: 12, padding: "6px 12px" }}
-                    onClick={() => { setDFrom(""); setDTo(""); }}>Clear</button>
-                )}
-              </div>
-            )}
-
-            {filterMode === "all" && (
-              <div style={{ fontSize: 12.5, color: "var(--color-text-muted)" }}>Showing every report, newest first.</div>
-            )}
+        {processing && (
+          <div style={{ fontSize: 12.5, color: "var(--color-text-muted)", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+            <Clock size={13} /> Reading and classifying your new files — this list updates by itself.
           </div>
         )}
 
-        {filtered && tab !== "unsorted" && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--color-text-secondary)", marginBottom: 12 }}>
-            <span>Showing <b>{filterMode === "month" ? (ymLabel(filterMonth)) : "selected dates"}</b> · {shown.length} report{shown.length !== 1 ? "s" : ""}</span>
-            <button style={{ background: "none", border: "none", color: "var(--color-primary)", fontWeight: 600, cursor: "pointer", fontSize: 12.5, padding: 0 }}
-              onClick={() => { setFilterMode("all"); setShowFilter(false); }}>Show all →</button>
+        {isLoading && !docs.length ? (
+          <div className="card" style={{ padding: 30, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
+        ) : !shown.length ? (
+          <div className="card" style={{ padding: 30, textAlign: "center", color: "var(--color-text-muted)", fontSize: 13 }}>
+            {docs.length ? "Nothing matches." : "No reports yet — tap “Add” to upload a prescription or report."}
           </div>
-        )}
-
-        {picking && (
-          <div className="card" style={{ padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13 }}><b style={{ fontFamily: "monospace" }}>{sel.size}</b> selected</span>
-            <button className="btn-outline" style={{ fontSize: 12, padding: "5px 10px" }}
-              onClick={() => setSel(new Set(shown.map(d => d.id)))}>Select all in view</button>
-            <span style={{ flex: 1 }} />
-            <button className="btn-primary" style={{ fontSize: 13, padding: "6px 14px" }} disabled={!sel.size} onClick={downloadSelected}>
-              <Download size={14} /> {sel.size === 1 ? "Open" : "Download ZIP"}
-            </button>
-          </div>
-        )}
-
-        {counts.unsorted > 0 && tab !== "unsorted" && (
-          <div className="card" style={{ padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10, borderLeft: "3px solid var(--color-warning)" }}>
-            <span style={{ fontSize: 13 }}>
-              <b>{counts.unsorted}</b> uploaded file{counts.unsorted !== 1 ? "s" : ""} need your review
-              {reviewSummary.length ? <span style={{ color: "var(--color-text-muted)" }}> — {reviewSummary.join(" · ")}</span> : "."}
-            </span>
-            <button style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--color-primary)", fontWeight: 600, fontSize: 13, cursor: "pointer" }}
-              onClick={() => setTab("unsorted")}>Review</button>
-          </div>
-        )}
-
-        {isLoading ? (
-          <div className="card" style={{ padding: 40, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
-        ) : shown.length === 0 ? (
-          <div className="card" style={{ padding: 44, textAlign: "center" }}>
-            <FileText size={30} style={{ color: "var(--color-border)", marginBottom: 12 }} />
-            <div style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 16, marginBottom: 4 }}>
-              {q ? `Nothing matches “${q}”.`
-                : tab === "unsorted" ? "Nothing to review."
-                : filterMode === "month" && filterMonth ? `No reports in ${ymLabel(filterMonth)}.`
-                : filterMode === "dates" && dateFilterOn ? "Nothing in that date range."
-                : "No reports yet."}
-            </div>
-            {filtered && tab !== "unsorted"
-              ? <button className="btn-outline" style={{ marginTop: 10 }} onClick={() => { setFilterMode("all"); setShowFilter(false); }}>Show all reports</button>
-              : (!q && tab !== "unsorted" && <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>Tap “Add” to upload a prescription or report.</div>)}
-          </div>
-        ) : tab === "unsorted" ? (
-          <>
-            {reviewSummary.length > 0 && (
-              <p style={{ fontSize: 12.5, color: "var(--color-text-muted)", margin: "0 0 12px" }}>
-                {reviewSummary.join(" · ")} — each row below asks only for what's missing.
-              </p>
-            )}
-            {shown.map(d => (
-              <ReviewRow key={d.id} doc={d} onFile={fileDoc} onRemove={removeDoc} />
-            ))}
-          </>
-        ) : catMode ? (
-          <>
-            {catGroups.map(({ key, label, list }) => (
-              <div key={key} style={{ marginBottom: 22 }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--color-text-primary)" }}>{label}</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 10.5, color: "var(--color-text-muted)" }}>{list.length}</span>
-                </div>
-                {list.map(d => (
-                  <DocRow key={`${key}:${d.id}`} doc={d} picking={picking} selected={sel.has(d.id)} showCat={key.startsWith("t:")}
-                    priv={privEnabled ? privMap.get(d.id) : undefined} onLock={privEnabled ? onLock : undefined}
-                    onToggle={() => toggleSel(d.id)} onOpen={() => setDetail(d)} />
-                ))}
-              </div>
-            ))}
-            {hasMore && (
-              <button className="btn-outline" style={{ width: "100%" }} onClick={loadMore}>Load more</button>
-            )}
-          </>
         ) : (
           <>
-            {monthGroups.map(({ label, list }) => (
-              <div key={label} style={{ marginBottom: 20 }}>
-                {filterMode !== "month" && (
-                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--color-text-muted)", marginBottom: 8 }}>{label}</div>
-                )}
-                {list.map(d => (
-                  <DocRow key={d.id} doc={d} picking={picking} selected={sel.has(d.id)}
-                    priv={privEnabled ? privMap.get(d.id) : undefined} onLock={privEnabled ? onLock : undefined}
-                    onToggle={() => toggleSel(d.id)} onOpen={() => setDetail(d)} />
-                ))}
-              </div>
+            {shown.map(d => (
+              <DocRow key={d.id} doc={d} picking={picking} selected={sel.has(d.id)}
+                priv={privEnabled ? privMap.get(d.id) : undefined} onLock={privEnabled ? onLock : undefined}
+                onToggle={() => toggleSel(d.id)} onOpen={() => setDetail(d)} />
             ))}
-            {hasMore && (
-              <button className="btn-outline" style={{ width: "100%" }} onClick={loadMore}>Load more</button>
-            )}
+            {hasMore && <button className="btn-outline" style={{ width: "100%" }} onClick={loadMore}>Load more</button>}
           </>
         )}
-        </>
       </PageShell>
 
       {addOpen && (
         <AddModal patientAwpid={patientAwpid} onClose={() => setAddOpen(false)}
-          onDone={goto => { setAddOpen(false); setTab(goto); refetch(); }} />
+          onDone={() => { setAddOpen(false); setTab("all"); refetch(); }} />
       )}
       {detail && (
         <DetailModal doc={detail} patientAwpid={patientAwpid} onClose={() => setDetail(null)} onChanged={refetch} />
@@ -1412,20 +663,4 @@ const backdrop = {
 const sheet = { width: "min(560px, 96vw)", maxHeight: "88vh", overflowY: "auto", padding: 22 };
 const h3 = { fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 17, margin: 0 };
 const sub = { fontSize: 12.5, color: "var(--color-text-muted)", margin: "6px 0 0" };
-
-const OUTCOME_LABEL = {
-  not_medical: "NOT SAVED", unreadable: "COULDN’T READ", review: "REVIEW",
-  duplicate: "DUPLICATE", failed: "FAILED",
-};
-const OUTCOME_TAG = {
-  flexShrink: 0, fontSize: 9, fontWeight: 700, letterSpacing: ".04em",
-  padding: "2px 6px", borderRadius: 5, whiteSpace: "nowrap", marginTop: 1,
-};
-const OUTCOME_TAG_COLOR = {
-  not_medical: { background: "#FBEEDC", color: "#9A5B16" },
-  unreadable:  { background: "#FBEAE7", color: "#B23A2E" },
-  failed:      { background: "#FBEAE7", color: "#B23A2E" },
-  review:      { background: "var(--color-border)", color: "var(--color-text-muted)" },
-  duplicate:   { background: "var(--color-border)", color: "var(--color-text-muted)" },
-};
 const iconBtn = { background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)", padding: 4, display: "inline-flex" };

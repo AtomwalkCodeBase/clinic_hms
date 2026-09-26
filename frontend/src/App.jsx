@@ -41,6 +41,7 @@ const PlatformSubscriptions = lazy(() => import("./pages/platform-admin/Subscrip
 const PlatformUsers      = lazy(() => import("./pages/platform-admin/UsersPage"));
 const PlatformVaccinationTemplates = lazy(() => import("./pages/platform-admin/VaccinationTemplatesPage"));
 const PlatformMilestoneTemplates = lazy(() => import("./pages/platform-admin/MilestoneTemplatesPage"));
+const PlatformClassificationRules = lazy(() => import("./pages/platform-admin/ClassificationRulesPage"));
 
 // Hospital Admin
 const AdminDashboard = lazy(() => import("./pages/hospital-admin/DashboardPage"));
@@ -242,6 +243,8 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformVaccinationTemplates /></ProtectedRoute>} />
           <Route path={ROUTES.PLATFORM.MILESTONE_TEMPLATES}
             element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformMilestoneTemplates /></ProtectedRoute>} />
+          <Route path={ROUTES.PLATFORM.CLASSIFICATION_RULES}
+            element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformClassificationRules /></ProtectedRoute>} />
 
           {/* Hospital Admin */}
           <Route path={ROUTES.ADMIN.DASHBOARD}

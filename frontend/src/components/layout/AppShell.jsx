@@ -160,6 +160,7 @@ const NAV_BY_ROLE = {
     { type: "link",  label: "Subscriptions",  iconKey: "subscriptions", to: ROUTES.PLATFORM.SUBSCRIPTIONS },
     { type: "link",  label: "Users",          iconKey: "users",         to: ROUTES.PLATFORM.USERS },
     { type: "link",  label: "Vaccination Templates", iconKey: "vaccination", to: ROUTES.PLATFORM.VACCINATION_TEMPLATES },
+    { type: "link",  label: "Classification Rules", iconKey: "platform", to: ROUTES.PLATFORM.CLASSIFICATION_RULES },
   ],
 
   [ROLES.HOSPITAL_ADMIN]: [

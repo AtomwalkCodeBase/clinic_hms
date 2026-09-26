@@ -378,7 +378,7 @@ class LabRequestAttachDocumentView(APIView):
         except FileValidationError as exc:
             return error(str(exc), errors={"file_data": str(exc)})
 
-        from apps.registry.models import SharedDocument
+        from apps.records.models import SharedDocument
 
         doc_type = request.data.get("doc_type") or "lab_report"
         if doc_type not in dict(SharedDocument.DOC_TYPE_CHOICES):
@@ -408,9 +408,9 @@ class LabRequestAttachDocumentView(APIView):
 
         doc = SharedDocument.objects.using("default").create(
             awpid=patient.awpid, title=title, doc_type=doc_type,
-            file_name=file_name, mime_type=mime_type, file_data=file_key,
+            file_name=file_name, mime_type=mime_type, s3_key=file_key,
             uploaded_by="staff", source_tenant_id=source_tenant_id,
-            source_ref=f"labreq:{db}:{req.id}",
+            source_ref=f"labreq:{db}:{req.id}", method="staff",
         )
 
         # Attaching an outside report only makes sense once the request is

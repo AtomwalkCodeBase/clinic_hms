@@ -2,7 +2,7 @@
 core/ocr.py
 -----------
 One entry point for turning an image — or a rasterised scanned-PDF page —
-into text with a confidence score, for core.doc_classifier.
+into text with a confidence score, for apps/records/services.py.
 
 Engine order comes from ``settings.DOC_OCR_ENGINE``:
 
@@ -368,39 +368,3 @@ def pdf_page_images(raw: bytes, *, max_pages: int = 3, dpi: int = 200) -> list[b
     finally:
         doc.close()
     return out
-
-
-# ── warm-up ───────────────────────────────────────────────────────────
-_WARMED = False
-
-
-def warmup() -> str:
-    """
-    Build the active engine's model now so the first real upload doesn't eat
-    the ~3–4 s cold start. Safe to call many times (no-op after the first),
-    from any thread, and a no-op when the engine is "none" or unavailable.
-    Returns the engine it warmed ("" if nothing).
-    """
-    global _WARMED
-    if _WARMED:
-        return ""
-    _WARMED = True
-    name = available()
-    if name in ("", "none"):
-        return ""
-    if name == "tesseract":
-        return name   # binary check already ran in available(); no model to load
-    # A small but real page — a degenerate 1x1 can send the detector's resize
-    # path pathological on some builds, so give it something normal to chew.
-    try:
-        import io as _io
-        from PIL import Image, ImageDraw
-        im = Image.new("RGB", (320, 110), "white")
-        ImageDraw.Draw(im).text((12, 40), "warm up 12/09/2026", fill=(20, 20, 20))
-        b = _io.BytesIO()
-        im.save(b, "PNG")
-        run(b.getvalue())
-        logger.info("core.ocr: %s model warmed", name)
-    except Exception:
-        logger.warning("core.ocr: warmup failed for %s", name, exc_info=True)
-    return name
