@@ -14,17 +14,14 @@ import { useState, useEffect, useCallback } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import apiClient     from "../../services/api.client";
+import { orgApi } from "../../api";
 import { useToast }  from "../../hooks/useToast";
 import API_ENDPOINTS from "../../config/api.config";
 import { Receipt, Tag, ListChecks } from "lucide-react";
 import { DropdownListEditor } from "../../components/hospital-admin/DropdownListEditor";
+import { editorInputStyle as inputStyle } from "../../styles/formStyles";
 
-const inputStyle = {
-  boxSizing: "border-box",
-  border: "1.5px solid var(--color-border)", borderRadius: 8,
-  padding: "8px 12px", fontSize: 13,
-  background: "var(--color-surface)", color: "var(--color-text)", outline: "none",
-};
+
 const labelStyle = { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 5, color: "var(--color-text-muted)" };
 
 function SectionCard({ icon: Icon, title, subtitle, children }) {
@@ -59,7 +56,7 @@ function TenantBillingSettings() {
   const [taxRateInput, setTaxRateInput] = useState("");
 
   const load = useCallback(() => {
-    apiClient.get("/org/settings/")
+    orgApi.getSettings()
       .then(r => {
         const s = r.data?.data || r.data;
         setSettings(s);
@@ -73,7 +70,7 @@ function TenantBillingSettings() {
   async function save(patch) {
     setSaving(true);
     try {
-      const { data: res } = await apiClient.patch("/org/settings/", patch);
+      const { data: res } = await orgApi.updateSettings(patch);
       const updated = res.data || {};
       setSettings(s => ({ ...s, ...updated }));
       // Re-sync the specific field(s) just saved to the server's own

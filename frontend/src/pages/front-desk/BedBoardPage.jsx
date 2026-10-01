@@ -33,16 +33,10 @@ import { useToast } from "../../hooks/useToast";
 import apiClient from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { ROUTES } from "../../config/routes.config";
-import "../../styles/intake-workspace.css"; // reuses .bed/.bedgrid/.bed-legend styles from AdmissionsPage
-
-const STATUS_META = {
-  available:      { cls: "free",     label: "Available" },
-  reserved:       { cls: "reserved", label: "Reserved" },
-  occupied:       { cls: "occupied", label: "Occupied" },
-  cleaning:       { cls: "cleaning", label: "Cleaning" },
-  blocked:        { cls: "blocked",  label: "Blocked" },
-  out_of_service: { cls: "blocked",  label: "Out of Service" },
-};
+import "../../styles/intake-workspace.css";
+import { admissionLabelStyle as fieldLabelStyle } from "../../styles/formStyles";
+import { formatDateTime } from "../../utils/dates";
+import { BED_STATUS_META as STATUS_META } from "../../constants/badges"; 
 function statusMeta(status) {
   return STATUS_META[status] || { cls: "taken", label: status || "Unknown" };
 }
@@ -51,17 +45,14 @@ const BADGE_META = {
   cleaning: "badge--warning", blocked: "badge--neutral", out_of_service: "badge--neutral",
 };
 
-function formatDateTime(iso) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString();
-}
+
 
 const selectStyle = {
   width: "100%", padding: "8px 10px", borderRadius: 8,
   border: "1.5px solid var(--color-border)", background: "var(--color-surface)",
   color: "var(--color-text)", fontSize: 13.5,
 };
-const fieldLabelStyle = { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4, color: "var(--color-text-muted)" };
+
 
 // One modal, contents vary by the clicked bed's current status.
 function BedActionModal({ bed, awaitingBed, availableBeds, onClose, onDone }) {

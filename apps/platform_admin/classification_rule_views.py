@@ -1,5 +1,5 @@
 """
-Platform Admin → Classification rules (apps.records.ClassificationRule).
+Platform Admin → Document types and their keywords (apps.records.DocumentClassification).
 
   GET    /api/v1/platform/classification-rules/        every rule
   POST   /api/v1/platform/classification-rules/        {doc_type, keywords, is_active}
@@ -14,38 +14,41 @@ Also here: the records periodic-sweep settings and the classification results re
 Platform Admin surface, same pipeline (apps.records).
 
   GET/PATCH /api/v1/platform/records/sweep-config/      SweepConfig (instant_max_files, sweep_dispatch_limit)
-  GET       /api/v1/platform/records/report/            SharedDocument rows: type, method, score, status
-  PATCH     /api/v1/platform/records/report/<id>/        human-correct a document's type
+  GET       /api/v1/platform/records/report/            MedicalDocument rows: type, who classified, confidence, status
+  PATCH     /api/v1/platform/records/report/<id>/        a person overwrites one document's type
 """
 import re
 
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from apps.records.models import ClassificationRule, SharedDocument, SweepConfig
+from apps.records import services
+from apps.records.models import DocumentClassification, MedicalDocument, SweepConfig
+from apps.records.scoring import parse_keywords
 from core.pagination import paginate_queryset
 from core.permissions import IsPlatformAdmin
 from core.response import created, error, not_found, success
 
 
 def _row(r):
-    return {"id": r.id, "doc_type": r.doc_type, "keywords": r.keywords,
+    return {"id": r.id, "doc_type": r.code, "keywords": r.keywords,
             "is_active": r.is_active, "updated_at": r.updated_at}
 
 
 def _apply(rule, data):
     """Copy + clean the request fields onto `rule`. Returns an error message or None."""
     if "doc_type" in data:
-        doc_type = re.sub(r"[^a-z0-9_]+", "_", str(data["doc_type"] or "").strip().lower()).strip("_")[:30]
-        if not doc_type:
+        code = re.sub(r"[^a-z0-9_]+", "_", str(data["doc_type"] or "").strip().lower()).strip("_")[:30]
+        if not code:
             return "Document type is required, e.g. lab_report."
-        if ClassificationRule.objects.filter(doc_type=doc_type).exclude(pk=rule.pk).exists():
-            return f"There is already a rule for {doc_type}."
-        rule.doc_type = doc_type
+        if DocumentClassification.objects.filter(code=code).exclude(pk=rule.pk).exists():
+            return f"There is already a rule for {code}."
+        rule.code = code
+        rule.name = rule.name or code.replace("_", " ").capitalize()
     if "keywords" in data:
         words = [w.strip().lower() for w in str(data["keywords"] or "").split("|") if w.strip()]
-        if not words:
-            return "Add at least one keyword (pipe-separated)."
+        if not parse_keywords("|".join(words))[0]:
+            return "Add at least one keyword (pipe-separated); -word and word^3 are allowed on top of that."
         rule.keywords = "|".join(dict.fromkeys(words))
     if "is_active" in data:
         rule.is_active = bool(data["is_active"])
@@ -56,10 +59,10 @@ class ClassificationRuleListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request):
-        return success(data=[_row(r) for r in ClassificationRule.objects.all()])
+        return success(data=[_row(r) for r in DocumentClassification.objects.all()])
 
     def post(self, request):
-        rule = ClassificationRule()
+        rule = DocumentClassification()
         msg = _apply(rule, {"doc_type": "", "keywords": "", **request.data})
         if msg:
             return error(msg)
@@ -71,7 +74,7 @@ class ClassificationRuleDetailView(APIView):
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def patch(self, request, pk):
-        rule = ClassificationRule.objects.filter(pk=pk).first()
+        rule = DocumentClassification.objects.filter(pk=pk).first()
         if not rule:
             return not_found("Rule not found.")
         msg = _apply(rule, request.data)
@@ -81,18 +84,23 @@ class ClassificationRuleDetailView(APIView):
         return success(data=_row(rule))
 
     def delete(self, request, pk):
-        deleted, _ = ClassificationRule.objects.filter(pk=pk).delete()
+        deleted, _ = DocumentClassification.objects.filter(pk=pk).delete()
         return success(data={"deleted": bool(deleted)}) if deleted else not_found("Rule not found.")
 
 
+_SETTINGS_LIMITS = {          # field → (lowest, highest) a Platform Admin may set
+    "instant_max_files": (1, None), "sweep_dispatch_limit": (1, None), "sweep_interval_seconds": (1, None),
+    "min_confidence": (1, 100), "evidence_scale": (1, 100),
+}
+
+
 def _sweep_row(c):
-    return {"instant_max_files": c.instant_max_files, "sweep_dispatch_limit": c.sweep_dispatch_limit,
-            "sweep_interval_seconds": c.sweep_interval_seconds}
+    return {field: getattr(c, field) for field in _SETTINGS_LIMITS}
 
 
 class SweepConfigView(APIView):
-    """Platform Admin → Records settings: all three sweep settings, live (no restart) — saving
-    also updates the actual Celery Beat schedule (see SweepConfig.save())."""
+    """Platform Admin → Records settings: the sweep settings and how a verdict is judged (the confidence a type
+    needs, the evidence scale), live (no restart) — saving also updates the actual Celery Beat schedule."""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request):
@@ -100,15 +108,15 @@ class SweepConfigView(APIView):
 
     def patch(self, request):
         c = SweepConfig.current()
-        for field in ("instant_max_files", "sweep_dispatch_limit", "sweep_interval_seconds"):
+        for field, (low, high) in _SETTINGS_LIMITS.items():
             if field not in request.data:
                 continue
             try:
                 value = int(request.data[field])
             except (TypeError, ValueError):
                 return error(f"{field} must be a whole number.")
-            if value < 1:
-                return error(f"{field} must be at least 1.")
+            if value < low or (high and value > high):
+                return error(f"{field} must be between {low} and {high}." if high else f"{field} must be at least {low}.")
             setattr(c, field, value)
         c.save()
         return success(data=_sweep_row(c))
@@ -116,37 +124,50 @@ class SweepConfigView(APIView):
 
 def _doc_row(d):
     return {"id": d.id, "title": d.title, "doc_type": d.doc_type, "method": d.method, "score": d.score,
-            "processing_status": d.processing_status, "awpid": d.awpid, "created_at": d.created_at}
+            "best_guess": d.best_guess, "processing_status": d.processing_status, "awpid": d.awpid_id, "created_at": d.created_at}
 
 
 class DocumentReportView(APIView):
     """Platform Admin → Records report: every document, newest first.
-    ?method=rule|llm|staff  ?status=<processing_status>  ?page=  ?page_size="""
+    ?method=rule|staff  ?status=<processing_status>  ?page=  ?page_size="""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request):
-        qs = SharedDocument.objects.filter(deleted_at__isnull=True).order_by("-created_at")
-        if request.query_params.get("method"):
-            qs = qs.filter(method=request.query_params["method"])
+        qs = MedicalDocument.objects.filter(deleted_at__isnull=True, hidden_at__isnull=True).order_by("-created_at")
+        by = {"staff": "human", "rule": "system"}.get(request.query_params.get("method"))
+        if by:
+            qs = qs.filter(classification_source=by)
         if request.query_params.get("status"):
-            qs = qs.filter(processing_status=request.query_params["status"])
+            qs = qs.filter(status=request.query_params["status"])
         page, meta = paginate_queryset(request, qs)
         return success(data={"results": [_doc_row(d) for d in page], "pagination": meta,
-                              "doc_types": [c[0] for c in SharedDocument.DOC_TYPE_CHOICES]})
+                              "doc_types": [c.code for c in DocumentClassification.configured()]})
 
 
 class DocumentCorrectView(APIView):
-    """PATCH {doc_type} — a person overriding a wrong rule/LLM verdict by hand. Sets method="staff"
-    so the report shows this row is now a human correction, not an automatic one."""
+    """PATCH {doc_type} — a person overriding a wrong rule verdict by hand. Sets method="staff"
+    so the report shows this row is now a human correction, not an automatic one. Works on a failed
+    document too: the file is still there, so it becomes a normal completed document."""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def patch(self, request, pk):
-        doc = SharedDocument.objects.filter(pk=pk).first()
+        doc = MedicalDocument.objects.filter(pk=pk).first()
         if not doc:
             return not_found("Document not found.")
         doc_type = request.data.get("doc_type")
-        if doc_type not in dict(SharedDocument.DOC_TYPE_CHOICES):
+        if doc_type not in [c.code for c in DocumentClassification.configured()]:
             return error("doc_type must be one of the known document types.")
-        doc.doc_type, doc.method = doc_type, "staff"
-        doc.save(update_fields=["doc_type", "method", "updated_at"])
-        return success(data=_doc_row(doc))
+        try:
+            services.correct_document(doc, doc_type)
+        except ValueError as exc:
+            return error(str(exc))
+        return success(data=_doc_row(MedicalDocument.objects.get(pk=doc.pk)))
+
+
+class ReclassifyView(APIView):
+    """POST — run today's rules again over the documents the rules classified (never a person's verdict), using
+    the text already read, no OCR. For after the keywords or the settings were tuned."""
+    permission_classes = [IsAuthenticated, IsPlatformAdmin]
+
+    def post(self, request):
+        return success(data=services.reclassify_existing())

@@ -18,7 +18,6 @@ import string
 import logging
 from datetime import date
 
-from django.conf import settings
 from django.db.models import Q
 from django.utils.text import slugify
 from rest_framework.views import APIView
@@ -26,7 +25,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from core.permissions import IsPlatformAdmin
 from core.response import success, created, error, not_found
-from core.pagination import paginate_queryset, paginate_list
+from core.pagination import paginate_list
 from apps.tenants.models import Tenant, Subscription, TenantAuditLog
 from apps.tenants.utils import create_tenant_database, run_tenant_migrations, drop_tenant_database
 from apps.tenants.constants import TIER_FEATURE_DEFAULTS
@@ -273,11 +272,11 @@ class TenantListCreateView(APIView):
         admin_employee_id = None
         email_sent = False
         try:
-            from apps.org.views import _next_employee_id
+            from apps.org.services import next_employee_id
             admin_staff = StaffUser(
                 phone=admin_mobile,
                 email=admin_email,
-                employee_id=_next_employee_id(db_name),
+                employee_id=next_employee_id(db_name),
                 first_name="Hospital",
                 last_name="Admin",
                 role="hospital_admin",

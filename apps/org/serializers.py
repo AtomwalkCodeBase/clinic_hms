@@ -4,7 +4,7 @@ from rest_framework import serializers
 from core import storage as blob_storage
 from .models import (
     Branch, Department, StaffUser, DoctorProfile, StaffProfile, StaffBranchMapping,
-    Permission, Role, UserRole, DoctorSchedule, DoctorAvailabilitySlot,
+    Permission, Role, DoctorSchedule, DoctorAvailabilitySlot,
     Floor, Room, RoomAssignment, NurseDoctorAssignment, Bed,
 )
 
@@ -322,7 +322,7 @@ class StaffInviteSerializer(serializers.Serializer):
         return value
 
     # Employee ID is NOT accepted as input — it's auto-generated via NNTM
-    # (see apps.org.views._next_employee_id), same as UHID/invoice/etc.
+    # (see apps.org.services.next_employee_id), same as UHID/invoice/etc.
     # Never manually typed in, so it isn't part of this input contract.
     first_name    = serializers.CharField(max_length=150)
     last_name     = serializers.CharField(max_length=150, required=False, allow_blank=True)

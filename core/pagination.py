@@ -1,14 +1,12 @@
 """
 core/pagination.py
 ------------------
-Standard pagination classes for Atomwalk HMS.
-All list endpoints use StandardResultsPagination unless specifically overridden.
+Pagination helpers for Atomwalk HMS.
 
-Most views in this codebase are plain APIView subclasses that return the shared
-`success(data=...)` envelope (see core/response.py) rather than DRF generic
-views, so the DRF PageNumberPagination classes below never actually run —
-they're kept for reference/future generic views. For plain APIView list
-endpoints, use `paginate_queryset` / `paginate_list` instead: they read
+The views in this codebase are plain APIView subclasses that return the shared
+`success(data=...)` envelope (see core/response.py) rather than DRF generic views, so DRF's
+pagination classes never run (the old StandardResultsPagination/LargeResultsPagination were
+removed as dead code). List endpoints use `paginate_queryset` / `paginate_list`, which read
 ?page=&page_size= from the request, slice the data, and return a `meta` dict
 that should be embedded in the response alongside the page's items, e.g.:
 
@@ -21,31 +19,8 @@ that should be embedded in the response alongside the page's items, e.g.:
 
 import math
 
-from rest_framework.pagination import PageNumberPagination
-
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
-
-
-class StandardResultsPagination(PageNumberPagination):
-    """
-    Default pagination: 20 results per page.
-    Client can override with ?page_size=N (max 100).
-    """
-    page_size = 20
-    page_size_query_param = "page_size"
-    max_page_size = 100
-    page_query_param = "page"
-
-
-class LargeResultsPagination(PageNumberPagination):
-    """
-    For bulk exports or catalog lookups: 100 results per page.
-    Used by lab_test_catalog, drug master, etc.
-    """
-    page_size = 100
-    page_size_query_param = "page_size"
-    max_page_size = 500
 
 
 def _parse_page_params(request, default_page_size=DEFAULT_PAGE_SIZE, max_page_size=MAX_PAGE_SIZE):

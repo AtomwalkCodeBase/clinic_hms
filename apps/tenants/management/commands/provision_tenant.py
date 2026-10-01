@@ -136,7 +136,7 @@ class Command(BaseCommand):
         self.stdout.write(f"[ 3/5 ] Creating database '{db_name}'...")
         try:
             create_tenant_database(db_name)
-            self.stdout.write(self.style.SUCCESS(f"    Database created"))
+            self.stdout.write(self.style.SUCCESS("    Database created"))
         except Exception as e:
             tenant.delete()
             raise CommandError(f"Failed to create database: {e}")
@@ -154,11 +154,11 @@ class Command(BaseCommand):
         temp_password = _gen_password()
         try:
             from apps.org.models import StaffUser
-            from apps.org.views import _next_employee_id
+            from apps.org.services import next_employee_id
             admin = StaffUser(
                 phone=admin_mobile,
                 email=admin_email,
-                employee_id=_next_employee_id(db_name),
+                employee_id=next_employee_id(db_name),
                 first_name="Hospital",
                 last_name="Admin",
                 role="hospital_admin",

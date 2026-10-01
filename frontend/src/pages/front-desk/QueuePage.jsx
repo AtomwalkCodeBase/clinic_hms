@@ -17,35 +17,23 @@ import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { ROUTES }    from "../../config/routes.config";
 import { Search, Filter, X, CalendarDays, Users, Clock, Stethoscope, CheckCircle2 } from "lucide-react";
+import { APPOINTMENT_STATUS_BADGE as BADGE } from "../../constants/badges";
+import { formatDateLabel, addDays } from "../../utils/dates";
+import { todayLocal, toLocalISODate } from "../../utils/dates";
 
-const TODAY = new Date().toISOString().split("T")[0];
+const TODAY = todayLocal();
 const MAX_RESCHEDULE_DATE = (() => {
   const d = new Date();
   d.setDate(d.getDate() + 62);
-  return d.toISOString().split("T")[0];
+  return toLocalISODate(d);
 })();
 
-function addDays(dateStr, n) {
-  const d = new Date(dateStr + "T00:00:00");
-  d.setDate(d.getDate() + n);
-  return d.toISOString().split("T")[0];
-}
+
 const TOMORROW = addDays(TODAY, 1);
 
-function formatDateLabel(dateStr) {
-  const d = new Date(dateStr + "T00:00:00");
-  return d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
-}
 
-const BADGE = {
-  scheduled:   "badge--primary",
-  waiting:     "badge--warning",
-  vitals_done: "badge--success",
-  in_progress: "badge--info",
-  done:        "badge--success",
-  cancelled:   "badge--error",
-  no_show:     "badge--neutral",
-};
+
+
 
 // Same slot grid as the booking form on AppointmentsPage — reused here so a
 // reschedule shows real live availability instead of a freeform time field.

@@ -125,7 +125,7 @@ export function TenantDetailDrawer({ tenant, onClose, onChanged }) {
 
   useEffect(() => {
     fetchAuditLog(tenant.id).then(setAuditLog).catch(() => setAuditLog([]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [tenant.id]);
 
   async function applyTier() {

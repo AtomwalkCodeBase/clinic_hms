@@ -9,6 +9,7 @@ import { useState, useEffect, useCallback } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import apiClient     from "../../services/api.client";
+import { orgApi } from "../../api";
 import { useToast }  from "../../hooks/useToast";
 import { useAuth }   from "../../hooks/useAuth";
 import { usePermissions } from "../../hooks/usePermissions";
@@ -347,7 +348,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
   // Defaults to whatever the tenant's global setting is, but admin can flip it per invite.
   const [adminSetsFee, setAdminSetsFee] = useState(false);
   useEffect(() => {
-    api.get("/org/settings/")
+    orgApi.getSettings()
       .then(r => {
         const fo = (r.data?.data ?? r.data)?.fee_ownership;
         setAdminSetsFee(fo === "hospital");

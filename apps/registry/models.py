@@ -282,7 +282,7 @@ class SharedVital(models.Model):
 class SharedBirthHistory(models.Model):
     """
     Cross-hospital mirror of apps.patients.models.BirthHistory — written
-    through (best-effort, same pattern as apps.opd.views._sync_to_hie) from
+    through (best-effort, same pattern as apps.registry.hie.sync_encounter_to_hie) from
     BirthHistoryView.post()/patch() whenever a hospital captures or edits a
     child's birth history, so it's visible to the Emergency QR summary
     (apps/patients/emergency_views.py) and any other cross-hospital view,
@@ -715,8 +715,9 @@ class OTPCode(models.Model):
         password, create an account, log in) — verify_otp() hands back a
         short-lived signed JWT ("action token", see core.otp.make_action_token)
         that the next-step endpoint must present. This mirrors the
-        _make_invite_token pattern already used for staff invites
-        (apps.auth_app.views) rather than inventing a second convention.
+        signed-JWT "token_type" convention the staff setup-password token
+        uses (apps.auth_app.views.SetupPasswordView) rather than inventing a
+        second one.
     """
     PURPOSE_PASSWORD_RESET_STAFF   = "password_reset_staff"
     PURPOSE_PASSWORD_RESET_PATIENT = "password_reset_patient"

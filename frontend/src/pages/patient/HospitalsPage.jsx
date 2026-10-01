@@ -109,7 +109,7 @@ export default function PatientHospitalsPage() {
   const geo = useGeolocation();
   const nearMeParams = geo.coords ? { lat: geo.coords.lat, lng: geo.coords.lng } : {};
   const { data, isLoading, error, refetch } = useApi(API_ENDPOINTS.PORTAL.HOSPITALS, { params: nearMeParams });
-  const allHospitals = data?.results || [];
+  const allHospitals = useMemo(() => data?.results || [], [data]);
 
   const { data: specData } = useApi(API_ENDPOINTS.PORTAL.SPECIALTIES);
   const specialties = specData?.results || [];

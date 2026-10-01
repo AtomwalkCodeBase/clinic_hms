@@ -45,6 +45,7 @@ import apiClient from "../../../services/api.client";
 import API_ENDPOINTS from "../../../config/api.config";
 import { useToast } from "../../../hooks/useToast";
 import { openDataUrlInNewTab } from "../../../utils/fileViewer";
+import { vaxBucket } from "../../../utils/vaccination";
 
 const METRICS = [
   { id: "height_cm", label: "Height", unit: "cm", color: "var(--color-primary)", light: "var(--color-primary-light)", percentileKey: "height" },
@@ -60,19 +61,7 @@ const CHART_TYPES = [
   { id: "area",  label: "Area" },
 ];
 
-// Mirrors vaxBucket() in RecordsPage.jsx exactly (kept local — that helper
-// isn't exported) so marker colors on this chart always agree with the
-// pill colors on the timeline below it.
-function vaxBucket(item) {
-  const status = item.status;
-  if (status === "completed" || status === "declined") return "Completed";
-  if (status === "pending_review" || status === "rejected") return "Needs Review";
-  if (status === "ordered") return "Needs Review";
-  if (status === "unknown") {
-    return item.timing === "due_now" || item.timing === "past_window" ? "Needs Review" : "Upcoming";
-  }
-  return "Upcoming";
-}
+
 
 const BUCKET_COLOR = {
   Completed: "#1B8A5A",

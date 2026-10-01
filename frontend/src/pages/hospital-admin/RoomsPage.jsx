@@ -869,7 +869,7 @@ export default function RoomsPage() {
   const [saving, setSaving] = useState(false);
 
   const { data: branchData } = useApi(API_ENDPOINTS.ORG.BRANCHES);
-  const branches = branchData || [];
+  const branches = useMemo(() => branchData || [], [branchData]);
 
   useEffect(() => {
     if (!branchId && branches.length) setBranchId(String(branches[0].id));

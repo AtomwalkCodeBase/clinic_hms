@@ -36,8 +36,9 @@ import { useApi }      from "../../hooks/useApi";
 import { useAuth }     from "../../hooks/useAuth";
 import API_ENDPOINTS   from "../../config/api.config";
 import { ROUTES }      from "../../config/routes.config";
+import { todayLocal } from "../../utils/dates";
 
-const TODAY = new Date().toISOString().split("T")[0];
+const TODAY = todayLocal();
 
 function timeAgo(iso) {
   if (!iso) return "";
@@ -111,7 +112,7 @@ export default function FrontDeskDashboardPage() {
   const { data: apptData, isLoading, refetch: refetchAppts } = useApi(API_ENDPOINTS.OPD.APPOINTMENTS, {
     params: { date: TODAY }, pollMs: 15000,
   });
-  const appointments = apptData?.results || apptData || [];
+  const appointments = useMemo(() => apptData?.results || apptData || [], [apptData]);
 
   const { data: referrals, refetch: refetchReferrals } = useApi(API_ENDPOINTS.IPD.REFERRALS, { params: { status: "pending" } });
   const { data: awaitingBed, refetch: refetchAwaitingBed } = useApi(API_ENDPOINTS.IPD.ADMISSION_AWAITING_BED);

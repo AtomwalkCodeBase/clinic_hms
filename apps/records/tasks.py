@@ -1,31 +1,52 @@
+import logging
+
 from celery import shared_task
 
 from . import services
 from .models import SweepConfig
 
+logger = logging.getLogger(__name__)
 
-@shared_task(soft_time_limit=120, time_limit=180)
+# acks_late + reject_on_worker_lost: if a worker dies mid-task the message is redelivered instead of
+# lost. Safe because both stages start with a status check and an advisory lock, so a redelivered or
+# duplicate run for a document that already moved on is a no-op.
+# ignore_result: nothing reads task results (state lives on MedicalDocument.status).
+_TASK_OPTS = dict(acks_late=True, reject_on_worker_lost=True, ignore_result=True)
+
+
+@shared_task(soft_time_limit=120, time_limit=180, **_TASK_OPTS)
 def extract_document_task(document_id):
-    """S3 → RapidOCR → save text, then dispatch classify_document_task. Time-limited so a hung OCR
+    """S3 → content check → text, then dispatch classify_document_task. Time-limited so a hung OCR
     call can't tie up a worker forever; a limit hit is caught like any other failure ("failed")."""
     services.extract_document(document_id)
 
 
-@shared_task(soft_time_limit=300, time_limit=360)
+@shared_task(soft_time_limit=60, time_limit=90, **_TASK_OPTS)
 def classify_document_task(document_id):
-    """Rules, then Ollama if score < 75 → save result / status / error. Its own task, and its own
-    (longer) time limit, so a slow LLM call never blocks extraction of the next document."""
+    """Keyword rules → classification, status and batch counters. Its own task so extraction of the
+    next document never waits on it."""
     services.classify_document(document_id)
 
 
-@shared_task
+_STAGES = {"extract": extract_document_task, "classify": classify_document_task}
+
+
+def dispatch_documents(limit, ids=None):
+    """Claim up to `limit` documents (see services.claim_documents) and send each to its stage's task.
+    A broker hiccup leaves that document claimed; it is picked up again once its claim goes stale."""
+    sent = 0
+    for document_id, stage in services.claim_documents(limit, ids):
+        try:
+            _STAGES[stage].delay(document_id)
+            sent += 1
+        except Exception:
+            logger.exception("records: couldn't dispatch document %s", document_id)
+    return sent
+
+
+@shared_task(**_TASK_OPTS)
 def recover_stuck_documents():
-    """Every SweepConfig.sweep_interval_seconds (Beat, DB-backed — see SweepConfig.save()): send up
-    to SweepConfig.sweep_dispatch_limit documents (Platform Admin → Records settings) that are either
-    freshly queued (a bulk upload deferred at intake — see SweepConfig.instant_max_files — or one
-    whose initial dispatch failed) or stuck in ocr/classifying for 5+ minutes (worker died) — routed
-    to whichever stage's task matches where each document currently is."""
-    rows = services.documents_ready_for_pickup(limit=SweepConfig.current().sweep_dispatch_limit)
-    for document_id, status in rows:
-        (classify_document_task if status == "classifying" else extract_document_task).delay(document_id)
-    return len(rows)
+    """The dispatcher: every SweepConfig.sweep_interval_seconds (Beat, DB-backed — see SweepConfig.save())
+    send up to SweepConfig.sweep_dispatch_limit documents that are queued (a bulk upload deferred at intake,
+    or one whose initial dispatch failed) or abandoned in extracting/classifying for 5+ minutes."""
+    return dispatch_documents(SweepConfig.current().sweep_dispatch_limit)

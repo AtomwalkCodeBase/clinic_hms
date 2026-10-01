@@ -354,7 +354,7 @@ class DoctorProfile(models.Model):
     experience_years= models.PositiveSmallIntegerField(null=True, blank=True)
     consultation_fee= models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
     # Charged instead of consultation_fee when the appointment_type is
-    # "followup" (see apps/opd/views.py::_resolve_doctor_consultation_fee).
+    # "followup" (see apps/opd/services.py::resolve_doctor_consultation_fee).
     # Left null by default — falls back to consultation_fee, so doctors who
     # don't set this keep charging the same flat fee for every visit type,
     # same as before this field existed.

@@ -38,34 +38,9 @@ from rest_framework.views import APIView
 
 from core.permissions import IsHospitalAdmin
 from core.response import success, created, error, not_found
+from apps.registry.schedule_dicts import schedule_dict, vaccination_rule_dict
 
 logger = logging.getLogger(__name__)
-
-
-def _rule_dict(rule):
-    return {
-        "id": rule.id,
-        "vaccine_name": rule.vaccine_name,
-        "dose_number": rule.dose_number,
-        "scheduled_label": rule.scheduled_label,
-        "min_age_days": rule.min_age_days,
-        "max_age_days": rule.max_age_days,
-        "mandatory": rule.mandatory,
-        "sort_order": rule.sort_order,
-    }
-
-
-def _schedule_dict(schedule, active_id=None, rule_count=None):
-    return {
-        "id": schedule.id,
-        "name": schedule.name,
-        "description": schedule.description,
-        "is_template": schedule.is_template,
-        "active": schedule.active,
-        "owner_tenant_id": schedule.owner_tenant_id,
-        "is_active_for_this_hospital": active_id is not None and schedule.id == active_id,
-        "rule_count": rule_count if rule_count is not None else schedule.rules.count(),
-    }
 
 
 class VaccinationScheduleListCreateView(APIView):
@@ -91,8 +66,8 @@ class VaccinationScheduleListCreateView(APIView):
         )
 
         return success(data={
-            "own_schedules": [_schedule_dict(s, active_id) for s in own],
-            "templates": [_schedule_dict(s, active_id) for s in templates],
+            "own_schedules": [schedule_dict(s, active_id) for s in own],
+            "templates": [schedule_dict(s, active_id) for s in templates],
             "active_schedule_id": active_id,
         })
 
@@ -142,7 +117,7 @@ class VaccinationScheduleListCreateView(APIView):
             tenant.save(using="default", update_fields=["active_vaccination_schedule_id"])
 
         return created(
-            data=_schedule_dict(new_schedule, new_schedule.id, len(template_rules)),
+            data=schedule_dict(new_schedule, new_schedule.id, len(template_rules)),
             message=f"Cloned '{template.name}' and set as this hospital's active schedule.",
         )
 
@@ -176,8 +151,8 @@ class VaccinationScheduleDetailView(APIView):
         if not schedule:
             return not_found("Schedule not found.")
         rules = schedule.rules.all().order_by("sort_order")
-        data = _schedule_dict(schedule, rule_count=len(rules))
-        data["rules"] = [_rule_dict(r) for r in rules]
+        data = schedule_dict(schedule, rule_count=len(rules))
+        data["rules"] = [vaccination_rule_dict(r) for r in rules]
         return success(data=data)
 
     def patch(self, request, pk):
@@ -243,8 +218,8 @@ class VaccinationScheduleDetailView(APIView):
                     rules_touched += 1
 
         rules = schedule.rules.all().order_by("sort_order")
-        data = _schedule_dict(schedule, rule_count=len(rules))
-        data["rules"] = [_rule_dict(r) for r in rules]
+        data = schedule_dict(schedule, rule_count=len(rules))
+        data["rules"] = [vaccination_rule_dict(r) for r in rules]
         return success(data=data, message=f"Schedule updated ({rules_touched} rule change(s)).")
 
 

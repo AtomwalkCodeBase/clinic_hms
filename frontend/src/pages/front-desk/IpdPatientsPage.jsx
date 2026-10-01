@@ -21,15 +21,9 @@ import { PageShell } from "../../components/common/PageShell";
 import { useApi } from "../../hooks/useApi";
 import API_ENDPOINTS from "../../config/api.config";
 import { ROUTES } from "../../config/routes.config";
+import { timeAgo } from "../../utils/dates";
 
-function timeAgo(iso) {
-  if (!iso) return "";
-  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
-  if (mins < 60) return `${mins} min ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs} hr ago`;
-  return new Date(iso).toLocaleDateString();
-}
+
 
 const FILTERS = [
   { key: "all",      label: "All" },

@@ -67,13 +67,9 @@ import apiClient from "../../services/api.client";
 import { useToast } from "../../hooks/useToast";
 import { Lock, Pencil, Check, X } from "lucide-react";
 import { KebabMenu } from "./KebabMenu";
+import { editorInputStyle as inputStyle } from "../../styles/formStyles";
 
-const inputStyle = {
-  boxSizing: "border-box",
-  border: "1.5px solid var(--color-border)", borderRadius: 8,
-  padding: "8px 12px", fontSize: 13,
-  background: "var(--color-surface)", color: "var(--color-text)", outline: "none",
-};
+
 
 // Small pill toggle — same visual language as the bigger toggles elsewhere
 // in hospital-admin settings screens.

@@ -14,15 +14,9 @@ import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useApi } from "../../hooks/useApi";
 import API_ENDPOINTS from "../../config/api.config";
+import { ADMISSION_STATUS_BADGE as STATUS_BADGE } from "../../constants/badges";
 
-const STATUS_BADGE = {
-  requested: "badge--neutral",
-  admitted: "badge--warning",
-  active: "badge--success",
-  discharge_initiated: "badge--warning",
-  discharged: "badge--neutral",
-  cancelled: "badge--error",
-};
+
 
 function daysSince(iso) {
   if (!iso) return "—";

@@ -18,6 +18,7 @@ import apiClient      from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { usePatientContext } from "../../context/PatientContext";
 import { openDataUrlInNewTab } from "../../utils/fileViewer";
+import { fileToDataUrl } from "../../utils/files";
 
 // Prescriptions are intentionally NOT offered here — they live on My Reports /
 // the Prescriptions page. This page is lab work: reports, scans, summaries.
@@ -32,16 +33,7 @@ const DOC_TYPES = [
 // appear here — see MyReportsPage for the full vault.
 const LAB_PAGE_DOC_TYPES = new Set(["lab_report", "scan", "discharge_summary", "other"]);
 
-const MAX_FILE_BYTES = 11 * 1024 * 1024; // 11MB — matches the backend's base64 guard
-
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload  = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+const MAX_FILE_BYTES = 11 * 1024 * 1024; 
 
 function estimatedReady(orderedAt, turnaroundHours) {
   if (!orderedAt || !turnaroundHours) return null;

@@ -28,35 +28,29 @@ import { ArrowLeft } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import apiClient     from "../../services/api.client";
+import { billingApi } from "../../api";
 import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
 import API_ENDPOINTS from "../../config/api.config";
 import { ROUTES }     from "../../config/routes.config";
+import { INVOICE_STATUS_BADGE as INVOICE_BADGE, ADMISSION_STATUS_BADGE as STATUS_BADGE } from "../../constants/badges";
+import { formatDateTime } from "../../utils/dates";
+import { admissionLabelStyle as labelStyle } from "../../styles/formStyles";
 
 const inputStyle = {
   width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 8,
   fontSize: 13.5, border: "1.5px solid var(--color-border)", background: "var(--color-surface)",
   color: "var(--color-text)", outline: "none",
 };
-const labelStyle = { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4, color: "var(--color-text-muted)" };
 
-const STATUS_BADGE = {
-  requested:            "badge--neutral",
-  admitted:              "badge--warning",
-  active:                "badge--success",
-  discharge_initiated:  "badge--warning",
-  discharged:            "badge--neutral",
-  cancelled:             "badge--error",
-};
+
+
 
 function formatDate(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString();
 }
-function formatDateTime(iso) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString();
-}
+
 
 // ── Registration details — inline-editable, same display/edit-swap pattern
 // as platform-admin/HospitalDetailPage.jsx's OverviewTab. ───────────────────
@@ -639,7 +633,7 @@ function PaymentModal({ invoice, onClose, onRecorded }) {
     e.preventDefault();
     setSaving(true);
     try {
-      await apiClient.post(API_ENDPOINTS.BILLING.PAYMENTS, {
+      await billingApi.recordPayment({
         invoice: invoice.id, amount: Number(amount), payment_mode: mode, transaction_ref: ref,
       });
       toastSuccess("Payment recorded.");
@@ -688,13 +682,7 @@ function PaymentModal({ invoice, onClose, onRecorded }) {
   );
 }
 
-const INVOICE_BADGE = {
-  draft:          "badge--neutral",
-  issued:         "badge--primary",
-  paid:           "badge--success",
-  partially_paid: "badge--warning",
-  cancelled:      "badge--error",
-};
+
 
 function InvoiceView({ invoice, onChanged }) {
   const [payModal, setPayModal] = useState(false);

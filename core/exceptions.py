@@ -8,7 +8,6 @@ Register in settings: REST_FRAMEWORK.EXCEPTION_HANDLER = 'core.exceptions.custom
 
 import logging
 from rest_framework.views import exception_handler
-from rest_framework import status
 
 logger = logging.getLogger(__name__)
 

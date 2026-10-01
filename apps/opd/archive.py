@@ -3,7 +3,7 @@ apps/opd/archive.py
 -------------------
 store_prescription_document() — on encounter sign, render the Prescription to
 a PDF (with the "scan to save in My Reports" QR, apps/opd/pdf.py) and store it
-as a SharedDocument(doc_type="prescription"). Idempotent by
+as a MedicalDocument(classification=prescription). Idempotent by
 source_ref = "encounter:<id>".
 
 All tenant-DB reads are explicit .using(db) with pk filters — no relation
@@ -23,7 +23,8 @@ def store_prescription_document(rx, db, tenant_id):
     from apps.org.models import StaffUser, Branch
     from apps.tenants.models import Tenant
     from apps.patients.models import Patient
-    from apps.records.models import SharedDocument
+    from apps.records.models import MedicalDocument
+    from apps.records.services import create_issued_document
     from core import storage as blob_storage
 
     items = list(PrescriptionItem.objects.using(db).filter(prescription=rx))
@@ -49,12 +50,12 @@ def store_prescription_document(rx, db, tenant_id):
         doctor_name = StaffUser.objects.using(db).get(pk=raw).get_full_name()
     except Exception:
         pass
-    doctor_label = f"Dr. {doctor_name}" if doctor_name else ""
 
+    doctor_label = f"Dr. {doctor_name}" if doctor_name else ""
     visit_date = appt.scheduled_date if appt else (rx.created_at.date() if rx.created_at else None)
     src_ref = f"encounter:{rx.encounter_id}"
 
-    existing = SharedDocument.objects.using("default").filter(source_ref=src_ref).first()
+    existing = MedicalDocument.objects.using("default").filter(source_ref=src_ref).first()
     if existing is not None:
         return existing
 
@@ -64,15 +65,12 @@ def store_prescription_document(rx, db, tenant_id):
     )
     pdf_uri = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
     title = f"Prescription {rx.rx_number or str(rx.id)[:8]}" + (f" — {visit_date}" if visit_date else "")
-    slug = blob_storage.identity_slug(name=patient.full_name, identifier=patient.awpid)
-    s3_key = blob_storage.upload_data_uri(
-        pdf_uri, prefix="prescriptions", mime_type="application/pdf",
-        category="prescription", identity=slug,
+    file_path = blob_storage.upload_data_uri(
+        pdf_uri, prefix=f"patients/{patient.awpid}/prescriptions", mime_type="application/pdf",
+        category="prescription",
     )
-    return SharedDocument.objects.using("default").create(
-        awpid=patient.awpid, title=title, doc_type="prescription",
-        file_name=f"{title}.pdf", mime_type="application/pdf", s3_key=s3_key,
-        uploaded_by="staff", source_tenant_id=tenant_id, source_ref=src_ref,
-        public_document_id=rx.rx_number or "", hospital_label=hospital_name,
-        doctor_label=doctor_label, method="staff", document_date=visit_date,
+    return create_issued_document(
+        awpid=patient.awpid, file_path=file_path, name=f"{title}.pdf", doc_type="prescription",
+        source_tenant_id=tenant_id, source_ref=src_ref, title=title, public_document_id=rx.rx_number or "",
+        hospital_label=hospital_name, doctor_label=doctor_label, document_date=visit_date,
     )

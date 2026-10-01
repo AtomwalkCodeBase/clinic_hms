@@ -46,16 +46,20 @@ CSRF_TRUSTED_ORIGINS = [o for o in config("CSRF_TRUSTED_ORIGINS", default="").sp
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {
+        "request_context": {"()": "core.logging_context.RequestContextFilter"},
+    },
     "formatters": {
         "json": {
             "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
-            "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+            "format": "%(asctime)s %(levelname)s %(name)s %(request_id)s %(tenant_id)s %(user_id)s %(message)s",
         }
     },
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
             "formatter": "json",
+            "filters": ["request_context"],
         },
     },
     "root": {"handlers": ["console"], "level": "WARNING"},

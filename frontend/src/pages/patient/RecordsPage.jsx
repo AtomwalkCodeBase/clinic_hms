@@ -42,36 +42,14 @@ import VaccinationSidebar, { RecommendedByDoctor } from "./components/Vaccinatio
 import HealthTimeline from "./components/HealthTimeline";
 import GrowthVaccinationChart from "./components/GrowthVaccinationChart";
 import MilestonesRoadmap from "./components/MilestonesRoadmap";
+import { fileToDataUrl } from "../../utils/files";
+import { vaxBucket } from "../../utils/vaccination";
+import { PORTAL_APPOINTMENT_BADGE as BADGE } from "../../constants/badges";
+import { todayLocal } from "../../utils/dates";
 
-const BADGE = {
-  scheduled: "badge--primary", waiting: "badge--warning", vitals_done: "badge--success",
-  in_progress: "badge--info", done: "badge--success", cancelled: "badge--error",
-};
 
-// Status values from build_roadmap() (apps/registry/vaccine_schedule.py):
-// "completed" / "pending_review" / "rejected" when a real SharedVaccination
-// record matches the slot, or "unknown" when none does. "unknown" is never
-// shown as "overdue" or "missed" — the backend genuinely doesn't know
-// whether the vaccine was given elsewhere, only that there's no record of
-// it here. The `timing` field ("upcoming" / "due_now" / "past_window") is
-// separate, informational-only metadata about whether the age window has
-// been reached — it does not change the status label/color.
-//
-// Buckets into the 3-pill vocabulary the mockup uses (Completed / Upcoming /
-// Needs Review) — a coarser read than the old per-status badge set, on
-// purpose: "pending_review" and "unknown due_now/past_window" both read as
-// "someone should look at this", so they share one pill and one color
-// rather than five different badge styles.
-function vaxBucket(item) {
-  const status = item.status;
-  if (status === "completed" || status === "declined") return "Completed";
-  if (status === "pending_review" || status === "rejected") return "Needs Review";
-  if (status === "ordered") return "Needs Review";
-  if (status === "unknown") {
-    return item.timing === "due_now" || item.timing === "past_window" ? "Needs Review" : "Upcoming";
-  }
-  return "Upcoming";
-}
+
+
 
 const PILL_STYLE = {
   Completed:    { label: "Completed",    bg: "var(--color-success-light)", color: "var(--color-success)" },
@@ -151,14 +129,7 @@ function ViewCertificateButton({ recordId }) {
   );
 }
 
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload  = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+
 
 // Today's date in YYYY-MM-DD, for the date input's `max` — blocks the
 // browser's native date picker from accepting a future date outright, and
@@ -166,7 +137,7 @@ function fileToDataUrl(file) {
 // harder to fat-finger a 5-digit year like "82026" that would otherwise
 // sail through as a "valid-looking" date string.
 function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+  return todayLocal();
 }
 
 function UploadVaccinationForm({ patientAwpid, prefillVaccine, prefillLabel, onDone, onCancel }) {

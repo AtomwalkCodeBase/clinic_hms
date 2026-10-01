@@ -30,11 +30,6 @@ const DOC_TYPE_LABEL = {
   other: "Document",
 };
 
-function fmtDate(d) {
-  if (!d) return "";
-  return new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-}
-
 export default function ViewReportPage() {
   const { token } = useParams();
   // idle -> confirming -> ready | error
@@ -96,9 +91,6 @@ export default function ViewReportPage() {
             <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 2 }}>
               {DOC_TYPE_LABEL[state.doc.doc_type] || state.doc.title}
             </div>
-            {state.doc.document_date && (
-              <div style={{ fontSize: 12.5, color: "#999", marginBottom: 18 }}>{fmtDate(state.doc.document_date)}</div>
-            )}
             <a
               href={state.doc.file_url} target="_blank" rel="noopener noreferrer"
               style={{

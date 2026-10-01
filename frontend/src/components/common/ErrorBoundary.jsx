@@ -30,7 +30,7 @@ export class ErrorBoundary extends Component {
     // integration (Sentry or similar) when one is wired up. Silently
     // swallowing this would recreate the exact "invisible failure" pattern
     // this session already fixed elsewhere (silent except blocks, etc.).
-    // eslint-disable-next-line no-console
+     
     console.error("ErrorBoundary caught a render error:", error, info?.componentStack);
   }
 

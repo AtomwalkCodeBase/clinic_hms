@@ -29,14 +29,13 @@ from core.response import success, error
 from apps.tenants.models import Tenant, Subscription
 from apps.tenants.constants import TIER_FEATURE_DEFAULTS
 from apps.org.models import StaffUser
-from apps.registry.models import PatientIdentity, StaffMobileIndex
+from apps.registry.models import StaffMobileIndex
 
 logger = logging.getLogger(__name__)
 
 from .serializers import (
     StaffLoginSerializer,
     PlatformLoginSerializer,
-    PatientLoginSerializer,
     SetupPasswordSerializer,
     ChangePasswordSerializer,
 )
@@ -49,8 +48,8 @@ def _make_tokens(payload: dict) -> dict:
     BlacklistedToken (see LogoutView below and core/authentication.py).
     """
     now         = timezone.now()
-    access_exp  = now + timedelta(minutes=60)
-    refresh_exp = now + timedelta(days=7)
+    access_exp  = now + settings.JWT_ACCESS_TOKEN_LIFETIME
+    refresh_exp = now + settings.JWT_REFRESH_TOKEN_LIFETIME
 
     access_payload  = {**payload, "exp": access_exp,  "token_type": "access",  "jti": secrets.token_hex(16)}
     refresh_payload = {**payload, "exp": refresh_exp, "token_type": "refresh", "jti": secrets.token_hex(16)}
@@ -59,21 +58,6 @@ def _make_tokens(payload: dict) -> dict:
         "access":  jwt.encode(access_payload,  settings.JWT_SIGNING_KEY, algorithm="HS256"),
         "refresh": jwt.encode(refresh_payload, settings.JWT_SIGNING_KEY, algorithm="HS256"),
     }
-
-
-def _make_invite_token(staff_id: int, tenant_db: str) -> str:
-    """
-    Generate a signed invite token for the setup-password flow.
-    Valid for 48 hours. Not an access token — only accepted by SetupPasswordView.
-    """
-    payload = {
-        "staff_id":  staff_id,
-        "tenant_db": tenant_db,
-        "token_type": "invite",
-        "exp": timezone.now() + timedelta(hours=48),
-        "jti": secrets.token_hex(8),  # prevent reuse
-    }
-    return jwt.encode(payload, settings.JWT_SIGNING_KEY, algorithm="HS256")
 
 
 # ── Staff Login ───────────────────────────────────────────────────────────────
@@ -135,9 +119,8 @@ class StaffLoginView(APIView):
                 return error("This hospital account is inactive. Contact Atomwalk support.")
 
         # ── Step 3: Ensure tenant DB is registered ────────────────────────────
-        if db_name not in settings.DATABASES:
-            from apps.tenants.utils import _make_db_config
-            settings.DATABASES[db_name] = _make_db_config(db_name)
+        from apps.tenants.utils import ensure_tenant_db
+        ensure_tenant_db(db_name)
 
         # ── Step 4: Fetch StaffUser from tenant DB ────────────────────────────
         try:

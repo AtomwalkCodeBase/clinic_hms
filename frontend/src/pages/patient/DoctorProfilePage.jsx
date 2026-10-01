@@ -26,8 +26,9 @@ import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import ROUTES        from "../../config/routes.config";
+import { todayLocal, toLocalISODate } from "../../utils/dates";
 
-const TODAY = new Date().toISOString().split("T")[0];
+const TODAY = todayLocal();
 
 // Booking window capped at 2 months out — nobody realistically books an OPD
 // slot a year in advance, and an unbounded date picker just invites picking
@@ -36,7 +37,7 @@ const TODAY = new Date().toISOString().split("T")[0];
 const MAX_BOOKING_DATE = (() => {
   const d = new Date();
   d.setMonth(d.getMonth() + 2);
-  return d.toISOString().split("T")[0];
+  return toLocalISODate(d);
 })();
 
 const STEPS = ["Choose date", "Select time", "Your concern", "Confirm"];

@@ -14,6 +14,7 @@ import { useApi }    from "../../hooks/useApi";
 import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
+import { pharmacyApi } from "../../api";
 import API_ENDPOINTS from "../../config/api.config";
 import PaginationControls from "../../components/common/PaginationControls";
 
@@ -168,7 +169,7 @@ export default function StockPage() {
     }
     setSaving(true);
     try {
-      await apiClient.post(API_ENDPOINTS.PHARMACY.STOCK, { ...payload, branch: user.branch_id });
+      await pharmacyApi.receiveStock({ ...payload, branch: user.branch_id });
       toastSuccess("Stock received.");
       setAdding(false);
       refetch();

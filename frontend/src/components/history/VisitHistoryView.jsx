@@ -24,16 +24,10 @@ import API_ENDPOINTS  from "../../config/api.config";
 import { ROUTES }     from "../../config/routes.config";
 import { openDataUrlInNewTab, downloadFile } from "../../utils/fileViewer";
 import DependentBadge from "../common/DependentBadge";
+import { APPOINTMENT_STATUS_BADGE as BADGE } from "../../constants/badges";
+import { todayLocal } from "../../utils/dates";
 
-const BADGE = {
-  scheduled:   "badge--primary",
-  waiting:     "badge--warning",
-  vitals_done: "badge--success",
-  in_progress: "badge--info",
-  done:        "badge--success",
-  cancelled:   "badge--error",
-  no_show:     "badge--neutral",
-};
+
 
 // Today / Upcoming / Past — the flat, date-descending list this used to be
 // made it impossible to tell a scheduled visit next week from one that
@@ -41,7 +35,7 @@ const BADGE = {
 // scheduled_date vs. today fixes that without touching how the backend
 // paginates (each page's rows just get sorted into these three groups).
 function bucketByDate(rows) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   const buckets = { today: [], upcoming: [], past: [] };
   for (const r of rows) {
     if (!r.scheduled_date) { buckets.past.push(r); continue; }

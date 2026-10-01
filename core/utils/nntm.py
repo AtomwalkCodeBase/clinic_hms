@@ -28,7 +28,7 @@ def get_next_number(branch_id: int, entity: str, using: str = "default") -> tupl
     Args:
         branch_id: The branch this number belongs to. For 'employee_id',
                    which is a hospital-wide (not per-branch) sequence, pass 0
-                   — see apps.org.views._next_employee_id.
+                   — see apps.org.services.next_employee_id.
         entity:    One of: 'uhid', 'invoice', 'lab_report', 'lab_test', 'lab_request', 'prescription', 'queue', 'employee_id', 'drug', 'admission'.
         using:     The database alias to use (tenant DB name).
 
@@ -67,8 +67,18 @@ def get_next_number(branch_id: int, entity: str, using: str = "default") -> tupl
         nn.last_number += 1
         nn.save(using=using, update_fields=["last_number"])
 
+        # Counters are per branch but most number columns are unique
+        # hospital-wide, so every branch except the first gets "B<id>-" after
+        # the prefix (first branch keeps its historical format).
+        infix = ""
+        if branch_id:
+            from apps.org.models import Branch
+            first = Branch.objects.using(using).order_by("id").values_list("id", flat=True).first()
+            if first is not None and branch_id != first:
+                infix = f"B{branch_id}-"
+
         padded = str(nn.last_number).zfill(nn.pad_length)
-        formatted_id = f"{nn.prefix}{padded}"
+        formatted_id = f"{nn.prefix}{infix}{padded}"
 
         logger.debug(
             "NNTM: branch=%s entity=%s → %s",

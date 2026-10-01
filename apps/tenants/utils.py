@@ -6,8 +6,8 @@ Tenant utility functions:
 
 import re
 import logging
-from datetime import date
-from django.db import connections, transaction
+import threading
+from django.db import connections
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,45 @@ def _make_db_config(name: str) -> dict:
         "ATOMIC_REQUESTS":  t.get("ATOMIC_REQUESTS", False),
         "TEST":             t.get("TEST", {}),
     }
+
+
+_alias_lock = threading.Lock()
+
+
+def ensure_tenant_db(db_name):
+    """
+    Make sure `db_name` is a configured Django database alias, registering it from the
+    tenant template if it is not. The one place that mutates settings.DATABASES — the
+    request path (JWT middleware, login, OTP, portal, compliance), Celery workers and the
+    management commands all call this instead of repeating the snippet. Idempotent and
+    guarded by a lock so two threads registering the same tenant can't race.
+    """
+    if db_name in settings.DATABASES:
+        return
+    with _alias_lock:
+        if db_name not in settings.DATABASES:
+            settings.DATABASES[db_name] = _make_db_config(db_name)
+
+
+def resolve_source_tenant_id(db_alias) -> int:
+    """
+    Registry id of the tenant whose database `db_alias` is — the value the write-through
+    code stamps into `source_tenant_id`. For code that has no request to read
+    `request.tenant_id` from (model signals, helpers).
+
+    core.middleware only sets the DB alias on the thread-local, never a tenant id, so the
+    old `getattr(_thread_local, "tenant_id", 0)` was always 0 outside the seed commands
+    (which do set it, and still win here). 0 means "unknown".
+    """
+    from core.db_router import _thread_local
+    from apps.tenants.models import Tenant
+
+    explicit = getattr(_thread_local, "tenant_id", 0)
+    if explicit:
+        return explicit
+    if not db_alias:
+        return 0
+    return Tenant.objects.using("default").filter(db_name=db_alias).values_list("id", flat=True).first() or 0
 
 
 def create_tenant_database(db_name: str):
@@ -161,8 +200,7 @@ def run_tenant_migrations(db_name: str):
     from django.core.management import call_command
 
     # Ensure DB is registered with all required keys
-    if db_name not in settings.DATABASES:
-        settings.DATABASES[db_name] = _make_db_config(db_name)
+    ensure_tenant_db(db_name)
 
     # Run all migrations against the tenant DB.
     # The DB router's allow_migrate returns True for non-registry apps on non-default DBs,

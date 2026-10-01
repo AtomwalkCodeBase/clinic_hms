@@ -19,22 +19,13 @@ import API_ENDPOINTS from "../../config/api.config";
 import { sanitizeMobileInput, isValidMobile } from "../../utils/validation";
 import NewPasswordFields from "./NewPasswordFields";
 import AutofillDecoy from "./AutofillDecoy";
+import { authBareInput as bareInput, authFieldWrap as fieldWrap, authLabelStyle as labelStyle } from "../../styles/formStyles";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const labelStyle = {
-  display: "block", fontSize: 11, fontWeight: 700, letterSpacing: "0.06em",
-  textTransform: "uppercase", marginBottom: 7, color: "var(--color-text-secondary)",
-};
-const fieldWrap = (hasError) => ({
-  display: "flex", alignItems: "center", gap: 10,
-  border: `1.5px solid ${hasError ? "var(--color-error)" : "var(--color-border)"}`,
-  borderRadius: "var(--radius-input)", padding: "0 14px", background: "var(--color-bg)",
-});
-const bareInput = {
-  outline: "none", border: "none", background: "transparent", padding: "11px 0",
-  fontSize: 14, width: "100%", color: "var(--color-text)", fontFamily: "inherit",
-};
+
+
+
 
 export default function PatientRegisterFlow({ onDone, onCancel, toastSuccess, toastApiError }) {
   const [step, setStep] = useState("details"); // details -> code -> password

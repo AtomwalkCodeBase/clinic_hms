@@ -27,108 +27,19 @@ import { PageShell } from "../../components/common/PageShell";
 import apiClient      from "../../services/api.client";
 import { useToast }   from "../../hooks/useToast";
 import API_ENDPOINTS  from "../../config/api.config";
+import { VaccinationRuleRow as RuleRow } from "../../components/schedules/VaccinationRuleRow";
+import { emptyVaccinationRule as emptyRule } from "../../components/schedules/ruleDefaults";
+import { ScheduleBadge as Badge } from "../../components/schedules/ScheduleBadge";
+import { labelStyle, adminInputStyle as inputStyle } from "../../styles/formStyles";
 
-const inputStyle = {
-  width: "100%", boxSizing: "border-box",
-  border: "1.5px solid var(--color-border)", borderRadius: 8,
-  padding: "8px 10px", fontSize: 13.5,
-  background: "var(--color-surface)", color: "var(--color-text)", outline: "none",
-};
-const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 5 };
 
-function Badge({ children, tone = "primary" }) {
-  const tones = {
-    primary: { background: "var(--color-primary-light, var(--color-bg))", color: "var(--color-primary)", border: "1px solid var(--color-primary)" },
-    muted:   { background: "var(--color-bg)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" },
-  };
-  return (
-    <span style={{
-      fontSize: 11, fontWeight: 700, padding: "2px 10px", borderRadius: 20,
-      letterSpacing: 0.3, ...tones[tone],
-    }}>{children}</span>
-  );
-}
 
-function emptyRule(sortOrder) {
-  return {
-    _key: `new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    vaccine_name: "",
-    dose_number: 1,
-    scheduled_label: "",
-    min_age_days: 0,
-    max_age_days: "",
-    mandatory: true,
-    sort_order: sortOrder,
-  };
-}
 
-function RuleRow({ rule, onChange, onRemove, onMove, isFirst, isLast }) {
-  const set = (k) => (v) => onChange({ ...rule, [k]: v });
-  return (
-    <div className="card" style={{ padding: "14px 16px", display: "grid", gap: 10 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
-        <div>
-          <label style={labelStyle}>Vaccine Name *</label>
-          <input style={inputStyle} value={rule.vaccine_name}
-            onChange={e => set("vaccine_name")(e.target.value)} placeholder="e.g. BCG" required />
-        </div>
-        <div>
-          <label style={labelStyle}>Dose #</label>
-          <input type="number" min={1} style={inputStyle} value={rule.dose_number}
-            onChange={e => set("dose_number")(Number(e.target.value))} />
-        </div>
-      </div>
 
-      <div>
-        <label style={labelStyle}>Scheduled Label (milestone) *</label>
-        <input style={inputStyle} value={rule.scheduled_label}
-          onChange={e => set("scheduled_label")(e.target.value)} placeholder="e.g. Birth, 6 weeks, 9 months" required />
-      </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-        <div>
-          <label style={labelStyle}>Min Age (days) *</label>
-          <input type="number" min={0} style={inputStyle} value={rule.min_age_days}
-            onChange={e => set("min_age_days")(Number(e.target.value))} required />
-        </div>
-        <div>
-          <label style={labelStyle}>Max Age (days)</label>
-          <input type="number" min={0} style={inputStyle} value={rule.max_age_days ?? ""}
-            onChange={e => set("max_age_days")(e.target.value === "" ? "" : Number(e.target.value))}
-            placeholder="optional" />
-        </div>
-        <div>
-          <label style={labelStyle}>Sort Order</label>
-          <input type="number" style={inputStyle} value={rule.sort_order}
-            onChange={e => set("sort_order")(Number(e.target.value))} />
-        </div>
-      </div>
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 2 }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-          <input type="checkbox" checked={!!rule.mandatory} onChange={e => set("mandatory")(e.target.checked)} />
-          Mandatory
-        </label>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button type="button" onClick={onMove ? () => onMove(-1) : undefined} disabled={isFirst}
-            title="Move up"
-            style={{ padding: "5px 10px", borderRadius: 7, border: "1.5px solid var(--color-border)", background: "none", cursor: isFirst ? "not-allowed" : "pointer", fontSize: 13, opacity: isFirst ? 0.4 : 1 }}>
-            ↑
-          </button>
-          <button type="button" onClick={onMove ? () => onMove(1) : undefined} disabled={isLast}
-            title="Move down"
-            style={{ padding: "5px 10px", borderRadius: 7, border: "1.5px solid var(--color-border)", background: "none", cursor: isLast ? "not-allowed" : "pointer", fontSize: 13, opacity: isLast ? 0.4 : 1 }}>
-            ↓
-          </button>
-          <button type="button" onClick={onRemove}
-            style={{ padding: "5px 12px", borderRadius: 7, border: "1.5px solid var(--color-error)", background: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "var(--color-error)" }}>
-            Remove
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+
+
 
 function ScheduleEditor({ schedule, isActive, onSaved, canActivate, onActivate, activating }) {
   const api = apiClient;
@@ -146,6 +57,7 @@ function ScheduleEditor({ schedule, isActive, onSaved, canActivate, onActivate, 
     setDescription(schedule.description || "");
     setRules((schedule.rules || []).map(r => ({ ...r, _key: `existing-${r.id}` })));
     setRemovedIds([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-seed only when a different schedule is opened
   }, [schedule.id]);
 
   function addRule() {

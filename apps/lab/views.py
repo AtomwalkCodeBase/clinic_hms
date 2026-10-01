@@ -4,7 +4,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from core.response import success, created, error, not_found
-from core.permissions import IsHospitalStaff, IsLabTech, IsDoctor
+from core.permissions import IsHospitalStaff, IsLabTech
 from core.permissions import RequireFeature
 from core.utils.nntm import get_next_number
 from core.pagination import paginate_queryset
@@ -90,8 +90,8 @@ class LabTestDetailView(APIView):
 # ── Sample Type catalog — "make it configurable" ────────────────────────────
 # Backed by apps.billing.OptionList(list_type="sample_type"), same table as
 # Drug Form / Payment Mode / Room Type / Admission Type&Source — but a
-# bespoke view here (not billing's generic _DropdownListCreateView/
-# _DropdownDetailView) because that base class hardcodes IsHospitalAdmin for
+# bespoke view here (not billing's generic DropdownListCreateView/
+# DropdownDetailView) because that base class hardcodes IsHospitalAdmin for
 # viewing inactive entries (?all=1), which would lock the lab tech — the
 # actual domain expert who manages this catalog, same role as pharmacist for
 # Drug Form (see apps.prescriptions.views.DrugFormTypeListCreateView, the
@@ -350,7 +350,7 @@ class LabRequestAttachDocumentView(APIView):
     who walks in with a physical copy, or who has no portal account at all —
     LabRequestChoiceView already lets a nurse mark a request "outside" on the
     patient's behalf, but nothing let them finish the job. Writes to the same
-    registry SharedDocument table, tagged with the same
+    registry MedicalDocument table, tagged with the same
     "labreq:<db>:<request_id>" source_ref the patient's own upload would use,
     so LabRequestSerializer.attached_document and the patient's own
     PortalLabOrderListView pick it up identically regardless of who
@@ -378,10 +378,11 @@ class LabRequestAttachDocumentView(APIView):
         except FileValidationError as exc:
             return error(str(exc), errors={"file_data": str(exc)})
 
-        from apps.records.models import SharedDocument
+        from apps.records.models import DocumentClassification
+        from apps.records.services import create_issued_document
 
         doc_type = request.data.get("doc_type") or "lab_report"
-        if doc_type not in dict(SharedDocument.DOC_TYPE_CHOICES):
+        if doc_type not in [c.code for c in DocumentClassification.objects.using("default").all()]:
             doc_type = "lab_report"
         title = (request.data.get("title") or "").strip() or f"{req.test.name} — outside report"
 
@@ -389,11 +390,10 @@ class LabRequestAttachDocumentView(APIView):
         if not patient or not getattr(patient, "awpid", None):
             return error("This request has no patient/AWPID on file — cannot attach a document.")
 
-        identity = blob_storage.identity_slug(name=patient.full_name, identifier=patient.awpid)
         try:
             file_key = blob_storage.upload_data_uri(
-                file_data, prefix="patient-documents", mime_type=mime_type,
-                category="patient-document", identity=identity,
+                file_data, prefix=f"patients/{patient.awpid}/documents/outside-reports", mime_type=mime_type,
+                category="patient-document",
             )
         except blob_storage.StorageError as exc:
             return error(str(exc), errors={"file_data": str(exc)})
@@ -403,14 +403,11 @@ class LabRequestAttachDocumentView(APIView):
             detail=title, name=patient.full_name, identifier=patient.awpid,
         )
 
-        from core.db_router import _thread_local
-        source_tenant_id = getattr(_thread_local, "tenant_id", 0) or 0
+        source_tenant_id = request.tenant_id
 
-        doc = SharedDocument.objects.using("default").create(
-            awpid=patient.awpid, title=title, doc_type=doc_type,
-            file_name=file_name, mime_type=mime_type, s3_key=file_key,
-            uploaded_by="staff", source_tenant_id=source_tenant_id,
-            source_ref=f"labreq:{db}:{req.id}", method="staff",
+        doc = create_issued_document(
+            awpid=patient.awpid, file_path=file_key, name=file_name, mime_type=mime_type,
+            doc_type=doc_type, source_tenant_id=source_tenant_id, source_ref=f"labreq:{db}:{req.id}", title=title,
         )
 
         # Attaching an outside report only makes sense once the request is
@@ -478,11 +475,10 @@ def _bill_lab_request(req, db, user, tenant_id):
     try:
         from decimal import Decimal
         from apps.billing.models import Invoice, InvoiceItem
-        from apps.billing.views import _recompute_invoice_totals
-        from apps.opd.views import _tenant_default_tax_rate
+        from apps.billing.services import recompute_invoice_totals, tenant_default_tax_rate
 
         price = req.test.price if req.test.price is not None else Decimal("0")
-        tax_rate = _tenant_default_tax_rate(tenant_id)
+        tax_rate = tenant_default_tax_rate(tenant_id)
         invoice_number, _ = get_next_number(branch_id=req.branch_id, entity="invoice", using=db)
         invoice = Invoice.objects.using(db).create(
             patient=req.patient, branch_id=req.branch_id, invoice_number=invoice_number,
@@ -493,7 +489,7 @@ def _bill_lab_request(req, db, user, tenant_id):
             invoice=invoice, description=req.test.name, quantity=1,
             unit_price=price, tax_rate=tax_rate, total=price,
         )
-        _recompute_invoice_totals(invoice, db)
+        recompute_invoice_totals(invoice, db)
         req.invoice = invoice
         req.save(using=db, update_fields=["invoice"])
         logger.info("Billed lab request %s: invoice=%s test=%s price=%s",

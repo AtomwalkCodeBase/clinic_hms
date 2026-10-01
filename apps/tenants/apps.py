@@ -19,15 +19,14 @@ class TenantsConfig(AppConfig):
     @staticmethod
     def _register_tenant_databases():
         try:
-            from django.conf import settings
-            from apps.tenants.utils import _make_db_config
+            from apps.tenants.utils import ensure_tenant_db
             from apps.tenants.models import Tenant
 
             tenants = Tenant.objects.using("default").filter(is_active=True).values("db_name")
             for row in tenants:
                 db_name = row["db_name"]
-                if db_name and db_name not in settings.DATABASES:
-                    settings.DATABASES[db_name] = _make_db_config(db_name)
+                if db_name:
+                    ensure_tenant_db(db_name)
         except Exception:
             # Table may not exist yet during first migrate — silently skip
             pass

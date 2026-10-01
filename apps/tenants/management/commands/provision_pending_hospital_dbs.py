@@ -33,7 +33,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import connections
 
 from apps.tenants.models import Tenant
-from apps.tenants.utils import create_tenant_database, run_tenant_migrations, drop_tenant_database, _make_db_config
+from apps.tenants.utils import create_tenant_database, run_tenant_migrations, drop_tenant_database, _make_db_config, ensure_tenant_db
 
 DEFAULT_SUBDOMAINS = [
     "care-cure-clinic",
@@ -98,7 +98,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING(f"\n{tenant.name} ({subdomain}, {db})"))
 
         if _database_exists(db):
-            self.stdout.write(self.style.WARNING(f"  Database already exists — skipping create+migrate."))
+            self.stdout.write(self.style.WARNING("  Database already exists — skipping create+migrate."))
         else:
             self.stdout.write(f"  Creating database '{db}'...")
             try:
@@ -114,8 +114,7 @@ class Command(BaseCommand):
                 raise CommandError(f"Migration failed for {subdomain}, database rolled back: {exc}")
             self.stdout.write(self.style.SUCCESS("  Database created and migrated."))
 
-        if db not in settings.DATABASES:
-            settings.DATABASES[db] = _make_db_config(db)
+        ensure_tenant_db(db)
 
         # Same default-template assignment provision_tenant does for a
         # brand-new tenant — these rows never got it since 0015 only wrote
@@ -144,7 +143,7 @@ class Command(BaseCommand):
 
         # ── Hospital admin login ────────────────────────────────────────
         from apps.org.models import StaffUser
-        from apps.org.views import _next_employee_id
+        from apps.org.services import next_employee_id
         from apps.registry.models import StaffMobileIndex
 
         if StaffUser.objects.using(db).filter(role="hospital_admin").exists():
@@ -156,7 +155,7 @@ class Command(BaseCommand):
         admin = StaffUser(
             phone=mobile,
             email="",
-            employee_id=_next_employee_id(db),
+            employee_id=next_employee_id(db),
             first_name="Hospital",
             last_name="Admin",
             role="hospital_admin",

@@ -43,7 +43,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.tenants.models import Tenant
-from apps.tenants.utils import _make_db_config
+from apps.tenants.utils import ensure_tenant_db
 from apps.org.models import StaffUser
 
 ROLE_PREFIX = {
@@ -98,8 +98,7 @@ class Command(BaseCommand):
 
     def _process_tenant(self, tenant):
         db = tenant.db_name
-        if db not in settings.DATABASES:
-            settings.DATABASES[db] = _make_db_config(db)
+        ensure_tenant_db(db)
 
         self.stdout.write(f"\n{'=' * 70}\n  {tenant.name} ({tenant.subdomain})\n{'=' * 70}")
 

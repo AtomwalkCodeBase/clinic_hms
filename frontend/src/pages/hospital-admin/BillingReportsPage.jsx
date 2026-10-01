@@ -19,9 +19,10 @@ import { useApi }    from "../../hooks/useApi";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { TrendingUp, IndianRupee, Wallet, ListChecks } from "lucide-react";
+import { todayLocal, toLocalISODate } from "../../utils/dates";
 
-const todayStr = () => new Date().toISOString().split("T")[0];
-const daysAgoStr = n => new Date(Date.now() - n * 86400000).toISOString().split("T")[0];
+const todayStr = () => todayLocal();
+const daysAgoStr = n => toLocalISODate(new Date(Date.now() - n * 86400000));
 
 function money(v) {
   return `₹${Number(v || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

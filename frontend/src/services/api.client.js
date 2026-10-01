@@ -13,6 +13,7 @@
 
 import axios from "axios";
 import APP_CONFIG from "../config/app.config";
+import API_ENDPOINTS from "../config/api.config";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
@@ -56,7 +57,12 @@ function normaliseError(error) {
   // not found, not enrolled for online booking, etc.) silently collapsed into
   // the generic "Something went wrong" toast.
   return {
-    message: error.response?.data?.message || error.response?.data?.error || fallback,
+    message: error.response?.data?.message
+      || error.response?.data?.error
+      // Bare DRF errors ({"detail": "..."}) — normally reshaped server-side by
+      // core.exceptions.custom_exception_handler, kept here as a safety net.
+      || (typeof error.response?.data?.detail === "string" ? error.response.data.detail : "")
+      || fallback,
     errors:  error.response?.data?.errors  || {},
     status:  error.response?.status,
     data:    error.response?.data || null,
@@ -128,7 +134,7 @@ apiClient.interceptors.response.use(
         const refreshToken = tokenStore.getRefresh();
         if (!refreshToken) throw new Error("No refresh token");
 
-        const { data } = await publicClient.post("/api/v1/auth/token/refresh/", {
+        const { data } = await publicClient.post(API_ENDPOINTS.AUTH.REFRESH, {
           refresh: refreshToken,
         });
 

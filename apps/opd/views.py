@@ -30,17 +30,16 @@ from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.views import APIView
-from rest_framework.generics import ListCreateAPIView, RetrieveUpdateAPIView
 from rest_framework.response import Response
-from rest_framework.filters import OrderingFilter
-from django_filters.rest_framework import DjangoFilterBackend
 
-from core.permissions import IsHospitalStaff as IsTenantStaff, IsDoctor, IsDoctorOrNurse, IsFrontDesk, RequireFeature
+from core.permissions import IsHospitalStaff as IsTenantStaff, IsDoctor, IsDoctorOrNurse, RequireFeature
 from core.pagination import paginate_queryset
 from core.response import error as api_error, not_found as api_not_found, forbidden as api_forbidden, success
 
 from apps.billing.models import OptionList
-from apps.billing.views import _DropdownListCreateView, _DropdownDetailView
+from apps.billing.option_list_views import DropdownListCreateView, DropdownDetailView
+from apps.registry.hie import sync_encounter_to_hie
+from .services import auto_generate_invoice
 
 from .models import Appointment, OPDEncounter, Prescription, PrescriptionItem, PrescriptionFavourite, Vitals
 from .serializers import (
@@ -62,14 +61,14 @@ logger = logging.getLogger(__name__)
 # always books "opd"; "followup"/"emergency" are set programmatically, not
 # chosen from a dropdown) — this exists so a hospital can see/extend the
 # catalog (e.g. add "teleconsult") even though nothing forces them to.
-class AppointmentTypeListCreateView(_DropdownListCreateView):
+class AppointmentTypeListCreateView(DropdownListCreateView):
     list_type = OptionList.LIST_APPOINTMENT_TYPE
     serializer_class = AppointmentTypeSerializer
     identity_field = "name"
     model_field = "label"
 
 
-class AppointmentTypeDetailView(_DropdownDetailView):
+class AppointmentTypeDetailView(DropdownDetailView):
     list_type = OptionList.LIST_APPOINTMENT_TYPE
     serializer_class = AppointmentTypeSerializer
     identity_field = "name"
@@ -384,7 +383,7 @@ class AppointmentHistoryView(APIView):
         # recorded" instead of just an empty space.
         enc_ids = [row["encounter"]["id"] for row in data if row.get("encounter")]
         if enc_ids:
-            from apps.records.models import SharedDocument
+            from apps.records.models import DOC_TYPE_EXPR, MedicalDocument
             encs = {
                 str(e.id): e for e in OPDEncounter.objects.using(db)
                 .filter(id__in=enc_ids)
@@ -407,9 +406,9 @@ class AppointmentHistoryView(APIView):
                 wanted_refs += [f"encounter:{i}",
                                 f"encounter:{i}:handwritten:rx",
                                 f"encounter:{i}:handwritten:note"]
-            for d in (SharedDocument.objects.using("default")
+            for d in (MedicalDocument.objects.using("default")
                       .filter(source_ref__in=wanted_refs)
-                      .values("id", "source_ref", "doc_type")):
+                      .values("id", "source_ref", doc_type=DOC_TYPE_EXPR)):
                 ref = d["source_ref"]
                 eid = ref.split(":", 2)[1]
                 if ref.endswith(":handwritten:rx"):
@@ -1105,7 +1104,7 @@ def _create_prescription_for(enc, db):
 
 def _store_prescription_pdf(enc, db, tenant_id):
     """After sign: mirror the prescription to a registry
-    SharedDocument(doc_type='prescription') so it shows in the doctor's
+    MedicalDocument(classification=prescription) so it shows in the doctor's
     history and the patient's My Reports. Delegates to
     apps.opd.archive.store_prescription_document."""
     rx = Prescription.objects.using(db).filter(encounter_id=enc.id).first()
@@ -1124,8 +1123,8 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
     in object storage — the original-source record behind the typeset
     prescription and the OCR'd SOAP note.
 
-      rx_pages   -> SharedDocument(doc_type="prescription")   [patient + doctor]
-      note_pages -> SharedDocument(doc_type="consult_note")   [doctor only —
+      rx_pages   -> MedicalDocument(classification=prescription)   [patient + doctor]
+      note_pages -> MedicalDocument(classification=consult_note)   [doctor only —
                     STAFF_ONLY_DOC_TYPES, excluded from every portal query]
 
     Best-effort: any failure here is logged and swallowed, never blocks the
@@ -1140,7 +1139,8 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
         from apps.patients.models import Patient
         from apps.tenants.models import Tenant
         from apps.registry.models import ConsultSession
-        from apps.records.models import SharedDocument
+        from apps.records.models import MedicalDocument
+        from apps.records.services import create_issued_document
         from core import storage as blob_storage
 
         sess = ConsultSession.objects.using("default").filter(id=session_id).first()
@@ -1153,14 +1153,11 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
         hospital = tenant.name if tenant else "Hospital"
         appt = enc.appointment if enc.appointment_id else None
         visit_date = appt.scheduled_date if appt else timezone.now().date()
-        slug = blob_storage.identity_slug(
-            name=patient.full_name if patient else "", identifier=getattr(patient, "awpid", ""),
-        )
         rx = Prescription.objects.using(db).filter(encounter_id=enc.id).first()
         rx_label = (rx.rx_number if rx and rx.rx_number else "")
 
-        # (tab, pages, doc_type, s3_prefix, s3_category, title)
-        #   doc_type    -> SharedDocument.doc_type (drives portal visibility)
+        # (tab, pages, doc_type, folder, s3_category, title)
+        #   doc_type    -> the document's classification (drives portal visibility)
         #   s3_category -> a key from core.storage.UPLOAD_CATEGORIES (drives
         #                  the stored file name segment)
         specs = [
@@ -1174,21 +1171,20 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
             if not pages:
                 continue
             ref = f"encounter:{enc.id}:handwritten:{tab}"
-            if SharedDocument.objects.using("default").filter(source_ref=ref).exists():
+            if MedicalDocument.objects.using("default").filter(source_ref=ref).exists():
                 cleared[tab] = True  # already archived on a prior attempt
                 continue
             pdf_bytes = images_to_pdf(pages, header=f"{title}  ·  {hospital}")
             if not pdf_bytes:
                 continue
             pdf_uri = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
-            s3_key = blob_storage.upload_data_uri(
-                pdf_uri, prefix=prefix, mime_type="application/pdf",
-                category=category, identity=slug,
+            awpid = getattr(patient, "awpid", "")
+            file_path = blob_storage.upload_data_uri(
+                pdf_uri, prefix=f"patients/{awpid}/{prefix}", mime_type="application/pdf", category=category,
             )
-            SharedDocument.objects.using("default").create(
-                awpid=getattr(patient, "awpid", ""), title=title, doc_type=doc_type,
-                file_name=f"{title}.pdf", mime_type="application/pdf", s3_key=s3_key,
-                uploaded_by="staff", source_tenant_id=tenant_id, source_ref=ref, method="staff",
+            create_issued_document(
+                awpid=awpid, file_path=file_path, name=f"{title}.pdf", doc_type=doc_type,
+                source_tenant_id=tenant_id, source_ref=ref, title=title, hospital_label=hospital, document_date=visit_date,
             )
             cleared[tab] = True
 
@@ -1371,15 +1367,14 @@ class EncounterSignView(APIView):
             patient = None
 
         # Auto-generate invoice for this encounter
-        _auto_generate_invoice(enc, db, request.user, patient, tenant_id=request.tenant_id)
+        auto_generate_invoice(enc, db, request.user, patient, tenant_id=request.tenant_id)
 
         # Write-through to the cross-hospital HIE shared tables (registry DB).
-        # This is the platform's single write-through path for shared history —
-        # apps.clinical/apps.prescriptions are legacy duplicate models kept only
-        # for their billing/lab/pharmacy foreign keys and are not written to by
-        # the live OPD flow, so their own signals never fire. Writing straight
-        # to the registry Shared* tables here is the actual source of truth.
-        _sync_to_hie(enc, db, patient)
+        # This is the platform's single write-through path for shared history
+        # (apps.clinical and the old apps.prescriptions models were retired and
+        # own no tables). It writes straight to the registry Shared* tables and
+        # never blocks sign-off — see apps/registry/hie.py.
+        sync_encounter_to_hie(enc, db, patient, tenant_id=request.tenant_id)
 
         # Store the prescription as a PDF (doctor history + patient portal),
         # archive the consult-pad's raw handwriting as PDFs, then close the
@@ -1798,193 +1793,6 @@ class EncounterSummaryPDFView(APIView):
             "file_name": f"{uhid}_consultation_summary.pdf",
             "mime_type": "application/pdf",
         })
-
-
-def _sync_to_hie(encounter, db, patient):
-    """
-    Push a sanitized copy of this encounter's diagnoses, vitals, and
-    prescription to the registry's shared HIE tables so other hospitals can
-    see this patient's cross-provider history. Never blocks sign-off —
-    all failures are logged and swallowed.
-    """
-    if patient is None or not getattr(patient, "awpid", None):
-        logger.warning("HIE sync skipped for encounter %s: no patient/awpid.", encounter.id)
-        return
-
-    from core.db_router import _thread_local
-    from apps.registry.models import SharedDiagnosis, SharedVital, SharedPrescription, SharedPrescriptionItem
-
-    source_tenant_id = getattr(_thread_local, "tenant_id", 0) or 0
-    awpid = patient.awpid
-
-    # ── Diagnoses (OPDEncounter.diagnoses is a JSON list of {code, description}) ──
-    for diag in (encounter.diagnoses or []):
-        try:
-            SharedDiagnosis.objects.using("default").update_or_create(
-                awpid=awpid,
-                source_tenant_id=source_tenant_id,
-                icd10_code=diag.get("code", ""),
-                defaults={
-                    "description":     diag.get("description", ""),
-                    "clinical_status": "active",
-                    "onset_date":      encounter.encounter_date if hasattr(encounter, "encounter_date") else None,
-                },
-            )
-        except Exception as exc:
-            logger.error("HIE SharedDiagnosis write failed for encounter=%s: %s", encounter.id, exc)
-
-    # ── Vitals (one row per appointment, via OneToOne) ─────────────────────
-    try:
-        vitals = encounter.appointment.vitals
-    except Exception:
-        vitals = None
-    if vitals is not None:
-        try:
-            SharedVital.objects.using("default").update_or_create(
-                awpid=awpid,
-                recorded_at=vitals.recorded_at,
-                defaults={
-                    "source":            "clinic",
-                    "bp_systolic":       vitals.systolic_bp,
-                    "bp_diastolic":      vitals.diastolic_bp,
-                    "pulse_rate":        vitals.pulse_rate,
-                    "spo2":              vitals.spo2,
-                    "temperature":       vitals.temperature,
-                    "weight_kg":         vitals.weight_kg,
-                    "height_cm":         vitals.height_cm,
-                    "head_circumference_cm": vitals.head_circumference_cm,
-                    "resp_rate":         vitals.respiratory_rate,
-                    "blood_sugar_mgdl":  vitals.blood_sugar_rbs,
-                    "source_tenant_id":  source_tenant_id,
-                },
-            )
-        except Exception as exc:
-            logger.error("HIE SharedVital write failed for encounter=%s: %s", encounter.id, exc)
-
-    # ── Prescription (opd.Prescription is OneToOne on the encounter) ───────
-    try:
-        rx = encounter.prescription
-    except Exception:
-        rx = None
-    if rx is not None:
-        try:
-            shared_rx, _ = SharedPrescription.objects.using("default").update_or_create(
-                awpid=awpid,
-                source_tenant_id=source_tenant_id,
-                prescribed_on=(rx.created_at.date() if rx.created_at else timezone.now().date()),
-            )
-            SharedPrescriptionItem.objects.using("default").filter(prescription=shared_rx).delete()
-            for item in rx.items.all():
-                SharedPrescriptionItem.objects.using("default").create(
-                    prescription=shared_rx,
-                    drug_name=item.drug_name,
-                    dose=item.dosage,
-                    unit="",
-                    frequency=item.frequency,
-                    route=item.route,
-                    duration_days=item.duration_days,
-                )
-        except Exception as exc:
-            logger.error("HIE SharedPrescription write failed for encounter=%s: %s", encounter.id, exc)
-
-
-def _resolve_doctor_consultation_fee(db, doctor_user_id, appointment_type=None):
-    """
-    encounter.doctor_user_id is a UUIDField, but the value actually stored
-    in it is the StaffUser's plain integer pk — Django's UUIDField silently
-    wraps a plain int via uuid.UUID(int=value) (see e.g. auth_app.views'
-    "user_id": staff.id, saved straight into these UUID columns). Unwrap
-    either form back to the integer pk so DoctorProfile can be looked up.
-
-    For a "followup" visit, prefers DoctorProfile.followup_fee — but only
-    if the doctor actually set one; otherwise falls back to their regular
-    consultation_fee, so doctors who never configured a separate follow-up
-    rate keep charging the same flat fee for every visit type (unchanged
-    behaviour for them). Returns None if there's no doctor profile or no
-    fee resolvable at all.
-    """
-    import uuid as _uuid
-    from apps.org.models import StaffUser
-    from apps.opd.models import Appointment
-
-    raw = doctor_user_id.int if isinstance(doctor_user_id, _uuid.UUID) else doctor_user_id
-    try:
-        staff = StaffUser.objects.using(db).select_related("doctor_profile").get(pk=raw)
-        profile = staff.doctor_profile
-        if appointment_type == Appointment.TYPE_FOLLOWUP and profile.followup_fee is not None:
-            return profile.followup_fee
-        return profile.consultation_fee
-    except Exception:
-        return None
-
-
-def _tenant_default_tax_rate(tenant_id):
-    from decimal import Decimal
-    from apps.tenants.models import Tenant
-    if not tenant_id:
-        return Decimal("0")
-    try:
-        return Tenant.objects.using("default").get(pk=tenant_id).default_tax_rate
-    except Tenant.DoesNotExist:
-        return Decimal("0")
-
-
-def _auto_generate_invoice(encounter, db, user, patient=None, tenant_id=None):
-    """
-    Create a draft invoice after encounter sign-off. Never blocks sign-off.
-
-    Uses the doctor's actual DoctorProfile fee (falls back to ₹0 — not a
-    guessed flat amount — if the doctor never set one) and the tenant's
-    configured default_tax_rate, instead of the old hardcoded ₹500.
-
-    Picks consultation_fee vs followup_fee based on the appointment's
-    appointment_type (see _resolve_doctor_consultation_fee), and labels the
-    invoice line accordingly — so a follow-up visit is no longer charged
-    and described identically to a first consultation.
-    """
-    from decimal import Decimal
-    from apps.billing.models import Invoice, InvoiceItem
-    from apps.billing.views import _recompute_invoice_totals
-    from apps.patients.models import Patient
-    from apps.opd.models import Appointment
-    from core.utils.nntm import get_next_number
-
-    try:
-        if patient is None:
-            patient = Patient.objects.using(db).get(uuid=encounter.patient_id)
-
-        appointment_type = getattr(encounter.appointment, "appointment_type", None)
-        fee = _resolve_doctor_consultation_fee(db, encounter.doctor_user_id, appointment_type)
-        if fee is None:
-            fee = Decimal("0")
-        tax_rate = _tenant_default_tax_rate(tenant_id)
-        description = (
-            "Follow-up Consultation" if appointment_type == Appointment.TYPE_FOLLOWUP
-            else "OPD Consultation"
-        )
-
-        invoice_number, _ = get_next_number(branch_id=patient.branch_id or 1, entity="invoice", using=db)
-        invoice = Invoice.objects.using(db).create(
-            patient=patient,
-            branch=patient.branch,
-            invoice_number=invoice_number,
-            status="draft",
-            created_by_id=user.id,
-            notes=f"Auto-generated for OPD encounter {encounter.id}",
-        )
-        InvoiceItem.objects.using(db).create(
-            invoice=invoice,
-            description=description,
-            quantity=1,
-            unit_price=fee,
-            tax_rate=tax_rate,
-            total=fee,
-        )
-        _recompute_invoice_totals(invoice, db)
-        logger.info("Auto-generated invoice %s for encounter %s (type=%s, fee=%s, tax_rate=%s%%)",
-                    invoice.invoice_number, encounter.id, appointment_type, fee, tax_rate)
-    except Exception as e:
-        logger.warning("Could not auto-generate invoice: %s", e)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { publicClient } from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import { TEST_CATEGORY_LABELS as PANEL_LABELS } from "../../constants/labels";
 
 /* ── the one place the feature is named ─────────────────────────────────── */
 const FEATURE_NAME = "Share Records";
@@ -317,15 +318,7 @@ function ClinicianWait({ token }) {
 const catOf = (t) => (t === "prescription" ? "prescription" : t === "lab_report" ? "lab" : "doc");
 const CAT_LABEL = { prescription: "Prescription", lab: "Lab report", doc: "Document" };
 
-// Lab-report panels — mirrors core/report_types.py. Used to group the doctor's
-// "My Reports" list category by category (the same way the patient sees it).
-const PANEL_LABELS = {
-  cbc: "Complete Blood Count", lipid: "Lipid Profile", lft: "Liver Function Test",
-  kft: "Kidney Function Test", thyroid: "Thyroid Profile", diabetes: "Blood Sugar & HbA1c",
-  urine: "Urine Routine", electrolytes: "Serum Electrolytes", vitamin: "Vitamin & Mineral",
-  inflammation: "Inflammatory Markers", cardiac: "Cardiac Markers", coagulation: "Coagulation Profile",
-  hormone: "Hormone Panel", infection: "Infection Serology", culture: "Culture & Sensitivity",
-};
+
 const PANEL_ORDER = Object.keys(PANEL_LABELS);
 const NONPANEL_LABEL = { prescription: "Prescriptions", scan: "Imaging", discharge_summary: "Discharge summaries", other: "Other" };
 function docSections(d) {
@@ -392,8 +385,8 @@ function DocRow({ d, token, onChanged }) {
     finally { setBusy(""); }
   }
 
-  const title = d.doc_type === "prescription" && d.doctor_label ? `Prescription · ${d.doctor_label}` : d.title;
-  const sub = [meta.label, d.hospital_label, fmtShort(d.document_date || d.created_at)].filter(Boolean).join(" · ");
+  const title = d.title;
+  const sub = [meta.label, fmtShort(d.created_at)].filter(Boolean).join(" · ");
   const state = d.download_state;
 
   return (
@@ -579,12 +572,12 @@ function RecordsView({ token }) {
   // Only months/years that actually have a record — a doctor scanning one
   // patient's history doesn't need every calendar month back to year zero.
   const monthOpts = useMemo(() => {
-    const keys = new Set(docs.map((d) => ymKey(d.document_date || d.created_at)).filter(Boolean));
+    const keys = new Set(docs.map((d) => ymKey(d.created_at)).filter(Boolean));
     return [...keys].sort((a, b) => b.localeCompare(a)).map((k) => ({ key: k, label: ymLabel(k) }));
   }, [docs]);
   const yearOpts = useMemo(() => {
     const years = new Set(docs.map((d) => {
-      const dt = new Date(d.document_date || d.created_at || "");
+      const dt = new Date(d.created_at || "");
       return isNaN(dt) ? null : dt.getFullYear();
     }).filter(Boolean));
     return [...years].sort((a, b) => b - a);
@@ -610,9 +603,9 @@ function RecordsView({ token }) {
     const list = docs
       .filter((d) => tab === "all" || catOf(d.doc_type) === tab)
       .filter((d) => !catMode || !catSel.size || (d.report_categories || []).some((c) => catSel.has(c)))
-      .filter((d) => !needle || [d.title, d.hospital_label, d.doctor_label, d.public_document_id].filter(Boolean).join(" ").toLowerCase().includes(needle))
+      .filter((d) => !needle || [d.title].filter(Boolean).join(" ").toLowerCase().includes(needle))
       .filter((d) => {
-        const day = (d.document_date || d.created_at || "").slice(0, 10);
+        const day = (d.created_at || "").slice(0, 10);
         if (filterMode === "month" && filterMonth) return day && ymKey(day) === filterMonth;
         if (filterMode === "year" && filterYear) return day && day.slice(0, 4) === filterYear;
         if (filterMode === "dates" && (dFrom || dTo)) {
@@ -622,7 +615,7 @@ function RecordsView({ token }) {
         return true;
       })
       .slice()
-      .sort((a, b) => (b.document_date || b.created_at).localeCompare(a.document_date || a.created_at));
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
 
     // All / Lab reports: group category by category (matches the patient's
     // own view). Prescriptions / Documents: month-grouped.
@@ -636,7 +629,7 @@ function RecordsView({ token }) {
     }
     const map = new Map();
     list.forEach((d) => {
-      const k = ymKey(d.document_date || d.created_at) || "0000-00";
+      const k = ymKey(d.created_at) || "0000-00";
       if (!map.has(k)) map.set(k, []);
       map.get(k).push(d);
     });

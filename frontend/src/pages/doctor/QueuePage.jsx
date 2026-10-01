@@ -21,21 +21,16 @@ import apiClient            from "../../services/api.client";
 import API_ENDPOINTS        from "../../config/api.config";
 import { Building2, CalendarDays, Filter, X } from "lucide-react";
 import { ROUTES }           from "../../config/routes.config";
+import { formatDateLabel, addDays } from "../../utils/dates";
+import { todayLocal } from "../../utils/dates";
 
-const TODAY = new Date().toISOString().split("T")[0];
+const TODAY = todayLocal();
 
-function addDays(dateStr, n) {
-  const d = new Date(dateStr + "T00:00:00");
-  d.setDate(d.getDate() + n);
-  return d.toISOString().split("T")[0];
-}
+
 const TOMORROW = addDays(TODAY, 1);
 const WEEK_END = addDays(TODAY, 7);
 
-function formatDateLabel(dateStr) {
-  const d = new Date(dateStr + "T00:00:00");
-  return d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
-}
+
 
 /** Buckets a flat, date-ascending appointment list into Today / Tomorrow /
  * This Week / Later sections so a doctor can see their whole upcoming

@@ -26,7 +26,7 @@ export default function PatientHospitalDoctorsPage() {
   const hospital = (hospData?.results || []).find(h => String(h.tenant_id) === String(tenantId));
 
   const { data, isLoading, error, refetch } = useApi(API_ENDPOINTS.PORTAL.DOCTORS(tenantId));
-  const allDoctors = data?.results || [];
+  const allDoctors = useMemo(() => data?.results || [], [data]);
 
   const specialties = useMemo(() => {
     const counts = new Map();

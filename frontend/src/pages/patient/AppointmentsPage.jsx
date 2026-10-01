@@ -26,15 +26,16 @@ import API_ENDPOINTS from "../../config/api.config";
 import ROUTES        from "../../config/routes.config";
 import { openDataUrlInNewTab } from "../../utils/fileViewer";
 import { usePatientContext } from "../../context/PatientContext";
+import { todayLocal, toLocalISODate } from "../../utils/dates";
 
-const TODAY = new Date().toISOString().split("T")[0];
+const TODAY = todayLocal();
 // Mirrors the 2-month booking window enforced server-side (see
 // AppointmentRescheduleView / PortalRescheduleBookingView) — a reschedule is
 // just a move within the same booking rules as a fresh booking.
 const MAX_RESCHEDULE_DATE = (() => {
   const d = new Date();
   d.setDate(d.getDate() + 62);
-  return d.toISOString().split("T")[0];
+  return toLocalISODate(d);
 })();
 const CANCELLABLE_STATUSES = ["scheduled", "waiting", "vitals_done"];
 const RESCHEDULABLE_STATUSES = ["scheduled", "waiting"];
@@ -64,7 +65,7 @@ const INVOICE_STATUS_META = {
 // (that's the hospital's record of what happened), we just stop presenting it as
 // "upcoming" once its day has passed.
 function isExpired(b) {
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = todayLocal();
   return ACTIVE_STATUSES.includes(b.status) && b.date < todayStr;
 }
 
@@ -82,8 +83,8 @@ function StatusBadge({ status }) {
 }
 
 function relativeDate(dateStr) {
-  const today = new Date().toISOString().split("T")[0];
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+  const today = todayLocal();
+  const tomorrow = toLocalISODate(new Date(Date.now() + 86400000));
   if (dateStr === today) return "Today";
   if (dateStr === tomorrow) return "Tomorrow";
   try {

@@ -17,8 +17,9 @@ import apiClient       from "../../services/api.client";
 import API_ENDPOINTS   from "../../config/api.config";
 import { ROUTES }      from "../../config/routes.config";
 import { Users, Building2, Settings } from "lucide-react";
+import { todayLocal } from "../../utils/dates";
 
-const TODAY = new Date().toISOString().slice(0, 10);
+const TODAY = todayLocal();
 
 /* Tiny inline sparkline */
 function Sparkline({ points, width = 180, height = 46 }) {
@@ -175,7 +176,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [toastApiError]);
+  }, []);
 
   useEffect(() => { fetchStats(); }, [fetchStats]);
 

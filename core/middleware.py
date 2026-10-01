@@ -27,6 +27,7 @@ from django.http  import JsonResponse
 import jwt
 
 from .db_router import set_tenant_db
+from .logging_context import set_request_identity
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,15 @@ EXEMPT_PREFIXES = (
                                       # (apps/patients/document_view_views.py) — no Atomwalk login at all;
                                       # auth is the signed token in the URL itself (core/qr_token.py).
     "/health/",
-    "/admin/",
+    "/django-admin/",                # Django admin (atomwalk/urls.py) — it has its own session login, not a Bearer token
+)
+
+# drf-spectacular's schema and Swagger views are AllowAny once past this middleware, so
+# exempting them would publish the whole API surface anonymously. Only exempt them in DEBUG
+# (a browser can't send a Bearer header to view them); in production they stay behind a JWT.
+DEBUG_ONLY_EXEMPT_PREFIXES = (
+    "/api/docs/",
+    "/api/schema/",
 )
 
 
@@ -65,7 +74,8 @@ class JWTTenantMiddleware:
         set_tenant_db(None)
 
         # ── Skip exempt paths ─────────────────────────────────────────────
-        if any(request.path.startswith(prefix) for prefix in EXEMPT_PREFIXES):
+        exempt = EXEMPT_PREFIXES + DEBUG_ONLY_EXEMPT_PREFIXES if settings.DEBUG else EXEMPT_PREFIXES
+        if any(request.path.startswith(prefix) for prefix in exempt):
             return self.get_response(request)
 
         # ── Extract token ─────────────────────────────────────────────────
@@ -100,7 +110,7 @@ class JWTTenantMiddleware:
             # Tenant DBs are not persisted across restarts — they're registered
             # lazily on first use (login, or here on subsequent requests).
             if db_name not in settings.DATABASES:
-                from apps.tenants.utils import _make_db_config
+                from apps.tenants.utils import ensure_tenant_db
                 from apps.tenants.models import Tenant
                 if not Tenant.objects.filter(db_name=db_name, is_active=True).exists():
                     logger.error(
@@ -108,11 +118,12 @@ class JWTTenantMiddleware:
                         db_name,
                     )
                     return self._unauthorised("Invalid tenant context.")
-                settings.DATABASES[db_name] = _make_db_config(db_name)
+                ensure_tenant_db(db_name)
                 logger.info("Lazily registered tenant DB config: %s", db_name)
             set_tenant_db(db_name)
 
         # ── Attach claims to request ──────────────────────────────────────
+        set_request_identity(tenant_id=payload.get("tenant_id"), user_id=payload.get("user_id"))
         request.tenant_db      = db_name
         request.tenant_id      = payload.get("tenant_id")
         request.user_role      = payload.get("role")

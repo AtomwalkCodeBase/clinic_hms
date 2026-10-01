@@ -21,8 +21,9 @@ import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import { todayLocal } from "../../utils/dates";
 
-const TODAY = new Date().toISOString().split("T")[0];
+const TODAY = todayLocal();
 
 // ── Family tree strip ─────────────────────────────────────────────────────
 function FamilyStrip({ members, selfAwpid, onSelectExisting, onRegisterNew, loading }) {

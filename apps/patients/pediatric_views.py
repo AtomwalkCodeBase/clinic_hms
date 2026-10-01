@@ -25,7 +25,6 @@ record, it just wouldn't normally happen.
 import logging
 from datetime import date
 
-from django.utils import timezone
 from rest_framework.views import APIView
 
 from core.response import success, created, error, not_found
@@ -33,7 +32,6 @@ from core.permissions import IsHospitalStaff, IsDoctorOrFrontDesk, IsDoctorOrNur
 
 from .models import Patient, BirthHistory
 from .serializers import BirthHistorySerializer
-from .age_utils import age_years_months as _age_years_months
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +39,7 @@ logger = logging.getLogger(__name__)
 def _sync_birth_history_to_registry(bh, patient, tenant_id):
     """
     Best-effort write-through to registry.SharedBirthHistory — same pattern
-    as apps.opd.views._sync_to_hie for vitals/diagnoses/prescriptions — so
+    as apps.registry.hie.sync_encounter_to_hie for vitals/diagnoses/prescriptions — so
     a child's birth history is visible cross-hospital (Emergency QR summary,
     any future HIE view), not just at whichever hospital captured it. Never
     blocks the main save; failures are logged and swallowed.

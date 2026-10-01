@@ -1,10 +1,11 @@
 import logging
+from django.db import transaction
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from core.response import success, created, error, not_found
 from core.permissions import IsPharmacist, RequireFeature
 from core.pagination import paginate_queryset
-from .serializers import StockSerializer, StockTransactionSerializer, DispenseSerializer
+from .serializers import StockSerializer, DispenseSerializer
 from .models import Stock, StockTransaction, Dispense
 
 logger = logging.getLogger(__name__)
@@ -42,31 +43,35 @@ class StockListView(APIView):
         if added <= 0:
             return error("Quantity received must be greater than zero.")
 
-        stock, made = Stock.objects.using(db).get_or_create(
-            drug=d["drug"], branch=d["branch"], batch_number=d.get("batch_number", ""),
-            defaults={
-                "expiry_date":   d.get("expiry_date"),
-                "quantity":      0,
-                "reorder_level": d.get("reorder_level", 10),
-                "unit_cost":     d.get("unit_cost"),
-                "mrp":           d.get("mrp"),
-            },
-        )
-        qty_before = stock.quantity
-        stock.quantity += added
-        # An existing batch being topped up can still have its price/expiry
-        # corrected in the same call rather than needing a second edit step.
-        if not made:
-            if d.get("expiry_date"):  stock.expiry_date = d["expiry_date"]
-            if d.get("unit_cost") is not None: stock.unit_cost = d["unit_cost"]
-            if d.get("mrp") is not None:       stock.mrp = d["mrp"]
-        stock.save(using=db)
+        with transaction.atomic(using=db):
+            stock, made = Stock.objects.using(db).get_or_create(
+                drug=d["drug"], branch=d["branch"], batch_number=d.get("batch_number", ""),
+                defaults={
+                    "expiry_date":   d.get("expiry_date"),
+                    "quantity":      0,
+                    "reorder_level": d.get("reorder_level", 10),
+                    "unit_cost":     d.get("unit_cost"),
+                    "mrp":           d.get("mrp"),
+                },
+            )
+            # Lock the batch and read its current quantity, so this can't overwrite a
+            # concurrent dispense's decrement with a stale value.
+            stock = Stock.objects.using(db).select_for_update().get(pk=stock.pk)
+            qty_before = stock.quantity
+            stock.quantity += added
+            # An existing batch being topped up can still have its price/expiry
+            # corrected in the same call rather than needing a second edit step.
+            if not made:
+                if d.get("expiry_date"):  stock.expiry_date = d["expiry_date"]
+                if d.get("unit_cost") is not None: stock.unit_cost = d["unit_cost"]
+                if d.get("mrp") is not None:       stock.mrp = d["mrp"]
+            stock.save(using=db)
 
-        StockTransaction.objects.using(db).create(
-            stock=stock, txn_type="purchase", quantity_change=added,
-            quantity_before=qty_before, quantity_after=stock.quantity,
-            reference_type="Purchase", recorded_by=request.user,
-        )
+            StockTransaction.objects.using(db).create(
+                stock=stock, txn_type="purchase", quantity_change=added,
+                quantity_before=qty_before, quantity_after=stock.quantity,
+                reference_type="Purchase", recorded_by_id=request.user.id,
+            )
         return created(data=StockSerializer(stock).data, message="Stock received.")
 
 
@@ -79,57 +84,63 @@ class DispenseView(APIView):
             return error("Validation error.", errors=s.errors)
 
         db    = request.tenant_db
-        stock = s.validated_data["stock"]
         qty   = s.validated_data["quantity"]
 
-        if stock.quantity < qty:
-            return error(f"Insufficient stock. Available: {stock.quantity}")
+        # One transaction for the whole stock movement, holding a row lock on the batch:
+        # two pharmacists dispensing the same batch queue up here instead of both reading
+        # the same quantity and one decrement being lost, and a failure part-way rolls the
+        # deduction back instead of leaving stock reduced with no ledger row.
+        with transaction.atomic(using=db):
+            stock = Stock.objects.using(db).select_for_update().get(pk=s.validated_data["stock"].pk)
 
-        qty_before = stock.quantity
-        stock.quantity -= qty
-        stock.save(using=db, update_fields=["quantity"])
+            if stock.quantity < qty:
+                return error(f"Insufficient stock. Available: {stock.quantity}")
 
-        StockTransaction.objects.using(db).create(
-            stock=stock,
-            txn_type="dispense",
-            quantity_change=-qty,
-            quantity_before=qty_before,
-            quantity_after=stock.quantity,
-            reference_type="Dispense",
-            recorded_by=request.user,
-        )
+            qty_before = stock.quantity
+            stock.quantity -= qty
+            stock.save(using=db, update_fields=["quantity"])
 
-        dispense = Dispense.objects.using(db).create(
-            dispensed_by=request.user, **s.validated_data
-        )
+            StockTransaction.objects.using(db).create(
+                stock=stock,
+                txn_type="dispense",
+                quantity_change=-qty,
+                quantity_before=qty_before,
+                quantity_after=stock.quantity,
+                reference_type="Dispense",
+                recorded_by_id=request.user.id,
+            )
 
-        # If every item on this prescription now has at least one dispense
-        # record against it, treat the whole prescription as fulfilled so it
-        # drops off the pending queue. This checks "touched at least once"
-        # rather than "fully dispensed to the prescribed quantity" — there's
-        # no quantity-prescribed field on PrescriptionItem to compare
-        # against, only what's actually been dispensed, so a same-item
-        # top-up dispense (e.g. partial fill now, rest later) won't
-        # re-open a prescription already marked dispensed. Good enough for
-        # the common case; a pharmacist can still dispense against an
-        # already-"dispensed" prescription's item if more is needed.
-        #
-        # apps.opd.Prescription/PrescriptionItem — the live model doctors
-        # actually write to (see apps/pharmacy/models.py header note; this
-        # used to point at the old apps.prescriptions models, which the
-        # live OPD flow never wrote to, so nothing ever reached this queue).
-        from apps.opd.models import Prescription, PrescriptionItem
-        item = s.validated_data["prescription_item"]
-        prescription_id = item.prescription_id
-        still_pending = PrescriptionItem.objects.using(db).filter(
-            prescription_id=prescription_id
-        ).exclude(
-            id__in=Dispense.objects.using(db)
-                .filter(prescription_item__prescription_id=prescription_id)
-                .values_list("prescription_item_id", flat=True)
-        ).exists()
-        if not still_pending:
-            Prescription.objects.using(db).filter(pk=prescription_id).update(status=Prescription.STATUS_DISPENSED)
+            dispense = Dispense.objects.using(db).create(
+                dispensed_by_id=request.user.id, **s.validated_data
+            )
+
+            # If every item on this prescription now has at least one dispense
+            # record against it, treat the whole prescription as fulfilled so it
+            # drops off the pending queue. This checks "touched at least once"
+            # rather than "fully dispensed to the prescribed quantity" — there's
+            # no quantity-prescribed field on PrescriptionItem to compare
+            # against, only what's actually been dispensed, so a same-item
+            # top-up dispense (e.g. partial fill now, rest later) won't
+            # re-open a prescription already marked dispensed. Good enough for
+            # the common case; a pharmacist can still dispense against an
+            # already-"dispensed" prescription's item if more is needed.
+            #
+            # apps.opd.Prescription/PrescriptionItem — the live model doctors
+            # actually write to (see apps/pharmacy/models.py header note; this
+            # used to point at the old apps.prescriptions models, which the
+            # live OPD flow never wrote to, so nothing ever reached this queue).
+            from apps.opd.models import Prescription, PrescriptionItem
+            item = s.validated_data["prescription_item"]
+            prescription_id = item.prescription_id
+            still_pending = PrescriptionItem.objects.using(db).filter(
+                prescription_id=prescription_id
+            ).exclude(
+                id__in=Dispense.objects.using(db)
+                    .filter(prescription_item__prescription_id=prescription_id)
+                    .values_list("prescription_item_id", flat=True)
+            ).exists()
+            if not still_pending:
+                Prescription.objects.using(db).filter(pk=prescription_id).update(status=Prescription.STATUS_DISPENSED)
 
         # ── Billing: create/append to a real Invoice, priced from Stock.mrp
         # (actual sale price) rather than Stock.unit_cost (purchase cost) —
@@ -143,44 +154,47 @@ class DispenseView(APIView):
         try:
             from decimal import Decimal
             from apps.billing.models import Invoice, InvoiceItem
-            from apps.billing.views import _recompute_invoice_totals
-            from apps.opd.views import _tenant_default_tax_rate
+            from apps.billing.services import recompute_invoice_totals, tenant_default_tax_rate
             from apps.patients.models import Patient
             from core.utils.nntm import get_next_number
 
-            rx = Prescription.objects.using(db).get(pk=prescription_id)
-            # Batch MRP wins (real price this batch was received at); fall
-            # back to unit_cost, then to the drug's catalog reference price
-            # (Drug.default_mrp) rather than silently billing ₹0 just
-            # because whoever received this particular batch left the price
-            # fields blank.
-            unit_price = (
-                stock.mrp if stock.mrp is not None
-                else stock.unit_cost if stock.unit_cost is not None
-                else getattr(stock.drug, "default_mrp", None) or Decimal("0")
-            )
-            tax_rate = _tenant_default_tax_rate(request.tenant_id)
-
-            if rx.invoice_id:
-                invoice = Invoice.objects.using(db).get(pk=rx.invoice_id)
-            else:
-                patient = Patient.objects.using(db).get(uuid=rx.patient_id)
-                invoice_number, _ = get_next_number(branch_id=patient.branch_id or 1, entity="invoice", using=db)
-                invoice = Invoice.objects.using(db).create(
-                    patient=patient, branch=patient.branch, invoice_number=invoice_number,
-                    status="draft", created_by_id=request.user.id,
-                    notes=f"Auto-generated for prescription {rx.rx_number or rx.id}",
+            # Its own savepoint: a failure half-way (invoice created, line item not) rolls the
+            # whole bill back rather than leaving an empty invoice behind. Still best-effort.
+            with transaction.atomic(using=db):
+                # Locked so two concurrent dispenses on one Rx can't each create its invoice.
+                rx = Prescription.objects.using(db).select_for_update().get(pk=prescription_id)
+                # Batch MRP wins (real price this batch was received at); fall
+                # back to unit_cost, then to the drug's catalog reference price
+                # (Drug.default_mrp) rather than silently billing ₹0 just
+                # because whoever received this particular batch left the price
+                # fields blank.
+                unit_price = (
+                    stock.mrp if stock.mrp is not None
+                    else stock.unit_cost if stock.unit_cost is not None
+                    else getattr(stock.drug, "default_mrp", None) or Decimal("0")
                 )
-                rx.invoice = invoice
-                rx.save(using=db, update_fields=["invoice"])
+                tax_rate = tenant_default_tax_rate(request.tenant_id)
 
-            InvoiceItem.objects.using(db).create(
-                invoice=invoice, description=item.drug_name, quantity=qty,
-                unit_price=unit_price, tax_rate=tax_rate, total=unit_price * qty,
-            )
-            _recompute_invoice_totals(invoice, db)
-            logger.info("Billed dispense: prescription=%s invoice=%s drug=%s qty=%s unit_price=%s",
-                        prescription_id, invoice.invoice_number, item.drug_name, qty, unit_price)
+                if rx.invoice_id:
+                    invoice = Invoice.objects.using(db).get(pk=rx.invoice_id)
+                else:
+                    patient = Patient.objects.using(db).get(uuid=rx.patient_id)
+                    invoice_number, _ = get_next_number(branch_id=patient.branch_id or 1, entity="invoice", using=db)
+                    invoice = Invoice.objects.using(db).create(
+                        patient=patient, branch=patient.branch, invoice_number=invoice_number,
+                        status="draft", created_by_id=request.user.id,
+                        notes=f"Auto-generated for prescription {rx.rx_number or rx.id}",
+                    )
+                    rx.invoice = invoice
+                    rx.save(using=db, update_fields=["invoice"])
+
+                InvoiceItem.objects.using(db).create(
+                    invoice=invoice, description=item.drug_name, quantity=qty,
+                    unit_price=unit_price, tax_rate=tax_rate, total=unit_price * qty,
+                )
+                recompute_invoice_totals(invoice, db)
+                logger.info("Billed dispense: prescription=%s invoice=%s drug=%s qty=%s unit_price=%s",
+                            prescription_id, invoice.invoice_number, item.drug_name, qty, unit_price)
         except Exception as e:
             logger.warning("Could not bill dispense for prescription %s: %s", prescription_id, e)
 
@@ -229,7 +243,7 @@ class PendingPrescriptionsView(APIView):
         # each per row. patient_id/doctor_user_id are UUIDs on Prescription
         # (patient_id mirrors Patient.uuid; doctor_user_id is the StaffUser
         # pk wrapped via uuid.UUID(int=staff_id) — see
-        # apps.opd.views._resolve_doctor_consultation_fee for the same
+        # apps.opd.services.resolve_doctor_consultation_fee for the same
         # unwrap trick applied there).
         patient_uuids = {p.patient_id for p in page_items}
         doctor_pks = {(d.int if hasattr(d, "int") else d) for d in {p.doctor_user_id for p in page_items}}

@@ -32,7 +32,7 @@ class DocumentViewView(APIView):
     GET /api/v1/view-report/<token>/
 
     Verifies the signed token (bare, or the "/view-report/<token>" shape a
-    generic scanner hands back unchanged), resolves the SharedDocument it
+    generic scanner hands back unchanged), resolves the MedicalDocument it
     points to, and returns a signed file URL. Any invalid/malformed/unknown
     token returns a patient-safe 400/404 — this is reachable by anyone with a
     camera, never a stack trace.
@@ -47,15 +47,16 @@ class DocumentViewView(APIView):
         if not v.ok or not v.awpid or not v.public_document_id:
             return error(message="This code is invalid.", status=400)
 
-        from apps.records.models import SharedDocument
+        from apps.records.models import MedicalDocument
 
         doc = (
-            SharedDocument.objects.using("default")
+            MedicalDocument.objects.using("default")
             .filter(
                 awpid=v.awpid,
                 public_document_id=v.public_document_id,
-                doc_type=v.doc_type,
+                classification__code=v.doc_type,
                 deleted_at__isnull=True,
+                hidden_at__isnull=True,
             )
             .order_by("-created_at")
             .first()
@@ -64,9 +65,9 @@ class DocumentViewView(APIView):
             return error(message="This document could not be found.", status=404)
 
         try:
-            file_url = blob_storage.signed_url(doc.s3_key, download_name=doc.file_name or None)
+            file_url = blob_storage.signed_url(doc.file_path, download_name=doc.file_name or None)
         except Exception:
-            logger.exception("view-report: signed_url failed for SharedDocument id=%s", doc.id)
+            logger.exception("view-report: signed_url failed for MedicalDocument id=%s", doc.id)
             return error(message="This document could not be opened right now. Please try again.", status=500)
 
         return success(data={

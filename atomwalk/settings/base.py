@@ -7,7 +7,6 @@ Architecture:
                     via TenantDatabaseRouter using thread-local context
 """
 
-import os
 from pathlib import Path
 from datetime import timedelta
 from decouple import config
@@ -87,7 +86,6 @@ DJANGO_APPS = [
 
 THIRD_PARTY_APPS = [
     "rest_framework",
-    "rest_framework_simplejwt",
     "corsheaders",
     "django_filters",
     "drf_spectacular",
@@ -122,6 +120,8 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 # ── Middleware ───────────────────────────────────────────────────────────────
 MIDDLEWARE = [
+    # First, so every log line (including the other middleware's) carries the request id.
+    "core.logging_context.RequestIdMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # Serves STATIC_ROOT directly from the app process (compressed +
@@ -249,6 +249,11 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 25,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Reshapes every DRF-raised error (PermissionDenied/AuthenticationFailed from
+    # core.authentication, throttling, serializer errors, 404s) into the same
+    # {success, message, errors} envelope core.response uses — without this they go out
+    # as DRF's bare {"detail": ...} and the frontend loses the message.
+    "EXCEPTION_HANDLER": "core.exceptions.custom_exception_handler",
     # No rate limiting existed anywhere (including login) before this. Global
     # defaults are a safety net; auth endpoints get a tighter "login" scope
     # via ScopedRateThrottle (see apps/auth_app/views.py).
@@ -292,20 +297,15 @@ REST_FRAMEWORK = {
 }
 
 # ── JWT ──────────────────────────────────────────────────────────────────────
-SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(
-        minutes=config("JWT_ACCESS_TOKEN_LIFETIME_MINUTES", default=60, cast=int)
-    ),
-    "REFRESH_TOKEN_LIFETIME": timedelta(
-        days=config("JWT_REFRESH_TOKEN_LIFETIME_DAYS", default=7, cast=int)
-    ),
-    "ROTATE_REFRESH_TOKENS": False,
-    "UPDATE_LAST_LOGIN": False,
-    "ALGORITHM": "HS256",
-    "SIGNING_KEY": JWT_SIGNING_KEY,
-    "AUTH_HEADER_TYPES": ("Bearer",),
-    # Atomwalk uses a custom JWT view (apps/auth_app/views.py) instead of SimpleJWT obtain
-}
+# Lifetimes of the access/refresh tokens issued by apps/auth_app/views.py::_make_tokens. (These
+# used to be a SIMPLE_JWT dict for a library that is not actually used, and _make_tokens ignored
+# them and hard-coded 60 minutes / 7 days — the defaults here are the same values.)
+JWT_ACCESS_TOKEN_LIFETIME = timedelta(
+    minutes=config("JWT_ACCESS_TOKEN_LIFETIME_MINUTES", default=60, cast=int)
+)
+JWT_REFRESH_TOKEN_LIFETIME = timedelta(
+    days=config("JWT_REFRESH_TOKEN_LIFETIME_DAYS", default=7, cast=int)
+)
 
 # ── CORS ─────────────────────────────────────────────────────────────────────
 from corsheaders.defaults import default_headers as _cors_default_headers
@@ -322,7 +322,7 @@ CORS_ALLOW_HEADERS = (*_cors_default_headers, "x-share-device")
 # ── API Docs (drf-spectacular) ───────────────────────────────────────────────
 SPECTACULAR_SETTINGS = {
     "TITLE": "Atomwalk Healthcare Platform API",
-    "DESCRIPTION": "Multi-tenant hospital management system — Phase 0 + 1",
+    "DESCRIPTION": "Multi-tenant hospital management system API",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
@@ -388,9 +388,6 @@ if DEBUG:
 else:
     OTP_HASH_PEPPER = config("OTP_HASH_PEPPER")
 
-# ── Platform Admin ───────────────────────────────────────────────────────────
-PLATFORM_ADMIN_SECRET = config("PLATFORM_ADMIN_SECRET", default="change-this")
-
 # ── My Reports document QR (core/qr_token.py) ────────────────────────────────
 # HMAC secret for the QR codes printed on prescriptions / lab reports.
 # RECOMMENDED to set a dedicated value in production: it can then be rotated
@@ -433,28 +430,6 @@ CONSULT_PAD_LLM_MODEL = config("CONSULT_PAD_LLM_MODEL", default="qwen/qwen3.8-27
 # Falls back to GROQ_API_KEY so an existing Groq key already in .env just works.
 CONSULT_PAD_LLM_KEY   = config("CONSULT_PAD_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
 
-# ── Records: document classification LLM (apps/records/services.py) ────────
-# Asked only when the keyword rules score a document under 75. Any
-# OpenAI-compatible endpoint; locally Ollama: BASE=http://localhost:11434/v1
-# MODEL=qwen2.5-coder:7b (no key needed).
-DOC_CLASSIFIER_LLM_BASE    = config("DOC_CLASSIFIER_LLM_BASE", default="http://localhost:11434/v1")
-DOC_CLASSIFIER_LLM_MODEL   = config("DOC_CLASSIFIER_LLM_MODEL", default="qwen2.5-coder:7b")
-DOC_CLASSIFIER_LLM_KEY     = config("DOC_CLASSIFIER_LLM_KEY", default="")
-DOC_CLASSIFIER_LLM_TIMEOUT = config("DOC_CLASSIFIER_LLM_TIMEOUT", default=180, cast=int)
-
-# apps/records/services.py::llm_complete() — both modes are Ollama (OpenAI-compatible
-# /chat/completions), so they share one implementation; only the server config below differs.
-# No fallback between the two: LLM_MODE must be exactly "local" or "production" (anything else is a
-# hard error — see llm_mode()), and a failure in the selected mode is an error, never a silent switch.
-#   local       DOC_CLASSIFIER_LLM_* above (this machine's Ollama) — also what llm_classify() uses.
-#   production  sir's GPU server (also Ollama).
-LLM_MODE = config("LLM_MODE", default="local")
-LLM_PRODUCTION_URL = config("LLM_PRODUCTION_URL", default="")
-LLM_PRODUCTION_MODEL = config("LLM_PRODUCTION_MODEL", default="qwen2.5-coder:7b")
-LLM_PRODUCTION_TOKEN = config("LLM_PRODUCTION_TOKEN", default="")
-LLM_PRODUCTION_TIMEOUT = config("LLM_PRODUCTION_TIMEOUT", default=300, cast=int)
-LLM_NUM_CTX = config("LLM_NUM_CTX", default=32768, cast=int)
-
 # All three sweep settings (instant-upload file limit, per-run dispatch limit, and how often the
 # sweep runs) are Platform Admin-editable at runtime — apps.records.models.SweepConfig, via
 # apps/platform_admin/classification_rule_views.py. No env vars, no restart, for any of them: the
@@ -467,6 +442,13 @@ LLM_NUM_CTX = config("LLM_NUM_CTX", default=32768, cast=int)
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
 CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cast=bool)
+# OCR calls are long-running: don't let a worker reserve a backlog of them while it is busy.
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+# Keep retrying the broker connection at worker start-up (Celery 5.3 only does so by default with a warning).
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+# Redis re-delivers an unacknowledged (acks_late) task after this long. Must exceed the longest task
+# time limit (apps/records/tasks.py: 420s) plus its retry countdowns.
+CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 3600}
 # Beat reads its schedule from the DB (django_celery_beat), not from a fixed dict here, so
 # SweepConfig can change the sweep interval live with no restart.
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"

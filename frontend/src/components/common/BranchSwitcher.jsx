@@ -9,7 +9,7 @@ export default function BranchSwitcher({ branches, activeBranchId, onChange, sty
   if (!branches || branches.length <= 1) return null;
   return (
     <select
-      value={activeBranchId}
+      value={activeBranchId ?? ""}
       onChange={e => onChange(e.target.value)}
       style={{
         padding: "6px 10px", borderRadius: 8, fontSize: 12.5, fontWeight: 600,

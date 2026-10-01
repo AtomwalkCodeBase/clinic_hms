@@ -16,7 +16,7 @@ from django.db import models
 from apps.org.models import StaffUser, Branch
 from apps.patients.models import Patient
 from apps.prescriptions.models import Drug
-from apps.opd.models import Prescription, PrescriptionItem
+from apps.opd.models import PrescriptionItem
 
 
 class Stock(models.Model):

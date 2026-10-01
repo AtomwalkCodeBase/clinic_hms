@@ -15,7 +15,7 @@ reliable way for a serializer to know which tenant DB to check against.
 from rest_framework import serializers
 
 from apps.billing.models import OptionList
-from apps.org.models import StaffUser, Department, Bed
+from apps.org.models import Department, Bed
 from apps.patients.models import Patient
 from .models import AdmissionReferral, Admission, AdmissionDeposit, PatientMovement
 

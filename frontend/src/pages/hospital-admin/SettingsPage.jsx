@@ -7,7 +7,7 @@ import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
-import apiClient     from "../../services/api.client";
+import { orgApi } from "../../api";
 import HospitalLogoUpload from "../../components/common/HospitalLogoUpload";
 import API_ENDPOINTS from "../../config/api.config";
 import { DropdownListEditor } from "../../components/hospital-admin/DropdownListEditor";
@@ -59,7 +59,7 @@ export default function SettingsPage() {
   const [savingFolder, setSavingFolder] = useState(false);
 
   useEffect(() => {
-    apiClient.get("/org/settings/")
+    orgApi.getSettings()
       .then(r => {
         const data = r.data?.data ?? r.data;
         setSettings(data);
@@ -71,7 +71,7 @@ export default function SettingsPage() {
   async function saveStorageFolder() {
     setSavingFolder(true);
     try {
-      const r = await apiClient.patch("/org/settings/", { storage_folder: folderInput.trim() });
+      const r = await orgApi.updateSettings({ storage_folder: folderInput.trim() });
       const data = r.data?.data ?? r.data;
       setSettings(data);
       setFolderInput(data?.storage_folder || "");
@@ -86,7 +86,7 @@ export default function SettingsPage() {
   async function saveFeeOwnership(newValue) {
     setSaving(true);
     try {
-      const r = await apiClient.patch("/org/settings/", { fee_ownership: newValue });
+      const r = await orgApi.updateSettings({ fee_ownership: newValue });
       setSettings(r.data?.data ?? r.data);
       toastSuccess("Fee configuration saved.");
     } catch (e) {

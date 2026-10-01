@@ -42,7 +42,6 @@ endpoint in this project works, so a few things are true by design:
 """
 
 import logging
-from datetime import date
 
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
@@ -56,7 +55,7 @@ from apps.registry.models import (
     SharedLabResult, SharedVaccination,
     EmergencyAccessLog,
 )
-from apps.records.models import SharedDocument
+from apps.records.models import MedicalDocument
 
 logger = logging.getLogger(__name__)
 
@@ -224,8 +223,8 @@ class EmergencySummaryView(APIView):
 
         doc_ids = [d["id"] for d in history["documents"]]
         doc_files = {
-            d.id: blob_storage.signed_url(d.s3_key)
-            for d in SharedDocument.objects.using("default").filter(id__in=doc_ids)
+            d.id: blob_storage.signed_url(d.file_path)
+            for d in MedicalDocument.objects.using("default").filter(id__in=doc_ids)
         }
         for d in history["documents"]:
             d["file_url"] = doc_files.get(d["id"], "")

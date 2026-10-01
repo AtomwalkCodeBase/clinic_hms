@@ -15,6 +15,7 @@ import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { usePatientContext } from "../../context/PatientContext";
 import { Calendar, Stethoscope, Syringe, Building2, CircleCheck } from "lucide-react";
+import { todayLocal, toLocalISODate } from "../../utils/dates";
 
 const TYPE_META = {
   appointment_reminder: { label: "Appointment", icon: Calendar,    color: "var(--color-primary)", bg: "var(--color-primary-light)" },
@@ -23,8 +24,8 @@ const TYPE_META = {
 };
 
 function relativeDate(dateStr) {
-  const today = new Date().toISOString().split("T")[0];
-  const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+  const today = todayLocal();
+  const yesterday = toLocalISODate(new Date(Date.now() - 86400000));
   if (dateStr === today) return "Today";
   if (dateStr === yesterday) return "Yesterday";
   try {

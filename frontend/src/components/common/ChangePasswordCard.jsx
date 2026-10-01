@@ -12,14 +12,10 @@ import { useState } from "react";
 import { useToast } from "../../hooks/useToast";
 import apiClient from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import { labelStyle, inputStyle } from "../../styles/formStyles";
 
-const inputStyle = {
-  width: "100%", boxSizing: "border-box",
-  border: "1.5px solid var(--color-border)", borderRadius: 8,
-  padding: "9px 12px", fontSize: 14,
-  background: "var(--color-surface)", color: "var(--color-text)", outline: "none",
-};
-const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 5 };
+
+
 
 export default function ChangePasswordCard() {
   const { toastSuccess, toastApiError } = useToast();

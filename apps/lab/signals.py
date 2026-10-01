@@ -12,10 +12,11 @@ from .models import LabReport
 logger = logging.getLogger(__name__)
 
 
-def _get_source_tenant_id():
+def _get_source_tenant_id(instance):
+    """Registry id of the hospital this LabReport belongs to (0 if it can't be resolved)."""
     try:
-        from core.db_router import _thread_local
-        return getattr(_thread_local, "tenant_id", 0) or 0
+        from apps.tenants.utils import resolve_source_tenant_id
+        return resolve_source_tenant_id(instance._state.db)
     except Exception:
         return 0
 
@@ -29,7 +30,7 @@ def on_report_delivered(sender, instance, **kwargs):
     try:
         SharedLabResult.objects.using("default").update_or_create(
             awpid=instance.patient.awpid,
-            source_tenant_id=_get_source_tenant_id(),
+            source_tenant_id=_get_source_tenant_id(instance),
             delivered_at=instance.delivered_at,
             defaults={
                 "test_name":      instance.request.test.name,
@@ -40,15 +41,15 @@ def on_report_delivered(sender, instance, **kwargs):
                 "mime_type":      instance.mime_type,
             },
         )
-    except Exception as exc:
-        logger.error("HIE SharedLabResult write failed for report=%s: %s", instance.id, exc)
+    except Exception:
+        logger.exception("HIE SharedLabResult write failed for report=%s", instance.id)
 
-    # Mirror into the My Reports document vault (SharedDocument) — same as
+    # Mirror into the My Reports document vault (MedicalDocument) — same as
     # prescriptions get on sign, so a delivered lab report shows in the
     # patient's My Reports alongside them. Best-effort; a failure here must
     # not roll back the deliver.
     try:
         from apps.lab.archive import store_lab_report_document
-        store_lab_report_document(instance, instance._state.db, _get_source_tenant_id())
-    except Exception as exc:
-        logger.error("My Reports vault mirror failed for report=%s: %s", instance.id, exc)
+        store_lab_report_document(instance, instance._state.db, _get_source_tenant_id(instance))
+    except Exception:
+        logger.exception("My Reports vault mirror failed for report=%s", instance.id)

@@ -17,23 +17,16 @@ import { PageShell } from "../../components/common/PageShell";
 import { useToast }  from "../../hooks/useToast";
 import { useAuth }   from "../../hooks/useAuth";
 import apiClient     from "../../services/api.client";
+import { orgApi } from "../../api";
 import API_ENDPOINTS from "../../config/api.config";
 import ProfilePhotoUpload from "../../components/common/ProfilePhotoUpload";
 import ChangePasswordCard from "../../components/common/ChangePasswordCard";
 import { formatAgeYM } from "../../utils/age";
+import { readOnlyStyle, labelStyle, inputStyle } from "../../styles/formStyles";
 
-const inputStyle = {
-  width: "100%", boxSizing: "border-box",
-  border: "1.5px solid var(--color-border)", borderRadius: 8,
-  padding: "9px 12px", fontSize: 14,
-  background: "var(--color-surface)", color: "var(--color-text)", outline: "none",
-};
-const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 5 };
-const readOnlyStyle = {
-  ...inputStyle,
-  background: "var(--color-surface-secondary, #f6f4ee)",
-  color: "var(--color-text-muted)",
-};
+
+
+
 
 // Same downscale approach as ProfilePhotoUpload — signatures don't need to
 // be huge either, and this keeps it well under the request body cap.
@@ -83,7 +76,7 @@ export default function DoctorMyProfilePage() {
     Promise.all([
       apiClient.get(API_ENDPOINTS.ORG.MY_DOCTOR_PROFILE),
       apiClient.get(API_ENDPOINTS.ORG.MY_PROFILE),
-      apiClient.get("/org/settings/").catch(() => ({ data: { data: { fee_ownership: "doctor" } } })),
+      orgApi.getSettings().catch(() => ({ data: { data: { fee_ownership: "doctor" } } })),
     ])
       .then(([profileRes, meRes, settingsRes]) => {
         if (profileRes.data?.data) {

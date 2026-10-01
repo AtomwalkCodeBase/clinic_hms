@@ -19,8 +19,7 @@ import base64
 import logging
 import re
 import threading
-import time
-from datetime import date, timedelta
+from datetime import timedelta
 
 from django.db import connections
 from django.utils import timezone

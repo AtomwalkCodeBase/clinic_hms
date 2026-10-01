@@ -12,10 +12,9 @@ Usage:
 """
 
 from django.core.management.base import BaseCommand
-from django.conf import settings
 
 from apps.tenants.models import Tenant
-from apps.tenants.utils import _make_db_config, run_tenant_migrations
+from apps.tenants.utils import ensure_tenant_db, run_tenant_migrations
 
 
 class Command(BaseCommand):
@@ -45,8 +44,7 @@ class Command(BaseCommand):
         for tenant in tenants:
             self.stdout.write(f"  Migrating: {tenant.name} ({tenant.db_name})")
             # Register in settings.DATABASES if not already there
-            if tenant.db_name not in settings.DATABASES:
-                settings.DATABASES[tenant.db_name] = _make_db_config(tenant.db_name)
+            ensure_tenant_db(tenant.db_name)
             try:
                 run_tenant_migrations(tenant.db_name)
                 self.stdout.write(self.style.SUCCESS(f"    ✓ {tenant.db_name} — done"))

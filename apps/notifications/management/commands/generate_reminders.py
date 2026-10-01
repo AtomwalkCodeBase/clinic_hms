@@ -23,10 +23,9 @@ Usage:
 """
 
 from django.core.management.base import BaseCommand
-from django.conf import settings
 
 from apps.tenants.models import Tenant
-from apps.tenants.utils import _make_db_config
+from apps.tenants.utils import ensure_tenant_db
 from apps.notifications.services import run_for_tenant
 
 
@@ -56,8 +55,7 @@ class Command(BaseCommand):
 
         total_appt, total_followup = 0, 0
         for tenant in tenants:
-            if tenant.db_name not in settings.DATABASES:
-                settings.DATABASES[tenant.db_name] = _make_db_config(tenant.db_name)
+            ensure_tenant_db(tenant.db_name)
             try:
                 counts = run_for_tenant(tenant.db_name)
                 total_appt += counts["appointment_reminders"]

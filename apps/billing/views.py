@@ -4,10 +4,11 @@ from datetime import timedelta
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
+from django.db import transaction
 from django.db.models import Sum
 
 from core.response import success, created, error, not_found
-from core.permissions import IsHospitalStaff, IsFrontDesk, IsHospitalAdmin
+from core.permissions import IsHospitalStaff, IsHospitalAdmin
 from core.pagination import paginate_queryset
 from core.utils.nntm import get_next_number
 from .serializers import (
@@ -15,22 +16,11 @@ from .serializers import (
     ServiceCategorySerializer, PaymentModeOptionSerializer, InvoiceStatusOptionSerializer,
     RoomTypeOptionSerializer,
 )
+from .option_list_views import DropdownListCreateView, DropdownDetailView
+from .services import recompute_invoice_totals
 from .models import (
     Invoice, InvoiceItem, Payment, BillingService, OptionList,
 )
-
-
-def _recompute_invoice_totals(invoice, db):
-    """Subtotal/tax/total are derived from line items — never set directly."""
-    items = InvoiceItem.objects.using(db).filter(invoice=invoice)
-    subtotal = sum((i.unit_price * i.quantity for i in items), Decimal("0"))
-    tax_amount = sum(
-        ((i.unit_price * i.quantity) * (i.tax_rate / Decimal("100")) for i in items), Decimal("0")
-    )
-    invoice.subtotal = subtotal
-    invoice.tax_amount = tax_amount
-    invoice.total_amount = subtotal + tax_amount - invoice.discount_amount
-    invoice.save(using=db, update_fields=["subtotal", "tax_amount", "total_amount"])
 
 
 class BillingServiceListView(APIView):
@@ -93,112 +83,7 @@ class BillingServiceDetailView(APIView):
         return success(message="Service deactivated.")
 
 
-# ── Configurable dropdown lists ──────────────────────────────────────────────
-# Replace what used to be hardcoded `choices=` lists on BillingService.category,
-# Payment.payment_mode, and Invoice.status — plus apps.prescriptions.DrugFormType
-# for drug forms. v7: these four used to be four near-identical tables; now
-# they're one OptionList table with a list_type discriminator, so the CRUD
-# logic lives once in these base classes — each subclass just points at its
-# own list_type/serializer.
-
-class _DropdownListCreateView(APIView):
-    list_type = None
-    serializer_class = None
-    identity_field = "label"  # request JSON key that must be unique / can't change on a system row
-    model_field = "label"     # the OptionList column identity_field actually maps to
-
-    def get_permissions(self):
-        if self.request.method == "GET":
-            return [IsAuthenticated(), IsHospitalStaff()]
-        return [IsAuthenticated(), IsHospitalAdmin()]
-
-    def get(self, request):
-        qs = OptionList.objects.using(request.tenant_db).filter(list_type=self.list_type)
-        # ?all=1 — used by the hospital-admin Billing Setup screen so it can
-        # render a toggle for entries that are currently switched off (the
-        # normal is_active=True filter below is what every other caller,
-        # e.g. the front-desk "record a payment" dropdown, should keep
-        # seeing — an admin-only escape hatch, not a behavior change).
-        if request.query_params.get("all") == "1":
-            from core.permissions import IsHospitalAdmin as _IsHospitalAdmin
-            if not _IsHospitalAdmin().has_permission(request, self):
-                return error("Only hospital admins can view inactive entries.", status=403)
-        else:
-            qs = qs.filter(is_active=True)
-        return success(data=self.serializer_class(qs, many=True).data)
-
-    def post(self, request):
-        s = self.serializer_class(data=request.data)
-        if not s.is_valid():
-            return error("Validation error.", errors=s.errors)
-        data = dict(s.validated_data)
-        # For the three list types with no distinct "value" concept
-        # (service_category, payment_mode, drug_form), value mirrors label —
-        # only invoice_status's serializer supplies "value" explicitly.
-        if "value" not in data:
-            data["value"] = data.get("label", "")
-        lookup = {self.model_field: data.get(self.model_field), "list_type": self.list_type}
-        if OptionList.objects.using(request.tenant_db).filter(**lookup).exists():
-            return error("This value already exists.", errors={self.identity_field: "Already in use."})
-        obj = OptionList(is_system=False, list_type=self.list_type, **data)
-        obj.save(using=request.tenant_db)
-        return created(data=self.serializer_class(obj).data, message="Added.")
-
-
-class _DropdownDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsHospitalAdmin]
-    list_type = None
-    serializer_class = None
-    identity_field = "label"
-    model_field = "label"
-    # InvoiceStatusOption's system rows have real backend logic tied to
-    # their stored value (see PaymentCreateView / InvoiceItemCreateView) —
-    # deactivating "paid", say, would break invoice state transitions, so
-    # those stay locked. PaymentModeOption has no such coupling (a payment
-    # mode is just a label a staff member picks), so it opts back in below —
-    # a hospital genuinely may not want to offer "Credit" or "Online".
-    system_can_deactivate = False
-
-    def _get(self, request, pk):
-        try:
-            return OptionList.objects.using(request.tenant_db).get(pk=pk, list_type=self.list_type)
-        except OptionList.DoesNotExist:
-            return None
-
-    def patch(self, request, pk):
-        obj = self._get(request, pk)
-        if not obj:
-            return not_found("Not found.")
-        if obj.is_system and self.identity_field in request.data \
-                and request.data[self.identity_field] != getattr(obj, self.model_field):
-            return error(f"This is a system value — its {self.identity_field} can't be changed, only its label/active state.")
-        if obj.is_system and request.data.get("is_active") is False and not self.system_can_deactivate:
-            return error("System values can't be deactivated — the backend relies on them.")
-        s = self.serializer_class(obj, data=request.data, partial=True)
-        if not s.is_valid():
-            return error("Validation error.", errors=s.errors)
-        for attr, val in s.validated_data.items():
-            setattr(obj, attr, val)
-        # Keep value in sync with label for the three list types that have
-        # no independent "value" concept — only invoice_status's value and
-        # label are allowed to diverge (and its value is separately locked
-        # above via the is_system check when model_field == "value").
-        if self.model_field == "label" and "label" in s.validated_data:
-            obj.value = s.validated_data["label"]
-        obj.save(using=request.tenant_db)
-        return success(data=self.serializer_class(obj).data, message="Updated.")
-
-    def delete(self, request, pk):
-        obj = self._get(request, pk)
-        if not obj:
-            return not_found("Not found.")
-        if obj.is_system:
-            return error("System values can't be removed — deactivate a custom one you added instead.")
-        obj.delete(using=request.tenant_db)
-        return success(message="Removed.")
-
-
-class ServiceCategoryListCreateView(_DropdownListCreateView):
+class ServiceCategoryListCreateView(DropdownListCreateView):
     """GET/POST /api/v1/billing/service-categories/"""
     list_type = OptionList.LIST_SERVICE_CATEGORY
     serializer_class = ServiceCategorySerializer
@@ -206,7 +91,7 @@ class ServiceCategoryListCreateView(_DropdownListCreateView):
     model_field = "label"
 
 
-class ServiceCategoryDetailView(_DropdownDetailView):
+class ServiceCategoryDetailView(DropdownDetailView):
     """PATCH/DELETE /api/v1/billing/service-categories/{id}/"""
     list_type = OptionList.LIST_SERVICE_CATEGORY
     serializer_class = ServiceCategorySerializer
@@ -214,7 +99,7 @@ class ServiceCategoryDetailView(_DropdownDetailView):
     model_field = "label"
 
 
-class PaymentModeListCreateView(_DropdownListCreateView):
+class PaymentModeListCreateView(DropdownListCreateView):
     """GET/POST /api/v1/billing/payment-modes/"""
     list_type = OptionList.LIST_PAYMENT_MODE
     serializer_class = PaymentModeOptionSerializer
@@ -222,7 +107,7 @@ class PaymentModeListCreateView(_DropdownListCreateView):
     model_field = "label"
 
 
-class PaymentModeDetailView(_DropdownDetailView):
+class PaymentModeDetailView(DropdownDetailView):
     """PATCH/DELETE /api/v1/billing/payment-modes/{id}/"""
     list_type = OptionList.LIST_PAYMENT_MODE
     serializer_class = PaymentModeOptionSerializer
@@ -230,11 +115,11 @@ class PaymentModeDetailView(_DropdownDetailView):
     model_field = "label"
     # A hospital can genuinely not want to offer e.g. "Credit" or "Online" —
     # unlike InvoiceStatusOption, no backend logic depends on any specific
-    # PaymentModeOption row staying active. See _DropdownDetailView docstring.
+    # PaymentModeOption row staying active. See DropdownDetailView docstring.
     system_can_deactivate = True
 
 
-class InvoiceStatusListCreateView(_DropdownListCreateView):
+class InvoiceStatusListCreateView(DropdownListCreateView):
     """GET/POST /api/v1/billing/invoice-statuses/"""
     list_type = OptionList.LIST_INVOICE_STATUS
     serializer_class = InvoiceStatusOptionSerializer
@@ -242,7 +127,7 @@ class InvoiceStatusListCreateView(_DropdownListCreateView):
     model_field = "value"
 
 
-class InvoiceStatusDetailView(_DropdownDetailView):
+class InvoiceStatusDetailView(DropdownDetailView):
     """PATCH/DELETE /api/v1/billing/invoice-statuses/{id}/"""
     list_type = OptionList.LIST_INVOICE_STATUS
     serializer_class = InvoiceStatusOptionSerializer
@@ -250,7 +135,7 @@ class InvoiceStatusDetailView(_DropdownDetailView):
     model_field = "value"
 
 
-class RoomTypeListCreateView(_DropdownListCreateView):
+class RoomTypeListCreateView(DropdownListCreateView):
     """GET/POST /api/v1/billing/room-types/"""
     list_type = OptionList.LIST_ROOM_TYPE
     serializer_class = RoomTypeOptionSerializer
@@ -258,7 +143,7 @@ class RoomTypeListCreateView(_DropdownListCreateView):
     model_field = "value"
 
 
-class RoomTypeDetailView(_DropdownDetailView):
+class RoomTypeDetailView(DropdownDetailView):
     """PATCH/DELETE /api/v1/billing/room-types/{id}/"""
     list_type = OptionList.LIST_ROOM_TYPE
     serializer_class = RoomTypeOptionSerializer
@@ -363,7 +248,7 @@ class InvoiceListCreateView(APIView):
                 total=Decimal(str(item.get("unit_price", 0))) * int(item.get("quantity", 1)),
             )
         if request.data.get("items"):
-            _recompute_invoice_totals(inv, db)
+            recompute_invoice_totals(inv, db)
             inv.refresh_from_db(using=db)
 
         return created(data=InvoiceSerializer(inv).data)
@@ -398,7 +283,7 @@ class InvoiceDetailView(APIView):
         if "discount_amount" in request.data:
             inv.discount_amount = Decimal(str(request.data["discount_amount"]))
             inv.save(using=db, update_fields=["discount_amount"])
-            _recompute_invoice_totals(inv, db)
+            recompute_invoice_totals(inv, db)
             inv.refresh_from_db(using=db)
 
         if "notes" in request.data:
@@ -489,7 +374,7 @@ class InvoiceItemCreateView(APIView):
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         d = s.validated_data
-        item = InvoiceItem.objects.using(db).create(
+        InvoiceItem.objects.using(db).create(
             invoice=inv,
             service=d.get("service"),
             description=d["description"],
@@ -498,7 +383,7 @@ class InvoiceItemCreateView(APIView):
             tax_rate=d.get("tax_rate", 0),
             total=d["unit_price"] * d.get("quantity", 1),
         )
-        _recompute_invoice_totals(inv, db)
+        recompute_invoice_totals(inv, db)
         return created(data=InvoiceSerializer(inv.__class__.objects.using(db).get(pk=inv.pk)).data,
                        message="Item added.")
 
@@ -569,14 +454,18 @@ class PaymentCreateView(APIView):
         s = PaymentSerializer(data=request.data)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
-        payment = Payment.objects.using(request.tenant_db).create(
-            recorded_by=request.user, **s.validated_data
-        )
-        # Update invoice paid_amount
-        inv = payment.invoice
-        inv.paid_amount += payment.amount
-        inv.status = "paid" if inv.paid_amount >= inv.total_amount else "partially_paid"
-        inv.save(using=request.tenant_db, update_fields=["paid_amount", "status"])
+        db = request.tenant_db
+        # Payment + the invoice's running total in one transaction, with the invoice row
+        # locked: two payments posted at once used to both read the same paid_amount and one
+        # of them was lost.
+        with transaction.atomic(using=db):
+            payment = Payment.objects.using(db).create(
+                recorded_by_id=request.user.id, **s.validated_data
+            )
+            inv = Invoice.objects.using(db).select_for_update().get(pk=payment.invoice_id)
+            inv.paid_amount += payment.amount
+            inv.status = "paid" if inv.paid_amount >= inv.total_amount else "partially_paid"
+            inv.save(using=db, update_fields=["paid_amount", "status"])
         return created(data=PaymentSerializer(payment).data)
 
 

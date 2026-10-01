@@ -37,6 +37,10 @@ class MockUser:
         self.id          = payload.get("user_id")
         self.pk          = self.id  # DRF's throttle classes read .pk, not .id
         self.email       = payload.get("email", "")
+        # Login tokens carry the display name; several views record it as "who did this"
+        # (getattr(request.user, "full_name", None) or email) — without this attribute
+        # that always fell through to the email address.
+        self.full_name   = payload.get("full_name", "")
         self.role        = payload.get("role", "")
         # Which system-role identities this user should be treated as for
         # every Is*/doctor-listing check — [] for the 6 system roles (they

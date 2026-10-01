@@ -14,8 +14,8 @@ Flow, the same for every purpose:
                        success returns a short-lived signed JWT ("action
                        token") — NOT the raw ability to reset a password or
                        create an account directly. This mirrors the
-                       existing _make_invite_token pattern in
-                       apps.auth_app.views (staff invite → setup-password)
+                       signed-JWT "token_type" convention of the
+                       staff setup-password token (apps.auth_app.views)
                        rather than inventing a second convention.
   3. decode_action_token() — the next-step endpoint (reset-password,
                        complete-registration, patient-otp-login, confirm

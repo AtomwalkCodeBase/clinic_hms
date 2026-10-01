@@ -16,25 +16,18 @@ import { PageShell } from "../../components/common/PageShell";
 import { useApi }    from "../../hooks/useApi";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
+import { billingApi } from "../../api";
 import API_ENDPOINTS from "../../config/api.config";
 import { openDataUrlInNewTab } from "../../utils/fileViewer";
+import { inputStyle } from "../../styles/formStyles";
+import { INVOICE_STATUS_BADGE as INVOICE_BADGE } from "../../constants/badges";
+import { todayLocal } from "../../utils/dates";
 
-const TODAY = new Date().toISOString().split("T")[0];
+const TODAY = todayLocal();
 
-const INVOICE_BADGE = {
-  draft:          "badge--neutral",
-  issued:         "badge--primary",
-  paid:           "badge--success",
-  partially_paid: "badge--warning",
-  cancelled:      "badge--error",
-};
 
-const inputStyle = {
-  width: "100%", boxSizing: "border-box",
-  border: "1.5px solid var(--color-border)", borderRadius: 8,
-  padding: "9px 12px", fontSize: 14,
-  background: "var(--color-surface)", color: "var(--color-text)", outline: "none",
-};
+
+
 const labelStyle = { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 5 };
 
 function PatientBalanceSummary({ appointmentId }) {
@@ -227,7 +220,7 @@ function PaymentModal({ invoice, onClose, onRecorded }) {
     e.preventDefault();
     setSaving(true);
     try {
-      await apiClient.post(API_ENDPOINTS.BILLING.PAYMENTS, {
+      await billingApi.recordPayment({
         invoice: invoice.id,
         amount: Number(amount),
         payment_mode: mode,

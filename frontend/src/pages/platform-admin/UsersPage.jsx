@@ -12,11 +12,9 @@ import { PageShell } from "../../components/common/PageShell";
 import apiClient     from "../../services/api.client";
 import { useToast }  from "../../hooks/useToast";
 import API_ENDPOINTS from "../../config/api.config";
+import { STAFF_ROLE_LABELS as ROLE_LABELS } from "../../constants/labels";
 
-const ROLE_LABELS = {
-  hospital_admin: "Hospital Admin", doctor: "Doctor", nurse: "Nurse",
-  front_desk: "Front Desk", lab_tech: "Lab Technician", pharmacist: "Pharmacist",
-};
+
 const ROLES = Object.keys(ROLE_LABELS);
 
 export default function UsersPage() {
@@ -55,7 +53,7 @@ export default function UsersPage() {
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [api, search, roleFilter, statusFilter, hospitalFilter]);
 
   useEffect(() => {

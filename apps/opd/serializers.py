@@ -1,4 +1,3 @@
-from datetime import date as _date
 from rest_framework import serializers
 from apps.patients.age_utils import age_years_months as _age_years_months
 from apps.billing.models import OptionList

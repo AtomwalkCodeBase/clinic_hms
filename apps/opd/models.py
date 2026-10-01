@@ -38,7 +38,7 @@ class Appointment(models.Model):
     # serializer layer (AppointmentCreateSerializer), not here. The three
     # constants below stay as plain Python string literals — backend logic
     # branches on TYPE_FOLLOWUP specifically (see views.py's
-    # _resolve_doctor_consultation_fee) — so they're still seeded as
+    # resolve_doctor_consultation_fee) — so they're still seeded as
     # is_system=True defaults (see apps/opd/migrations/0002_seed_appointment_types.py)
     # a hospital can add more (e.g. "teleconsult") alongside, never rename/
     # remove these three.

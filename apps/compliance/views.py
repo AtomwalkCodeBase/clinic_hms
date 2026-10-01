@@ -193,10 +193,8 @@ class PortalRecordAmendmentView(APIView):
         for tenant in Tenant.objects.using("default").filter(is_active=True):
             db = tenant.db_name
             try:
-                from apps.tenants.utils import _make_db_config
-                from django.conf import settings
-                if db not in settings.DATABASES:
-                    settings.DATABASES[db] = _make_db_config(db)
+                from apps.tenants.utils import ensure_tenant_db
+                ensure_tenant_db(db)
 
                 patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
                 if not patient:
@@ -216,10 +214,9 @@ class PortalRecordAmendmentView(APIView):
 
     def post(self, request):
         from apps.tenants.models import Tenant
-        from apps.tenants.utils import _make_db_config
+        from apps.tenants.utils import ensure_tenant_db
         from apps.patients.models import Patient
         from apps.registry.models import PatientAccount, PatientRelationship
-        from django.conf import settings
 
         d = request.data
         tenant_id = d.get("tenant_id")
@@ -241,8 +238,7 @@ class PortalRecordAmendmentView(APIView):
                 return error("That patient isn't linked to your account.", status=403)
 
         db = tenant.db_name
-        if db not in settings.DATABASES:
-            settings.DATABASES[db] = _make_db_config(db)
+        ensure_tenant_db(db)
 
         patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
         if not patient:

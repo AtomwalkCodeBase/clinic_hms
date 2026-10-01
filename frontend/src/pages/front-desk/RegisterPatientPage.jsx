@@ -414,7 +414,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
 
     setLoading(true);
     try {
-      const { data: envelope } = await apiClient.post("/api/v1/patients/register/", form);
+      const { data: envelope } = await apiClient.post(API_ENDPOINTS.PATIENTS.REGISTER, form);
       const patient = envelope?.data;
 
       // Optional Birth History — only when there's actually something to

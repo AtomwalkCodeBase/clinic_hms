@@ -13,15 +13,13 @@ All views require IsAuthenticated + IsHospitalAdmin unless noted.
 IsHospitalStaff allows read-only access where indicated.
 """
 
-import jwt
 import re
 import secrets
 import string
 import logging
-from datetime import timedelta, datetime
+from datetime import datetime
 from decimal import Decimal
 
-from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework.views import APIView
@@ -36,57 +34,12 @@ from core.file_validation import validate_data_uri, FileValidationError
 from core import storage as blob_storage
 from apps.registry.models import StaffMobileIndex
 
-from .models import Branch, Department, StaffUser, DoctorProfile, StaffProfile, Role, Permission, UserRole, Floor, Room, RoomAssignment, Bed, DoctorSchedule, DoctorAvailabilitySlot
+from .models import Branch, Department, StaffUser, DoctorProfile, StaffProfile, Role, Permission, UserRole, Floor, Room, RoomAssignment, Bed, DoctorSchedule
 
 logger = logging.getLogger(__name__)
 
 
-# NNTM entity config: (entity_key, prefix, pad_length)
-_NNTM_ENTITIES = [
-    ("uhid",         "UHID-", 6),
-    ("invoice",      "INV-",  6),
-    ("lab_report",   "LAB-",  6),
-    ("lab_test",     "LT-",   4),
-    ("lab_request",  "LR-",   6),
-    ("prescription", "RX-",   6),
-    ("queue",        "Q-",    4),
-]
-
-
-def _seed_next_numbers(branch_id: int, db_name: str) -> None:
-    """Create NNTM counter rows for a new branch (idempotent — skips if already exist)."""
-    from apps.org.models import NextNumber
-    for entity, prefix, pad in _NNTM_ENTITIES:
-        NextNumber.objects.using(db_name).get_or_create(
-            branch_id=branch_id,
-            entity=entity,
-            defaults={"prefix": prefix, "pad_length": pad, "last_number": 0},
-        )
-
-
-def _next_employee_id(db_name: str) -> str:
-    """
-    Auto-generate the next Employee ID via NNTM — see core/utils/nntm.py and
-    docs/onboarding_auth_rbac_architecture.md 3.1.2. Unlike UHID/invoice/etc,
-    Employee ID is a hospital-WIDE sequence (a staff member isn't tied to one
-    branch the way a UHID is), so it uses the sentinel branch_id=0 rather
-    than being seeded per-branch in _seed_next_numbers above. Lazily
-    get_or_create's its counter row on first use so this self-heals for
-    tenants provisioned before this feature existed, with no migration or
-    provisioning-script change required.
-
-    Never manually editable — see StaffInviteSerializer / StaffDetailView.
-    """
-    from apps.org.models import NextNumber
-    from core.utils.nntm import get_next_number
-
-    NextNumber.objects.using(db_name).get_or_create(
-        branch_id=0, entity="employee_id",
-        defaults={"prefix": "EMP-", "pad_length": 6, "last_number": 0},
-    )
-    formatted_id, _ = get_next_number(0, "employee_id", using=db_name)
-    return formatted_id
-
+from .services import seed_next_numbers, next_employee_id
 
 from .serializers import (
     BranchSerializer,
@@ -165,21 +118,6 @@ def _send_new_account_email(staff, temp_password):
     )
 
 
-def _make_invite_token(staff_id: int, tenant_db: str) -> str:
-    """
-    Generate a signed invite token for the setup-password flow.
-    Valid for 48 hours. Accepted only by /api/v1/auth/setup-password/.
-    """
-    payload = {
-        "staff_id":   staff_id,
-        "tenant_db":  tenant_db,
-        "token_type": "invite",
-        "exp":        timezone.now() + timedelta(hours=48),
-        "jti":        secrets.token_hex(8),
-    }
-    return jwt.encode(payload, settings.JWT_SIGNING_KEY, algorithm="HS256")
-
-
 # ── Branches ──────────────────────────────────────────────────────────────────
 
 class BranchListCreateView(APIView):
@@ -216,7 +154,7 @@ class BranchListCreateView(APIView):
         branch.save(using=request.tenant_db)
 
         # Seed NNTM rows so UHID / invoice / lab / Rx / queue numbers work immediately
-        _seed_next_numbers(branch.id, request.tenant_db)
+        seed_next_numbers(branch.id, request.tenant_db)
 
         return created(data=BranchSerializer(branch).data, message="Branch created.")
 
@@ -441,11 +379,11 @@ class StaffInviteView(APIView):
             existing.custom_role          = custom_role_obj
             existing.email                = d.get("email") or existing.email
             # Employee ID is auto-generated via NNTM, never typed in — see
-            # _next_employee_id. Someone predating this feature (or created
+            # next_employee_id. Someone predating this feature (or created
             # before it) may not have one yet; assign it now rather than
             # leaving it permanently blank. Once set it never changes.
             if not existing.employee_id:
-                existing.employee_id = _next_employee_id(request.tenant_db)
+                existing.employee_id = next_employee_id(request.tenant_db)
             existing.must_change_password = True
             existing.set_password(temp_password)
             existing.save(using=request.tenant_db)
@@ -497,7 +435,7 @@ class StaffInviteView(APIView):
         staff = StaffUser(
             phone=d["phone"],
             email=d.get("email") or None,
-            employee_id=_next_employee_id(request.tenant_db),
+            employee_id=next_employee_id(request.tenant_db),
             first_name=d["first_name"],
             last_name=d.get("last_name", ""),
             role=d["role"],
@@ -711,7 +649,7 @@ class StaffDetailView(APIView):
         # how UHID/invoice numbers work). Assign one now if this record
         # predates the feature and somehow still doesn't have one.
         if not staff.employee_id:
-            staff.employee_id = _next_employee_id(request.tenant_db)
+            staff.employee_id = next_employee_id(request.tenant_db)
 
         allowed = ["first_name", "last_name", "role", "phone", "date_of_birth", "branch_id", "department_id"]
         for field in allowed:
@@ -1520,7 +1458,11 @@ class TenantSettingsView(APIView):
     Currently exposes fee_ownership.  Add other per-tenant knobs here rather
     than scattering them across unrelated endpoints.
     """
-    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+    def get_permissions(self):
+        # Any staff role may read (the doctor profile needs fee_ownership);
+        # only admins see the full config or may change it.
+        perm = IsHospitalStaff if self.request.method == "GET" else IsHospitalAdmin
+        return [IsAuthenticated(), perm()]
 
     def _get_tenant(self, request):
         from apps.tenants.models import Tenant as _Tenant
@@ -1533,6 +1475,8 @@ class TenantSettingsView(APIView):
         tenant = self._get_tenant(request)
         if not tenant:
             return not_found("Tenant not found.")
+        if not IsHospitalAdmin().has_permission(request, self):
+            return success(data={"fee_ownership": tenant.fee_ownership})
         return success(data={
             "fee_ownership": tenant.fee_ownership,
             # Read-only here — staff need this to log in with Employee ID

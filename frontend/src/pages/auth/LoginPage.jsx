@@ -22,6 +22,8 @@ import { getThemeById } from "../../config/themes.config";
 import { deriveThemeVars } from "../../utils/theme";
 import AutofillDecoy from "../../components/auth/AutofillDecoy";
 import PatientRegisterFlow from "../../components/auth/PatientRegisterFlow";
+import { authBareInput as bareInput } from "../../styles/formStyles";
+import { IconEyeOff, IconEye, IconLock } from "../../components/auth/authIcons";
 
 // The login screen is shared brand identity, shown before any user is
 // signed in — it must always render in "Emerald Glass", never whatever
@@ -38,14 +40,7 @@ const TABS = [
   { key: "patient",  label: "Patient" },
 ];
 
-// Small inline icons (no extra dependency) ----------------------------------
-const IconLock = (props) => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-    <rect x="4" y="11" width="16" height="10" rx="2" />
-    <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-  </svg>
-);
+
 const IconUser = (props) => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
     strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
@@ -59,20 +54,8 @@ const IconBadge = (props) => (
     <path d="M12 2 3 6v6c0 5 4 8.5 9 10 5-1.5 9-5 9-10V6l-9-4Z" />
   </svg>
 );
-const IconEye = (props) => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z" />
-    <circle cx="12" cy="12" r="3" />
-  </svg>
-);
-const IconEyeOff = (props) => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-    <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-3.16 4.19M6.5 6.61C3.9 8.36 1 12 1 12s4 8 11 8a9.4 9.4 0 0 0 4.24-1M14.12 14.12A3 3 0 1 1 9.88 9.88" />
-    <path d="M1 1l22 22" />
-  </svg>
-);
+
+
 const IconPhone = (props) => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
     strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
@@ -97,19 +80,7 @@ const fieldWrap = (hasError) => ({
   transition: "border-color 160ms ease, box-shadow 160ms ease, background 160ms ease",
 });
 
-// Same reasoning as fieldWrap above — must live at module scope so
-// PasswordField (also module-scope) can see it, and so it isn't recreated
-// (and inputs remounted) on every LoginPage render.
-const bareInput = {
-  outline: "none",
-  border: "none",
-  background: "transparent",
-  padding: "11px 0",
-  fontSize: 14,
-  width: "100%",
-  color: "var(--color-text)",
-  fontFamily: "inherit",
-};
+
 
 function Field({ icon: Icon, error, children }) {
   return (

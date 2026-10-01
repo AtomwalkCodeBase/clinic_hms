@@ -19,6 +19,7 @@ import { PageShell } from "../../components/common/PageShell";
 import { useApi }    from "../../hooks/useApi";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
+import { pharmacyApi } from "../../api";
 import API_ENDPOINTS from "../../config/api.config";
 import PaginationControls from "../../components/common/PaginationControls";
 
@@ -39,7 +40,7 @@ function DispenseModal({ item, rx, stock, onClose, onDone }) {
     if (!stockId || !qty) return;
     setSaving(true);
     try {
-      await apiClient.post(API_ENDPOINTS.PHARMACY.DISPENSE, {
+      await pharmacyApi.dispense({
         prescription_item: item.id, stock: Number(stockId), quantity: parseInt(qty, 10),
       });
       toastSuccess("Dispensed.");

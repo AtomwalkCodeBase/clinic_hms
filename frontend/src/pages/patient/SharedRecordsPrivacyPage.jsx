@@ -30,27 +30,19 @@ import { PageShell } from "../../components/common/PageShell";
 import { useToast } from "../../hooks/useToast";
 import apiClient from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import { TEST_CATEGORY_LABELS as CATEGORY_LABELS } from "../../constants/labels";
 
 const body = (res) => res?.data?.data ?? res?.data ?? {};
 
-const KIND_LABEL = {
-  lab_report: "Lab reports", prescription: "Prescriptions",
-  scan: "Imaging", discharge_summary: "Discharge summaries", other: "Documents",
-};
-const KIND_ORDER = ["lab_report", "prescription", "scan", "discharge_summary", "other"];
-const KIND_ICON = { lab_report: FlaskConical, prescription: Pill, scan: ImageIcon, discharge_summary: FileText, other: FileText };
+// A type is whatever Platform Admin configured ("x_ray_report" → "X ray report"); "" = no type fit the document.
+const kindLabel = (k) => (k ? (k.charAt(0).toUpperCase() + k.slice(1)).replace(/_/g, " ") : "Unable to classify");
+const KIND_ICON = { lab_report: FlaskConical, prescription: Pill, scan: ImageIcon };
 
-const CATEGORY_LABELS = {
-  cbc: "Complete Blood Count", lipid: "Lipid Profile", lft: "Liver Function Test",
-  kft: "Kidney Function Test", thyroid: "Thyroid Profile", diabetes: "Blood Sugar & HbA1c",
-  urine: "Urine Routine", electrolytes: "Serum Electrolytes", vitamin: "Vitamin & Mineral",
-  inflammation: "Inflammatory Markers", cardiac: "Cardiac Markers", coagulation: "Coagulation Profile",
-  hormone: "Hormone Panel", infection: "Infection Serology", culture: "Culture & Sensitivity",
-};
+
 const catLabel = (s) => CATEGORY_LABELS[s] || s;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const dOf = (d) => d.document_date || d.created_at || "";
+const dOf = (d) => d.created_at || "";
 const monthLabel = (k) => { const [y, m] = k.split("-"); return `${MONTHS[(+m) - 1]} ${y}`; };
 const fmtDate = (iso) => { if (!iso) return "—"; const dt = new Date(iso); return `${String(dt.getDate()).padStart(2, "0")} ${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`; };
 
@@ -59,11 +51,11 @@ const fmtDate = (iso) => { if (!iso) return "—"; const dt = new Date(iso); ret
 function bucketOf(d) {
   const cats = (d.report_categories || []).filter((c) => CATEGORY_LABELS[c]);
   if (cats.length) return { key: `c:${cats[0]}`, label: catLabel(cats[0]) };
-  return { key: `k:${d.doc_type}`, label: KIND_LABEL[d.doc_type] || "Documents" };
+  return { key: `k:${d.doc_type}`, label: kindLabel(d.doc_type) };
 }
 const bucketRank = (key) => {
   if (key.startsWith("c:")) return Object.keys(CATEGORY_LABELS).indexOf(key.slice(2));
-  return 100 + KIND_ORDER.indexOf(key.slice(2));
+  return 100;
 };
 
 // ── a tiny confirm / choice dialog ──────────────────────────────────────────
@@ -251,7 +243,7 @@ export default function SharedRecordsPrivacyPage() {
   useEffect(() => { load(); }, [load]);
 
   const docs = useMemo(() => data?.documents || [], [data]);          // one page
-  const summary = data?.summary || {};
+  const summary = useMemo(() => data?.summary || {}, [data]);
   const pagination = data?.pagination || null;
   const session = data?.active_session || null;
 
@@ -268,7 +260,8 @@ export default function SharedRecordsPrivacyPage() {
   }, [summary]);
   const kindOptions = useMemo(() => {
     const counts = summary.kind_counts || {};
-    return KIND_ORDER.filter((k) => counts[k]).map((k) => ({ value: k, label: KIND_LABEL[k], count: counts[k] }));
+    return Object.keys(counts).sort((a, b) => counts[b] - counts[a])
+      .map((k) => ({ value: k, label: kindLabel(k), count: counts[k] }));
   }, [summary]);
   const monthOptions = summary.months || [];
 
@@ -481,7 +474,7 @@ export default function SharedRecordsPrivacyPage() {
             {filtersOn ? (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", margin: "10px 0 2px" }}>
                 {catSel.map((c) => <Chip key={c} label={catLabel(c)} onX={() => setCat(catSel.filter((v) => v !== c))} />)}
-                {kindSel.map((k) => <Chip key={k} label={KIND_LABEL[k]} onX={() => setKind(kindSel.filter((v) => v !== k))} />)}
+                {kindSel.map((k) => <Chip key={k} label={kindLabel(k)} onX={() => setKind(kindSel.filter((v) => v !== k))} />)}
                 {month !== "all" && <Chip label={monthLabel(month)} onX={() => setMonthF("all")} />}
                 <button style={{ ...linkBtn, color: "var(--color-text-muted)", textDecoration: "underline" }}
                   onClick={() => { setCatSel([]); setKindSel([]); setMonth("all"); setQ(""); setPage(1); setSel(new Set()); }}>Clear all</button>
@@ -544,10 +537,10 @@ export default function SharedRecordsPrivacyPage() {
                         </span>
                         <span style={{ flex: 1, minWidth: 0 }}>
                           <span style={{ fontSize: 12.5, fontWeight: 500, display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: stateOf(d) === "off" ? "var(--color-text-muted)" : "inherit" }}>
-                            {d.doc_type === "prescription" && d.doctor_label ? `Prescription · ${d.doctor_label}` : d.title}
+                            {d.title}
                           </span>
                           <span style={{ fontSize: 10.5, fontFamily: "monospace", color: "var(--color-text-muted)" }}>
-                            {[fmtDate(dOf(d)), d.hospital_label, catLabel((d.report_categories || [])[0] || "")].filter(Boolean).join(" · ")}
+                            {[fmtDate(dOf(d)), catLabel((d.report_categories || [])[0] || "")].filter(Boolean).join(" · ")}
                             {d.private_by_rule ? " · by rule" : ""}
                           </span>
                         </span>

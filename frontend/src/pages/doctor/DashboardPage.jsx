@@ -17,12 +17,13 @@ import BranchSwitcher    from "../../components/common/BranchSwitcher";
 import PaginationControls from "../../components/common/PaginationControls";
 import apiClient         from "../../services/api.client";
 import API_ENDPOINTS     from "../../config/api.config";
+import { todayLocal, toLocalISODate } from "../../utils/dates";
 
-const TODAY = new Date().toISOString().split("T")[0];
+const TODAY = todayLocal();
 const TOMORROW = (() => {
   const d = new Date();
   d.setDate(d.getDate() + 1);
-  return d.toISOString().split("T")[0];
+  return toLocalISODate(d);
 })();
 
 function formatScheduleDate(dateStr) {

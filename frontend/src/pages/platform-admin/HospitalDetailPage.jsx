@@ -17,13 +17,11 @@ import {
   TIERS, TIER_LABEL, SUB_STATUS_META,
   StatusBadge, SubStatusBadge, TierBadge, UsageBar, AuditLogTrail, fetchAuditLog,
 } from "./shared";
+import { STAFF_ROLE_LABELS as ROLE_LABELS } from "../../constants/labels";
 
 const TABS = ["Overview", "Users & Roles", "Subscription", "Audit Log"];
 
-const ROLE_LABELS = {
-  hospital_admin: "Hospital Admin", doctor: "Doctor", nurse: "Nurse",
-  front_desk: "Front Desk", lab_tech: "Lab Technician", pharmacist: "Pharmacist",
-};
+
 
 function OverviewTab({ tenant, overview, onChanged }) {
   const api = apiClient;

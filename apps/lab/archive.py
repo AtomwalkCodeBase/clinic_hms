@@ -2,7 +2,7 @@
 apps/lab/archive.py
 -------------------
 store_lab_report_document() — on delivery (apps/lab/signals.py), store the
-LabReport as a SharedDocument(doc_type="lab_report") so it shows in the
+LabReport as a MedicalDocument(classification=lab_report) so it shows in the
 patient's My Reports. Idempotent by source_ref = "labreport:<id>".
 
 The file is the PDF/image the lab uploaded (normalised to PDF, QR-stamped),
@@ -23,7 +23,8 @@ def store_lab_report_document(report, db, tenant_id):
     from apps.org.models import Branch
     from apps.tenants.models import Tenant
     from apps.patients.models import Patient
-    from apps.records.models import SharedDocument
+    from apps.records.models import MedicalDocument
+    from apps.records.services import create_issued_document
     from core import storage as blob_storage
     from core import normalise
     from core.qr_token import issue_url as qr_issue
@@ -35,7 +36,7 @@ def store_lab_report_document(report, db, tenant_id):
         return None
 
     src_ref = f"labreport:{report.id}"
-    existing = SharedDocument.objects.using("default").filter(source_ref=src_ref).first()
+    existing = MedicalDocument.objects.using("default").filter(source_ref=src_ref).first()
     if existing is not None:
         return existing
 
@@ -81,15 +82,12 @@ def store_lab_report_document(report, db, tenant_id):
         pdf_bytes = stamp_qr(pdf_bytes, token)
 
     title = f"{test_name}" + (f" — {when}" if when else "")
-    slug = blob_storage.identity_slug(name=getattr(patient, "full_name", ""), identifier=awpid)
-    s3_key = blob_storage.upload_data_uri(
+    file_path = blob_storage.upload_data_uri(
         "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii"),
-        prefix="lab-reports", mime_type="application/pdf", category="lab-report", identity=slug,
+        prefix=f"patients/{awpid}/lab-reports", mime_type="application/pdf", category="lab-report",
     )
-    return SharedDocument.objects.using("default").create(
-        awpid=awpid, title=title, doc_type="lab_report",
-        file_name=f"{title}.pdf", mime_type="application/pdf", s3_key=s3_key,
-        uploaded_by="staff", source_tenant_id=tenant_id, source_ref=src_ref,
-        public_document_id=report.report_number or "", hospital_label=hospital_name,
-        method="staff", document_date=when,
+    return create_issued_document(
+        awpid=awpid, file_path=file_path, name=f"{title}.pdf", doc_type="lab_report",
+        source_tenant_id=tenant_id, source_ref=src_ref, title=title, public_document_id=report.report_number or "",
+        hospital_label=hospital_name, document_date=when,
     )

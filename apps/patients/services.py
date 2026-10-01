@@ -7,7 +7,7 @@ Views are thin wrappers; they call these methods and return the result.
 
 import logging
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from core.utils.hashing  import hash_mobile, normalize_mobile
@@ -19,8 +19,8 @@ from apps.registry.models import (
     SharedDiagnosis, SharedVital, SharedAllergy,
     SharedLabResult, SharedPrescription,
 )
-from apps.records.models import SharedDocument
-from .models import Patient, Allergy
+from apps.records.models import DOC_TYPE_EXPR, MedicalDocument
+from .models import Patient
 
 logger = logging.getLogger(__name__)
 
@@ -770,10 +770,11 @@ class PatientService:
         # verifies them or the patient confirms the type. Hidden / deleted
         # rows are excluded too.
         documents = list(
-            SharedDocument.objects.using("default")
+            MedicalDocument.objects.using("default")
             .filter(awpid=awpid, hidden_at__isnull=True, deleted_at__isnull=True)
-            .filter(processing_status="completed")
-            .values("id", "title", "doc_type", "file_name", "mime_type", "uploaded_by", "created_at")
+            .filter(status="completed")
+            .values("id", "title", "mime_type", "uploaded_by", "created_at",
+                    doc_type=DOC_TYPE_EXPR, file_name=F("original_file_name"))
             .order_by("-created_at")[:50]
         )
 

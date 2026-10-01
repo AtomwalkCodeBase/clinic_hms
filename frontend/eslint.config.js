@@ -22,10 +22,15 @@ export default [
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      "react-refresh/only-export-components": [
-        "warn",
-        { allowConstantExport: true },
-      ],
+      // a name used but never defined only shows up when that screen is opened (it crashed My Reports once)
+      "no-undef": "error",
+      // Context/shared modules deliberately co-export hooks and helpers; the
+      // rule only affects dev-time fast refresh, so it stays off.
+      "react-refresh/only-export-components": "off",
     },
+  },
+  {
+    files: ["vite.config.js", "scripts/**", "**/*.test.js"],
+    languageOptions: { globals: globals.node },
   },
 ];

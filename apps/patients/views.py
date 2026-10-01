@@ -23,11 +23,6 @@ from .serializers import (
     PatientDetailSerializer,
     PatientSearchSerializer,
     AllergySerializer,
-    SharedDiagnosisSerializer,
-    SharedVitalSerializer,
-    SharedAllergySerializer,
-    SharedLabResultSerializer,
-    SharedPrescriptionSerializer,
 )
 from .services import PatientService
 from .models import Patient, Allergy
@@ -44,7 +39,7 @@ def _maybe_charge_registration_fee(patient, tenant_id, db, user):
     try:
         from apps.tenants.models import Tenant
         from apps.billing.models import Invoice, InvoiceItem
-        from apps.billing.views import _recompute_invoice_totals
+        from apps.billing.services import recompute_invoice_totals
         from core.utils.nntm import get_next_number
 
         tenant = Tenant.objects.using("default").get(pk=tenant_id)
@@ -70,7 +65,7 @@ def _maybe_charge_registration_fee(patient, tenant_id, db, user):
             tax_rate=tenant.default_tax_rate,
             total=tenant.registration_fee_amount,
         )
-        _recompute_invoice_totals(invoice, db)
+        recompute_invoice_totals(invoice, db)
     except Exception as exc:
         logger.warning("Could not auto-generate registration fee invoice: %s", exc)
 
@@ -329,11 +324,13 @@ class PatientHistoryView(APIView):
             # pipeline lives. So they stay visible even without HIE consent
             # (source_tenant_id pins them to us; patient-uploaded docs have it
             # null). Everything else stays gated.
-            from apps.records.models import SharedDocument
+            from django.db.models import F
+            from apps.records.models import DOC_TYPE_EXPR, MedicalDocument
             own_notes = list(
-                SharedDocument.objects.using("default")
+                MedicalDocument.objects.using("default")
                 .filter(awpid=patient.awpid, source_tenant_id=request.tenant_id)
-                .values("id", "title", "doc_type", "file_name", "mime_type", "uploaded_by", "created_at")
+                .values("id", "title", "mime_type", "uploaded_by", "created_at",
+                        doc_type=DOC_TYPE_EXPR, file_name=F("original_file_name"))
                 .order_by("-created_at")[:50]
             )
             return success(data={
@@ -363,10 +360,10 @@ class PatientDocumentDetailView(APIView):
     permission_classes = [IsAuthenticated, IsDoctorOrNurse]
 
     def get(self, request, doc_id):
-        from apps.records.models import SharedDocument
+        from apps.records.models import MedicalDocument
         try:
-            doc = SharedDocument.objects.using("default").get(pk=doc_id)
-        except SharedDocument.DoesNotExist:
+            doc = MedicalDocument.objects.using("default").get(pk=doc_id)
+        except MedicalDocument.DoesNotExist:
             return not_found("Document not found.")
 
         # Same HIE-consent gate PatientHistoryView applies to the lightweight
@@ -397,7 +394,7 @@ class PatientDocumentDetailView(APIView):
         # client-side (utils/fileViewer.downloadFile).
         want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
         dl_name = doc.file_name or f"{doc.title or 'document'}.pdf"
-        file_data = blob_storage.signed_url(doc.s3_key, download_name=dl_name if want_download else None)
+        file_data = blob_storage.signed_url(doc.file_path, download_name=dl_name if want_download else None)
 
         return success(data={
             "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,

@@ -48,36 +48,15 @@ import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
+import { BED_STATUS_META } from "../../constants/badges";
+import { CheckIcon } from "../../components/common/CheckIcon";
+import { timeAgo } from "../../utils/dates";
 
-function timeAgo(iso) {
-  if (!iso) return "";
-  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
-  if (mins < 60) return `${mins} min ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs} hr ago`;
-  return new Date(iso).toLocaleDateString();
-}
 
-function CheckIcon() {
-  return (
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-      <path d="M4 12l5 5L20 6" />
-    </svg>
-  );
-}
 
-// Bed status -> the CSS class from intake-workspace.css that colors it, and
-// the label the legend/details panel shows. "available" is styled as
-// `.bed.free` (pre-existing class, kept as-is so nothing else regresses);
-// the rest render distinctly instead of collapsing into one gray "taken".
-const BED_STATUS_META = {
-  available:      { cls: "free",     label: "Available" },
-  reserved:       { cls: "reserved", label: "Reserved" },
-  occupied:       { cls: "occupied", label: "Occupied" },
-  cleaning:       { cls: "cleaning", label: "Cleaning" },
-  blocked:        { cls: "blocked",  label: "Blocked" },
-  out_of_service: { cls: "blocked",  label: "Out of Service" },
-};
+
+
+
 function bedStatusMeta(status) {
   return BED_STATUS_META[status] || { cls: "taken", label: status || "Unavailable" };
 }

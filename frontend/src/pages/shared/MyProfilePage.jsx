@@ -18,19 +18,11 @@ import API_ENDPOINTS from "../../config/api.config";
 import ProfilePhotoUpload from "../../components/common/ProfilePhotoUpload";
 import ChangePasswordCard from "../../components/common/ChangePasswordCard";
 import { formatAgeYM } from "../../utils/age";
+import { readOnlyStyle, labelStyle, inputStyle } from "../../styles/formStyles";
 
-const inputStyle = {
-  width: "100%", boxSizing: "border-box",
-  border: "1.5px solid var(--color-border)", borderRadius: 8,
-  padding: "9px 12px", fontSize: 14,
-  background: "var(--color-surface)", color: "var(--color-text)", outline: "none",
-};
-const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 5 };
-const readOnlyStyle = {
-  ...inputStyle,
-  background: "var(--color-surface-secondary, #f6f4ee)",
-  color: "var(--color-text-muted)",
-};
+
+
+
 
 export default function MyProfilePage() {
   const { user, refreshUser } = useAuth();

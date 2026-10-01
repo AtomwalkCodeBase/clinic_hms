@@ -7,7 +7,6 @@ tests.py and require a real database (see apps/opd/tests.py docstring).
 """
 
 from django.test import TestCase, override_settings
-from django.urls import reverse
 
 
 class HealthCheckTests(TestCase):

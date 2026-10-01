@@ -165,7 +165,7 @@ class Invoice(models.Model):
                                         related_name="invoices")
     # `encounter` (FK to apps.clinical.Encounter) was removed (HMS-07c-1) —
     # it was always left null in practice: the live OPD flow's
-    # _auto_generate_invoice() (apps/opd/views.py) never set it, since
+    # auto_generate_invoice() (apps/opd/services.py) never set it, since
     # apps.clinical.Encounter and apps.opd.OPDEncounter are incompatible
     # types and the latter is what a real consultation actually creates.
     # apps.clinical.Encounter itself has since been retired entirely.

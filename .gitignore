@@ -59,3 +59,8 @@ Thumbs.db
 /.claude/
 # Celery Beat local schedule file
 celerybeat-schedule*
+
+# Coverage data / reports
+.coverage
+.coverage.*
+htmlcov/

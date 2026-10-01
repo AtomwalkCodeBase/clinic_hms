@@ -14,6 +14,7 @@ import { useApi }     from "../../hooks/useApi";
 import apiClient      from "../../services/api.client";
 import API_ENDPOINTS  from "../../config/api.config";
 import { CheckCircle2, Stethoscope, Baby } from "lucide-react";
+import { todayLocal } from "../../utils/dates";
 
 const MILESTONE_STATUS_STYLE = {
   achieved:   { bg: "#ECFDF5", color: "#047857", label: "Achieved" },
@@ -167,7 +168,7 @@ function PediatricPanel({ patientPk }) {
   );
 }
 
-const TODAY = new Date().toISOString().slice(0, 10);
+const TODAY = todayLocal();
 
 function VitalInput({ label, unit, name, value, onChange, placeholder }) {
   return (

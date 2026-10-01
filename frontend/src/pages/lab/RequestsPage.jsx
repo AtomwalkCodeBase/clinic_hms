@@ -17,26 +17,15 @@ import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { formatYearsMonths } from "../../utils/age";
+import { fileToDataUrl } from "../../utils/files";
+import { LAB_STATUS_BADGE as STATUS_BADGE } from "../../constants/badges";
 
-const STATUS_BADGE = {
-  ordered:    { label: "Ordered",    bg: "var(--color-border)", color: "var(--color-text-muted)" },
-  collected:  { label: "Collected",  bg: "#DBEAFE", color: "#1E40AF" },
-  processing: { label: "Processing", bg: "#FEF3C7", color: "#92400E" },
-  completed:  { label: "Completed",  bg: "#D1FAE5", color: "#065F46" },
-  cancelled:  { label: "Cancelled",  bg: "#FEE2E2", color: "#991B1B" },
-};
+
 
 const NEXT_STATUS = { ordered: "collected", collected: "processing" };
 const NEXT_LABEL   = { ordered: "Mark Collected", collected: "Start Processing" };
 
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload  = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+
 
 const EMPTY_ITEM = { parameter_name: "", result_value: "", unit: "", reference_range: "", is_abnormal: false };
 

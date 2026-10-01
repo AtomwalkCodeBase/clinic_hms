@@ -13,7 +13,7 @@
  * up yet.
  */
 import { useRef, useState } from "react";
-import apiClient    from "../../services/api.client";
+import { orgApi } from "../../api";
 import { useToast } from "../../hooks/useToast";
 
 const MAX_WIDTH  = 480;
@@ -61,7 +61,7 @@ export default function HospitalLogoUpload({ logo, onUploaded }) {
     setUploading(true);
     try {
       const dataUrl = await resizeToDataUrl(file);
-      const { data: res } = await apiClient.patch("/org/settings/", { logo: dataUrl });
+      const { data: res } = await orgApi.updateSettings({ logo: dataUrl });
       onUploaded?.(res?.data?.logo ?? dataUrl);
       toastSuccess("Hospital logo updated.");
     } catch (err) {
@@ -75,7 +75,7 @@ export default function HospitalLogoUpload({ logo, onUploaded }) {
     if (!window.confirm("Remove your hospital's logo? Every login will fall back to the default monogram.")) return;
     setRemoving(true);
     try {
-      await apiClient.patch("/org/settings/", { logo: "" });
+      await orgApi.updateSettings({ logo: "" });
       onUploaded?.("");
       toastSuccess("Logo removed.");
     } catch (err) {

@@ -22,6 +22,7 @@ import APP_CONFIG from "../../config/app.config";
 import { ROUTES } from "../../config/routes.config";
 import NewPasswordFields from "./NewPasswordFields";
 import AutofillDecoy from "./AutofillDecoy";
+import { authLabelStyle as labelStyle } from "../../styles/formStyles";
 
 const AUDIENCE_CONFIG = {
   staff: {
@@ -40,10 +41,7 @@ const AUDIENCE_CONFIG = {
   },
 };
 
-const labelStyle = {
-  display: "block", fontSize: 11, fontWeight: 700, letterSpacing: "0.06em",
-  textTransform: "uppercase", marginBottom: 7, color: "var(--color-text-secondary)",
-};
+
 const inputStyle = {
   outline: "none", border: "1.5px solid var(--color-border)", borderRadius: "var(--radius-input)",
   padding: "10px 14px", fontSize: 14, width: "100%", boxSizing: "border-box",

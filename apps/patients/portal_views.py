@@ -27,6 +27,8 @@ from rest_framework.throttling import ScopedRateThrottle
 from core.permissions import IsPatient
 from core.response import success, error, not_found
 from core.pagination import paginate_list, paginate_queryset
+from .portal_access import resolve_target_awpid_and_dob
+from apps.tenants.utils import ensure_tenant_db
 from core.file_validation import validate_data_uri, FileValidationError
 from core.geo import haversine_km, parse_lat_lng
 from apps.patients.age_utils import age_years_months as _age_years_months
@@ -35,12 +37,6 @@ from apps.tenants.models import Tenant
 from apps.registry.models import PatientAccount, PatientIdentity
 
 logger = logging.getLogger(__name__)
-
-
-def _ensure_db(db_name):
-    if db_name not in settings.DATABASES:
-        from apps.tenants.utils import _make_db_config
-        settings.DATABASES[db_name] = _make_db_config(db_name)
 
 
 # Matches literal doctors AND custom-role staff whose Role.acts_as includes
@@ -256,7 +252,7 @@ class PortalPlatformStatsView(APIView):
         doctor_count = 0
         for tenant in active_tenants:
             try:
-                _ensure_db(tenant.db_name)
+                ensure_tenant_db(tenant.db_name)
                 doctor_count += StaffUser.objects.using(tenant.db_name).filter(
                     role="doctor", is_active=True
                 ).count()
@@ -379,7 +375,7 @@ class PortalSearchView(APIView):
                 continue
             db = tenant.db_name
             try:
-                _ensure_db(db)
+                ensure_tenant_db(db)
 
                 name_q = Q()
                 for t in terms:
@@ -510,7 +506,7 @@ class PortalSpecialtyListView(APIView):
         for tenant in Tenant.objects.using("default").filter(is_active=True):
             db = tenant.db_name
             try:
-                _ensure_db(db)
+                ensure_tenant_db(db)
                 doctor_ids = set(
                     StaffUser.objects.using(db).filter(DOCTOR_Q, is_active=True).values_list("id", flat=True)
                 )
@@ -545,7 +541,7 @@ class PortalDoctorListView(APIView):
         if not _patient_app_enabled(tenant):
             return Response({"error": "This hospital isn't available for online booking."}, status=403)
 
-        _ensure_db(tenant.db_name)
+        ensure_tenant_db(tenant.db_name)
         from apps.org.models import StaffUser, DoctorProfile
 
         try:
@@ -588,7 +584,7 @@ class PortalDoctorDetailView(APIView):
         if not _patient_app_enabled(tenant):
             return Response({"error": "This hospital isn't available for online booking."}, status=403)
 
-        _ensure_db(tenant.db_name)
+        ensure_tenant_db(tenant.db_name)
         from apps.org.models import StaffUser, DoctorProfile
 
         try:
@@ -670,7 +666,7 @@ class PortalNextTokenView(APIView):
             return Response({"error": "This hospital isn't available for online booking."}, status=403)
 
         db = tenant.db_name
-        _ensure_db(db)
+        ensure_tenant_db(db)
         target_date = request.query_params.get("date") or str(date.today())
 
         tokens = Appointment.objects.using(db).filter(
@@ -753,7 +749,7 @@ class PortalSlotListView(APIView):
             return Response({"error": "Hospital not found."}, status=404)
 
         db = tenant.db_name
-        _ensure_db(db)
+        ensure_tenant_db(db)
         slot_date = request.query_params.get("date") or str(date.today())
 
         booked = {
@@ -825,7 +821,7 @@ class PortalBookView(APIView):
             return Response({"error": "This hospital isn't available for online booking."}, status=403)
 
         db = tenant.db_name
-        _ensure_db(db)
+        ensure_tenant_db(db)
 
         try:
             doctor = StaffUser.objects.using(db).get(DOCTOR_Q, pk=doctor_id, is_active=True)
@@ -1043,7 +1039,7 @@ class PortalMyRecordsView(APIView):
         for tenant in Tenant.objects.using("default").filter(is_active=True):
             db = tenant.db_name
             try:
-                _ensure_db(db)
+                ensure_tenant_db(db)
                 patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
                 if not patient:
                     continue
@@ -1120,7 +1116,7 @@ class PortalInvoiceListView(APIView):
     """
     GET /api/v1/portal/invoices/?patient_awpid=
     Every invoice raised for this patient (or a linked family member — see
-    _resolve_target_awpid_and_dob), across all hospitals. Invoice has no
+    resolve_target_awpid_and_dob), across all hospitals. Invoice has no
     link back to a specific Appointment/booking in this schema — a hospital
     can bill a patient for a consultation, a walk-in registration fee, or
     anything else, all as the same kind of Invoice row keyed only to the
@@ -1133,7 +1129,7 @@ class PortalInvoiceListView(APIView):
         from apps.patients.models import Patient
         from apps.billing.models import Invoice
 
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
 
@@ -1141,7 +1137,7 @@ class PortalInvoiceListView(APIView):
         for tenant in Tenant.objects.using("default").filter(is_active=True):
             db = tenant.db_name
             try:
-                _ensure_db(db)
+                ensure_tenant_db(db)
                 patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
                 if not patient:
                     continue
@@ -1197,7 +1193,7 @@ class PortalInvoiceReceiptPDFView(APIView):
 
         if not Tenant.objects.using("default").filter(db_name=tenant_db, is_active=True).exists():
             return error("Unknown hospital.")
-        _ensure_db(tenant_db)
+        ensure_tenant_db(tenant_db)
 
         try:
             # NOT prefetch_related("items", "payments") — under this app's
@@ -1323,7 +1319,7 @@ class PortalMyBookingsView(APIView):
             doctor_photo = None
             doctor_specialisation = ""
             try:
-                _ensure_db(b.db_name)
+                ensure_tenant_db(b.db_name)
                 appt = Appointment.objects.using(b.db_name).get(pk=b.appointment_id)
                 status_now = _auto_expire_if_stale(appt, b.db_name)
                 token = appt.token_number
@@ -1331,7 +1327,7 @@ class PortalMyBookingsView(APIView):
                 # appt.doctor_user_id is a UUIDField, but the value actually
                 # stored in it is StaffUser's plain integer pk — Django's
                 # UUIDField silently wraps a plain int via uuid.UUID(int=value)
-                # (see apps.opd.views._resolve_doctor_consultation_fee for the
+                # (see apps.opd.services.resolve_doctor_consultation_fee for the
                 # same unwrap). Returning it unwrapped sent the frontend a
                 # garbage UUID as doctor_id, so "Book follow-up" 404'd the
                 # doctor-detail lookup the moment a patient tapped to rebook.
@@ -1464,7 +1460,7 @@ class PortalCancelBookingView(APIView):
         except PortalBooking.DoesNotExist:
             return not_found("Booking not found.")
 
-        _ensure_db(booking.db_name)
+        ensure_tenant_db(booking.db_name)
         try:
             appt = Appointment.objects.using(booking.db_name).get(pk=booking.appointment_id)
         except Appointment.DoesNotExist:
@@ -1514,7 +1510,7 @@ class PortalRescheduleBookingView(APIView):
         if new_date > date.today() + timedelta(days=62):
             return error("Appointments can only be booked up to 2 months in advance.")
 
-        _ensure_db(booking.db_name)
+        ensure_tenant_db(booking.db_name)
         db = booking.db_name
         try:
             appt = Appointment.objects.using(db).get(pk=booking.appointment_id)
@@ -1566,14 +1562,14 @@ class PortalRescheduleBookingView(APIView):
 
 # ── My documents ─────────────────────────────────────────────────────────────
 # Uploading is POST /api/v1/records/upload/ (apps/records). These are the
-# patient's read / delete / zip endpoints over apps.records.SharedDocument.
+# patient's read / delete / zip endpoints over apps.records.MedicalDocument.
 
 def _handwritten_siblings(awpid):
     """The consult pad's raw handwritten Rx ("encounter:<id>:handwritten:rx")
     hangs off its typeset prescription instead of being its own row.
     Returns ({typeset source_ref: handwriting doc id}, [handwriting ids to hide])."""
-    from apps.records.models import SharedDocument
-    docs = SharedDocument.objects.using("default").filter(awpid=awpid, source_ref__startswith="encounter:")
+    from apps.records.models import MedicalDocument
+    docs = MedicalDocument.objects.using("default").filter(awpid=awpid, source_ref__startswith="encounter:")
     typeset = set(docs.exclude(source_ref__contains=":handwritten:").values_list("source_ref", flat=True))
     by_base = {}
     for hid, ref in docs.filter(source_ref__endswith=":handwritten:rx").values_list("id", "source_ref"):
@@ -1586,25 +1582,72 @@ def _handwritten_siblings(awpid):
 def _document_row(d, handwritten_doc_id=None):
     return {
         "id": d.id, "title": d.title, "doc_type": d.doc_type,
-        "file_name": d.file_name, "mime_type": d.mime_type,
+        "file_name": d.file_name, "mime_type": d.mime_type, "size": d.size,
         "uploaded_by": d.uploaded_by, "created_at": d.created_at,
         "document_date": d.document_date, "public_document_id": d.public_document_id,
         "hospital_label": d.hospital_label, "doctor_label": d.doctor_label,
         "source_tenant_id": d.source_tenant_id,
-        "processing_status": d.processing_status, "score": d.score, "method": d.method,
+        "processing_status": d.processing_status, "score": d.score, "method": d.method, "best_guess": d.best_guess, "duplicate_of": d.duplicate_of,
         "error": d.error if d.processing_status == "failed" else "",
         "batch_id": d.batch_id, "handwritten_doc_id": handwritten_doc_id,
     }
 
 
+def _remove_from_view(doc):
+    """Take a report out of the patient's reports (and other hospitals' view). A prescription's handwriting
+    sibling goes with it. The issuing hospital keeps its own copy."""
+    from apps.records.models import MedicalDocument
+    targets = [doc]
+    if doc.doc_type == "prescription" and doc.source_ref.startswith("encounter:") \
+            and ":handwritten:" not in doc.source_ref:
+        targets += list(MedicalDocument.objects.using("default")
+                        .filter(awpid=doc.awpid_id, source_ref=f"{doc.source_ref}:handwritten:rx"))
+    now = timezone.now()
+    for t in targets:
+        field = "hidden_at" if t.source_tenant_id else "deleted_at"
+        setattr(t, field, now)
+        t.save(using="default", update_fields=[field])
+
+
+def _events(doc):
+    """What has happened to a report, oldest first, in words — the Activity tab. Built from what is stored
+    (there is no separate event log), so it shows the upload and the latest outcome."""
+    S = type(doc).Status
+    label = lambda t: t.replace("_", " ").capitalize() if t else "nothing"       # noqa: E731
+    events = [{"at": doc.created_at, "text": "Issued by your hospital" if doc.source_tenant_id else "You uploaded this file"}]
+    if doc.status == S.FAILED:
+        events.append({"at": doc.updated_at, "text": f"We couldn’t read it — {doc.error}".rstrip(" —")})
+    elif doc.status == S.REJECTED:
+        events.append({"at": doc.updated_at, "text": f"Not added: {doc.error or 'it is already in your reports'}"})
+    elif doc.status == S.COMPLETED and not doc.source_tenant_id:
+        if doc.classification_source == type(doc).Source.HUMAN:
+            events.append({"at": doc.updated_at, "text": f"You set the type to {label(doc.doc_type)}"})
+        elif doc.classification_id:
+            events.append({"at": doc.updated_at, "text": f"Filed as {label(doc.doc_type)} by the rules"
+                                                          f" ({round(doc.score or 0)}% confident)"})
+        else:
+            best = (doc.classification_details or {}).get("best_guess")
+            events.append({"at": doc.updated_at, "text": f"The rules couldn’t tell what it is"
+                                                          f"{f' (closest: {label(best)})' if best else ''}"})
+    elif doc.status in type(doc).IN_PROGRESS:
+        events.append({"at": doc.updated_at, "text": "Being read"})
+    return events
+
+
+def _choosable_types():
+    """What a patient may file a report under: the types Platform Admin configured, minus staff-only ones."""
+    from apps.records.models import DocumentClassification
+    return [c.code for c in DocumentClassification.configured()]
+
+
 def _own_document(request, doc_id):
     """(doc, None) if the caller (or a linked family member) owns it, else (None, error)."""
-    from apps.records.models import SharedDocument
-    target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+    from apps.records.models import MedicalDocument
+    target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
     if err:
         return None, err
-    doc = SharedDocument.objects.using("default").filter(pk=doc_id, awpid=target_awpid).first()
-    if not doc or doc.doc_type in SharedDocument.STAFF_ONLY_DOC_TYPES:
+    doc = MedicalDocument.objects.using("default").filter(pk=doc_id, awpid=target_awpid).first()
+    if not doc or doc.is_staff_only:
         return None, error("Document not found.", status=404)
     return doc, None
 
@@ -1617,20 +1660,20 @@ class PortalDocumentListCreateView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.records.models import SharedDocument
+        from apps.records.models import MedicalDocument
 
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
         hw_by_base, linked_hw_ids = _handwritten_siblings(target_awpid)
-        qs = (SharedDocument.objects.using("default")
+        qs = (MedicalDocument.objects.using("default")
               .filter(awpid=target_awpid, hidden_at__isnull=True, deleted_at__isnull=True)
-              .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
+              .exclude(classification__is_staff_only=True)
               .exclude(id__in=linked_hw_ids)
               .order_by("-created_at"))
         statuses = [s for s in (request.query_params.get("status") or "").split(",") if s]
         if statuses:
-            qs = qs.filter(processing_status__in=statuses)
+            qs = qs.filter(status__in=statuses)
         page_items, meta = paginate_queryset(request, qs)
         return Response({"results": [_document_row(d, hw_by_base.get(d.source_ref)) for d in page_items],
                          "pagination": meta})
@@ -1638,15 +1681,20 @@ class PortalDocumentListCreateView(APIView):
 
 class PortalDocumentDetailView(APIView):
     """
-    GET    /api/v1/portal/documents/<id>/[?download=1]  — metadata + a short-lived signed file URL
+    GET    /api/v1/portal/documents/<id>/[?download=1]  — metadata + a short-lived signed file URL, and the
+           types the patient may choose from (`doc_types`: what Platform Admin configured)
+    PATCH  /api/v1/portal/documents/<id>/               — the patient acts on a document they uploaded:
+           {doc_type}  correct its type (a human verdict, which the rules never overwrite)
+           {action: "keep"}   keep a file we rejected as a duplicate
+           {action: "retry"}  try a file that failed again
     DELETE /api/v1/portal/documents/<id>/               — remove it from My Reports and from
-           other hospitals' view (patient uploads: deleted_at; hospital-issued: hidden_at, the
-           issuing hospital keeps its copy). A prescription's handwriting sibling goes with it.
+           other hospitals' view (an upload: deleted_at; a hospital-issued report: hidden_at, and the hospital keeps its own copy). A
+           prescription's handwriting sibling goes with it.
     """
     permission_classes = [IsPatient]
 
     def get(self, request, doc_id):
-        from apps.records.models import SharedDocument
+        from apps.records.models import MedicalDocument
         doc, err = _own_document(request, doc_id)
         if err:
             return err
@@ -1655,31 +1703,77 @@ class PortalDocumentDetailView(APIView):
         hw_id = None
         if doc.doc_type == "prescription" and doc.source_ref.startswith("encounter:") \
                 and ":handwritten:" not in doc.source_ref:
-            hw_id = (SharedDocument.objects.using("default")
-                     .filter(awpid=doc.awpid, source_ref=f"{doc.source_ref}:handwritten:rx")
+            hw_id = (MedicalDocument.objects.using("default")
+                     .filter(awpid=doc.awpid_id, source_ref=f"{doc.source_ref}:handwritten:rx")
                      .values_list("id", flat=True).first())
         return success(data={
             **_document_row(doc, hw_id),
-            "file_data": blob_storage.signed_url(doc.s3_key, download_name=dl_name if want_download else None),
+            "file_data": blob_storage.signed_url(doc.file_path, download_name=dl_name if want_download else None),
             "download": want_download,
+            "doc_types": _choosable_types(),
+            "events": _events(doc),
         })
 
-    def delete(self, request, doc_id):
-        from apps.records.models import SharedDocument
+    def patch(self, request, doc_id):
+        from apps.records import services
         doc, err = _own_document(request, doc_id)
         if err:
             return err
-        targets = [doc]
-        if doc.doc_type == "prescription" and doc.source_ref.startswith("encounter:") \
-                and ":handwritten:" not in doc.source_ref:
-            targets += list(SharedDocument.objects.using("default")
-                            .filter(awpid=doc.awpid, source_ref=f"{doc.source_ref}:handwritten:rx"))
-        now = timezone.now()
-        for t in targets:
-            field = "hidden_at" if t.source_tenant_id else "deleted_at"
-            setattr(t, field, now)
-            t.save(using="default", update_fields=[field])
+        if doc.source_tenant_id or doc.uploaded_by == "staff":
+            return error("This report was issued by your hospital, so it can't be changed here.")
+        action = request.data.get("action")
+        try:
+            if action in ("keep", "retry"):
+                (services.keep_duplicate if action == "keep" else services.retry_document)(doc)
+                try:
+                    from apps.records.tasks import dispatch_documents
+                    dispatch_documents(1, ids=[doc.id])       # start it now; the sweep is the backstop
+                except Exception:
+                    logger.exception("portal: couldn't dispatch document %s", doc.id)
+            else:
+                doc_type = request.data.get("doc_type")
+                if doc_type not in _choosable_types():
+                    return error("Choose one of the available types.")
+                services.correct_document(doc, doc_type)
+        except ValueError as exc:
+            return error(str(exc))
+        return success(data=_document_row(type(doc).objects.using("default").get(pk=doc.pk)))
+
+    def delete(self, request, doc_id):
+        doc, err = _own_document(request, doc_id)
+        if err:
+            return err
+        _remove_from_view(doc)
         return success(data={"id": doc.id, "deleted": True})
+
+
+class PortalDocumentBulkDeleteView(APIView):
+    """
+    POST /api/v1/portal/documents/bulk-delete/   body: { ids: [<doc_id>, ...] }  (max 100)
+    Removes the caller's selected reports (same as deleting each one). Ids that aren't theirs are ignored and
+    reported back as `skipped`, so one wrong id never blocks the rest.
+    """
+    permission_classes = [IsPatient]
+    _MAX_IDS = 100
+
+    def post(self, request):
+        from apps.records.models import MedicalDocument
+
+        target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        ids = request.data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return error("Select at least one report.")
+        if len(ids) > self._MAX_IDS:
+            return error(f"Select at most {self._MAX_IDS} reports at a time.")
+        docs = list(MedicalDocument.objects.using("default")
+                    .filter(pk__in=[i for i in ids if isinstance(i, int)], awpid=target_awpid, hidden_at__isnull=True, deleted_at__isnull=True)
+                    .exclude(classification__is_staff_only=True))
+        for doc in docs:
+            _remove_from_view(doc)
+        removed = [d.id for d in docs]
+        return success(data={"deleted": len(removed), "ids": removed, "skipped": [i for i in ids if i not in removed]})
 
 
 class PortalDocumentZipView(APIView):
@@ -1694,9 +1788,9 @@ class PortalDocumentZipView(APIView):
         import io
         import zipfile
         from django.http import HttpResponse
-        from apps.records.models import SharedDocument
+        from apps.records.models import MedicalDocument
 
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
         ids = request.data.get("ids") or []
@@ -1704,15 +1798,15 @@ class PortalDocumentZipView(APIView):
             return error("Select at least one document.")
         if len(ids) > self._MAX_IDS:
             return error(f"Select at most {self._MAX_IDS} documents.")
-        docs = (SharedDocument.objects.using("default")
+        docs = (MedicalDocument.objects.using("default")
                 .filter(pk__in=ids, awpid=target_awpid, deleted_at__isnull=True)
-                .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES))
+                .exclude(classification__is_staff_only=True))
 
         buf, used = io.BytesIO(), set()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for d in docs:
                 try:
-                    content = blob_storage.get_bytes(d.s3_key)
+                    content = blob_storage.get_bytes(d.file_path)
                 except Exception:
                     logger.warning("zip: could not read document %s", d.id, exc_info=True)
                     continue
@@ -1745,7 +1839,7 @@ class PortalLabOrderListView(APIView):
         from apps.patients.models import Patient
         from apps.lab.models import LabRequest
 
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
         results = []
@@ -1753,7 +1847,7 @@ class PortalLabOrderListView(APIView):
         for tenant in Tenant.objects.using("default").filter(is_active=True):
             db = tenant.db_name
             try:
-                _ensure_db(db)
+                ensure_tenant_db(db)
                 patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
                 if not patient:
                     continue
@@ -1795,8 +1889,8 @@ class PortalLabOrderListView(APIView):
 
                     attached_doc = None
                     if r.patient_choice == "outside":
-                        from apps.records.models import SharedDocument
-                        doc = (SharedDocument.objects.using("default")
+                        from apps.records.models import MedicalDocument
+                        doc = (MedicalDocument.objects.using("default")
                                .filter(awpid=target_awpid, source_ref=f"labreq:{db}:{r.id}")
                                .order_by("-created_at").first())
                         if doc:
@@ -1860,7 +1954,7 @@ class PortalLabOrderChoiceView(APIView):
 
         if not Tenant.objects.using("default").filter(db_name=tenant_db, is_active=True).exists():
             return error("Unknown hospital.")
-        _ensure_db(tenant_db)
+        ensure_tenant_db(tenant_db)
 
         try:
             lab_req = LabRequest.objects.using(tenant_db).select_related("patient").get(pk=request_id)
@@ -1911,10 +2005,10 @@ class PortalPrescriptionListView(APIView):
         from apps.opd.models import Appointment, OPDEncounter, Prescription
         from apps.org.models import StaffUser
         from apps.patients.models import Patient
-        from apps.records.models import SharedDocument
+        from apps.records.models import MedicalDocument
         import uuid as _uuid
 
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
         results = []
@@ -1922,7 +2016,7 @@ class PortalPrescriptionListView(APIView):
         for tenant in Tenant.objects.using("default").filter(is_active=True):
             db = tenant.db_name
             try:
-                _ensure_db(db)
+                ensure_tenant_db(db)
                 patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
                 if not patient:
                     continue
@@ -1957,8 +2051,8 @@ class PortalPrescriptionListView(APIView):
                 # encounter, doc_type "prescription" (patient-visible).
                 hw_by_enc = {
                     d.source_ref.split(":")[1]: d.id
-                    for d in SharedDocument.objects.using("default").filter(
-                        awpid=target_awpid, doc_type="prescription",
+                    for d in MedicalDocument.objects.using("default").filter(
+                        awpid=target_awpid, classification__code="prescription",
                         source_ref__endswith=":handwritten:rx",
                     )
                 }
@@ -2032,7 +2126,7 @@ class PortalPrescriptionChoiceView(APIView):
 
         if not Tenant.objects.using("default").filter(db_name=tenant_db, is_active=True).exists():
             return error("Unknown hospital.")
-        _ensure_db(tenant_db)
+        ensure_tenant_db(tenant_db)
 
         try:
             rx = Prescription.objects.using(tenant_db).select_related("encounter").get(pk=prescription_id)
@@ -2096,7 +2190,7 @@ class PortalPrescriptionReceiptPDFView(APIView):
 
         if not Tenant.objects.using("default").filter(db_name=tenant_db, is_active=True).exists():
             return error("Unknown hospital.")
-        _ensure_db(tenant_db)
+        ensure_tenant_db(tenant_db)
 
         try:
             # NOT prefetch_related("items") — under this app's custom
@@ -2171,7 +2265,7 @@ class PortalLabReportFileView(APIView):
 
         if not Tenant.objects.using("default").filter(db_name=tenant_db, is_active=True).exists():
             return error("Unknown hospital.")
-        _ensure_db(tenant_db)
+        ensure_tenant_db(tenant_db)
 
         try:
             # select_related("report") — see the identical fix + comment on
@@ -2323,7 +2417,6 @@ class PortalProfileView(APIView):
             # same number the frontend already has loaded shouldn't force
             # the patient through an OTP for a no-op.
             mobile_changed = bool(mobile) and mobile != acct.mobile
-            old_mobile = acct.mobile
             if mobile_changed:
                 from core.otp import decode_action_token, OTPError
                 from apps.registry.models import OTPCode
@@ -2534,7 +2627,7 @@ class PortalGrowthView(APIView):
     def get(self, request):
         from apps.registry.models import SharedVital
 
-        target_awpid, dob, err = _resolve_target_awpid_and_dob(request)
+        target_awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
 
@@ -2639,31 +2732,6 @@ def _parse_portal_date(value, field_label):
     return parsed, None
 
 
-def _resolve_target_awpid_and_dob(request):
-    """
-    Shared helper — resolves which patient (self or a linked family member)
-    a portal request is about, and returns (awpid, date_of_birth, error_response).
-    Mirrors the ownership check already used by PortalMyRecordsView /
-    PortalHealthSummaryView: a family member's AWPID is only valid here if
-    PatientRelationship actually links it to this account.
-    """
-    acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-    target_awpid = (request.query_params.get("patient_awpid") or request.data.get("patient_awpid") or "").strip() or acct.awpid
-
-    if target_awpid == acct.awpid:
-        return target_awpid, acct.date_of_birth, None
-
-    from apps.registry.models import PatientRelationship
-    is_family = PatientRelationship.objects.using("default").filter(
-        guardian_awpid=acct.awpid, dependent_awpid=target_awpid,
-    ).exists()
-    if not is_family:
-        return None, None, error("That patient isn't linked to your account.", status=403)
-
-    identity = PatientIdentity.objects.using("default").filter(awpid=target_awpid).first()
-    return target_awpid, (identity.date_of_birth if identity else None), None
-
-
 def _portal_schedule_rules():
     """
     Which VaccinationSchedule's rules to use for the patient-portal's
@@ -2712,7 +2780,7 @@ class PortalVaccinationListView(APIView):
     def get(self, request):
         from apps.registry.vaccine_schedule import build_roadmap, summarize_roadmap
 
-        target_awpid, dob, err = _resolve_target_awpid_and_dob(request)
+        target_awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
 
@@ -2761,7 +2829,7 @@ class PortalMilestoneListView(APIView):
     def get(self, request):
         from apps.registry.milestone_roadmap import build_roadmap, summarize_roadmap
 
-        target_awpid, dob, err = _resolve_target_awpid_and_dob(request)
+        target_awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
 
@@ -2796,7 +2864,7 @@ class PortalVaccinationUploadView(APIView):
     def post(self, request):
         from apps.registry.models import SharedVaccination
 
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
 
@@ -2935,10 +3003,10 @@ class PortalHealthTimelineView(APIView):
         from apps.opd.models import Appointment, OPDEncounter
         from apps.lab.models import LabRequest
         from apps.registry.models import SharedVital
-        from apps.records.models import SharedDocument
+        from apps.records.models import MedicalDocument
         from apps.registry.vaccine_schedule import build_roadmap
 
-        target_awpid, dob, err = _resolve_target_awpid_and_dob(request)
+        target_awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
 
@@ -2956,7 +3024,7 @@ class PortalHealthTimelineView(APIView):
         for tenant in tenants:
             db = tenant.db_name
             try:
-                _ensure_db(db)
+                ensure_tenant_db(db)
                 patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
                 if not patient:
                     continue
@@ -3027,7 +3095,7 @@ class PortalHealthTimelineView(APIView):
         for tenant in tenants:
             db = tenant.db_name
             try:
-                _ensure_db(db)
+                ensure_tenant_db(db)
                 patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
                 if not patient:
                     continue
@@ -3068,9 +3136,9 @@ class PortalHealthTimelineView(APIView):
 
         # ── Documents ───────────────────────────────────────────────────
         try:
-            docs = (SharedDocument.objects.using("default")
+            docs = (MedicalDocument.objects.using("default")
                     .filter(awpid=target_awpid)
-                    .exclude(doc_type__in=SharedDocument.STAFF_ONLY_DOC_TYPES)
+                    .exclude(classification__is_staff_only=True)
                     .order_by("-created_at")[:limit])
             for d in docs:
                 entries.append({
@@ -3119,7 +3187,7 @@ class PortalNotificationsView(APIView):
         from apps.notifications.models import NotificationLog
         from apps.registry.vaccine_schedule import build_roadmap
 
-        target_awpid, dob, err = _resolve_target_awpid_and_dob(request)
+        target_awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
 
@@ -3129,7 +3197,7 @@ class PortalNotificationsView(APIView):
         for tenant in Tenant.objects.using("default").filter(is_active=True):
             db = tenant.db_name
             try:
-                _ensure_db(db)
+                ensure_tenant_db(db)
                 patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
                 if not patient:
                     continue
@@ -3190,13 +3258,12 @@ class PortalNotificationMarkReadView(APIView):
     permission_classes = [IsPatient]
 
     def post(self, request, tenant_db, pk):
-        from apps.patients.models import Patient
         from apps.notifications.models import NotificationLog
         from apps.registry.models import PatientRelationship
 
         if not Tenant.objects.using("default").filter(db_name=tenant_db, is_active=True).exists():
             return error("Unknown hospital.")
-        _ensure_db(tenant_db)
+        ensure_tenant_db(tenant_db)
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
         try:
@@ -3205,7 +3272,7 @@ class PortalNotificationMarkReadView(APIView):
             return not_found("Notification not found.")
         # PortalNotificationsView (the list this "id" comes from) already
         # resolves a family member's own notifications via
-        # _resolve_target_awpid_and_dob — mirror the same ownership rule
+        # resolve_target_awpid_and_dob — mirror the same ownership rule
         # here instead of the stricter account-only check this used to have.
         owner_awpid = log.patient.awpid if log.patient else None
         is_owner = owner_awpid == acct.awpid
@@ -3402,7 +3469,7 @@ class PortalEmergencyTokenView(APIView):
     permission_classes = [IsPatient]
 
     def post(self, request):
-        target_awpid, _dob, err = _resolve_target_awpid_and_dob(request)
+        target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
 

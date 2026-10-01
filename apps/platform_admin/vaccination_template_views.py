@@ -37,34 +37,9 @@ from rest_framework.views import APIView
 
 from core.permissions import IsPlatformAdmin
 from core.response import success, created, error, not_found
+from apps.registry.schedule_dicts import template_dict, vaccination_rule_dict
 
 logger = logging.getLogger(__name__)
-
-
-def _rule_dict(rule):
-    return {
-        "id": rule.id,
-        "vaccine_name": rule.vaccine_name,
-        "dose_number": rule.dose_number,
-        "scheduled_label": rule.scheduled_label,
-        "min_age_days": rule.min_age_days,
-        "max_age_days": rule.max_age_days,
-        "mandatory": rule.mandatory,
-        "sort_order": rule.sort_order,
-    }
-
-
-def _template_dict(schedule, rule_count=None, tenants_using=None):
-    return {
-        "id": schedule.id,
-        "name": schedule.name,
-        "description": schedule.description,
-        "active": schedule.active,
-        "created_at": schedule.created_at.isoformat(),
-        "updated_at": schedule.updated_at.isoformat(),
-        "rule_count": rule_count if rule_count is not None else schedule.rules.count(),
-        "tenants_using": tenants_using,
-    }
 
 
 class VaccinationTemplateListCreateView(APIView):
@@ -90,7 +65,7 @@ class VaccinationTemplateListCreateView(APIView):
             usage_counts[tid] = usage_counts.get(tid, 0) + 1
 
         return success(data=[
-            _template_dict(t, tenants_using=usage_counts.get(t.id, 0)) for t in templates
+            template_dict(t, tenants_using=usage_counts.get(t.id, 0)) for t in templates
         ])
 
     def post(self, request):
@@ -131,7 +106,7 @@ class VaccinationTemplateListCreateView(APIView):
             VaccinationScheduleRule.objects.using("default").bulk_create(created_rules)
 
         return created(
-            data=_template_dict(template, rule_count=len(created_rules), tenants_using=0),
+            data=template_dict(template, rule_count=len(created_rules), tenants_using=0),
             message="Vaccination schedule template created.",
         )
 
@@ -156,8 +131,8 @@ class VaccinationTemplateDetailView(APIView):
         if not template:
             return not_found("Template not found.")
         rules = template.rules.all().order_by("sort_order")
-        data = _template_dict(template, rule_count=len(rules))
-        data["rules"] = [_rule_dict(r) for r in rules]
+        data = template_dict(template, rule_count=len(rules))
+        data["rules"] = [vaccination_rule_dict(r) for r in rules]
         return success(data=data)
 
     def patch(self, request, pk):
@@ -221,8 +196,8 @@ class VaccinationTemplateDetailView(APIView):
                     rules_touched += 1
 
         rules = template.rules.all().order_by("sort_order")
-        data = _template_dict(template, rule_count=len(rules))
-        data["rules"] = [_rule_dict(r) for r in rules]
+        data = template_dict(template, rule_count=len(rules))
+        data["rules"] = [vaccination_rule_dict(r) for r in rules]
         return success(data=data, message=f"Template updated ({rules_touched} rule change(s)).")
 
     def delete(self, request, pk):

@@ -26,7 +26,8 @@ whole point of the check is telling the user they already have an account.
 
 import logging
 
-from django.conf import settings
+
+from apps.tenants.utils import ensure_tenant_db
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 from rest_framework.throttling import ScopedRateThrottle
@@ -68,12 +69,6 @@ _HANDLED_PURPOSES = {
 _VERIFIABLE_PURPOSES = _HANDLED_PURPOSES | {OTPCode.PURPOSE_CONTACT_CHANGE_PATIENT}
 
 
-def _ensure_tenant_db(db_name):
-    if db_name not in settings.DATABASES:
-        from apps.tenants.utils import _make_db_config
-        settings.DATABASES[db_name] = _make_db_config(db_name)
-
-
 def _resolve_staff_target(identifier):
     """Mobile or email, matching StaffLoginView's own identifier resolution. Returns (staff_id, db_name) or None."""
     from apps.registry.models import StaffMobileIndex
@@ -87,7 +82,7 @@ def _resolve_staff_target(identifier):
     except StaffMobileIndex.DoesNotExist:
         return None
 
-    _ensure_tenant_db(index.db_name)
+    ensure_tenant_db(index.db_name)
     try:
         from django.db.models import Q
         staff = StaffUser.objects.using(index.db_name).get(
@@ -254,7 +249,7 @@ class StaffForgotPasswordResetView(APIView):
 
         db_name = payload.get("target_db")
         staff_id = payload.get("target_id")
-        _ensure_tenant_db(db_name)
+        ensure_tenant_db(db_name)
         from apps.org.models import StaffUser
         try:
             staff = StaffUser.objects.using(db_name).get(pk=staff_id, is_active=True)

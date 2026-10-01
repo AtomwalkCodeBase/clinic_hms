@@ -15,20 +15,13 @@ import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { Syringe, FlaskConical, Paperclip } from "lucide-react";
 import { dataUrlToBlob, openDataUrlInNewTab } from "../../utils/fileViewer";
+import { LAB_STATUS_BADGE } from "../../constants/badges";
+import { fileToDataUrl } from "../../utils/files";
+import { todayLocal } from "../../utils/dates";
 
-const TODAY = new Date().toISOString().split("T")[0];
+const TODAY = todayLocal();
 
-// Same helper duplicated in RecordsPage.jsx / EncounterPage.jsx / lab's
-// RequestsPage.jsx — no shared utils module for it yet, matches this
-// codebase's existing per-file convention rather than introducing one here.
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload  = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+
 
 const STATUS_BADGE = {
   in_progress: "badge--info",
@@ -37,13 +30,7 @@ const STATUS_BADGE = {
   vitals_done: "badge--success",
 };
 
-const LAB_STATUS_BADGE = {
-  ordered:    { label: "Ordered",    bg: "var(--color-border)", color: "var(--color-text-muted)" },
-  collected:  { label: "Collected",  bg: "#DBEAFE", color: "#1E40AF" },
-  processing: { label: "Processing", bg: "#FEF3C7", color: "#92400E" },
-  completed:  { label: "Completed",  bg: "#D1FAE5", color: "#065F46" },
-  cancelled:  { label: "Cancelled",  bg: "#FEE2E2", color: "#991B1B" },
-};
+
 
 // ─── One ordered test — nurse sets/corrects the patient's in-house/outside
 // choice here (folded in from the old standalone Lab Orders page). ─────────

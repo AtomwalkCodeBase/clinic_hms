@@ -14,6 +14,7 @@ import { useApi }     from "../../hooks/useApi";
 import PaginationControls from "../../components/common/PaginationControls";
 import apiClient      from "../../services/api.client";
 import API_ENDPOINTS  from "../../config/api.config";
+import { todayLocal, toLocalISODate } from "../../utils/dates";
 import {
   AlertCircle, ClipboardList, CalendarClock, ChevronDown, ChevronUp,
   Filter, X, Stethoscope,
@@ -33,11 +34,11 @@ function groupByDoctor(list) {
   return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 }
 
-const TODAY = new Date().toISOString().slice(0, 10);
+const TODAY = todayLocal();
 const TOMORROW = (() => {
   const d = new Date();
   d.setDate(d.getDate() + 1);
-  return d.toISOString().slice(0, 10);
+  return toLocalISODate(d);
 })();
 
 function formatScheduleDate(dateStr) {
@@ -84,7 +85,7 @@ export default function NurseDashboardPage() {
       .then(r => setAppointments(r.data?.results || r.data?.data || []))
       .catch(() => toastApiError(null, "Failed to load today's queue."))
       .finally(() => setLoading(false));
-  }, []);
+  }, [toastApiError]);
 
   // ── Today's Queue — search + status filter, grouped by doctor. Filtered
   // client-side (the full unfiltered `appointments` list is already loaded

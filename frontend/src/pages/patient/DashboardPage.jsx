@@ -19,15 +19,10 @@ import { useAuth }     from "../../hooks/useAuth";
 import apiClient       from "../../services/api.client";
 import API_ENDPOINTS   from "../../config/api.config";
 import ROUTES          from "../../config/routes.config";
+import { PORTAL_APPOINTMENT_BADGE as BADGE } from "../../constants/badges";
+import { todayLocal } from "../../utils/dates";
 
-const BADGE = {
-  scheduled:   "badge--primary",
-  waiting:     "badge--warning",
-  vitals_done: "badge--success",
-  in_progress: "badge--info",
-  done:        "badge--success",
-  cancelled:   "badge--error",
-};
+
 
 // Map chip class to accent colors for left border + tint
 const CHIP_COLORS = {
@@ -115,7 +110,7 @@ export default function PatientDashboardPage() {
   // "Upcoming" = still active (not done/cancelled/no_show) AND its day hasn't
   // already passed — an appointment the hospital never closed out shouldn't
   // keep counting as upcoming forever once its date is in the past.
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = todayLocal();
   const upcoming = bookings.filter(b =>
     !["done", "cancelled", "no_show"].includes(b.status) && b.date >= todayStr
   );

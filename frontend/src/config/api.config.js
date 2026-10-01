@@ -24,7 +24,6 @@ export const API_ENDPOINTS = {
     PERMISSIONS:      `${API_V1}/auth/me/permissions/`,
     CHANGE_PASSWORD:  `${API_V1}/auth/change-password/`,
     SETUP_PASSWORD:   `${API_V1}/auth/setup-password/`,
-    STAFF_INVITE:     `${API_V1}/auth/staff/invite/`,
     // OTP — shared by staff/patient forgot-password, patient registration,
     // and day-to-day patient OTP login (see apps/auth_app/otp_views.py).
     OTP_REQUEST:      `${API_V1}/auth/otp/request/`,
@@ -35,6 +34,7 @@ export const API_ENDPOINTS = {
 
   RECORDS: {
     UPLOAD: `${API_V1}/records/upload/`,   // multipart, apps/records
+    BATCH:  (id) => `${API_V1}/records/batches/${id}/`,   // the batch, its counts, then its documents
   },
   PLATFORM: {
     TENANTS:          `${API_V1}/platform/tenants/`,
@@ -47,8 +47,6 @@ export const API_ENDPOINTS = {
     STATS:            `${API_V1}/platform/stats/`,
     PLANS:            `${API_V1}/platform/plans/`,
     USERS:            `${API_V1}/platform/users/`,
-    SUBSCRIPTIONS:    `${API_V1}/platform/subscriptions/`,
-    USAGE:            `${API_V1}/platform/usage/`,
     VACCINATION_TEMPLATES:      `${API_V1}/platform/vaccination-templates/`,
     VACCINATION_TEMPLATE: (id) => `${API_V1}/platform/vaccination-templates/${id}/`,
     MILESTONE_TEMPLATES:      `${API_V1}/platform/milestone-templates/`,
@@ -58,6 +56,7 @@ export const API_ENDPOINTS = {
     RECORDS_SWEEP_CONFIG: `${API_V1}/platform/records/sweep-config/`,
     RECORDS_REPORT:       `${API_V1}/platform/records/report/`,
     RECORDS_REPORT_ITEM: (id) => `${API_V1}/platform/records/report/${id}/`,
+    RECORDS_RECLASSIFY:   `${API_V1}/platform/records/reclassify/`,
   },
 
   ORG: {
@@ -67,7 +66,6 @@ export const API_ENDPOINTS = {
     STAFF:            `${API_V1}/org/staff/`,
     STAFF_MEMBER:(id) => `${API_V1}/org/staff/${id}/`,
     DOCTORS:          `${API_V1}/org/doctors/`,
-    DOCTOR:     (id) => `${API_V1}/org/doctors/${id}/`,
     DOCTOR_SPECIALISATIONS: `${API_V1}/org/doctors/specialisations/`,
     MY_DOCTOR_PROFILE: `${API_V1}/org/me/doctor-profile/`,
     MY_STAFF_PROFILE:  `${API_V1}/org/me/staff-profile/`,
@@ -75,6 +73,7 @@ export const API_ENDPOINTS = {
     STAFF_BRANCHES: (id) => `${API_V1}/org/staff/${id}/branches/`,
     STAFF_DOCTORS: (id) => `${API_V1}/org/staff/${id}/doctors/`,
     MY_BRANCHES:       `${API_V1}/org/me/branches/`,
+    SETTINGS:          `${API_V1}/org/settings/`,
     PERMISSIONS:       `${API_V1}/org/permissions/`,
     ROLES:             `${API_V1}/org/roles/`,
     ROLE:       (id) => `${API_V1}/org/roles/${id}/`,
@@ -104,7 +103,6 @@ export const API_ENDPOINTS = {
   },
 
   PATIENTS: {
-    LIST:             `${API_V1}/patients/`,
     REGISTER:         `${API_V1}/patients/register/`,
     // Provisional/unidentified-patient registration (Emergency path) — no
     // mobile or guardian required. See PatientEmergencyRegisterSerializer.
@@ -127,14 +125,6 @@ export const API_ENDPOINTS = {
     // ── Pediatric-only additions ────────────────────────────────────────
     BIRTH_HISTORY:     (id) => `${API_V1}/patients/${id}/birth-history/`,
     MILESTONES:        (id) => `${API_V1}/patients/${id}/milestones/`,
-  },
-
-  SCHEDULING: {
-    APPOINTMENTS:     `${API_V1}/scheduling/appointments/`,
-    APPOINTMENT:(id) => `${API_V1}/scheduling/appointments/${id}/`,
-    QUEUE:            `${API_V1}/scheduling/queue/`,
-    QUEUE_NEXT:       `${API_V1}/scheduling/queue/next/`,
-    TEMPLATES:        `${API_V1}/scheduling/templates/`,
   },
 
   // OPD module — appointment queue, encounters, prescriptions
@@ -190,6 +180,7 @@ export const API_ENDPOINTS = {
     DOCUMENTS:             `${API_V1}/portal/documents/`,
     DOCUMENT: (id) =>       `${API_V1}/portal/documents/${id}/`,
     DOCUMENTS_ZIP:         `${API_V1}/portal/documents/zip/`,
+    DOCUMENTS_BULK_DELETE: `${API_V1}/portal/documents/bulk-delete/`,
     LAB_ORDERS:            `${API_V1}/portal/lab-orders/`,
     LAB_ORDER_CHOICE:      `${API_V1}/portal/lab-orders/choice/`,
     LAB_REPORT_FILE: (tenantDb, requestId) => `${API_V1}/portal/lab-orders/${tenantDb}/${requestId}/report/`,
@@ -316,7 +307,6 @@ export const API_ENDPOINTS = {
 
   PHARMACY: {
     STOCK:            `${API_V1}/pharmacy/stock/`,
-    TRANSACTIONS:     `${API_V1}/pharmacy/transactions/`,
     DISPENSE:         `${API_V1}/pharmacy/dispense/`,
     PRESCRIPTIONS:    `${API_V1}/pharmacy/prescriptions/`,
     PRESCRIPTION_LOOKUP: `${API_V1}/pharmacy/prescriptions/lookup/`,

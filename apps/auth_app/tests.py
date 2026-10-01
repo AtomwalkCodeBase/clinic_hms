@@ -57,3 +57,30 @@ class LoginThrottleScopeTests(TestCase):
     def test_logout_requires_authentication(self):
         from rest_framework.permissions import IsAuthenticated
         self.assertIn(IsAuthenticated, LogoutView.permission_classes)
+
+
+class TokenLifetimeTests(TestCase):
+    """The JWT_*_LIFETIME settings (env-configurable) are what _make_tokens actually uses."""
+
+    def lifetimes(self):
+        tokens = _make_tokens({"user_id": 1})
+        decode = lambda t: jwt.decode(t, settings.JWT_SIGNING_KEY, algorithms=["HS256"])
+        a, r = decode(tokens["access"]), decode(tokens["refresh"])
+        return a["exp"] - a["iat"] if "iat" in a else None, a["exp"], r["exp"]
+
+    def test_tokens_last_as_long_as_the_configured_lifetimes(self):
+        import time
+        _, a_exp, r_exp = self.lifetimes()
+        now = time.time()
+        self.assertAlmostEqual(a_exp - now, settings.JWT_ACCESS_TOKEN_LIFETIME.total_seconds(), delta=30)
+        self.assertAlmostEqual(r_exp - now, settings.JWT_REFRESH_TOKEN_LIFETIME.total_seconds(), delta=30)
+
+    def test_overriding_the_settings_changes_the_token_lifetimes(self):
+        import time
+        from datetime import timedelta
+        from django.test import override_settings
+        with override_settings(JWT_ACCESS_TOKEN_LIFETIME=timedelta(minutes=5), JWT_REFRESH_TOKEN_LIFETIME=timedelta(days=1)):
+            _, a_exp, r_exp = self.lifetimes()
+        now = time.time()
+        self.assertAlmostEqual(a_exp - now, 5 * 60, delta=30)
+        self.assertAlmostEqual(r_exp - now, 24 * 3600, delta=30)

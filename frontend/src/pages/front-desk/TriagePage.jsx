@@ -29,8 +29,9 @@ import { useApi } from "../../hooks/useApi";
 import { useAuth } from "../../hooks/useAuth";
 import API_ENDPOINTS from "../../config/api.config";
 import { ROUTES } from "../../config/routes.config";
+import { todayLocal } from "../../utils/dates";
 
-const TODAY = new Date().toISOString().split("T")[0];
+const TODAY = todayLocal();
 
 export function TriagePageContent({ embedded = false } = {}) {
   const navigate = useNavigate();

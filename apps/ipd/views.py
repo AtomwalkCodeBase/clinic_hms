@@ -17,8 +17,9 @@ from core.audit import log_action
 from core.utils.nntm import get_next_number
 
 from apps.billing.models import OptionList
-from apps.billing.views import _DropdownListCreateView, _DropdownDetailView
-from apps.org.models import StaffUser, Bed
+from apps.billing.option_list_views import DropdownListCreateView, DropdownDetailView
+from apps.billing.services import recompute_invoice_totals
+from apps.org.models import Bed
 from apps.patients.models import Patient
 from apps.compliance.models import ConsentRecord
 
@@ -38,7 +39,7 @@ from .serializers import (
 # Payment Mode / Invoice Status / Service Category. A hospital admin manages
 # these from the same "Dropdown Lists" settings surface, two more tabs.
 
-class AdmissionTypeListCreateView(_DropdownListCreateView):
+class AdmissionTypeListCreateView(DropdownListCreateView):
     list_type = OptionList.LIST_ADMISSION_TYPE
     serializer_class = OptionListSerializer
     # `value` (not `label`) is what Admission.admission_type actually stores
@@ -50,7 +51,7 @@ class AdmissionTypeListCreateView(_DropdownListCreateView):
     model_field = "value"
 
 
-class AdmissionTypeDetailView(_DropdownDetailView):
+class AdmissionTypeDetailView(DropdownDetailView):
     list_type = OptionList.LIST_ADMISSION_TYPE
     serializer_class = OptionListSerializer
     identity_field = "value"
@@ -58,14 +59,14 @@ class AdmissionTypeDetailView(_DropdownDetailView):
     system_can_deactivate = False  # Emergency/Elective/etc. stay available even if deactivated attempts are made — same caution as InvoiceStatusOption
 
 
-class AdmissionSourceListCreateView(_DropdownListCreateView):
+class AdmissionSourceListCreateView(DropdownListCreateView):
     list_type = OptionList.LIST_ADMISSION_SOURCE
     serializer_class = OptionListSerializer
     identity_field = "value"
     model_field = "value"
 
 
-class AdmissionSourceDetailView(_DropdownDetailView):
+class AdmissionSourceDetailView(DropdownDetailView):
     list_type = OptionList.LIST_ADMISSION_SOURCE
     serializer_class = OptionListSerializer
     identity_field = "value"
@@ -793,7 +794,6 @@ class GenerateInvoiceView(APIView):
         from django.utils import timezone
         from apps.billing.models import Invoice, InvoiceItem, Payment, OptionList as BillingOptionList
         from apps.billing.serializers import InvoiceSerializer
-        from apps.billing.views import _recompute_invoice_totals
 
         db = request.tenant_db
         try:
@@ -848,7 +848,7 @@ class GenerateInvoiceView(APIView):
             dep.reconciled_invoice = invoice
             dep.save(using=db, update_fields=["reconciled_invoice"])
 
-        _recompute_invoice_totals(invoice, db)
+        recompute_invoice_totals(invoice, db)
         invoice.refresh_from_db(using=db)
         paid = sum((p.amount for p in invoice.payments.using(db).all()), Decimal("0"))
         if paid > 0:

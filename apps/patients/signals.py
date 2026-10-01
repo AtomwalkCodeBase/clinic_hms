@@ -12,10 +12,11 @@ from .models import Allergy
 logger = logging.getLogger(__name__)
 
 
-def _get_source_tenant_id():
+def _get_source_tenant_id(instance):
+    """Registry id of the hospital this Allergy belongs to (0 if it can't be resolved)."""
     try:
-        from core.db_router import _thread_local
-        return getattr(_thread_local, "tenant_id", 0) or 0
+        from apps.tenants.utils import resolve_source_tenant_id
+        return resolve_source_tenant_id(instance._state.db)
     except Exception:
         return 0
 
@@ -27,7 +28,7 @@ def on_allergy_save(sender, instance, **kwargs):
         SharedAllergy.objects.using("default").update_or_create(
             awpid=instance.patient.awpid,
             substance=instance.substance,
-            source_tenant_id=_get_source_tenant_id(),
+            source_tenant_id=_get_source_tenant_id(instance),
             defaults={
                 "reaction":    instance.reaction,
                 "severity":    instance.severity,
@@ -35,5 +36,5 @@ def on_allergy_save(sender, instance, **kwargs):
                 "recorded_at": instance.recorded_at,
             },
         )
-    except Exception as exc:
-        logger.error("HIE SharedAllergy write failed for allergy=%s: %s", instance.id, exc)
+    except Exception:
+        logger.exception("HIE SharedAllergy write failed for allergy=%s", instance.id)
