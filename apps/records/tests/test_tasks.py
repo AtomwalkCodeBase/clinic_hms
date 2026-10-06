@@ -1,324 +1,292 @@
-import hashlib
-from datetime import timedelta
+"""The pipeline: extraction, classification, retries, the batch counters, and what a person can do afterwards."""
 from unittest import mock
 
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
-from django.utils import timezone
 
-from apps.records import services
-from apps.records.models import MedicalDocument, SweepConfig
-from apps.records.tasks import (
-    classify_document_task, dispatch_documents, extract_document_task, recover_stuck_documents,
-)
-from apps.records.tests.helpers import PDF, make_doc, reload
+from apps.records import classification as cls, services
+from apps.records.models import DocumentBatch, DocumentText, MedicalDocument, PatientDocumentClassification
+from apps.records.tasks import classify_document_task, extract_document_task
+from apps.records.tests.helpers import PDF, identity, make_doc, reload
 
 S = MedicalDocument.Status
-PDF_HASH = hashlib.sha256(PDF).hexdigest()
+RX = "Dr ABC Rx Paracetamol Syrup 5 ml TDS Diagnosis: Viral fever"
 
 
 def row(doc):
     return MedicalDocument.objects.get(pk=doc.id)
 
 
-@mock.patch("apps.records.services.storage.get_bytes", return_value=PDF)
+def classification(doc):
+    return PatientDocumentClassification.objects.get(document_id=doc.id)
+
+
+@mock.patch("core.storage.get_bytes", return_value=PDF)
 class ExtractDocumentTests(TestCase):
-    """Stage 1: one read (content check + hash), duplicate check, text, then hand off to classification."""
+    """Stage 1: file → content check → text, then hand off to classification."""
     databases = {"default"}
 
     @mock.patch("apps.records.tasks.classify_document_task.delay")
-    @mock.patch("apps.records.services.extract_text", return_value="hemoglobin glucose")
-    def test_success_saves_text_type_and_hash_and_dispatches_classification(self, _extract, dispatch, _get):
-        doc = make_doc(status=S.EXTRACTING)
+    @mock.patch("apps.records.services.extract_text", return_value=("hemoglobin glucose", "pdf_text"))
+    def test_success_saves_the_text_and_type_and_queues_classification(self, _extract, delay, _get):
+        doc = make_doc(status=S.QUEUED)
         extract_document_task(doc.id)
-        doc = reload(doc)
-        self.assertEqual((row(doc).status, doc.mime_type, doc.content_hash, doc.size),
-                         (S.CLASSIFYING, "application/pdf", PDF_HASH, len(PDF)))
-        self.assertEqual(row(doc).classification_details["extracted_text"], "hemoglobin glucose")
-        dispatch.assert_called_once_with(doc.id)
+        doc = row(doc)
+        self.assertEqual((doc.status, doc.mime_type, doc.size), (S.CLASSIFYING, "application/pdf", len(PDF)))
+        text = DocumentText.objects.get(document=doc)
+        self.assertEqual((text.extracted_text, text.engine), ("hemoglobin glucose", "pdf_text"))
+        delay.assert_called_once_with(doc.id)
 
     @mock.patch("apps.records.tasks.classify_document_task.delay")
-    def test_a_file_that_is_not_a_pdf_or_image_fails_with_a_clear_reason(self, dispatch, get):
+    @mock.patch("apps.records.services.extract_text", return_value=("text", "ocr"))
+    def test_the_file_is_read_through_the_file_field(self, _extract, _delay, get):
+        doc = make_doc(status=S.QUEUED)
+        extract_document_task(doc.id)
+        get.assert_called_once_with("documents/AWP-T1/1/1.pdf")
+
+    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    def test_a_file_that_is_not_a_pdf_or_image_fails_at_once_with_a_clear_reason(self, delay, get):
         get.return_value = b"just some text"
-        doc = make_doc(status=S.EXTRACTING)
-        extract_document_task(doc.id)
+        doc = make_doc(status=S.QUEUED)
+        extract_document_task(doc.id)                    # no exception: nothing to retry
         self.assertEqual(row(doc).status, S.FAILED)
-        self.assertIn("not a valid", row(doc).error)
-        dispatch.assert_not_called()
+        self.assertIn("not a valid", row(doc).error_message)
+        delay.assert_not_called()
 
     @mock.patch("apps.records.tasks.classify_document_task.delay")
-    def test_an_empty_file_fails_with_a_clear_reason(self, dispatch, get):
+    def test_an_empty_file_fails_with_a_clear_reason(self, delay, get):
         get.return_value = b""
-        doc = make_doc(status=S.EXTRACTING)
+        doc = make_doc(status=S.QUEUED)
         extract_document_task(doc.id)
-        self.assertEqual((row(doc).status, row(doc).error), (S.FAILED, "The file is empty."))
-        dispatch.assert_not_called()
+        self.assertEqual((row(doc).status, row(doc).error_message), (S.FAILED, "The file is empty."))
+        delay.assert_not_called()
+
+    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    def test_a_file_over_the_limit_fails(self, delay, _get):
+        doc = make_doc(status=S.QUEUED)
+        with mock.patch("apps.records.services.MAX_FILE_BYTES", 10):
+            extract_document_task(doc.id)
+        self.assertEqual((row(doc).status, row(doc).error_message), (S.FAILED, "The file is over 250 MB."))
+        delay.assert_not_called()
 
     @mock.patch("apps.records.tasks.classify_document_task.delay")
     @mock.patch("apps.records.services.extract_text", side_effect=RuntimeError("OCR crashed"))
-    def test_an_extraction_error_fails_the_document_and_never_dispatches(self, _extract, dispatch, _get):
-        doc = make_doc(status=S.EXTRACTING)
-        extract_document_task(doc.id)
+    def test_an_unexpected_error_is_raised_so_celery_retries_and_the_document_stays_in_progress(self, _extract, delay, _get):
+        doc = make_doc(status=S.QUEUED)
+        with self.assertRaises(RuntimeError):
+            extract_document_task(doc.id)
+        self.assertEqual(row(doc).status, S.EXTRACTING)
+        delay.assert_not_called()
+
+    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    @mock.patch("apps.records.services.extract_text", side_effect=RuntimeError("OCR crashed"))
+    def test_when_the_retries_are_used_up_the_document_is_failed_for_the_patient_to_retry(self, _extract, delay, _get):
+        doc = make_doc(status=S.QUEUED)
+        extract_document_task.apply(args=(doc.id,), retries=extract_document_task.max_retries)   # the last attempt
         self.assertEqual(row(doc).status, S.FAILED)
-        self.assertIn("OCR crashed", row(doc).error)
-        dispatch.assert_not_called()
+        self.assertIn("OCR crashed", row(doc).error_message)
+        delay.assert_not_called()
 
     @mock.patch("apps.records.tasks.classify_document_task.delay")
     @mock.patch("apps.records.services.extract_text")
-    def test_only_a_document_being_extracted_is_touched(self, extract, dispatch, _get):
-        for status in (S.QUEUED, S.CLASSIFYING, S.COMPLETED, S.FAILED, S.REJECTED):
-            extract_document_task(make_doc(status=status).id)
+    def test_only_a_document_still_in_the_pipeline_is_touched(self, extract, delay, get):
+        for status in (S.COMPLETED, S.FAILED, S.REVIEW_REQUIRED):
+            doc = make_doc(status=status)
+            extract_document_task(doc.id)
+            self.assertEqual(row(doc).status, status)
         extract.assert_not_called()
-        dispatch.assert_not_called()
+        get.assert_not_called()
+        delay.assert_not_called()
 
-
-@mock.patch("apps.records.services.storage.get_bytes", return_value=PDF)
-@mock.patch("apps.records.tasks.classify_document_task.delay")
-@mock.patch("apps.records.services.extract_text", return_value="text")
-class DuplicateTests(TestCase):
-    """A file the patient already has is rejected before any OCR is spent on it."""
-    databases = {"default"}
-
-    def test_the_same_file_again_is_rejected_without_ocr(self, extract, dispatch, _get):
-        first = make_doc(status=S.COMPLETED, content_hash=PDF_HASH, name="first.pdf")
-        second = make_doc(status=S.EXTRACTING, name="second.pdf")
-        extract_document_task(second.id)
-        self.assertEqual(row(second).status, S.REJECTED)
-        self.assertIn("Same as first.pdf", row(second).error)
+    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    @mock.patch("apps.records.services.extract_text")
+    def test_a_retry_after_the_text_was_saved_only_repeats_the_hand_off(self, extract, delay, get):
+        doc = make_doc(status=S.CLASSIFYING, text="already read")
+        extract_document_task(doc.id)
+        get.assert_not_called()
         extract.assert_not_called()
-        dispatch.assert_not_called()
-        self.assertEqual(row(first).status, S.COMPLETED)
+        delay.assert_called_once_with(doc.id)
 
-    def test_a_rejected_duplicate_remembers_which_document_it_is_the_same_as(self, extract, dispatch, _get):
-        first = make_doc(status=S.COMPLETED, content_hash=PDF_HASH)
-        second = make_doc(status=S.EXTRACTING)
-        extract_document_task(second.id)
-        self.assertEqual(reload(second).duplicate_of, first.id)
-
-    def test_a_duplicate_the_patient_chose_to_keep_goes_through(self, extract, dispatch, _get):
-        make_doc(status=S.COMPLETED, content_hash=PDF_HASH)
-        kept = make_doc(status=S.EXTRACTING, data={"keep_duplicate": True})
-        extract_document_task(kept.id)
-        self.assertEqual(row(kept).status, S.CLASSIFYING)
-
-    def test_another_patient_having_the_same_file_is_not_a_duplicate(self, extract, dispatch, _get):
-        make_doc("AWP-OTHER", status=S.COMPLETED, content_hash=PDF_HASH)
-        mine = make_doc(status=S.EXTRACTING)
-        extract_document_task(mine.id)
-        self.assertEqual(row(mine).status, S.CLASSIFYING)
-
-    def test_a_deleted_or_failed_original_does_not_count(self, extract, dispatch, _get):
-        make_doc(status=S.COMPLETED, content_hash=PDF_HASH, deleted_at=timezone.now())
-        make_doc(status=S.FAILED, content_hash=PDF_HASH)
-        mine = make_doc(status=S.EXTRACTING)
-        extract_document_task(mine.id)
-        self.assertEqual(row(mine).status, S.CLASSIFYING)
-
-    def test_an_earlier_upload_is_never_rejected_because_of_a_later_one(self, extract, dispatch, _get):
-        earlier = make_doc(status=S.COMPLETED, content_hash=PDF_HASH)
-        make_doc(status=S.COMPLETED, content_hash=PDF_HASH)
-        self.assertIsNone(services._duplicate_of(reload(earlier)))
-
-    def test_the_last_guard_in_classification_catches_a_twin_that_raced_through(self, extract, dispatch, _get):
-        make_doc(status=S.COMPLETED, content_hash=PDF_HASH, name="first.pdf")
-        raced = make_doc(status=S.CLASSIFYING, content_hash=PDF_HASH, data={"extracted_text": "x"})
-        classify_document_task(raced.id)
-        self.assertEqual(row(raced).status, S.REJECTED)
+    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    @mock.patch("apps.records.services.extract_text", return_value=("text", "ocr"))
+    def test_identical_files_are_both_kept(self, _extract, _delay, _get):
+        """There is no duplicate detection any more: the same file twice is two documents."""
+        a, b = make_doc(status=S.QUEUED), make_doc(status=S.QUEUED)
+        extract_document_task(a.id)
+        extract_document_task(b.id)
+        self.assertEqual((row(a).status, row(b).status), (S.CLASSIFYING, S.CLASSIFYING))
 
 
 class ClassifyDocumentTests(TestCase):
-    """Stage 2: keyword rules on the already-extracted text — never re-runs extraction."""
+    """Stage 2: the rule engine on the extracted text."""
     databases = {"default"}
 
-    def classifying_doc(self, text="laboratory hemoglobin glucose cholesterol reference range", **kw):
-        return make_doc(status=S.CLASSIFYING, data={"extracted_text": text}, **kw)
-
-    def test_success_saves_type_who_score_and_status(self):
-        doc = self.classifying_doc()
+    def test_a_clear_verdict_completes_the_document_with_its_type(self):
+        batch = DocumentBatch.objects.create(patient=identity(), total_files=1)
+        doc = make_doc(status=S.CLASSIFYING, text=RX, batch=batch)
         classify_document_task(doc.id)
-        doc = reload(doc)
-        self.assertEqual((doc.processing_status, doc.doc_type, row(doc).classification_source, doc.method),
-                         (S.COMPLETED, "lab_report", "system", "rule"))
-        self.assertGreaterEqual(doc.score, 60)
-        self.assertEqual(row(doc).classification_details["extracted_text"][:10], "laboratory")        # the text is kept
-        self.assertEqual(doc.error, "")
+        doc = row(doc)
+        self.assertEqual((doc.status, doc.document_type, doc.error_message), (S.COMPLETED, "prescription", ""))
+        c = classification(doc)
+        self.assertEqual((c.status, c.final_document_type, c.rule_score, c.second_best_score, c.score_margin),
+                         ("rule_classified", "prescription", 21, 1, 20))
+        batch.refresh_from_db()
+        self.assertEqual((batch.processed_files, batch.failed_files, batch.status), (1, 0, "completed"))
 
-    def test_a_document_no_configured_type_fits_is_completed_without_a_type_not_failed(self):
-        doc = self.classifying_doc(text="nothing recognisable here")
+    def test_text_the_rules_cannot_place_needs_review(self):
+        batch = DocumentBatch.objects.create(patient=identity(), total_files=1)
+        doc = make_doc(status=S.CLASSIFYING, text="hello world", batch=batch)
         classify_document_task(doc.id)
-        doc = reload(doc)
-        self.assertEqual((doc.processing_status, doc.doc_type, doc.classification_id), (S.COMPLETED, "", None))
-        self.assertIn("Unable to classify", row(doc).classification_details["note"])
+        doc = row(doc)
+        self.assertEqual((doc.status, doc.document_type), (S.REVIEW_REQUIRED, "not_classified"))
+        self.assertEqual(classification(doc).status, "review_required")
+        batch.refresh_from_db()
+        self.assertEqual((batch.processed_files, batch.status), (1, "completed"))     # finished, awaiting a person
 
-    def test_the_verdict_keeps_what_it_was_based_on(self):
-        doc = self.classifying_doc()
+    def test_a_document_with_no_text_needs_review(self):
+        doc = make_doc(status=S.CLASSIFYING)
         classify_document_task(doc.id)
-        data = row(doc).classification_details
-        self.assertEqual((data["best_guess"], data["method"], data["evidence"]), ("lab_report", "rule", 5.0))
-        self.assertIn("glucose", data["matched"])
+        self.assertEqual((row(doc).status, row(doc).document_type), (S.REVIEW_REQUIRED, "not_classified"))
 
-    def test_a_persons_verdict_is_never_overwritten(self):
-        doc = self.classifying_doc(doc_type="scan", by="human")
+    def test_a_persons_choice_is_not_overwritten_and_the_document_completes(self):
+        doc = make_doc(status=S.CLASSIFYING, text=RX, document_type="lab_report", by="human")
         classify_document_task(doc.id)
-        doc = reload(doc)
-        self.assertEqual((doc.processing_status, doc.doc_type, row(doc).classification_source), (S.COMPLETED, "scan", "human"))
-
-    @mock.patch("apps.records.services.classify", side_effect=RuntimeError("rules broke"))
-    def test_failure_saves_status_and_error(self, _classify):
-        doc = self.classifying_doc()
-        classify_document_task(doc.id)
-        self.assertEqual(row(doc).status, S.FAILED)
-        self.assertIn("rules broke", row(doc).error)
+        doc = row(doc)
+        self.assertEqual((doc.status, doc.document_type), (S.COMPLETED, "lab_report"))
+        self.assertEqual(classification(doc).status, "human_classified")
 
     def test_only_a_document_being_classified_is_touched(self):
-        doc = make_doc(status=S.EXTRACTING)
-        classify_document_task(doc.id)
-        self.assertEqual(row(doc).status, S.EXTRACTING)
+        for status in (S.QUEUED, S.EXTRACTING, S.COMPLETED, S.FAILED, S.REVIEW_REQUIRED):
+            doc = make_doc(status=status, text=RX)
+            classify_document_task(doc.id)
+            self.assertEqual(row(doc).status, status)
+            self.assertFalse(PatientDocumentClassification.objects.filter(document=doc).exists())
 
-
-class HumanCorrectionTests(TestCase):
-    databases = {"default"}
-
-    def test_correcting_a_failed_document_completes_it(self):
-        doc = make_doc(status=S.FAILED)
-        MedicalDocument.objects.filter(pk=doc.pk).update(error="could not read it")
-        services.correct_document(reload(doc), "prescription")
-        doc = reload(doc)
-        self.assertEqual((doc.processing_status, doc.doc_type, row(doc).classification_source, doc.error),
-                         (S.COMPLETED, "prescription", "human", ""))
-
-    def test_a_correction_replaces_the_classification_and_only_one_is_kept(self):
-        doc = make_doc(status=S.COMPLETED, doc_type="lab_report", by="system", score=71.5,
-                       data={"extracted_text": "t", "method": "rule", "matched": ["glucose"], "best_guess": "lab_report"})
-        services.correct_document(reload(doc), "prescription")
-        doc = reload(doc)
-        self.assertEqual((doc.doc_type, doc.classification_source, doc.score), ("prescription", "human", None))
-        self.assertEqual(doc.classification_details, {"extracted_text": "t", "method": "human"})   # no trace of the rules' verdict
-        services.correct_document(doc, "scan")                                                      # overwriting again just replaces it
-        self.assertEqual((reload(doc).doc_type, reload(doc).classification_source), ("scan", "human"))
-
-    def test_a_rejected_duplicate_stays_rejected(self):
-        doc = make_doc(status=S.REJECTED)
-        with self.assertRaises(ValueError):
-            services.correct_document(reload(doc), "scan")
-        self.assertEqual(row(doc).status, S.REJECTED)
-
-
-class ClaimDocumentsTests(TestCase):
-    """The dispatcher: queued and abandoned documents are claimed once, and never forever."""
-    databases = {"default"}
-
-    def test_a_queued_document_is_claimed_for_extraction(self):
-        doc = make_doc()
-        self.assertEqual(services.claim_documents(10), [(doc.id, "extract")])
-        self.assertEqual((row(doc).status, row(doc).attempts), (S.EXTRACTING, 1))
-        self.assertIsNotNone(row(doc).claimed_at)
-
-    def test_a_claimed_document_is_not_claimed_again_while_its_claim_is_fresh(self):
-        make_doc()
-        services.claim_documents(10)
-        self.assertEqual(services.claim_documents(10), [])
-
-    def test_an_abandoned_document_is_re_sent_to_the_stage_it_was_in(self):
-        old = timezone.now() - timedelta(minutes=services.STUCK_MINUTES + 1)
-        extracting, classifying = make_doc(status=S.EXTRACTING), make_doc(status=S.CLASSIFYING)
-        MedicalDocument.objects.update(claimed_at=old, attempts=1)
-        self.assertCountEqual(services.claim_documents(10),
-                              [(extracting.id, "extract"), (classifying.id, "classify")])
-
-    def test_an_in_progress_document_that_was_never_claimed_is_picked_up(self):
-        doc = make_doc(status=S.CLASSIFYING)
-        self.assertEqual(services.claim_documents(10), [(doc.id, "classify")])
-
-    def test_a_document_that_keeps_dying_is_failed_after_max_attempts(self):
-        old = timezone.now() - timedelta(minutes=services.STUCK_MINUTES + 1)
-        doc = make_doc(status=S.EXTRACTING)
-        MedicalDocument.objects.update(claimed_at=old, attempts=services.MAX_ATTEMPTS)
-        self.assertEqual(services.claim_documents(10), [])
+    @mock.patch("apps.records.services.rules.classify_document_by_rules", side_effect=RuntimeError("boom"))
+    def test_an_error_is_retried_and_fails_the_document_once_the_retries_are_used_up(self, _rules):
+        doc = make_doc(status=S.CLASSIFYING, text=RX)
+        with self.assertRaises(RuntimeError):
+            classify_document_task(doc.id)
+        self.assertEqual(row(doc).status, S.CLASSIFYING)
+        classify_document_task.apply(args=(doc.id,), retries=classify_document_task.max_retries)   # the last attempt
         self.assertEqual(row(doc).status, S.FAILED)
-        self.assertIn("attempts", row(doc).error)
-
-    def test_limit_and_ids_are_respected_oldest_first(self):
-        first, second, third = make_doc(), make_doc(), make_doc()
-        self.assertEqual(services.claim_documents(1), [(first.id, "extract")])
-        self.assertEqual(services.claim_documents(10, ids=[third.id]), [(third.id, "extract")])
-        self.assertEqual(row(second).status, S.QUEUED)
-
-    def test_finished_documents_are_never_claimed(self):
-        for status in (S.COMPLETED, S.FAILED, S.REJECTED):
-            make_doc(status=status)
-        self.assertEqual(services.claim_documents(10), [])
+        self.assertIn("boom", row(doc).error_message)
 
 
-class DispatchTests(TestCase):
+@mock.patch("core.storage.get_bytes", return_value=PDF)
+class WholePipelineTests(TestCase):
     databases = {"default"}
 
-    @mock.patch("apps.records.tasks.classify_document_task.delay")
-    @mock.patch("apps.records.tasks.extract_document_task.delay")
-    def test_each_document_goes_to_its_own_stage(self, extract, classify):
-        queued, stuck = make_doc(), make_doc(status=S.CLASSIFYING)
-        MedicalDocument.objects.filter(pk=stuck.pk).update(
-            claimed_at=timezone.now() - timedelta(minutes=services.STUCK_MINUTES + 1), attempts=1)
-        self.assertEqual(dispatch_documents(10), 2)
-        extract.assert_called_once_with(queued.id)
-        classify.assert_called_once_with(stuck.id)
-
-    @mock.patch("apps.records.tasks.extract_document_task.delay", side_effect=[RuntimeError("broker down"), None])
-    def test_a_broker_error_on_one_document_does_not_stop_the_rest(self, extract):
-        make_doc()
-        make_doc()
-        self.assertEqual(dispatch_documents(10), 1)
-        self.assertEqual(extract.call_count, 2)
-
-    @mock.patch("apps.records.tasks.extract_document_task.delay")
-    def test_the_periodic_task_uses_the_configured_limit(self, extract):
-        for _ in range(3):
-            make_doc()
-        cfg = SweepConfig.current()
-        cfg.sweep_dispatch_limit = 2
-        cfg.save()
-        self.assertEqual(recover_stuck_documents(), 2)
-        self.assertEqual(extract.call_count, 2)
-
-
-class FullPipelineTests(TestCase):
-    """Upload → dispatcher → extraction → classification with real PDFs; only S3 and the broker are faked."""
-    databases = {"default"}
-
-    @staticmethod
-    def pdf_with(text):
-        import fitz
-        doc = fitz.open()
-        doc.new_page().insert_text((50, 80), text, fontsize=10)
-        return doc.tobytes()
-
-    def test_a_batch_with_a_good_file_a_twin_and_a_bad_file_ends_with_each_in_a_final_state(self):
-        from apps.records.tests.helpers import identity
-        identity("AWP-T1")
-        bucket = {}
-        fake = mock.Mock()
-        fake.put_bytes.side_effect = lambda path, data, mime_type: bucket.setdefault(path, data) and path
-        fake.get_bytes.side_effect = lambda path: bucket[path]
-        lab = self.pdf_with("City laboratory. Hemoglobin 13 g/dL, glucose 90, cholesterol 180. Reference range attached.")
-        junk = b"not a pdf at all"
-        files = [(SimpleUploadedFile(n, b, content_type="application/pdf"), b)
-                 for n, b in (("lab.pdf", lab), ("lab-copy.pdf", lab), ("junk.pdf", junk))]
-
-        with mock.patch("apps.records.services.storage", fake), \
-                mock.patch("apps.records.tasks.classify_document_task.delay", side_effect=services.classify_document), \
-                mock.patch("apps.records.tasks.extract_document_task.delay", side_effect=services.extract_document):
-            batch, docs = services.save_upload("AWP-T1", files)
-            self.assertEqual(dispatch_documents(10), 3)
-
-        good, twin, bad = (reload(d) for d in docs)
-        self.assertEqual((good.processing_status, good.doc_type, row(good).classification_source), (S.COMPLETED, "lab_report", "system"))
-        self.assertIn("Hemoglobin", row(good).classification_details["extracted_text"])
-        self.assertEqual(twin.processing_status, S.REJECTED)
-        self.assertIn("Same as lab.pdf", twin.error)
-        self.assertEqual(bad.processing_status, S.FAILED)
-
+    @mock.patch("apps.records.services.extract_text", return_value=(RX, "ocr"))
+    def test_a_queued_document_ends_completed_with_its_text_and_classification(self, _extract, _get):
+        batch = DocumentBatch.objects.create(patient=identity(), total_files=1)
+        doc = make_doc(status=S.QUEUED, batch=batch)
+        with mock.patch("apps.records.tasks.classify_document_task.delay",
+                        side_effect=lambda pk: classify_document_task(pk)):
+            extract_document_task(doc.id)
+        doc = row(doc)
+        self.assertEqual((doc.status, doc.document_type, cls.method_of(doc), cls.score_of(doc)), (S.COMPLETED, "prescription", "rule", 21))
+        self.assertEqual(cls.text_of(doc), RX)
         batch.refresh_from_db()
-        summary = services.batch_summary(batch)
-        self.assertEqual(summary["status"], "completed")
-        self.assertEqual((summary["counts"]["completed"], summary["counts"]["rejected"], summary["counts"]["failed"]), (1, 1, 1))
-        self.assertEqual([d["file_name"] for d in summary["documents"]], ["lab.pdf", "lab-copy.pdf", "junk.pdf"])
+        self.assertEqual((batch.processed_files, batch.status), (1, "completed"))
+
+
+class StartProcessingTests(TestCase):
+    databases = {"default"}
+
+    @mock.patch("apps.records.tasks.extract_document_task.delay")
+    def test_each_document_is_queued(self, delay):
+        a, b = make_doc(), make_doc()
+        services.start_processing([a.id, b.id])
+        self.assertEqual([c.args for c in delay.call_args_list], [(a.id,), (b.id,)])
+
+    @mock.patch("apps.records.tasks.extract_document_task.delay", side_effect=ConnectionError("broker down"))
+    def test_when_the_queue_is_unreachable_the_documents_fail_so_the_patient_can_retry(self, _delay):
+        batch = DocumentBatch.objects.create(patient=identity(), total_files=1)
+        doc = make_doc(batch=batch)
+        services.start_processing([doc.id])
+        self.assertEqual(row(doc).status, S.FAILED)
+        self.assertIn("Couldn't start processing", row(doc).error_message)
+        batch.refresh_from_db()
+        self.assertEqual((batch.failed_files, batch.status), (1, "completed_with_errors"))
+
+
+class CorrectionTests(TestCase):
+    databases = {"default"}
+
+    def test_a_person_files_a_document_that_needs_review(self):
+        doc = make_doc(status=S.REVIEW_REQUIRED, by="rules")
+        services.correct_document(doc, "lab_report")
+        doc = row(doc)
+        self.assertEqual((doc.status, doc.document_type, cls.method_of(doc)), (S.COMPLETED, "lab_report", "staff"))
+        c = classification(doc)
+        self.assertEqual((c.human_document_type, c.final_document_type, c.status), ("lab_report", "lab_report", "human_classified"))
+
+    def test_a_person_can_change_the_type_the_rules_chose(self):
+        doc = make_doc(status=S.COMPLETED, document_type="lab_report", by="rules")
+        services.correct_document(doc, "prescription")
+        self.assertEqual((row(doc).document_type, classification(doc).final_document_type), ("prescription", "prescription"))
+
+    def test_a_failed_file_becomes_a_normal_completed_one(self):
+        doc = make_doc(status=S.FAILED, error_message="unreadable")
+        services.correct_document(doc, "other")
+        self.assertEqual((row(doc).status, row(doc).error_message, row(doc).document_type), (S.COMPLETED, "", "other"))
+
+    def test_a_file_still_being_read_cannot_be_filed(self):
+        for status in (S.QUEUED, S.EXTRACTING, S.CLASSIFYING):
+            with self.assertRaises(ValueError):
+                services.correct_document(make_doc(status=status), "lab_report")
+
+    def test_only_a_real_type_can_be_chosen(self):
+        doc = make_doc(status=S.COMPLETED)
+        for bad in ("made_up", "not_classified", "LAB_REPORT"):
+            with self.assertRaises(ValueError):
+                services.correct_document(doc, bad)
+
+    def test_only_a_failed_file_can_be_retried(self):
+        doc = make_doc(status=S.FAILED, error_message="boom")
+        services.retry_document(doc)
+        self.assertEqual((row(doc).status, row(doc).error_message), (S.QUEUED, ""))
+        for status in (S.QUEUED, S.COMPLETED, S.REVIEW_REQUIRED, S.CLASSIFYING):
+            with self.assertRaises(ValueError):
+                services.retry_document(make_doc(status=status))
+
+
+class ReclassifyTests(TestCase):
+    databases = {"default"}
+
+    def test_the_rules_run_again_over_what_the_rules_classified(self):
+        doc = make_doc(status=S.REVIEW_REQUIRED, by="rules", text=RX)
+        counts = services.reclassify_existing()
+        self.assertEqual(counts, {"checked": 1, "changed": 1, "classified": 1, "unclassified": 0})
+        self.assertEqual((row(doc).status, row(doc).document_type), (S.COMPLETED, "prescription"))
+
+    def test_a_document_the_rules_now_cannot_place_goes_back_to_review(self):
+        doc = make_doc(status=S.COMPLETED, document_type="prescription", by="rules", text="hello world")
+        services.reclassify_existing()
+        self.assertEqual((row(doc).status, row(doc).document_type), (S.REVIEW_REQUIRED, "not_classified"))
+
+    def test_a_persons_choice_and_a_hospital_document_are_never_touched(self):
+        human = make_doc(status=S.COMPLETED, document_type="lab_report", by="human", text=RX)
+        issued = make_doc(status=S.COMPLETED, document_type="lab_report", by="issued", text=RX, source_tenant_id="3")
+        self.assertEqual(services.reclassify_existing()["checked"], 0)
+        self.assertEqual((row(human).document_type, row(issued).document_type), ("lab_report", "lab_report"))
+
+    def test_a_document_without_text_is_skipped(self):
+        make_doc(status=S.REVIEW_REQUIRED, by="rules")
+        self.assertEqual(services.reclassify_existing()["checked"], 0)
+
+
+class BatchCounterTests(TestCase):
+    databases = {"default"}
+
+    def test_the_batch_counts_follow_its_documents(self):
+        batch = DocumentBatch.objects.create(patient=identity(), total_files=4)
+        make_doc(batch=batch, status=S.COMPLETED, document_type="lab_report", by="rules")
+        make_doc(batch=batch, status=S.REVIEW_REQUIRED, by="rules")
+        make_doc(batch=batch, status=S.CLASSIFYING)
+        make_doc(batch=batch, status=S.FAILED)
+        batch.refresh()
+        self.assertEqual((batch.processed_files, batch.failed_files, batch.status), (2, 1, "processing"))
+        MedicalDocument.objects.filter(batch=batch, status=S.CLASSIFYING).update(status=S.COMPLETED)
+        batch.refresh()
+        self.assertEqual((batch.processed_files, batch.status), (3, "completed_with_errors"))

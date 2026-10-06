@@ -131,4 +131,4 @@ class LabTenantIdTests(ProvenanceFixtureMixin, TenantDBTestCase):
             )
         self.assertLess(resp.status_code, 300, resp.data)
         doc = MedicalDocument.objects.using("default").get(source_ref__startswith="labreq:")
-        self.assertEqual(doc.source_tenant_id, self.tenant.id)
+        self.assertEqual(doc.source_tenant_id, str(self.tenant.id))

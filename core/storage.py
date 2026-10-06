@@ -28,10 +28,16 @@ into upload_data_uri() here — this module doesn't re-validate content type.
 
 import base64
 import logging
+import mimetypes
+import posixpath
 import re
 import uuid
 
 from django.conf import settings
+from django.core.files.base import ContentFile
+from django.core.exceptions import SuspiciousFileOperation
+from django.core.files.storage import Storage
+from django.utils.deconstruct import deconstructible
 
 logger = logging.getLogger(__name__)
 
@@ -347,3 +353,42 @@ def put_bytes(key: str, data: bytes, *, mime_type: str) -> str:
         ServerSideEncryption="AES256",
     )
     return key
+
+
+@deconstructible
+class PrivateS3Storage(Storage):
+    """Django storage over the private bucket, so a FileField holds an S3 key and `.file.url` is a presigned
+    link (put_bytes / get_bytes / signed_url / delete above). Names given by `upload_to` are random, so a name is
+    never checked for a clash."""
+
+    def _open(self, name, mode="rb"):
+        return ContentFile(get_bytes(name), name=name)
+
+    def _save(self, name, content):
+        data = content.read()
+        mime_type = getattr(content, "content_type", None) or mimetypes.guess_type(name)[0] or "application/octet-stream"
+        put_bytes(name, data, mime_type=mime_type)
+        return name
+
+    def generate_filename(self, filename):
+        """An S3 key always uses "/", whatever the server's OS (Django's default would use "\\" on Windows)."""
+        filename = str(filename).replace("\\", "/")
+        dirname, name = posixpath.split(filename)
+        if ".." in dirname.split("/"):
+            raise SuspiciousFileOperation(f"Detected path traversal attempt in '{dirname}'")
+        return posixpath.normpath(posixpath.join(dirname, self.get_valid_name(name)))
+
+    def get_available_name(self, name, max_length=None):
+        return name
+
+    def exists(self, name):
+        return False
+
+    def delete(self, name):
+        delete(name)
+
+    def url(self, name):
+        return signed_url(name)
+
+    def size(self, name):
+        return _client().head_object(Bucket=settings.AWS_S3_BUCKET, Key=name)["ContentLength"]

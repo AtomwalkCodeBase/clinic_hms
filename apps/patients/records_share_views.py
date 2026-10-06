@@ -41,7 +41,8 @@ from core import storage as blob_storage
 from apps.registry.models import (
     PatientIdentity, PatientAccount, EmergencyAccessLog, RecordsShareRequest, RecordsPrivacy,
 )
-from apps.records.models import DocumentClassification, MedicalDocument
+from apps.records.classification import DOCUMENT_TYPES
+from apps.records.models import MedicalDocument
 from apps.patients.portal_views import EMERGENCY_SHARE_CATEGORIES, _render_qr_data_uri
 
 logger = logging.getLogger(__name__)
@@ -137,12 +138,12 @@ def _patient_name(awpid):
 def _vault_documents(awpid, limit=200):
     hw_rows = list(
         MedicalDocument.objects.using("default")
-        .filter(awpid=awpid, source_ref__endswith=":handwritten:rx")
+        .filter(patient__awpid=awpid, source_ref__endswith=":handwritten:rx")
         .values_list("id", "source_ref")
     )
     base_refs = set(
         MedicalDocument.objects.using("default")
-        .filter(awpid=awpid, source_ref__startswith="encounter:")
+        .filter(patient__awpid=awpid, source_ref__startswith="encounter:")
         .exclude(source_ref__contains=":handwritten:")
         .values_list("source_ref", flat=True)
     )
@@ -155,23 +156,20 @@ def _vault_documents(awpid, limit=200):
 
     rows = (
         MedicalDocument.objects.using("default")
-        .filter(awpid=awpid, hidden_at__isnull=True, deleted_at__isnull=True)
-        .exclude(classification__is_staff_only=True)
+        .filter(patient__awpid=awpid)
         .exclude(id__in=linked_hw_ids)
         .filter(status="completed")
         .order_by("-created_at")[:limit]
     )
     return [{
         "id":                d.id,
-        "title":             d.title,
-        "doc_type":          d.doc_type,
+        "title":             d.file_name,
+        "doc_type":          d.document_type,
         "file_name":         d.file_name,
         "mime_type":         d.mime_type,
         "uploaded_by":       d.uploaded_by,
         "document_date":     d.document_date,
-        "public_document_id": d.public_document_id,
-        "hospital_label":    d.hospital_label,
-        "doctor_label":      d.doctor_label,
+        "public_document_id": d.document_ref,
         "created_at":        d.created_at,
         "source_tenant_id":  d.source_tenant_id,
         "handwritten_doc_id": hw_by_base.get(d.source_ref),
@@ -224,11 +222,11 @@ def _pending_download_payload(grant):
     if not grant.pending_download_id:
         return None
     doc = MedicalDocument.objects.using("default").filter(
-        id=grant.pending_download_id, awpid=grant.awpid,
+        id=grant.pending_download_id, patient__awpid=grant.awpid,
     ).first()
     return {
         "id": grant.pending_download_id,
-        "title": doc.title if doc else "a document",
+        "title": doc.file_name if doc else "a document",
     }
 
 
@@ -529,13 +527,13 @@ class RecordsShareDownloadView(APIView):
             return error("Which document?", errors={"doc_id": "Required."})
 
         doc = MedicalDocument.objects.using("default").filter(
-            id=doc_id, awpid=grant.awpid, hidden_at__isnull=True, deleted_at__isnull=True,
+            id=doc_id, patient__awpid=grant.awpid,
         ).first()
         if not doc:
             return error("That document isn't part of this patient's records.", status=404)
 
         if doc_id in (grant.download_unlocked_ids or []):
-            return success(data={"state": "unlocked", "file_url": blob_storage.signed_url(doc.file_path)})
+            return success(data={"state": "unlocked", "file_url": blob_storage.signed_url(doc.file.name)})
 
         RecordsShareRequest.objects.using("default").filter(pk=grant.pk).update(
             pending_download_id=doc_id)
@@ -581,7 +579,7 @@ class RecordsShareDocumentViewView(APIView):
         if not grant or not grant.is_live:
             return error("This access has ended.", status=403)
         doc = MedicalDocument.objects.using("default").filter(
-            id=doc_id, awpid=grant.awpid, hidden_at__isnull=True, deleted_at__isnull=True,
+            id=doc_id, patient__awpid=grant.awpid,
         ).first()
         if not doc:
             return error("That document isn't part of this patient's records.", status=404)
@@ -590,7 +588,7 @@ class RecordsShareDocumentViewView(APIView):
             import base64
             from core import ocr as _ocr
 
-            pages = _ocr.pdf_page_images(blob_storage.get_bytes(doc.file_path), max_pages=12, dpi=150)
+            pages = _ocr.pdf_page_images(blob_storage.get_bytes(doc.file.name), max_pages=12, dpi=150)
             if not pages:
                 return error("Couldn't render this document for viewing.", status=500)
             return success(data={
@@ -598,7 +596,7 @@ class RecordsShareDocumentViewView(APIView):
                 "pages": [f"data:image/png;base64,{base64.b64encode(p).decode()}" for p in pages],
             })
 
-        return success(data={"mime_type": doc.mime_type, "file_url": blob_storage.signed_url(doc.file_path)})
+        return success(data={"mime_type": doc.mime_type, "file_url": blob_storage.signed_url(doc.file.name)})
 
 
 class RecordsShareCloseView(APIView):
@@ -1059,8 +1057,7 @@ class RecordsPrivacyView(APIView):
             p.hidden_categories = [str(s) for s in (d["hidden_categories"] or [])][:60]
             fields.append("hidden_categories")
         if "hidden_kinds" in d:
-            valid = list(DocumentClassification.objects.using("default").values_list("code", flat=True))
-            p.hidden_kinds = [k for k in (d["hidden_kinds"] or []) if k in valid]
+            p.hidden_kinds = [k for k in (d["hidden_kinds"] or []) if k in DOCUMENT_TYPES]
             fields.append("hidden_kinds")
         if "hidden_sections" in d:
             p.hidden_sections = [s for s in (d["hidden_sections"] or []) if s in RecordsPrivacy.SECTIONS]
@@ -1069,7 +1066,7 @@ class RecordsPrivacyView(APIView):
             want = {int(x) for x in (d["hidden_doc_ids"] or []) if str(x).lstrip("-").isdigit()}
             mine = set(
                 MedicalDocument.objects.using("default")
-                .filter(awpid=me, id__in=want).values_list("id", flat=True)
+                .filter(patient__awpid=me, id__in=want).values_list("id", flat=True)
             )
             p.hidden_doc_ids = sorted(mine); fields.append("hidden_doc_ids")
 
@@ -1082,7 +1079,7 @@ class RecordsPrivacyView(APIView):
             if add:
                 cur |= set(
                     MedicalDocument.objects.using("default")
-                    .filter(awpid=me, id__in=add).values_list("id", flat=True)
+                    .filter(patient__awpid=me, id__in=add).values_list("id", flat=True)
                 )
             cur -= rem
             p.hidden_doc_ids = sorted(cur)
@@ -1111,7 +1108,7 @@ class RecordsPrivacyToggleView(APIView):
             doc_id = int(request.data.get("doc_id"))
         except (TypeError, ValueError):
             return error("Which report?", errors={"doc_id": "Required."})
-        if not MedicalDocument.objects.using("default").filter(awpid=me, id=doc_id).exists():
+        if not MedicalDocument.objects.using("default").filter(patient__awpid=me, id=doc_id).exists():
             return error("That report isn't in your records.", status=404)
 
         make_private = bool(request.data.get("private"))
@@ -1155,7 +1152,7 @@ class RecordsShareRevealView(APIView):
         want = {int(x) for x in (request.data.get("doc_ids") or []) if str(x).lstrip("-").isdigit()}
         ids = set(
             MedicalDocument.objects.using("default")
-            .filter(awpid=me, id__in=want).values_list("id", flat=True)
+            .filter(patient__awpid=me, id__in=want).values_list("id", flat=True)
         )
 
         shown = set(grant.shown_private_ids or [])

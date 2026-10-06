@@ -34,7 +34,7 @@ function Menu({ items }) {
   );
 }
 
-export default function ReportRow({ doc, active, selectMode, selected, onClick, onOpen, onAct, onDelete, priv, onLock }) {
+export default function ReportRow({ doc, active, selectMode, selected, onClick, onOpen, onAct, priv, onLock }) {
   const state = stateOf(doc);
   const kind = fileKind(doc);
   const chips = chipsFor(doc);
@@ -48,7 +48,6 @@ export default function ReportRow({ doc, active, selectMode, selected, onClick, 
     ...(state === "duplicate" ? [{ label: "Keep anyway", onClick: () => onAct(doc, { action: "keep" }, "Keeping it — reading it now.") }] : []),
     ...(!hospital && state !== "duplicate" && state !== "processing" ? [{ label: "Change type", onClick: onOpen }] : []),
     ...(priv && onLock && state !== "processing" ? [{ label: priv.private ? "Share with doctors" : "Hide from doctors", onClick: () => onLock(doc) }] : []),
-    { label: "Delete", danger: true, onClick: () => onDelete([doc]) },
   ];
 
   return (

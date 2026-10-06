@@ -325,12 +325,12 @@ class PatientHistoryView(APIView):
             # (source_tenant_id pins them to us; patient-uploaded docs have it
             # null). Everything else stays gated.
             from django.db.models import F
-            from apps.records.models import DOC_TYPE_EXPR, MedicalDocument
+            from apps.records.models import MedicalDocument
             own_notes = list(
                 MedicalDocument.objects.using("default")
-                .filter(awpid=patient.awpid, source_tenant_id=request.tenant_id)
-                .values("id", "title", "mime_type", "uploaded_by", "created_at",
-                        doc_type=DOC_TYPE_EXPR, file_name=F("original_file_name"))
+                .filter(patient__awpid=patient.awpid, source_tenant_id=str(request.tenant_id))
+                .values("id", "file_name", "mime_type", "uploaded_by", "created_at",
+                        title=F("file_name"), doc_type=F("document_type"))
                 .order_by("-created_at")[:50]
             )
             return success(data={
@@ -370,12 +370,12 @@ class PatientDocumentDetailView(APIView):
         # list this document's id would normally be discovered from — a
         # doc_id obtained any other way (stale link, guessed id) must not
         # bypass consent just because the summary list itself is gated.
-        owner = Patient.objects.using(request.tenant_db).filter(awpid=doc.awpid).first()
+        owner = Patient.objects.using(request.tenant_db).filter(awpid=doc.patient.awpid).first()
         # A document this hospital captured for this visit (consult note,
         # handwritten/typeset prescription) is exempt from the HIE gate — it's
         # our own record, not cross-hospital sharing. Same carve-out as
         # PatientHistoryView's no-consent branch.
-        own_hospital_doc = doc.source_tenant_id == request.tenant_id
+        own_hospital_doc = doc.source_tenant_id == str(request.tenant_id)
         if not own_hospital_doc and (not owner or not owner.hie_consent_given):
             from core.audit import log_action
             log_action(request, request.tenant_db, action="patient.document.view_blocked_no_consent",
@@ -393,11 +393,11 @@ class PatientDocumentDetailView(APIView):
         # S3 URL gets a Content-Disposition override; a "data:" URI is saved
         # client-side (utils/fileViewer.downloadFile).
         want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
-        dl_name = doc.file_name or f"{doc.title or 'document'}.pdf"
-        file_data = blob_storage.signed_url(doc.file_path, download_name=dl_name if want_download else None)
+        dl_name = doc.file_name or "document.pdf"
+        file_data = blob_storage.signed_url(doc.file.name, download_name=dl_name if want_download else None)
 
         return success(data={
-            "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,
+            "id": doc.id, "title": doc.file_name, "doc_type": doc.document_type,
             "file_name": doc.file_name, "mime_type": doc.mime_type,
             "file_data": file_data, "created_at": doc.created_at,
             "download": want_download,

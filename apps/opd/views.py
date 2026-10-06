@@ -383,7 +383,7 @@ class AppointmentHistoryView(APIView):
         # recorded" instead of just an empty space.
         enc_ids = [row["encounter"]["id"] for row in data if row.get("encounter")]
         if enc_ids:
-            from apps.records.models import DOC_TYPE_EXPR, MedicalDocument
+            from apps.records.models import MedicalDocument
             encs = {
                 str(e.id): e for e in OPDEncounter.objects.using(db)
                 .filter(id__in=enc_ids)
@@ -394,36 +394,36 @@ class AppointmentHistoryView(APIView):
                 .filter(encounter_id__in=enc_ids, items__isnull=False)
                 .values_list("encounter_id", flat=True).distinct()
             }
-            # Three archived PDFs can hang off one encounter (see
+            # Two archived PDFs can hang off one encounter (see
             # apps.opd.views._store_prescription_pdf / _store_handwriting_pdfs):
             #   encounter:<id>                  -> typeset prescription  [pt + dr]
             #   encounter:<id>:handwritten:rx   -> handwritten Rx        [pt + dr]
-            #   encounter:<id>:handwritten:note -> handwritten SOAP note [dr only]
-            # Fetch all three in one query and bucket by ref shape.
-            typeset_rx_docs, hw_rx_docs, note_docs = {}, {}, {}
+            # They are patient documents (MedicalDocument). The handwritten Internal Note is not: it is the
+            # doctor's own record, kept on the consult session (ConsultSession.note_pdf), never a patient document.
+            from apps.registry.models import ConsultSession
+            typeset_rx_docs, hw_rx_docs = {}, {}
             wanted_refs = []
             for i in enc_ids:
-                wanted_refs += [f"encounter:{i}",
-                                f"encounter:{i}:handwritten:rx",
-                                f"encounter:{i}:handwritten:note"]
+                wanted_refs += [f"encounter:{i}", f"encounter:{i}:handwritten:rx"]
             for d in (MedicalDocument.objects.using("default")
                       .filter(source_ref__in=wanted_refs)
-                      .values("id", "source_ref", doc_type=DOC_TYPE_EXPR)):
+                      .values("id", "source_ref", "document_type")):
                 ref = d["source_ref"]
                 eid = ref.split(":", 2)[1]
                 if ref.endswith(":handwritten:rx"):
                     hw_rx_docs[eid] = d["id"]
-                elif ref.endswith(":handwritten:note"):
-                    note_docs[eid] = d["id"]
-                elif d["doc_type"] == "prescription":
+                elif d["document_type"] == "prescription":
                     typeset_rx_docs[eid] = d["id"]
+            noted = {str(e) for e in ConsultSession.objects.using("default")
+                     .filter(encounter_id__in=enc_ids, tenant_id=request.tenant_id)
+                     .exclude(note_pdf="").values_list("encounter_id", flat=True)}
             for row in data:
                 eid = row["encounter"]["id"] if row.get("encounter") else None
                 e = encs.get(eid) if eid else None
                 row["prescription_doc_id"] = typeset_rx_docs.get(eid)
                 row["handwritten_prescription_doc_id"] = hw_rx_docs.get(eid)
-                row["internal_note_doc_id"] = note_docs.get(eid)
-                row["has_internal_note"] = bool(row["internal_note_doc_id"]) or bool(e and (
+                row["internal_note_available"] = eid in noted
+                row["has_internal_note"] = row["internal_note_available"] or bool(e and (
                     (e.subjective or e.objective or e.assessment or e.plan or "").strip() or e.diagnoses
                 ))
                 row["has_prescription"] = bool(
@@ -436,7 +436,7 @@ class AppointmentHistoryView(APIView):
                 row["has_prescription"] = False
                 row["prescription_doc_id"] = None
                 row["handwritten_prescription_doc_id"] = None
-                row["internal_note_doc_id"] = None
+                row["internal_note_available"] = False
 
         return Response({"results": data, "pagination": meta})
 
@@ -1104,7 +1104,7 @@ def _create_prescription_for(enc, db):
 
 def _store_prescription_pdf(enc, db, tenant_id):
     """After sign: mirror the prescription to a registry
-    MedicalDocument(classification=prescription) so it shows in the doctor's
+    MedicalDocument(document_type=prescription) so it shows in the doctor's
     history and the patient's My Reports. Delegates to
     apps.opd.archive.store_prescription_document."""
     rx = Prescription.objects.using(db).filter(encounter_id=enc.id).first()
@@ -1123,9 +1123,9 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
     in object storage — the original-source record behind the typeset
     prescription and the OCR'd SOAP note.
 
-      rx_pages   -> MedicalDocument(classification=prescription)   [patient + doctor]
-      note_pages -> MedicalDocument(classification=consult_note)   [doctor only —
-                    STAFF_ONLY_DOC_TYPES, excluded from every portal query]
+      rx_pages   -> MedicalDocument(document_type=prescription)   [patient + doctor]
+      note_pages -> ConsultSession.note_pdf   [doctor only: kept on the consult
+                    session, never a patient document, so no patient query can reach it]
 
     Best-effort: any failure here is logged and swallowed, never blocks the
     sign. On success the now-redundant base64 canvas is cleared from the
@@ -1163,7 +1163,7 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
         specs = [
             ("rx", sess.rx_pages, "prescription", "prescriptions", "prescription",
              f"Handwritten Prescription{(' ' + rx_label) if rx_label else ''} — {visit_date}"),
-            ("note", sess.note_pages, "consult_note", "consult-notes", "consult-note",
+            ("note", sess.note_pages, "consultation_note", "consult-notes", "consult-note",
              f"Handwritten Consultation Note — {visit_date}"),
         ]
         cleared = {}
@@ -1171,7 +1171,9 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
             if not pages:
                 continue
             ref = f"encounter:{enc.id}:handwritten:{tab}"
-            if MedicalDocument.objects.using("default").filter(source_ref=ref).exists():
+            already = (bool(sess.note_pdf) if tab == "note"
+                       else MedicalDocument.objects.using("default").filter(source_ref=ref).exists())
+            if already:
                 cleared[tab] = True  # already archived on a prior attempt
                 continue
             pdf_bytes = images_to_pdf(pages, header=f"{title}  ·  {hospital}")
@@ -1182,10 +1184,14 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
             file_path = blob_storage.upload_data_uri(
                 pdf_uri, prefix=f"patients/{awpid}/{prefix}", mime_type="application/pdf", category=category,
             )
-            create_issued_document(
-                awpid=awpid, file_path=file_path, name=f"{title}.pdf", doc_type=doc_type,
-                source_tenant_id=tenant_id, source_ref=ref, title=title, hospital_label=hospital, document_date=visit_date,
-            )
+            if tab == "note":
+                # the doctor's own record: it stays on the consult session, not in the patient's documents
+                ConsultSession.objects.using("default").filter(id=sess.id).update(note_pdf=file_path)
+            else:
+                create_issued_document(
+                    awpid=awpid, file_path=file_path, name=f"{title}.pdf", doc_type=doc_type,
+                    source_tenant_id=tenant_id, source_ref=ref, document_date=visit_date,
+                )
             cleared[tab] = True
 
         upd = {}
@@ -1197,6 +1203,34 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
             ConsultSession.objects.using("default").filter(id=sess.id).update(**upd)
     except Exception:
         logger.exception("consult-pad handwriting archive failed for encounter=%s", enc.id)
+
+
+class EncounterInternalNoteView(APIView):
+    """
+    GET /api/v1/opd/encounters/<id>/internal-note/[?download=1]
+
+    The doctor's handwritten Internal Note, archived as a PDF when the encounter was signed. It lives on the consult
+    session (ConsultSession.note_pdf), so it is reachable only here — by a doctor of the hospital that wrote it —
+    and never through the patient's documents.
+    """
+    permission_classes = [IsDoctor]
+
+    def get(self, request, pk):
+        from apps.registry.models import ConsultSession
+        from core import storage as blob_storage
+
+        sess = (ConsultSession.objects.using("default")
+                .filter(encounter_id=pk, tenant_id=request.tenant_id).exclude(note_pdf="").first())
+        if not sess:
+            return api_not_found("No internal note was archived for this visit.")
+        want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
+        name = "Handwritten Consultation Note.pdf"
+        return success(data={
+            "id": str(sess.encounter_id), "title": "Handwritten Consultation Note", "doc_type": "consultation_note",
+            "file_name": name, "mime_type": "application/pdf", "created_at": sess.signed_at or sess.updated_at,
+            "file_data": blob_storage.signed_url(sess.note_pdf, download_name=name if want_download else None),
+            "download": want_download,
+        })
 
 
 class EncounterConsultSessionView(APIView):

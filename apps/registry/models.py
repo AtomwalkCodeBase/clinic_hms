@@ -902,6 +902,9 @@ class ConsultSession(models.Model):
     #   investigations, advice, follow_up_days, raw_text,
     #   status: idle|pending|done|failed, error, at }
     note_recognised = models.JSONField(null=True, blank=True)
+    # S3 key of the Internal Note's handwriting, archived as a PDF when the encounter is signed. Doctor-only:
+    # it is kept here, on the consult pad, and is never a patient document (apps.records knows nothing of it).
+    note_pdf = models.CharField(max_length=500, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

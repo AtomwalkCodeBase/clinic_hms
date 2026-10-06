@@ -8,18 +8,12 @@ from .views import (
 from .vaccination_template_views import (
     VaccinationTemplateListCreateView, VaccinationTemplateDetailView,
 )
-from .classification_rule_views import (
-    ClassificationRuleListCreateView, ClassificationRuleDetailView,
-    SweepConfigView, DocumentReportView, DocumentCorrectView, ReclassifyView,
-)
+from .classification_rule_views import DocumentReportView, DocumentCorrectView, ReclassifyView
 from .milestone_template_views import (
     MilestoneTemplateListCreateView, MilestoneTemplateDetailView,
 )
 
 urlpatterns = [
-    path("classification-rules/",          ClassificationRuleListCreateView.as_view(), name="platform-classification-rules"),
-    path("classification-rules/<int:pk>/", ClassificationRuleDetailView.as_view(), name="platform-classification-rule-detail"),
-    path("records/sweep-config/",   SweepConfigView.as_view(), name="platform-records-sweep-config"),
     path("records/report/",         DocumentReportView.as_view(), name="platform-records-report"),
     path("records/report/<int:pk>/", DocumentCorrectView.as_view(), name="platform-records-report-detail"),
     path("records/reclassify/", ReclassifyView.as_view(), name="platform-records-reclassify"),

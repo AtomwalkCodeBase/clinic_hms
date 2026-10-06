@@ -11,7 +11,7 @@
  * What each report is called, and the message and actions it gets, follow from utils/reports.js (stateOf).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckSquare, Clock, Download, Lock, Plus, Search, Trash2 } from "lucide-react";
+import { AlertTriangle, CheckSquare, Clock, Download, Lock, Plus, Search } from "lucide-react";
 import { Link } from "react-router-dom";
 import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -40,21 +40,6 @@ function useWide(px) {
     return () => mq.removeEventListener("change", on);
   }, [query]);
   return wide;
-}
-
-function ConfirmDialog({ title, message, confirmLabel, busy, onConfirm, onCancel }) {
-  return (
-    <div style={{ ...backdrop, zIndex: 1100 }} onClick={onCancel}>
-      <div className="card" style={{ width: "min(420px, 96vw)", padding: 22 }} onClick={e => e.stopPropagation()} role="alertdialog" aria-label={title}>
-        <h3 style={h3}>{title}</h3>
-        <p style={{ fontSize: 13, color: "var(--color-text-secondary)", lineHeight: 1.55, margin: "10px 0 18px" }}>{message}</p>
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button className="btn-outline" disabled={busy} onClick={onCancel}>Cancel</button>
-          <button className="btn-primary" style={{ background: "var(--color-danger)", borderColor: "var(--color-danger)" }} disabled={busy} onClick={onConfirm}>{confirmLabel}</button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export default function MyReportsPage() {
@@ -182,8 +167,6 @@ export default function MyReportsPage() {
   const [sel, setSel] = useState(() => new Set());
   const [addOpen, setAddOpen] = useState(false);
   const [openId, setOpenId] = useState(null);
-  const [confirm, setConfirm] = useState(null);          // the reports about to be deleted
-  const [deleting, setDeleting] = useState(false);
   const wide = useWide(1100);
 
   // tabs: All, Needs attention, then one tab per type that is actually present (most reports first)
@@ -221,28 +204,10 @@ export default function MyReportsPage() {
     } catch { toastError("Could not build the ZIP."); }
   }
 
-  // Delete one report or many: always asks first, then says what happened.
-  function askDelete(list) { if (list.length) setConfirm(list); }
-  async function confirmDelete() {
-    const list = confirm;
-    setDeleting(true);
-    try {
-      const res = await apiClient.post(API_ENDPOINTS.PORTAL.DOCUMENTS_BULK_DELETE, { ids: list.map(d => d.id), ...awpidParam });
-      const { deleted = 0, skipped = [] } = res.data?.data || res.data || {};
-      if (deleted) toastSuccess(deleted === 1 ? "Deleted from your reports." : `Deleted ${deleted} reports from your reports.`);
-      if (skipped.length) toastWarning(`${skipped.length} couldn’t be deleted — they weren’t found.`);
-      if (list.some(d => d.id === openId)) setOpenId(null);
-      stopSelecting();
-      refetch();
-    } catch (err) { toastApiError(err, "Could not delete — nothing was removed."); }
-    finally { setDeleting(false); setConfirm(null); }
-  }
-  const hospitalIssued = confirm ? confirm.filter(d => d.source_tenant_id || d.uploaded_by === "staff").length : 0;
-
   const panel = openDoc && (
     <ReportPanel doc={openDoc} original={openDoc.duplicate_of ? byId.get(openDoc.duplicate_of) : null} patientAwpid={patientAwpid}
       priv={privEnabled ? privMap.get(openDoc.id) : undefined} onLock={privEnabled ? onLock : undefined}
-      onClose={() => setOpenId(null)} onAct={actOn} onDelete={askDelete} onChanged={refetch} />
+      onClose={() => setOpenId(null)} onAct={actOn} onChanged={refetch} />
   );
 
   return (
@@ -322,8 +287,6 @@ export default function MyReportsPage() {
             </label>
             <span style={{ fontSize: 13, color: "var(--color-text-muted)", flex: 1 }}>{sel.size} selected</span>
             <button className="btn-outline" disabled={!sel.size} onClick={downloadSelected}><Download size={14} /> Download</button>
-            <button className="btn-outline" style={{ color: "var(--color-danger)", borderColor: "var(--color-danger)" }} disabled={!sel.size}
-              onClick={() => askDelete(docs.filter(d => sel.has(d.id)))}><Trash2 size={14} /> Delete{sel.size ? ` ${sel.size}` : ""}</button>
             <button className="btn-outline" onClick={stopSelecting}>Cancel</button>
           </div>
         )}
@@ -343,7 +306,7 @@ export default function MyReportsPage() {
                   <ReportRow key={d.id} doc={d} active={d.id === openId} selectMode={selectMode} selected={sel.has(d.id)}
                     priv={privEnabled ? privMap.get(d.id) : undefined} onLock={privEnabled ? onLock : undefined}
                     onClick={() => (selectMode ? toggleSel(d.id) : setOpenId(d.id))} onOpen={() => setOpenId(d.id)}
-                    onAct={actOn} onDelete={askDelete} />
+                    onAct={actOn} />
                 ))}
                 {hasMore && <button className="btn-outline" style={{ width: "100%" }} onClick={loadMore}>Load more</button>}
               </>
@@ -361,13 +324,6 @@ export default function MyReportsPage() {
       {addOpen && (
         <AddReportsModal patientAwpid={patientAwpid} onClose={() => setAddOpen(false)} onUploaded={afterUpload}
           onDone={() => { setAddOpen(false); setTab("all"); refetch(); }} />
-      )}
-      {confirm && (
-        <ConfirmDialog
-          title={confirm.length === 1 ? "Delete this report?" : `Delete ${confirm.length} reports?`}
-          message={`${confirm.length === 1 ? `“${confirm[0].title}” will` : "They will"} be removed from your reports and from other hospitals’ view. This can’t be undone.${hospitalIssued ? " Your hospital keeps its own copy of the reports it issued." : ""}`}
-          confirmLabel={confirm.length === 1 ? "Delete" : `Delete ${confirm.length}`} busy={deleting}
-          onConfirm={confirmDelete} onCancel={() => setConfirm(null)} />
       )}
       {lockDlg && (
         <div onClick={() => setLockDlg(null)} style={{ position: "fixed", inset: 0, background: "rgba(15,23,20,.42)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}>

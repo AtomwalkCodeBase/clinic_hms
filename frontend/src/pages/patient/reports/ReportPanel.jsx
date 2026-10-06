@@ -4,7 +4,7 @@
  * choose from, and the activity.
  */
 import { useEffect, useState } from "react";
-import { Download, FileText, Image as ImageIcon, Lock, Trash2, Unlock, X } from "lucide-react";
+import { Download, FileText, Image as ImageIcon, Lock, Unlock, X } from "lucide-react";
 import { useToast } from "../../../hooks/useToast";
 import apiClient from "../../../services/api.client";
 import API_ENDPOINTS from "../../../config/api.config";
@@ -35,7 +35,7 @@ function InfoRow({ label, children }) {
   );
 }
 
-export default function ReportPanel({ doc, original, patientAwpid, priv, onLock, onClose, onAct, onDelete, onChanged }) {
+export default function ReportPanel({ doc, original, patientAwpid, priv, onLock, onClose, onAct, onChanged }) {
   const { toastSuccess, toastApiError } = useToast();
   const [tab, setTab] = useState("details");
   const [detail, setDetail] = useState(null);           // the full record: file link, choosable types, activity
@@ -136,8 +136,6 @@ export default function ReportPanel({ doc, original, patientAwpid, priv, onLock,
                 {chips.extra ? <span style={chip(chips.extra.tone)}>{chips.extra.text}</span> : <span style={{ color: "var(--color-text-muted)" }}>—</span>}
               </InfoRow>
               <InfoRow label="Source">{hospital ? "Issued by your hospital" : "Uploaded by you"}</InfoRow>
-              {doc.hospital_label ? <InfoRow label="Hospital / lab">{doc.hospital_label}</InfoRow> : null}
-              {doc.doctor_label ? <InfoRow label="Doctor">{doc.doctor_label}</InfoRow> : null}
               {doc.document_date ? <InfoRow label="Document date">{fmtDate(doc.document_date)}</InfoRow> : null}
               {doc.public_document_id ? <InfoRow label="Document ID">{doc.public_document_id}</InfoRow> : null}
               <InfoRow label="Added on">{fmtDate(doc.created_at)}</InfoRow>
@@ -183,10 +181,6 @@ export default function ReportPanel({ doc, original, patientAwpid, priv, onLock,
             {priv.private ? <><Unlock size={15} /> Share with doctors</> : <><Lock size={15} /> Hide from doctors</>}
           </button>
         )}
-        <button className="btn-outline" style={{ color: "var(--color-danger)", borderColor: "var(--color-danger)", marginLeft: "auto" }} disabled={busy}
-          onClick={() => onDelete([doc])}>
-          <Trash2 size={15} /> Delete from my reports
-        </button>
       </div>
       {hospital && (
         <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 8 }}>

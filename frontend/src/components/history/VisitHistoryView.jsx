@@ -91,10 +91,10 @@ function HistoryTable({ rows, role, navigate, docActions, tableClass }) {
                       {r.has_prescription ? "Prescription (no PDF)" : "No prescription issued"}
                     </span>
                   )}
-                  {r.internal_note_doc_id ? (
+                  {r.internal_note_available ? (
                     <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
                       <span style={{ fontWeight: 700, color: "var(--color-text-secondary)" }}>Internal note:</span>
-                      {docActions(r.internal_note_doc_id)}
+                      {docActions(r.encounter.id, null, API_ENDPOINTS.OPD.ENCOUNTER_INTERNAL_NOTE(r.encounter.id))}
                     </div>
                   ) : (
                     <span style={{ color: r.has_internal_note ? "var(--color-text-secondary)" : "var(--color-text-muted)" }}>
@@ -190,10 +190,10 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
   // window.open() must be synchronous in the click handler or the popup is
   // blocked; the tab is pointed at the file once it loads. Responses are
   // enveloped { success, data: {...} } — unwrap one level.
-  async function openDoc(docId) {
+  async function openDoc(docId, url) {
     const win = window.open("", "_blank");
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PATIENTS.DOCUMENT(docId));
+      const res = await apiClient.get(url || API_ENDPOINTS.PATIENTS.DOCUMENT(docId));
       const doc = res.data?.data || res.data;
       if (doc?.file_data) openDataUrlInNewTab(win, doc.file_data);
       else if (win) win.close();
@@ -205,9 +205,9 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
 
   // Save a stored PDF to disk (browser "Save As"). ?download=1 makes the
   // backend hand back an attachment-disposition URL / data URI.
-  async function downloadDoc(docId) {
+  async function downloadDoc(docId, url) {
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PATIENTS.DOCUMENT(docId), { params: { download: 1 } });
+      const res = await apiClient.get(url || API_ENDPOINTS.PATIENTS.DOCUMENT(docId), { params: { download: 1 } });
       const doc = res.data?.data || res.data;
       if (doc?.file_data) downloadFile(doc.file_data, doc.file_name || "document.pdf");
       else window.alert("Could not download the document.");
@@ -223,13 +223,15 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
     border: "1px solid var(--color-primary)", color: "var(--color-primary)",
     background: "var(--color-primary-light)",
   };
-  const docActions = (docId, tag) => (
+  // `url` overrides where the file is fetched from: the doctor's internal note is not a patient document, so it has
+  // its own endpoint (OPD.ENCOUNTER_INTERNAL_NOTE) instead of PATIENTS.DOCUMENT.
+  const docActions = (docId, tag, url) => (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
       {tag && <span style={{ color: "var(--color-text-muted)" }}>({tag})</span>}
-      <button type="button" style={miniBtn} onClick={() => openDoc(docId)}>
+      <button type="button" style={miniBtn} onClick={() => openDoc(docId, url)}>
         <FileText size={9} /> View
       </button>
-      <button type="button" style={miniBtn} onClick={() => downloadDoc(docId)}>
+      <button type="button" style={miniBtn} onClick={() => downloadDoc(docId, url)}>
         <Download size={9} /> Save
       </button>
     </span>

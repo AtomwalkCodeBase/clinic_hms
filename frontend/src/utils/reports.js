@@ -93,7 +93,7 @@ export function sortReports(docs, key) {
 export function matchesSearch(doc, query) {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  const words = [doc.title, doc.file_name, doc.hospital_label, doc.doctor_label, doc.public_document_id,
+  const words = [doc.title, doc.file_name, doc.public_document_id,
     doc.doc_type && typeLabel(doc.doc_type), doc.best_guess && typeLabel(doc.best_guess), stateOf(doc)];
   return words.filter(Boolean).join(" ").toLowerCase().includes(q);
 }

@@ -2,7 +2,7 @@
 apps/lab/archive.py
 -------------------
 store_lab_report_document() — on delivery (apps/lab/signals.py), store the
-LabReport as a MedicalDocument(classification=lab_report) so it shows in the
+LabReport as a MedicalDocument(document_type=lab_report) so it shows in the
 patient's My Reports. Idempotent by source_ref = "labreport:<id>".
 
 The file is the PDF/image the lab uploaded (normalised to PDF, QR-stamped),
@@ -88,6 +88,6 @@ def store_lab_report_document(report, db, tenant_id):
     )
     return create_issued_document(
         awpid=awpid, file_path=file_path, name=f"{title}.pdf", doc_type="lab_report",
-        source_tenant_id=tenant_id, source_ref=src_ref, title=title, public_document_id=report.report_number or "",
-        hospital_label=hospital_name, document_date=when,
+        source_tenant_id=tenant_id, source_ref=src_ref, public_document_id=report.report_number or "",
+        document_date=when,
     )

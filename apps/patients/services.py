@@ -19,7 +19,7 @@ from apps.registry.models import (
     SharedDiagnosis, SharedVital, SharedAllergy,
     SharedLabResult, SharedPrescription,
 )
-from apps.records.models import DOC_TYPE_EXPR, MedicalDocument
+from apps.records.models import MedicalDocument
 from .models import Patient
 
 logger = logging.getLogger(__name__)
@@ -771,10 +771,10 @@ class PatientService:
         # rows are excluded too.
         documents = list(
             MedicalDocument.objects.using("default")
-            .filter(awpid=awpid, hidden_at__isnull=True, deleted_at__isnull=True)
+            .filter(patient__awpid=awpid)
             .filter(status="completed")
-            .values("id", "title", "mime_type", "uploaded_by", "created_at",
-                    doc_type=DOC_TYPE_EXPR, file_name=F("original_file_name"))
+            .values("id", "file_name", "mime_type", "uploaded_by", "created_at",
+                    title=F("file_name"), doc_type=F("document_type"))
             .order_by("-created_at")[:50]
         )
 

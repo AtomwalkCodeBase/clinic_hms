@@ -32,6 +32,7 @@ from apps.tenants.utils import ensure_tenant_db
 from core.file_validation import validate_data_uri, FileValidationError
 from core.geo import haversine_km, parse_lat_lng
 from apps.patients.age_utils import age_years_months as _age_years_months
+from apps.records import classification as doc_rules
 from core import storage as blob_storage
 from apps.tenants.models import Tenant
 from apps.registry.models import PatientAccount, PatientIdentity
@@ -1562,14 +1563,14 @@ class PortalRescheduleBookingView(APIView):
 
 # ── My documents ─────────────────────────────────────────────────────────────
 # Uploading is POST /api/v1/records/upload/ (apps/records). These are the
-# patient's read / delete / zip endpoints over apps.records.MedicalDocument.
+# patient's read / zip endpoints over apps.records.MedicalDocument.
 
 def _handwritten_siblings(awpid):
     """The consult pad's raw handwritten Rx ("encounter:<id>:handwritten:rx")
     hangs off its typeset prescription instead of being its own row.
     Returns ({typeset source_ref: handwriting doc id}, [handwriting ids to hide])."""
     from apps.records.models import MedicalDocument
-    docs = MedicalDocument.objects.using("default").filter(awpid=awpid, source_ref__startswith="encounter:")
+    docs = MedicalDocument.objects.using("default").filter(patient__awpid=awpid, source_ref__startswith="encounter:")
     typeset = set(docs.exclude(source_ref__contains=":handwritten:").values_list("source_ref", flat=True))
     by_base = {}
     for hid, ref in docs.filter(source_ref__endswith=":handwritten:rx").values_list("id", "source_ref"):
@@ -1581,32 +1582,16 @@ def _handwritten_siblings(awpid):
 
 def _document_row(d, handwritten_doc_id=None):
     return {
-        "id": d.id, "title": d.title, "doc_type": d.doc_type,
+        "id": d.id, "title": d.file_name, "doc_type": d.document_type,
         "file_name": d.file_name, "mime_type": d.mime_type, "size": d.size,
         "uploaded_by": d.uploaded_by, "created_at": d.created_at,
-        "document_date": d.document_date, "public_document_id": d.public_document_id,
-        "hospital_label": d.hospital_label, "doctor_label": d.doctor_label,
+        "document_date": d.document_date, "public_document_id": d.document_ref,
         "source_tenant_id": d.source_tenant_id,
-        "processing_status": d.processing_status, "score": d.score, "method": d.method, "best_guess": d.best_guess, "duplicate_of": d.duplicate_of,
-        "error": d.error if d.processing_status == "failed" else "",
+        "processing_status": d.processing_status, "score": doc_rules.score_of(d), "method": doc_rules.method_of(d),
+        "best_guess": doc_rules.best_guess_of(d),
+        "error": d.error_message if d.processing_status == "failed" else "",
         "batch_id": d.batch_id, "handwritten_doc_id": handwritten_doc_id,
     }
-
-
-def _remove_from_view(doc):
-    """Take a report out of the patient's reports (and other hospitals' view). A prescription's handwriting
-    sibling goes with it. The issuing hospital keeps its own copy."""
-    from apps.records.models import MedicalDocument
-    targets = [doc]
-    if doc.doc_type == "prescription" and doc.source_ref.startswith("encounter:") \
-            and ":handwritten:" not in doc.source_ref:
-        targets += list(MedicalDocument.objects.using("default")
-                        .filter(awpid=doc.awpid_id, source_ref=f"{doc.source_ref}:handwritten:rx"))
-    now = timezone.now()
-    for t in targets:
-        field = "hidden_at" if t.source_tenant_id else "deleted_at"
-        setattr(t, field, now)
-        t.save(using="default", update_fields=[field])
 
 
 def _events(doc):
@@ -1616,17 +1601,14 @@ def _events(doc):
     label = lambda t: t.replace("_", " ").capitalize() if t else "nothing"       # noqa: E731
     events = [{"at": doc.created_at, "text": "Issued by your hospital" if doc.source_tenant_id else "You uploaded this file"}]
     if doc.status == S.FAILED:
-        events.append({"at": doc.updated_at, "text": f"We couldn’t read it — {doc.error}".rstrip(" —")})
-    elif doc.status == S.REJECTED:
-        events.append({"at": doc.updated_at, "text": f"Not added: {doc.error or 'it is already in your reports'}"})
-    elif doc.status == S.COMPLETED and not doc.source_tenant_id:
-        if doc.classification_source == type(doc).Source.HUMAN:
-            events.append({"at": doc.updated_at, "text": f"You set the type to {label(doc.doc_type)}"})
-        elif doc.classification_id:
-            events.append({"at": doc.updated_at, "text": f"Filed as {label(doc.doc_type)} by the rules"
-                                                          f" ({round(doc.score or 0)}% confident)"})
+        events.append({"at": doc.updated_at, "text": f"We couldn’t read it — {doc.error_message}".rstrip(" —")})
+    elif doc.status in (S.COMPLETED, S.REVIEW_REQUIRED) and not doc.source_tenant_id:
+        if doc_rules.method_of(doc) == "staff":
+            events.append({"at": doc.updated_at, "text": f"You set the type to {label(doc.document_type)}"})
+        elif doc.status == S.COMPLETED:
+            events.append({"at": doc.updated_at, "text": f"Filed as {label(doc.document_type)} by the rules"})
         else:
-            best = (doc.classification_details or {}).get("best_guess")
+            best = doc_rules.best_guess_of(doc)
             events.append({"at": doc.updated_at, "text": f"The rules couldn’t tell what it is"
                                                           f"{f' (closest: {label(best)})' if best else ''}"})
     elif doc.status in type(doc).IN_PROGRESS:
@@ -1635,9 +1617,9 @@ def _events(doc):
 
 
 def _choosable_types():
-    """What a patient may file a report under: the types Platform Admin configured, minus staff-only ones."""
-    from apps.records.models import DocumentClassification
-    return [c.code for c in DocumentClassification.configured()]
+    """What a patient may file a report under: the fixed document types (apps/records/classification.py)."""
+    from apps.records.classification import CHOOSABLE_TYPES
+    return list(CHOOSABLE_TYPES)
 
 
 def _own_document(request, doc_id):
@@ -1646,15 +1628,15 @@ def _own_document(request, doc_id):
     target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
     if err:
         return None, err
-    doc = MedicalDocument.objects.using("default").filter(pk=doc_id, awpid=target_awpid).first()
-    if not doc or doc.is_staff_only:
+    doc = MedicalDocument.objects.using("default").filter(pk=doc_id, patient__awpid=target_awpid).first()
+    if not doc:
         return None, error("Document not found.", status=404)
     return doc, None
 
 
 class PortalDocumentListCreateView(APIView):
     """
-    GET /api/v1/portal/documents/?status=queued,ocr   — the patient's documents,
+    GET /api/v1/portal/documents/?status=queued,extracting   — the patient's documents,
     newest first, with each one's processing_status / type / score / method.
     """
     permission_classes = [IsPatient]
@@ -1667,9 +1649,9 @@ class PortalDocumentListCreateView(APIView):
             return err
         hw_by_base, linked_hw_ids = _handwritten_siblings(target_awpid)
         qs = (MedicalDocument.objects.using("default")
-              .filter(awpid=target_awpid, hidden_at__isnull=True, deleted_at__isnull=True)
-              .exclude(classification__is_staff_only=True)
+              .filter(patient__awpid=target_awpid)
               .exclude(id__in=linked_hw_ids)
+              .select_related("classification")
               .order_by("-created_at"))
         statuses = [s for s in (request.query_params.get("status") or "").split(",") if s]
         if statuses:
@@ -1682,14 +1664,10 @@ class PortalDocumentListCreateView(APIView):
 class PortalDocumentDetailView(APIView):
     """
     GET    /api/v1/portal/documents/<id>/[?download=1]  — metadata + a short-lived signed file URL, and the
-           types the patient may choose from (`doc_types`: what Platform Admin configured)
+           types the patient may choose from (`doc_types`: the fixed document types)
     PATCH  /api/v1/portal/documents/<id>/               — the patient acts on a document they uploaded:
            {doc_type}  correct its type (a human verdict, which the rules never overwrite)
-           {action: "keep"}   keep a file we rejected as a duplicate
            {action: "retry"}  try a file that failed again
-    DELETE /api/v1/portal/documents/<id>/               — remove it from My Reports and from
-           other hospitals' view (an upload: deleted_at; a hospital-issued report: hidden_at, and the hospital keeps its own copy). A
-           prescription's handwriting sibling goes with it.
     """
     permission_classes = [IsPatient]
 
@@ -1699,16 +1677,16 @@ class PortalDocumentDetailView(APIView):
         if err:
             return err
         want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
-        dl_name = doc.file_name or f"{doc.title or 'document'}.pdf"
+        dl_name = doc.file_name or "document.pdf"
         hw_id = None
-        if doc.doc_type == "prescription" and doc.source_ref.startswith("encounter:") \
+        if doc.document_type == "prescription" and doc.source_ref.startswith("encounter:") \
                 and ":handwritten:" not in doc.source_ref:
             hw_id = (MedicalDocument.objects.using("default")
-                     .filter(awpid=doc.awpid_id, source_ref=f"{doc.source_ref}:handwritten:rx")
+                     .filter(patient_id=doc.patient_id, source_ref=f"{doc.source_ref}:handwritten:rx")
                      .values_list("id", flat=True).first())
         return success(data={
             **_document_row(doc, hw_id),
-            "file_data": blob_storage.signed_url(doc.file_path, download_name=dl_name if want_download else None),
+            "file_data": blob_storage.signed_url(doc.file.name, download_name=dl_name if want_download else None),
             "download": want_download,
             "doc_types": _choosable_types(),
             "events": _events(doc),
@@ -1723,13 +1701,9 @@ class PortalDocumentDetailView(APIView):
             return error("This report was issued by your hospital, so it can't be changed here.")
         action = request.data.get("action")
         try:
-            if action in ("keep", "retry"):
-                (services.keep_duplicate if action == "keep" else services.retry_document)(doc)
-                try:
-                    from apps.records.tasks import dispatch_documents
-                    dispatch_documents(1, ids=[doc.id])       # start it now; the sweep is the backstop
-                except Exception:
-                    logger.exception("portal: couldn't dispatch document %s", doc.id)
+            if action == "retry":
+                services.retry_document(doc)
+                services.start_processing([doc.id])
             else:
                 doc_type = request.data.get("doc_type")
                 if doc_type not in _choosable_types():
@@ -1738,42 +1712,6 @@ class PortalDocumentDetailView(APIView):
         except ValueError as exc:
             return error(str(exc))
         return success(data=_document_row(type(doc).objects.using("default").get(pk=doc.pk)))
-
-    def delete(self, request, doc_id):
-        doc, err = _own_document(request, doc_id)
-        if err:
-            return err
-        _remove_from_view(doc)
-        return success(data={"id": doc.id, "deleted": True})
-
-
-class PortalDocumentBulkDeleteView(APIView):
-    """
-    POST /api/v1/portal/documents/bulk-delete/   body: { ids: [<doc_id>, ...] }  (max 100)
-    Removes the caller's selected reports (same as deleting each one). Ids that aren't theirs are ignored and
-    reported back as `skipped`, so one wrong id never blocks the rest.
-    """
-    permission_classes = [IsPatient]
-    _MAX_IDS = 100
-
-    def post(self, request):
-        from apps.records.models import MedicalDocument
-
-        target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-        ids = request.data.get("ids") or []
-        if not isinstance(ids, list) or not ids:
-            return error("Select at least one report.")
-        if len(ids) > self._MAX_IDS:
-            return error(f"Select at most {self._MAX_IDS} reports at a time.")
-        docs = list(MedicalDocument.objects.using("default")
-                    .filter(pk__in=[i for i in ids if isinstance(i, int)], awpid=target_awpid, hidden_at__isnull=True, deleted_at__isnull=True)
-                    .exclude(classification__is_staff_only=True))
-        for doc in docs:
-            _remove_from_view(doc)
-        removed = [d.id for d in docs]
-        return success(data={"deleted": len(removed), "ids": removed, "skipped": [i for i in ids if i not in removed]})
 
 
 class PortalDocumentZipView(APIView):
@@ -1799,18 +1737,17 @@ class PortalDocumentZipView(APIView):
         if len(ids) > self._MAX_IDS:
             return error(f"Select at most {self._MAX_IDS} documents.")
         docs = (MedicalDocument.objects.using("default")
-                .filter(pk__in=ids, awpid=target_awpid, deleted_at__isnull=True)
-                .exclude(classification__is_staff_only=True))
+                .filter(pk__in=ids, patient__awpid=target_awpid))
 
         buf, used = io.BytesIO(), set()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for d in docs:
                 try:
-                    content = blob_storage.get_bytes(d.file_path)
+                    content = blob_storage.get_bytes(d.file.name)
                 except Exception:
                     logger.warning("zip: could not read document %s", d.id, exc_info=True)
                     continue
-                name = d.file_name or f"{d.title or 'document'}-{d.id}.pdf"
+                name = d.file_name or f"document-{d.id}.pdf"
                 if name in used:
                     name = f"{d.id}-{name}"
                 used.add(name)
@@ -1891,10 +1828,10 @@ class PortalLabOrderListView(APIView):
                     if r.patient_choice == "outside":
                         from apps.records.models import MedicalDocument
                         doc = (MedicalDocument.objects.using("default")
-                               .filter(awpid=target_awpid, source_ref=f"labreq:{db}:{r.id}")
+                               .filter(patient__awpid=target_awpid, source_ref=f"labreq:{db}:{r.id}")
                                .order_by("-created_at").first())
                         if doc:
-                            attached_doc = {"id": doc.id, "title": doc.title, "created_at": doc.created_at}
+                            attached_doc = {"id": doc.id, "title": doc.file_name, "created_at": doc.created_at}
 
                     results.append({
                         "id": r.id,
@@ -2052,7 +1989,7 @@ class PortalPrescriptionListView(APIView):
                 hw_by_enc = {
                     d.source_ref.split(":")[1]: d.id
                     for d in MedicalDocument.objects.using("default").filter(
-                        awpid=target_awpid, classification__code="prescription",
+                        patient__awpid=target_awpid, document_type="prescription",
                         source_ref__endswith=":handwritten:rx",
                     )
                 }
@@ -3137,16 +3074,15 @@ class PortalHealthTimelineView(APIView):
         # ── Documents ───────────────────────────────────────────────────
         try:
             docs = (MedicalDocument.objects.using("default")
-                    .filter(awpid=target_awpid)
-                    .exclude(classification__is_staff_only=True)
+                    .filter(patient__awpid=target_awpid)
                     .order_by("-created_at")[:limit])
             for d in docs:
                 entries.append({
                     "date":      str(d.created_at.date() if hasattr(d.created_at, "date") else d.created_at),
                     "type":      "document",
                     "icon_hint": "file",
-                    "title":     d.title,
-                    "subtitle":  d.doc_type.replace("_", " ").title() if d.doc_type else None,
+                    "title":     d.file_name,
+                    "subtitle":  d.document_type.replace("_", " ").title() if d.document_type else None,
                     "detail":    {"id": d.id},
                 })
         except Exception as e:

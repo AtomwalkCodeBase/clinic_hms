@@ -32,7 +32,7 @@ REGISTRY_APPS = frozenset(
         "contenttypes",    # Django framework
         "sessions",        # Django sessions
         "admin",           # Django admin
-        "django_celery_beat",  # PeriodicTask/IntervalSchedule — kept in sync by records.SweepConfig
+        "django_celery_beat",  # Celery Beat's schedule tables (PeriodicTask/IntervalSchedule)
     ]
 )
 

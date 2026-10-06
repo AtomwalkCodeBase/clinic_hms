@@ -17,8 +17,9 @@ def pdf(name="report.pdf", size=None):
 
 
 @mock.patch("apps.records.views.resolve_target_awpid_and_dob", return_value=("AWP-T1", None, None))
-@mock.patch("apps.records.views.dispatch_documents")
-@mock.patch("apps.records.services.storage")
+@mock.patch("apps.records.views.start_processing")
+@mock.patch("apps.records.services.storage")            # the delete of an uploaded file
+@mock.patch("core.storage.put_bytes", side_effect=lambda key, data, mime_type: key)      # the FileField's S3 write
 class UploadViewTests(TestCase):
     databases = {"default"}
 
@@ -30,21 +31,26 @@ class UploadViewTests(TestCase):
         force_authenticate(request, user=MockUser({"user_id": 1, "role": "patient", "awpid": "AWP-T1"}))
         return UploadView.as_view()(request)
 
-    def test_every_upload_gets_a_batch_even_for_one_file(self, storage, dispatch, _resolve):
+    def test_every_upload_gets_a_batch_even_for_one_file(self, put, storage, start, _resolve):
         resp = self.post([pdf("a.pdf")])
 
         self.assertEqual(resp.status_code, 202)
         batch = DocumentBatch.objects.get()
-        self.assertEqual((batch.awpid_id, batch.total_files, resp.data["data"]["batch_id"]), ("AWP-T1", 1, batch.id))
+        self.assertEqual((batch.patient.awpid, batch.total_files, resp.data["data"]["batch_id"]), ("AWP-T1", 1, batch.id))
         doc = MedicalDocument.objects.get()
-        self.assertEqual((doc.processing_status, doc.awpid_id, doc.original_file_name, doc.batch_id, doc.size),
-                         ("queued", "AWP-T1", "a.pdf", batch.id, len(PDF)))
-        self.assertRegex(doc.file_path, rf"^patients/AWP-T1/documents/{batch.id}/[0-9a-f]{{32}}\.pdf$")
-        self.assertEqual(MedicalDocument.objects.get().status, "queued")
-        dispatch.assert_called_once_with(1, ids=[doc.id])
+        self.assertEqual((doc.processing_status, doc.patient.awpid, doc.file_name, doc.batch_id, doc.size, doc.document_type),
+                         ("queued", "AWP-T1", "a.pdf", batch.id, len(PDF), "not_classified"))
+        self.assertRegex(doc.file.name, rf"^documents/AWP-T1/{batch.id}/[0-9a-f]{{32}}\.pdf$")
+        start.assert_called_once_with([doc.id])
 
-    def test_several_files_share_one_batch_and_one_folder(self, storage, dispatch, _resolve):
-        storage.put_bytes.side_effect = lambda path, data, mime_type: path
+    def test_the_file_goes_to_s3_through_the_file_field(self, put, storage, start, _resolve):
+        self.post([pdf("a.pdf")])
+        doc = MedicalDocument.objects.get()
+        key, data = put.call_args.args
+        self.assertEqual((key, data), (doc.file.name, PDF))
+        self.assertEqual(put.call_args.kwargs["mime_type"], "application/pdf")
+
+    def test_several_files_share_one_batch_and_one_folder_and_are_all_queued(self, put, storage, start, _resolve):
         resp = self.post([pdf("a.pdf"), pdf("b.pdf"), pdf("c.pdf")])
 
         self.assertEqual(resp.status_code, 202)
@@ -52,77 +58,80 @@ class UploadViewTests(TestCase):
         self.assertEqual(batch.total_files, 3)
         docs = MedicalDocument.objects.filter(batch=batch)
         self.assertEqual(docs.count(), 3)
-        self.assertTrue(all(d.file_path.startswith(f"patients/AWP-T1/documents/{batch.id}/") for d in docs))
+        self.assertTrue(all(d.file.name.startswith(f"documents/AWP-T1/{batch.id}/") for d in docs))
         self.assertEqual(len(resp.data["data"]["documents"]), 3)
-        dispatch.assert_called_once()
+        start.assert_called_once_with([d.id for d in docs.order_by("id")])
 
-    def test_a_big_batch_is_left_queued_for_the_dispatcher(self, storage, dispatch, _resolve):
-        storage.put_bytes.side_effect = lambda path, data, mime_type: path
-        with mock.patch("apps.records.views.SweepConfig.current", return_value=mock.Mock(instant_max_files=2)):
-            self.post([pdf("a.pdf"), pdf("b.pdf"), pdf("c.pdf")])
-        dispatch.assert_not_called()
-        self.assertEqual(MedicalDocument.objects.filter(status="queued").count(), 3)
+    def test_a_long_file_name_is_cut_to_fit(self, put, storage, start, _resolve):
+        self.post([SimpleUploadedFile("x" * 150 + ".pdf", PDF, content_type="application/pdf")])
+        self.assertEqual(len(MedicalDocument.objects.get().file_name), 100)
 
-    def test_the_content_is_not_checked_at_the_door(self, storage, dispatch, _resolve):
+    def test_the_content_is_not_checked_at_the_door(self, put, storage, start, _resolve):
         """A bad file is accepted and fails later in the extraction job, so it never blocks the others."""
-        storage.put_bytes.side_effect = lambda path, data, mime_type: path
         resp = self.post([pdf("ok.pdf"), SimpleUploadedFile("notes.pdf", b"hello", content_type="application/pdf")])
         self.assertEqual(resp.status_code, 202)
         self.assertEqual(MedicalDocument.objects.count(), 2)
 
-    def test_an_unknown_extension_is_stored_as_bin_and_never_trusted_as_a_content_type(self, storage, dispatch, _resolve):
-        storage.put_bytes.side_effect = lambda path, data, mime_type: path
+    def test_an_unknown_extension_is_stored_as_bin_and_never_trusted_as_a_content_type(self, put, storage, start, _resolve):
         self.post([SimpleUploadedFile("evil.html", b"<html>", content_type="text/html")])
-        path, _data = storage.put_bytes.call_args.args
-        self.assertTrue(path.endswith(".bin"))
-        self.assertEqual(storage.put_bytes.call_args.kwargs["mime_type"], "application/octet-stream")
+        key, _data = put.call_args.args
+        self.assertTrue(key.endswith(".bin"))
+        self.assertEqual(put.call_args.kwargs["mime_type"], "application/octet-stream")
 
-    def test_one_oversize_file_rejects_everything_before_s3(self, storage, dispatch, _resolve):
+    def test_one_oversize_file_rejects_everything_before_s3(self, put, storage, start, _resolve):
         with mock.patch("apps.records.serializers.MAX_FILE_BYTES", 150):
             resp = self.post([pdf("ok.pdf"), pdf("big.pdf", size=200)])
 
         self.assertEqual(resp.status_code, 400)
-        storage.put_bytes.assert_not_called()
-        dispatch.assert_not_called()
+        put.assert_not_called()
+        start.assert_not_called()
         self.assertEqual(MedicalDocument.objects.count(), 0)
 
-    def test_an_empty_file_rejects_everything_before_s3(self, storage, dispatch, _resolve):
+    def test_an_empty_file_rejects_everything_before_s3(self, put, storage, start, _resolve):
         resp = self.post([pdf("ok.pdf"), SimpleUploadedFile("empty.pdf", b"", content_type="application/pdf")])
         self.assertEqual(resp.status_code, 400)
         self.assertIn("empty", str(resp.data))
-        storage.put_bytes.assert_not_called()
+        put.assert_not_called()
         self.assertEqual(MedicalDocument.objects.count(), 0)
 
-    def test_total_over_250mb_is_rejected(self, storage, dispatch, _resolve):
+    def test_total_over_250mb_is_rejected(self, put, storage, start, _resolve):
         with mock.patch("apps.records.serializers.MAX_TOTAL_BYTES", 150):
             resp = self.post([pdf("a.pdf"), pdf("b.pdf")])        # 2 × 109 bytes > 150
         self.assertEqual(resp.status_code, 400)
-        storage.put_bytes.assert_not_called()
+        put.assert_not_called()
 
-    def test_more_than_50_files_is_rejected(self, storage, dispatch, _resolve):
+    def test_more_than_50_files_is_rejected(self, put, storage, start, _resolve):
         with mock.patch("apps.records.serializers.MAX_FILES", 2):
             resp = self.post([pdf("a.pdf"), pdf("b.pdf"), pdf("c.pdf")])
         self.assertEqual(resp.status_code, 400)
-        storage.put_bytes.assert_not_called()
+        put.assert_not_called()
         self.assertEqual(MedicalDocument.objects.count(), 0)
 
-    def test_an_s3_failure_part_way_saves_nothing_and_deletes_what_was_sent(self, storage, dispatch, _resolve):
-        storage.put_bytes.side_effect = [None, RuntimeError("S3 down")]
+    def test_an_s3_failure_part_way_saves_nothing_and_deletes_what_was_sent(self, put, storage, start, _resolve):
+        sent = []
+
+        def flaky(key, data, mime_type):
+            sent.append(key)
+            if len(sent) == 2:
+                raise RuntimeError("S3 down")
+            return key
+
+        put.side_effect = flaky
         resp = self.post([pdf("a.pdf"), pdf("b.pdf")])
 
         self.assertEqual(resp.status_code, 503)
         self.assertEqual((MedicalDocument.objects.count(), DocumentBatch.objects.count()), (0, 0))
-        deleted = [c.args[0] for c in storage.delete.call_args_list]
-        self.assertEqual(len(deleted), 2)                    # both paths are cleaned up, sent or not
-        self.assertTrue(all(p.startswith("patients/AWP-T1/documents/") for p in deleted))
-        dispatch.assert_not_called()
+        deleted = [call.args[0] for call in storage.delete.call_args_list]
+        self.assertEqual(len(deleted), 1)                    # the one that was sent is cleaned up
+        self.assertTrue(deleted[0].startswith("documents/AWP-T1/"))
+        start.assert_not_called()
 
-    def test_files_are_sent_to_s3_at_the_same_time(self, storage, dispatch, _resolve):
+    def test_files_are_sent_to_s3_at_the_same_time(self, put, storage, start, _resolve):
         import threading
         import time
         active, peak, lock = 0, 0, threading.Lock()
 
-        def slow_put(path, data, mime_type):
+        def slow_put(key, data, mime_type):
             nonlocal active, peak
             with lock:
                 active += 1
@@ -130,8 +139,9 @@ class UploadViewTests(TestCase):
             time.sleep(0.05)
             with lock:
                 active -= 1
+            return key
 
-        storage.put_bytes.side_effect = slow_put
+        put.side_effect = slow_put
         resp = self.post([pdf(f"{i}.pdf") for i in range(6)])
         self.assertEqual(resp.status_code, 202)
         self.assertGreater(peak, 1)
@@ -150,27 +160,30 @@ class BatchDetailViewTests(TestCase):
 
     def test_returns_the_batch_counts_and_each_document(self, _resolve):
         identity("AWP-T1")
-        batch = DocumentBatch.objects.create(awpid_id="AWP-T1", total_files=3)
-        make_doc(batch=batch, status="completed", doc_type="lab_report", by="system", name="a.pdf")
+        batch = DocumentBatch.objects.create(patient=identity("AWP-T1"), total_files=3)
+        make_doc(batch=batch, status="completed", document_type="lab_report", by="rules", name="a.pdf")
         make_doc(batch=batch, status="queued", name="b.pdf")
-        make_doc(batch=batch, status="rejected", name="c.pdf")
+        make_doc(batch=batch, status="review_required", by="rules", name="c.pdf")
 
         data = self.get(batch.id).data["data"]
         self.assertEqual((data["id"], data["total_files"], data["status"]), (batch.id, 3, "processing"))
         self.assertEqual({k: v for k, v in data["counts"].items() if v},
-                         {"completed": 1, "queued": 1, "rejected": 1})
-        self.assertEqual([(d["file_name"], d["status"], d["doc_type"]) for d in data["documents"]],
-                         [("a.pdf", "completed", "lab_report"), ("b.pdf", "queued", ""), ("c.pdf", "rejected", "")])
+                         {"completed": 1, "queued": 1, "review_required": 1})
+        self.assertEqual([(d["file_name"], d["status"], d["processing_status"], d["doc_type"]) for d in data["documents"]],
+                         [("a.pdf", "completed", "completed", "lab_report"),
+                          ("b.pdf", "queued", "queued", "not_classified"),
+                          ("c.pdf", "review_required", "review_required", "not_classified")])
 
     def test_a_batch_is_complete_when_every_document_is_in_a_final_state(self, _resolve):
         identity("AWP-T1")
-        batch = DocumentBatch.objects.create(awpid_id="AWP-T1", total_files=2)
-        make_doc(batch=batch, status="completed", doc_type="scan", by="system")
+        batch = DocumentBatch.objects.create(patient=identity("AWP-T1"), total_files=3)
+        make_doc(batch=batch, status="completed", document_type="imaging_report", by="rules")
+        make_doc(batch=batch, status="review_required", by="rules")
         make_doc(batch=batch, status="failed")
         batch.refresh()
+        self.assertEqual((batch.processed_files, batch.failed_files, batch.status), (2, 1, "completed_with_errors"))
         self.assertEqual(services.batch_summary(batch)["status"], "completed")
 
     def test_someone_elses_batch_is_not_found(self, _resolve):
-        identity("AWP-OTHER")
-        batch = DocumentBatch.objects.create(awpid_id="AWP-OTHER", total_files=1)
+        batch = DocumentBatch.objects.create(patient=identity("AWP-OTHER"), total_files=1)
         self.assertEqual(self.get(batch.id).status_code, 404)

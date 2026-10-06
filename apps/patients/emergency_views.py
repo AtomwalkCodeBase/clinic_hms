@@ -223,7 +223,7 @@ class EmergencySummaryView(APIView):
 
         doc_ids = [d["id"] for d in history["documents"]]
         doc_files = {
-            d.id: blob_storage.signed_url(d.file_path)
+            d.id: blob_storage.signed_url(d.file.name)
             for d in MedicalDocument.objects.using("default").filter(id__in=doc_ids)
         }
         for d in history["documents"]:

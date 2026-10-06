@@ -52,11 +52,9 @@ class DocumentViewView(APIView):
         doc = (
             MedicalDocument.objects.using("default")
             .filter(
-                awpid=v.awpid,
-                public_document_id=v.public_document_id,
-                classification__code=v.doc_type,
-                deleted_at__isnull=True,
-                hidden_at__isnull=True,
+                patient__awpid=v.awpid,
+                document_ref=v.public_document_id,
+                document_type=v.doc_type,
             )
             .order_by("-created_at")
             .first()
@@ -65,14 +63,14 @@ class DocumentViewView(APIView):
             return error(message="This document could not be found.", status=404)
 
         try:
-            file_url = blob_storage.signed_url(doc.file_path, download_name=doc.file_name or None)
+            file_url = blob_storage.signed_url(doc.file.name, download_name=doc.file_name or None)
         except Exception:
             logger.exception("view-report: signed_url failed for MedicalDocument id=%s", doc.id)
             return error(message="This document could not be opened right now. Please try again.", status=500)
 
         return success(data={
-            "doc_type": doc.doc_type,
-            "title": doc.title,
+            "doc_type": doc.document_type,
+            "title": doc.file_name,
             "document_date": doc.document_date,
             "file_url": file_url,
         })

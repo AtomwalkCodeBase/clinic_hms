@@ -7,10 +7,9 @@ from rest_framework.views import APIView
 from apps.patients.portal_access import resolve_target_awpid_and_dob
 from core.permissions import IsPatient
 from core.response import error, not_found, success
-from .models import DocumentBatch, SweepConfig
+from .models import DocumentBatch
 from .serializers import UploadSerializer
-from .services import batch_summary, save_upload
-from .tasks import dispatch_documents
+from .services import batch_summary, save_upload, start_processing
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +19,10 @@ class UploadView(APIView):
     POST /api/v1/records/upload/   multipart: files=<file> (repeat for more), patient_awpid=<optional family member>
 
     Only the sizes are checked here (no empty file, none over 250 MB, 50 files and 250 MB at most). One DocumentBatch
-    per upload; every file is stored in S3 under patients/<awpid>/… with a "queued" MedicalDocument.
-    A small upload
-    (SweepConfig.instant_max_files or fewer) is handed to Celery at once; a bigger one is left "queued" for the
-    periodic dispatcher (recover_stuck_documents). Returns 202 with the batch id; follow it with
-    GET /api/v1/records/batches/<id>/. Each document moves queued → extracting → classifying →
-    completed | failed | rejected (duplicate) — the content check happens in the extraction job.
+    per upload; every file is stored in S3 under patients/<awpid>/… with a "queued" MedicalDocument, and every file
+    is handed to Celery at once. Returns 202 with the batch id; follow it with GET /api/v1/records/batches/<id>/.
+    Each document moves queued → extracting → classifying → completed | review_required | failed — the content
+    check happens in the extraction job.
     """
     permission_classes = [IsPatient]
     parser_classes = [MultiPartParser]
@@ -45,12 +42,8 @@ class UploadView(APIView):
         except Exception:
             logger.exception("records: upload to S3 failed")
             return error("Upload to storage failed — nothing was saved. Please try again.", status=503)
-        if len(docs) <= SweepConfig.current().instant_max_files:
-            try:
-                dispatch_documents(len(docs), ids=[d.id for d in docs])
-            except Exception:   # broker or database hiccup: stays "queued", the dispatcher sends it later
-                logger.exception("records: couldn't dispatch the new documents")
-        # else: a bulk batch — left "queued" for the periodic dispatcher to drain gradually
+        start_processing([d.id for d in docs])
+        docs = list(batch.documents.order_by("id"))      # fresh: a file that couldn't be queued is already "failed"
         return success(data={
             "batch_id": batch.id,
             "documents": [{"id": d.id, "file_name": d.file_name, "processing_status": d.processing_status} for d in docs],
@@ -66,7 +59,7 @@ class BatchDetailView(APIView):
         awpid, _dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
-        batch = DocumentBatch.objects.filter(pk=batch_id, awpid=awpid).first()
+        batch = DocumentBatch.objects.filter(pk=batch_id, patient__awpid=awpid).first()
         if not batch:
             return not_found("Batch not found.")
         return success(data=batch_summary(batch))

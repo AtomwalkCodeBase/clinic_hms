@@ -3,7 +3,7 @@ apps/opd/archive.py
 -------------------
 store_prescription_document() — on encounter sign, render the Prescription to
 a PDF (with the "scan to save in My Reports" QR, apps/opd/pdf.py) and store it
-as a MedicalDocument(classification=prescription). Idempotent by
+as a MedicalDocument(document_type=prescription). Idempotent by
 source_ref = "encounter:<id>".
 
 All tenant-DB reads are explicit .using(db) with pk filters — no relation
@@ -51,7 +51,6 @@ def store_prescription_document(rx, db, tenant_id):
     except Exception:
         pass
 
-    doctor_label = f"Dr. {doctor_name}" if doctor_name else ""
     visit_date = appt.scheduled_date if appt else (rx.created_at.date() if rx.created_at else None)
     src_ref = f"encounter:{rx.encounter_id}"
 
@@ -71,6 +70,6 @@ def store_prescription_document(rx, db, tenant_id):
     )
     return create_issued_document(
         awpid=patient.awpid, file_path=file_path, name=f"{title}.pdf", doc_type="prescription",
-        source_tenant_id=tenant_id, source_ref=src_ref, title=title, public_document_id=rx.rx_number or "",
-        hospital_label=hospital_name, doctor_label=doctor_label, document_date=visit_date,
+        source_tenant_id=tenant_id, source_ref=src_ref, public_document_id=rx.rx_number or "",
+        document_date=visit_date,
     )

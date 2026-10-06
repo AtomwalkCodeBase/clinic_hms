@@ -378,11 +378,11 @@ class LabRequestAttachDocumentView(APIView):
         except FileValidationError as exc:
             return error(str(exc), errors={"file_data": str(exc)})
 
-        from apps.records.models import DocumentClassification
+        from apps.records.classification import CHOOSABLE_TYPES
         from apps.records.services import create_issued_document
 
         doc_type = request.data.get("doc_type") or "lab_report"
-        if doc_type not in [c.code for c in DocumentClassification.objects.using("default").all()]:
+        if doc_type not in CHOOSABLE_TYPES:
             doc_type = "lab_report"
         title = (request.data.get("title") or "").strip() or f"{req.test.name} — outside report"
 
@@ -407,7 +407,7 @@ class LabRequestAttachDocumentView(APIView):
 
         doc = create_issued_document(
             awpid=patient.awpid, file_path=file_key, name=file_name, mime_type=mime_type,
-            doc_type=doc_type, source_tenant_id=source_tenant_id, source_ref=f"labreq:{db}:{req.id}", title=title,
+            doc_type=doc_type, source_tenant_id=source_tenant_id, source_ref=f"labreq:{db}:{req.id}",
         )
 
         # Attaching an outside report only makes sense once the request is
@@ -423,7 +423,7 @@ class LabRequestAttachDocumentView(APIView):
             req.save(using=db, update_fields=update_fields)
 
         return created(data={
-            "id": doc.id, "title": doc.title, "doc_type": doc.doc_type,
+            "id": doc.id, "title": doc.file_name, "doc_type": doc.document_type,
             "file_name": doc.file_name, "mime_type": doc.mime_type,
             "source_ref": doc.source_ref, "created_at": doc.created_at,
         }, message="Report attached.")
