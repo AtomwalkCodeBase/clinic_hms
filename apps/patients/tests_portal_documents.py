@@ -6,7 +6,7 @@ There is no patient-side delete: a document stays in the patient's records.
 
 from unittest import mock
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import NoReverseMatch, reverse
 from rest_framework.test import APIRequestFactory, force_authenticate
 
@@ -18,6 +18,7 @@ from apps.registry.models import PatientAccount
 from core.authentication import MockUser
 
 
+@override_settings(RECORDS_REVIEW_FROM="")          # the review step is off here: every upload counts as confirmed
 class PortalDocumentTests(TestCase):
     databases = {"default"}
 
@@ -68,12 +69,13 @@ class PortalDocumentTests(TestCase):
         self.assertNotIn("hospital_label", row)
         self.assertNotIn("doctor_label", row)
 
-    def test_an_unclassified_row_says_what_it_came_closest_to(self):
+    def test_an_unclassified_row_shows_no_guess_at_all(self):
         doc = make_doc(self.acct.awpid, status="review_required", by="rules", name="u.pdf")
         PatientDocumentClassification.objects.filter(document=doc).update(ai_document_type="lab_report")
         row = self.call(PortalDocumentListCreateView, "get").data["results"][0]
-        self.assertEqual((row["doc_type"], row["best_guess"], row["processing_status"]),
-                         ("not_classified", "lab_report", "review_required"))
+        self.assertEqual((row["doc_type"], row["suggested_type"], row["confirmed"], row["processing_status"]),
+                         ("not_classified", None, False, "review_required"))
+        self.assertNotIn("best_guess", row)
 
     def test_a_failed_row_carries_its_reason(self):
         make_doc(self.acct.awpid, status="failed", error_message="The file is empty.")
@@ -115,10 +117,10 @@ class PortalDocumentTests(TestCase):
     # ── retry ──
     def test_a_failed_file_can_be_tried_again(self):
         doc = make_doc(self.acct.awpid, status="failed", error_message="boom")
-        with mock.patch("apps.records.tasks.extract_document_task.delay") as delay:
+        with mock.patch("apps.records.tasks.extract_document_task.apply_async") as delay:
             resp = self.patch(doc, action="retry")
         self.assertEqual(resp.status_code, 200)
-        delay.assert_called_once_with(doc.id)
+        delay.assert_called_once_with(args=[doc.id, "instant"], queue="instant")
         self.assertEqual((reload(doc).status, reload(doc).error_message), ("queued", ""))
 
     def test_only_a_failed_file_can_be_retried(self):
@@ -144,5 +146,5 @@ class PortalDocumentTests(TestCase):
         review = make_doc(self.acct.awpid, status="review_required", by="rules")
         PatientDocumentClassification.objects.filter(document=review).update(ai_document_type="lab_report")
         failed = make_doc(self.acct.awpid, status="failed", error_message="The file is empty.")
-        self.assertEqual(self.events(review)[-1], "The rules couldn’t tell what it is (closest: Lab report)")
+        self.assertEqual(self.events(review)[-1], "The rules couldn’t tell what it is - choose its type")
         self.assertEqual(self.events(failed)[-1], "We couldn’t read it — The file is empty.")

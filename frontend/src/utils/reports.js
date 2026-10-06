@@ -21,17 +21,14 @@ export const NEEDS_ATTENTION = new Set(["unclassified", "failed", "duplicate"]);
 export function fmtDate(iso) {
   return iso ? new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "";
 }
-export function closestMatch(doc) {
-  return doc.best_guess ? `closest: ${typeLabel(doc.best_guess)}, ${Math.round(doc.score || 0)}% confident` : "";
-}
 // The one line under a report's name: what it is, or what happened to it.
 export function statusLine(doc) {
   switch (stateOf(doc)) {
     case "processing": return { tone: "muted", text: PROGRESS_TEXT[doc.processing_status] };
     case "failed": return { tone: "error", text: `Couldn’t read this file${doc.error ? ` — ${doc.error}` : ""}` };
     case "duplicate": return { tone: "warn", text: `Already in your reports${doc.error ? ` — ${doc.error}` : ""}` };
-    case "unclassified": return { tone: "warn", text: `Unable to classify${closestMatch(doc) ? ` (${closestMatch(doc)})` : ""}` };
-    default: return { tone: "muted", text: doc.method === "staff" ? typeLabel(doc.doc_type) : `${typeLabel(doc.doc_type)} · ${Math.round(doc.score || 0)}% confident` };
+    case "unclassified": return { tone: "warn", text: "Unable to classify" };
+    default: return { tone: "muted", text: doc.method === "staff" ? typeLabel(doc.doc_type) : `${typeLabel(doc.doc_type)} · Score ${Math.round(doc.score || 0)}` };
   }
 }
 
@@ -52,10 +49,10 @@ export function formatSize(bytes) {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-/** How much to trust a confidence: "good" 70+, "mid" 40–69, "low" under 40. */
+/** How strong a score is (it is points, not a percentage): "strong" 30+, "good" 20–29, "low" under 20. */
 export function confidenceTone(score) {
   const n = score || 0;
-  return n >= 70 ? "good" : n >= 40 ? "mid" : "low";
+  return n >= 30 ? "strong" : n >= 20 ? "good" : "low";
 }
 
 /** The two chips on a row: what it is, and how sure we are (or who decided). */
@@ -66,12 +63,12 @@ export function chipsFor(doc) {
     case "duplicate": return { type: { text: "Duplicate", tone: "warn" }, extra: null };
     case "unclassified":
       return { type: { text: "Unable to classify", tone: "warn" },
-               extra: doc.score > 0 ? { text: `${Math.round(doc.score)}% confident`, tone: confidenceTone(doc.score) } : null };
+               extra: doc.score > 0 ? { text: `Score ${Math.round(doc.score)}`, tone: confidenceTone(doc.score) } : null };
     default: {
       const type = { text: typeLabel(doc.doc_type), tone: "type" };
       if (doc.source_tenant_id || doc.uploaded_by === "staff") return { type, extra: { text: "Issued by hospital", tone: "neutral" } };
-      if (doc.method === "staff") return { type, extra: { text: "Set by you", tone: "neutral" } };
-      return { type, extra: { text: `${Math.round(doc.score || 0)}% confident`, tone: confidenceTone(doc.score) } };
+      if (doc.method === "staff") return { type, extra: { text: "Verified by you", tone: "neutral" } };
+      return { type, extra: { text: `Score ${Math.round(doc.score || 0)}`, tone: confidenceTone(doc.score) } };
     }
   }
 }
@@ -89,11 +86,11 @@ export function sortReports(docs, key) {
   return [...docs].sort(by[key] || by.newest);
 }
 
-/** File name, type, the closest guess, or a state word ("duplicate", "failed"). */
+/** File name, type, or a state word ("duplicate", "failed"). */
 export function matchesSearch(doc, query) {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   const words = [doc.title, doc.file_name, doc.public_document_id,
-    doc.doc_type && typeLabel(doc.doc_type), doc.best_guess && typeLabel(doc.best_guess), stateOf(doc)];
+    doc.doc_type && typeLabel(doc.doc_type), stateOf(doc)];
   return words.filter(Boolean).join(" ").toLowerCase().includes(q);
 }

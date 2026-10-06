@@ -49,7 +49,7 @@ export default function MyReportsPage() {
 
   const { items: docs, isLoading, hasMore, loadMore, refetch } = usePaginatedList(
     API_ENDPOINTS.PORTAL.DOCUMENTS,
-    { pageSize: 50, params: patientAwpid ? { patient_awpid: patientAwpid } : {} },
+    { pageSize: 50, params: { review: "all", ...(patientAwpid ? { patient_awpid: patientAwpid } : {}) } },
   );
   const awpidParam = patientAwpid ? { patient_awpid: patientAwpid } : {};
 

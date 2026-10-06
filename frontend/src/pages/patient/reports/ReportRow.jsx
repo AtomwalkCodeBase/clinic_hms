@@ -46,7 +46,7 @@ export default function ReportRow({ doc, active, selectMode, selected, onClick, 
     { label: "Open", onClick: onOpen },
     ...(state === "failed" ? [{ label: "Try again", onClick: () => onAct(doc, { action: "retry" }, "Trying again…") }] : []),
     ...(state === "duplicate" ? [{ label: "Keep anyway", onClick: () => onAct(doc, { action: "keep" }, "Keeping it — reading it now.") }] : []),
-    ...(!hospital && state !== "duplicate" && state !== "processing" ? [{ label: "Change type", onClick: onOpen }] : []),
+    ...(!hospital && !doc.confirmed && state !== "duplicate" && state !== "processing" ? [{ label: "Change type", onClick: onOpen }] : []),
     ...(priv && onLock && state !== "processing" ? [{ label: priv.private ? "Share with doctors" : "Hide from doctors", onClick: () => onLock(doc) }] : []),
   ];
 

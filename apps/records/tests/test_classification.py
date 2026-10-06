@@ -45,6 +45,18 @@ class EngineTests(SimpleTestCase):
         self.assertEqual(c.calculate_document_scores("billion")["medical_bill"]["score"], 0)          # "bill no"/"bill" not "billion"
         self.assertEqual(c.calculate_document_scores("500mg")["prescription"]["score"], 3)            # a unit glued to a number counts
 
+    def test_a_phrase_the_ocr_ran_together_still_matches(self):
+        glued = c.calculate_document_scores("ReferenceRange")["lab_report"]
+        self.assertEqual([m["keyword"] for m in glued["matched_rules"]], ["reference range"])
+        self.assertEqual(glued["score"], 10)
+        # a single word is never found inside a longer one, even when the text is squashed
+        self.assertEqual(c.calculate_document_scores("abnormality")["lab_report"]["score"], 0)
+
+    def test_a_unit_is_not_a_dose_and_a_ref_doctor_line_is_not_a_prescriber(self):
+        scores = c.calculate_document_scores("Haemoglobin 13.6 mg/dL\nRef. Doctor : Dr. A. Rao MBBS\nSodium 140 mmol/L")["prescription"]
+        self.assertEqual(scores["score"], 0)
+        self.assertEqual(c.calculate_document_scores("Tab Metformin 500 mg")["prescription"]["score"], 6)      # tab + mg
+
     def test_weights_are_ten_three_and_one(self):
         scores = c.calculate_document_scores(RX)["prescription"]
         levels = {m["keyword"]: m["weight"] for m in scores["matched_rules"]}
@@ -68,7 +80,7 @@ class EngineTests(SimpleTestCase):
     def test_a_tie_needs_a_person(self):
         result = c.classify_document_by_rules("discharge summary and invoice")
         self.assertEqual((result["document_type"], result["status"]), (c.NOT_CLASSIFIED, c.REVIEW_REQUIRED))
-        self.assertEqual((result["score"], result["score_margin"]), (10, 0))
+        self.assertEqual((result["score"], result["score_margin"]), (13, 3))           # discharge summary 10 + discharge 3, against invoice 10
         self.assertEqual(result["best_guess"], "discharge_summary")          # what it came closest to, for the reviewer
 
     def test_weak_words_alone_never_classify(self):
@@ -82,9 +94,9 @@ class EngineTests(SimpleTestCase):
         self.assertEqual((result["score"], result["second_best_score"], result["score_margin"]), (30, 26, 4))
         self.assertLess(result["score_margin"], c.MIN_MARGIN)
         self.assertEqual((result["document_type"], result["best_guess"]), (c.NOT_CLASSIFIED, "medical_bill"))
-        # two more medium words on the winner's side and it leads by 10: classified
+        # two more medium words on the winner's side and it leads by 13: classified ("subtotal" also matches the phrase "sub total")
         clear = c.classify_document_by_rules("rx prescription tablet syrup invoice tax invoice gst discount subtotal")
-        self.assertEqual((clear["score_margin"], clear["document_type"]), (10, "medical_bill"))
+        self.assertEqual((clear["score_margin"], clear["document_type"]), (13, "medical_bill"))
 
     def test_text_with_no_match_is_not_classified_with_no_guess(self):
         result = c.classify_document_by_rules("hello world")

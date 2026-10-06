@@ -28,9 +28,10 @@ _TASK_OPTS = dict(
 
 
 @shared_task(soft_time_limit=120, time_limit=180, **_TASK_OPTS)
-def extract_document_task(self, document_id):
-    """File → content check → text, then queue classify_document_task. Time-limited so a hung OCR call can't tie
-    up a worker for ever; a limit hit is retried like any other error."""
+def extract_document_task(self, document_id, queue=services.BULK_QUEUE):
+    """File → content check → text, then queue classify_document_task on the same `queue` (so a single instant file
+    is never stuck behind a bulk upload). Time-limited so a hung OCR call can't tie up a worker for ever; a limit
+    hit is retried like any other error."""
     try:
         ready = services.extract_document(document_id)
     except Exception as exc:
@@ -40,11 +41,11 @@ def extract_document_task(self, document_id):
             return
         raise
     if ready:
-        classify_document_task.delay(document_id)
+        classify_document_task.apply_async(args=[document_id, queue], queue=queue)
 
 
 @shared_task(soft_time_limit=60, time_limit=90, **_TASK_OPTS)
-def classify_document_task(self, document_id):
+def classify_document_task(self, document_id, queue=services.BULK_QUEUE):
     """Rule engine → classification, status and batch counters. Its own task so extraction of the next document
     never waits on it."""
     try:

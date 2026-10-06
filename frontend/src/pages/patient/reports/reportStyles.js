@@ -11,11 +11,11 @@ export const inputStyle = {
   padding: "7px 10px", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 13, background: "var(--color-surface, #fff)",
 };
 
-// Chip colours: what it is ("type"), how sure we are (good / mid / low), and the problem states.
+// Chip colours: what it is ("type"), how strong the score is (strong / good / low), and the problem states.
 const CHIP = {
   type:    { background: "#f5ead6", color: "#8a5a12" },
-  good:    { background: "#e2f3e8", color: "#166534" },
-  mid:     { background: "#fbf0dc", color: "#92400e" },
+  strong:  { background: "#166534", color: "#ffffff" },
+  good:    { background: "#dff3e6", color: "#166534" },
   low:     { background: "var(--color-bg)", color: "var(--color-text-muted)" },
   neutral: { background: "var(--color-bg)", color: "var(--color-text-secondary)" },
   warn:    { background: "#fbf0dc", color: "#92400e" },

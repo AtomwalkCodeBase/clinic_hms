@@ -437,8 +437,11 @@ CONSULT_PAD_LLM_KEY   = config("CONSULT_PAD_LLM_KEY", default="") or config("GRO
 # SweepConfig.save() creating/updating its PeriodicTask + IntervalSchedule rows.
 
 # ── Celery (atomwalk/celery.py) ──────────────────────────────────────────────
-#   worker: celery -A atomwalk worker --loglevel=info --pool=solo
-#   beat:   celery -A atomwalk beat --loglevel=info
+#   Two queues (apps/records/services.py): "instant" for a single-file upload, "bulk" for several. ONE worker serves
+#   both (the legacy "celery" queue too); Redis hands it tasks from the queues in turn, so an instant file waits for at
+#   most the one task already running, never for a whole bulk backlog:
+#   worker: celery -A atomwalk worker -Q instant,bulk,celery --loglevel=info --pool=solo
+#   beat:           celery -A atomwalk beat --loglevel=info
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
 CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cast=bool)
@@ -452,6 +455,11 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 3600}
 # Beat reads its schedule from the DB (django_celery_beat), not from a fixed dict here, so
 # SweepConfig can change the sweep interval live with no restart.
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# When the "confirm the type" step began (ISO date-time, e.g. 2026-10-07T00:00:00+00:00). Documents uploaded before
+# it are already the patient's and never need review; later uploads wait for the patient to confirm their type. Set it
+# to the deploy time. Left empty the review step is off (every upload is treated as already confirmed).
+RECORDS_REVIEW_FROM = config("RECORDS_REVIEW_FROM", default="")
 
 CACHES = {
     "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},

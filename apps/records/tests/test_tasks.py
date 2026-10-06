@@ -25,7 +25,7 @@ class ExtractDocumentTests(TestCase):
     """Stage 1: file → content check → text, then hand off to classification."""
     databases = {"default"}
 
-    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    @mock.patch("apps.records.tasks.classify_document_task.apply_async")
     @mock.patch("apps.records.services.extract_text", return_value=("hemoglobin glucose", "pdf_text"))
     def test_success_saves_the_text_and_type_and_queues_classification(self, _extract, delay, _get):
         doc = make_doc(status=S.QUEUED)
@@ -34,16 +34,16 @@ class ExtractDocumentTests(TestCase):
         self.assertEqual((doc.status, doc.mime_type, doc.size), (S.CLASSIFYING, "application/pdf", len(PDF)))
         text = DocumentText.objects.get(document=doc)
         self.assertEqual((text.extracted_text, text.engine), ("hemoglobin glucose", "pdf_text"))
-        delay.assert_called_once_with(doc.id)
+        delay.assert_called_once_with(args=[doc.id, "bulk"], queue="bulk")
 
-    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    @mock.patch("apps.records.tasks.classify_document_task.apply_async")
     @mock.patch("apps.records.services.extract_text", return_value=("text", "ocr"))
     def test_the_file_is_read_through_the_file_field(self, _extract, _delay, get):
         doc = make_doc(status=S.QUEUED)
         extract_document_task(doc.id)
         get.assert_called_once_with("documents/AWP-T1/1/1.pdf")
 
-    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    @mock.patch("apps.records.tasks.classify_document_task.apply_async")
     def test_a_file_that_is_not_a_pdf_or_image_fails_at_once_with_a_clear_reason(self, delay, get):
         get.return_value = b"just some text"
         doc = make_doc(status=S.QUEUED)
@@ -52,7 +52,7 @@ class ExtractDocumentTests(TestCase):
         self.assertIn("not a valid", row(doc).error_message)
         delay.assert_not_called()
 
-    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    @mock.patch("apps.records.tasks.classify_document_task.apply_async")
     def test_an_empty_file_fails_with_a_clear_reason(self, delay, get):
         get.return_value = b""
         doc = make_doc(status=S.QUEUED)
@@ -60,7 +60,7 @@ class ExtractDocumentTests(TestCase):
         self.assertEqual((row(doc).status, row(doc).error_message), (S.FAILED, "The file is empty."))
         delay.assert_not_called()
 
-    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    @mock.patch("apps.records.tasks.classify_document_task.apply_async")
     def test_a_file_over_the_limit_fails(self, delay, _get):
         doc = make_doc(status=S.QUEUED)
         with mock.patch("apps.records.services.MAX_FILE_BYTES", 10):
@@ -68,7 +68,7 @@ class ExtractDocumentTests(TestCase):
         self.assertEqual((row(doc).status, row(doc).error_message), (S.FAILED, "The file is over 250 MB."))
         delay.assert_not_called()
 
-    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    @mock.patch("apps.records.tasks.classify_document_task.apply_async")
     @mock.patch("apps.records.services.extract_text", side_effect=RuntimeError("OCR crashed"))
     def test_an_unexpected_error_is_raised_so_celery_retries_and_the_document_stays_in_progress(self, _extract, delay, _get):
         doc = make_doc(status=S.QUEUED)
@@ -77,7 +77,7 @@ class ExtractDocumentTests(TestCase):
         self.assertEqual(row(doc).status, S.EXTRACTING)
         delay.assert_not_called()
 
-    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    @mock.patch("apps.records.tasks.classify_document_task.apply_async")
     @mock.patch("apps.records.services.extract_text", side_effect=RuntimeError("OCR crashed"))
     def test_when_the_retries_are_used_up_the_document_is_failed_for_the_patient_to_retry(self, _extract, delay, _get):
         doc = make_doc(status=S.QUEUED)
@@ -86,7 +86,7 @@ class ExtractDocumentTests(TestCase):
         self.assertIn("OCR crashed", row(doc).error_message)
         delay.assert_not_called()
 
-    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    @mock.patch("apps.records.tasks.classify_document_task.apply_async")
     @mock.patch("apps.records.services.extract_text")
     def test_only_a_document_still_in_the_pipeline_is_touched(self, extract, delay, get):
         for status in (S.COMPLETED, S.FAILED, S.REVIEW_REQUIRED):
@@ -97,16 +97,16 @@ class ExtractDocumentTests(TestCase):
         get.assert_not_called()
         delay.assert_not_called()
 
-    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    @mock.patch("apps.records.tasks.classify_document_task.apply_async")
     @mock.patch("apps.records.services.extract_text")
     def test_a_retry_after_the_text_was_saved_only_repeats_the_hand_off(self, extract, delay, get):
         doc = make_doc(status=S.CLASSIFYING, text="already read")
         extract_document_task(doc.id)
         get.assert_not_called()
         extract.assert_not_called()
-        delay.assert_called_once_with(doc.id)
+        delay.assert_called_once_with(args=[doc.id, "bulk"], queue="bulk")
 
-    @mock.patch("apps.records.tasks.classify_document_task.delay")
+    @mock.patch("apps.records.tasks.classify_document_task.apply_async")
     @mock.patch("apps.records.services.extract_text", return_value=("text", "ocr"))
     def test_identical_files_are_both_kept(self, _extract, _delay, _get):
         """There is no duplicate detection any more: the same file twice is two documents."""
@@ -180,8 +180,8 @@ class WholePipelineTests(TestCase):
     def test_a_queued_document_ends_completed_with_its_text_and_classification(self, _extract, _get):
         batch = DocumentBatch.objects.create(patient=identity(), total_files=1)
         doc = make_doc(status=S.QUEUED, batch=batch)
-        with mock.patch("apps.records.tasks.classify_document_task.delay",
-                        side_effect=lambda pk: classify_document_task(pk)):
+        with mock.patch("apps.records.tasks.classify_document_task.apply_async",
+                        side_effect=lambda args, queue: classify_document_task(*args)):
             extract_document_task(doc.id)
         doc = row(doc)
         self.assertEqual((doc.status, doc.document_type, cls.method_of(doc), cls.score_of(doc)), (S.COMPLETED, "prescription", "rule", 21))
@@ -193,13 +193,28 @@ class WholePipelineTests(TestCase):
 class StartProcessingTests(TestCase):
     databases = {"default"}
 
-    @mock.patch("apps.records.tasks.extract_document_task.delay")
+    @mock.patch("apps.records.tasks.extract_document_task.apply_async")
     def test_each_document_is_queued(self, delay):
         a, b = make_doc(), make_doc()
         services.start_processing([a.id, b.id])
-        self.assertEqual([c.args for c in delay.call_args_list], [(a.id,), (b.id,)])
+        self.assertEqual([c.kwargs for c in delay.call_args_list],
+                         [{"args": [a.id, "bulk"], "queue": "bulk"}, {"args": [b.id, "bulk"], "queue": "bulk"}])
 
-    @mock.patch("apps.records.tasks.extract_document_task.delay", side_effect=ConnectionError("broker down"))
+    @mock.patch("apps.records.tasks.extract_document_task.apply_async")
+    def test_an_instant_document_is_queued_on_the_instant_queue(self, delay):
+        a = make_doc()
+        services.start_processing([a.id], services.INSTANT_QUEUE)
+        delay.assert_called_once_with(args=[a.id, "instant"], queue="instant")
+
+    @mock.patch("apps.records.tasks.classify_document_task.apply_async")
+    @mock.patch("apps.records.services.extract_text", return_value=("text", "ocr"))
+    @mock.patch("core.storage.get_bytes", return_value=PDF)
+    def test_the_classify_step_stays_on_the_queue_of_its_extract_step(self, _get, _extract, classify):
+        doc = make_doc(status=S.QUEUED)
+        extract_document_task(doc.id, "instant")
+        classify.assert_called_once_with(args=[doc.id, "instant"], queue="instant")
+
+    @mock.patch("apps.records.tasks.extract_document_task.apply_async", side_effect=ConnectionError("broker down"))
     def test_when_the_queue_is_unreachable_the_documents_fail_so_the_patient_can_retry(self, _delay):
         batch = DocumentBatch.objects.create(patient=identity(), total_files=1)
         doc = make_doc(batch=batch)

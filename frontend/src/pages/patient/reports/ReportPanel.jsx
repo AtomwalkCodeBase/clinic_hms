@@ -8,7 +8,7 @@ import { Download, FileText, Image as ImageIcon, Lock, Unlock, X } from "lucide-
 import { useToast } from "../../../hooks/useToast";
 import apiClient from "../../../services/api.client";
 import API_ENDPOINTS from "../../../config/api.config";
-import { chipsFor, closestMatch, fileKind, fmtDate, formatSize, stateOf, typeLabel } from "../../../utils/reports";
+import { chipsFor, fileKind, fmtDate, formatSize, stateOf, typeLabel } from "../../../utils/reports";
 import { FILE_TILE, TONE, chip, h3, iconBtn, inputStyle } from "./reportStyles";
 
 const STATE_LABEL = { processing: "Being read", ready: "Available", unclassified: "Available — type unknown", failed: "Couldn’t read", duplicate: "Not added (duplicate)" };
@@ -21,7 +21,7 @@ function explain(doc, original) {
     case "duplicate": return { tone: "warn", title: "This file is already in your reports",
       body: `${original ? `It’s the same as “${original.title}”. ` : doc.error ? `${doc.error} ` : ""}We didn’t add it a second time. Keep it anyway if you want both copies, or delete this one.` };
     case "unclassified": return { tone: "warn", title: "We couldn’t tell what this is",
-      body: `None of the report types set up here matched it${closestMatch(doc) ? ` (${closestMatch(doc)})` : ""}. Choose the right type so it’s filed correctly.` };
+      body: "None of the report types set up here matched it. Choose the right type so it’s filed correctly." };
     default: return null;
   }
 }
@@ -46,7 +46,7 @@ export default function ReportPanel({ doc, original, patientAwpid, priv, onLock,
   const kind = fileKind(doc);
   const chips = chipsFor(doc);
   const hospital = !!doc.source_tenant_id || doc.uploaded_by === "staff";
-  const canRetype = !hospital && state !== "duplicate" && state !== "processing";
+  const canRetype = !hospital && !doc.confirmed && state !== "duplicate" && state !== "processing";
   const note = explain(doc, original);
   const params = patientAwpid ? { patient_awpid: patientAwpid } : {};
   const Icon = kind === "image" ? ImageIcon : FileText;
@@ -117,6 +117,7 @@ export default function ReportPanel({ doc, original, patientAwpid, priv, onLock,
               <InfoRow label="File name">{doc.file_name || doc.title}</InfoRow>
               <InfoRow label="Document type">
                 <span style={chip(chips.type.tone)}>{chips.type.text}</span>
+                {doc.confirmed && !hospital && <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>Locked: you verified this type</span>}
                 {canRetype && (detail?.doc_types || []).length > 0 && (
                   <button className="btn-outline" style={{ fontSize: 12, padding: "3px 10px", marginLeft: "auto" }} onClick={() => setChoosing(c => !c)}>
                     {doc.doc_type ? "Change type" : "Choose type"}

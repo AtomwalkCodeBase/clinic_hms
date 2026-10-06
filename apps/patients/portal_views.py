@@ -1588,7 +1588,7 @@ def _document_row(d, handwritten_doc_id=None):
         "document_date": d.document_date, "public_document_id": d.document_ref,
         "source_tenant_id": d.source_tenant_id,
         "processing_status": d.processing_status, "score": doc_rules.score_of(d), "method": doc_rules.method_of(d),
-        "best_guess": doc_rules.best_guess_of(d),
+        "suggested_type": doc_rules.suggested_type_of(d), "confirmed": doc_rules.is_confirmed(d),
         "error": d.error_message if d.processing_status == "failed" else "",
         "batch_id": d.batch_id, "handwritten_doc_id": handwritten_doc_id,
     }
@@ -1608,9 +1608,7 @@ def _events(doc):
         elif doc.status == S.COMPLETED:
             events.append({"at": doc.updated_at, "text": f"Filed as {label(doc.document_type)} by the rules"})
         else:
-            best = doc_rules.best_guess_of(doc)
-            events.append({"at": doc.updated_at, "text": f"The rules couldn’t tell what it is"
-                                                          f"{f' (closest: {label(best)})' if best else ''}"})
+            events.append({"at": doc.updated_at, "text": "The rules couldn’t tell what it is - choose its type"})
     elif doc.status in type(doc).IN_PROGRESS:
         events.append({"at": doc.updated_at, "text": "Being read"})
     return events
@@ -1636,8 +1634,11 @@ def _own_document(request, doc_id):
 
 class PortalDocumentListCreateView(APIView):
     """
-    GET /api/v1/portal/documents/?status=queued,extracting   — the patient's documents,
-    newest first, with each one's processing_status / type / score / method.
+    GET /api/v1/portal/documents/?status=queued,extracting&review=pending|confirmed|all&doc_type=lab_report
+    - the patient's documents, newest first, with each one's processing_status / type / score / method.
+
+    review (default "confirmed"): "confirmed" is My Documents - everything except the patient's new uploads that still
+    wait for their confirmation; "pending" is exactly those uploads (the Needs Review list); "all" is both.
     """
     permission_classes = [IsPatient]
 
@@ -1656,9 +1657,31 @@ class PortalDocumentListCreateView(APIView):
         statuses = [s for s in (request.query_params.get("status") or "").split(",") if s]
         if statuses:
             qs = qs.filter(status__in=statuses)
+        from apps.records import services as records_services
+        review = (request.query_params.get("review") or "confirmed").lower()
+        if review == "pending":
+            qs = qs.filter(records_services.awaiting_review_q())
+        elif review != "all":
+            qs = qs.exclude(records_services.awaiting_review_q())
+        doc_type = request.query_params.get("doc_type")
+        if doc_type:
+            qs = qs.filter(document_type=doc_type)
         page_items, meta = paginate_queryset(request, qs)
         return Response({"results": [_document_row(d, hw_by_base.get(d.source_ref)) for d in page_items],
                          "pagination": meta})
+
+
+class PortalDocumentCountsView(APIView):
+    """GET /api/v1/portal/documents/counts/ - {"total", "awaiting_review", "unclassified", "by_type": {code: n}} for the
+    My Documents dropdown and the Needs Review badge. Every type code is present, zeros included."""
+    permission_classes = [IsPatient]
+
+    def get(self, request):
+        from apps.records import services as records_services
+        awpid, _dob, err = resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        return success(data=records_services.document_counts(awpid))
 
 
 class PortalDocumentDetailView(APIView):
@@ -1703,12 +1726,14 @@ class PortalDocumentDetailView(APIView):
         try:
             if action == "retry":
                 services.retry_document(doc)
-                services.start_processing([doc.id])
+                services.start_processing([doc.id], services.INSTANT_QUEUE)
             else:
                 doc_type = request.data.get("doc_type")
                 if doc_type not in _choosable_types():
                     return error("Choose one of the available types.")
                 services.correct_document(doc, doc_type)
+        except doc_rules.DocumentLocked as exc:
+            return error(str(exc), errors={"code": "locked"}, status=409)
         except ValueError as exc:
             return error(str(exc))
         return success(data=_document_row(type(doc).objects.using("default").get(pk=doc.pk)))

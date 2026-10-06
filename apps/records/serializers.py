@@ -20,3 +20,14 @@ class UploadSerializer(serializers.Serializer):
             if f.size > MAX_FILE_BYTES:
                 raise serializers.ValidationError(f"{f.name} is over 250 MB.")
         return [(f, f.read()) for f in files]
+
+
+class DecisionSerializer(serializers.Serializer):
+    document_id = serializers.IntegerField(min_value=1)
+    document_type = serializers.CharField(max_length=50)
+
+
+class SubmitSerializer(serializers.Serializer):
+    """The patient's final answers: one type per file. The type itself is checked per file in services.submit_decisions,
+    so one wrong entry is reported without stopping the others."""
+    decisions = serializers.ListField(child=DecisionSerializer(), allow_empty=False, max_length=100)

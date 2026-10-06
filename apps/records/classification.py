@@ -57,61 +57,79 @@ MIN_MARGIN = 5      # the winner must lead the runner-up by this many points
 
 DOCUMENT_RULES = {
     "prescription": {
-        "strong": ["prescription", "rx", "medication prescribed", "take medicine", "prescribed by"],
-        "medium": ["tablet", "tab", "capsule", "cap", "syrup", "injection", "mg", "ml", "dosage",
-                   "once daily", "twice daily", "bd", "tds", "od", "sos", "before food", "after food"],
-        "weak": ["diagnosis", "advice", "follow up", "doctor", "dr"],
+        "strong": ["prescription", "e-prescription", "rx", "c/o", "chief complaints", "medication prescribed", "take medicine", "prescribed by"],
+        "medium": ["tablet", "tab", "capsule", "cap", "syrup", "syp", "injection", "inj", "mg", "ml", "dosage", "once daily", "twice daily",
+                   "bd", "tds", "od", "hs", "qid", "sos", "before food", "after food", "before breakfast", "at night", "ointment",
+                   "eye drops", "next visit", "review after", "adv"],
+        "weak": ["diagnosis", "advice", "follow up", "doctor", "dr", "timings"],
     },
     "lab_report": {
-        "strong": ["laboratory report", "lab report", "reference range", "specimen", "test result",
-                   "pathology", "biological reference interval"],
-        "medium": ["hemoglobin", "haemoglobin", "wbc", "rbc", "platelet", "glucose", "creatinine",
-                   "cholesterol", "blood sugar", "urine", "sample"],
-        "weak": ["result", "unit", "range", "normal", "high", "low"],
+        "strong": ["laboratory report", "lab report", "reference range", "specimen", "test result", "pathology", "pathologist",
+                   "biological reference interval", "reference interval", "bio. ref", "investigation", "test name"],
+        "medium": ["hemoglobin", "haemoglobin", "wbc", "rbc", "platelet", "glucose", "creatinine", "cholesterol", "blood sugar", "urine",
+                   "sample", "parameter", "observed value", "sample collected", "report date", "checked by", "end of report", "hba1c", "tsh",
+                   "bilirubin", "sgot", "sgpt", "triglycerides", "hdl", "ldl", "uric acid", "specific gravity", "pus cells", "widal", "dengue",
+                   "crp", "esr", "vitamin d", "sodium", "potassium", "troponin", "inr", "aptt", "culture", "sensitivity", "nabl", "serum"],
+        "weak": ["result", "unit", "range", "normal", "high", "low", "method"],
     },
     "imaging_report": {
-        "strong": ["radiology report", "imaging report", "x-ray", "xray", "mri", "ct scan", "ultrasound",
-                   "sonography", "echocardiography"],
-        "medium": ["impression", "findings", "radiologist", "contrast", "lesion", "scan"],
+        "strong": ["radiology report", "imaging report", "x-ray", "xray", "mri", "ct scan", "ncct", "ultrasound", "usg", "sonography", "echocardiography",
+                   "mammography", "doppler", "radiologist", "radiodiagnosis", "clinical information", "accession", "modality", "bi-rads"],
+        "medium": ["impression", "findings", "contrast", "lesion", "scan", "technique", "comparison", "radiograph", "effusion", "standard protocol", "echo"],
         "weak": ["normal", "view", "study"],
     },
     "discharge_summary": {
-        "strong": ["discharge summary", "date of discharge", "discharge date", "hospital course"],
-        "medium": ["admission date", "date of admission", "discharge medication", "discharged",
-                   "condition at discharge"],
-        "weak": ["diagnosis", "follow up", "admitted", "ward"],
+        "strong": ["discharge summary", "date of discharge", "discharge date", "hospital course", "date of admission", "condition at discharge",
+                   "advice on discharge", "discharge medications", "discharge card", "ip no"],
+        "medium": ["admission date", "discharge medication", "discharged", "admission", "discharge", "ward", "procedure", "presenting complaints",
+                   "treatment given", "resident medical officer"],
+        "weak": ["diagnosis", "follow up", "admitted", "diet", "activity"],
     },
     "consultation_note": {
-        "strong": ["consultation note", "clinical notes", "opd note", "consultation summary"],
-        "medium": ["chief complaint", "history of present illness", "examination", "assessment",
-                   "subjective", "objective", "soap"],
-        "weak": ["complaint", "advice", "follow up", "plan"],
+        "strong": ["consultation note", "clinical notes", "opd note", "consultation summary", "history of present illness", "chief complaint",
+                   "visit type", "soap", "opd consultation", "progress note"],
+        "medium": ["examination", "assessment", "subjective", "objective", "systemic examination", "vitals", "afebrile", "past history", "hpi"],
+        "weak": ["complaint", "advice", "follow up", "plan", "review"],
     },
     "medical_bill": {
-        "strong": ["invoice", "tax invoice", "amount payable", "total amount", "bill no", "gst"],
-        "medium": ["subtotal", "discount", "quantity", "rate", "net amount", "payment mode", "receipt"],
-        "weak": ["total", "amount", "qty", "paid"],
+        "strong": ["invoice", "tax invoice", "amount payable", "total amount", "bill no", "gst", "gstin", "net payable", "amount in words",
+                   "receipt", "authorised signatory", "payment mode"],
+        "medium": ["subtotal", "sub total", "discount", "quantity", "rate", "net amount", "qty", "mrp", "batch", "with thanks", "rupees", "charges"],
+        "weak": ["total", "amount", "paid"],
     },
     "vaccination_record": {
-        "strong": ["vaccination certificate", "vaccination record", "immunization record",
-                   "immunisation record", "vaccine"],
-        "medium": ["dose", "batch no", "bcg", "opv", "dpt", "mmr", "hepatitis b", "covid", "booster"],
-        "weak": ["date given", "next due", "vaccinated"],
+        "strong": ["vaccination certificate", "vaccination record", "immunization record", "immunisation record", "vaccine", "immunization",
+                   "immunisation", "vaccination", "batch no", "next due", "date given"],
+        "medium": ["dose", "bcg", "opv", "dpt", "dtp", "dtwp", "mmr", "hepatitis b", "covid", "booster", "ipv", "hib", "rotavirus", "guardian",
+                   "covishield", "due at"],
+        "weak": ["vaccinated"],
     },
     "referral_letter": {
-        "strong": ["referral letter", "referred to", "refer to", "kindly see", "kind attention"],
-        "medium": ["dear doctor", "dear dr", "referral", "for further evaluation", "for opinion",
-                   "reason for referral"],
-        "weak": ["regards", "sincerely", "thank you"],
+        "strong": ["referral letter", "referred to", "refer to", "kindly see", "kind attention", "referral", "dear dr", "dear doctor", "for opinion",
+                   "yours sincerely"],
+        "medium": ["for further evaluation", "reason for referral", "kind opinion", "current medication", "presented with", "enclosed", "year-old"],
+        "weak": ["regards", "sincerely", "thank you", "sub"],
     },
     "medical_certificate": {
-        "strong": ["medical certificate", "fitness certificate", "to whom it may concern",
-                   "certified that", "sick leave"],
-        "medium": ["unfit for", "fit to resume", "rest for", "recommended rest", "leave"],
-        "weak": ["certificate", "signature", "registration no"],
+        "strong": ["medical certificate", "fitness certificate", "to whom it may concern", "certified that", "certify", "sick leave", "medically fit",
+                   "fit to resume", "unfit"],
+        "medium": ["unfit for", "rest for", "recommended rest", "advised rest", "leave", "issued", "ref. no", "for the purpose", "recovered"],
+        "weak": ["certificate", "registration no"],
     },
     # "other" has no rules on purpose: only a person files a document there.
 }
+
+
+def _dedupe_levels(rules):
+    """A keyword counts once per type: if it is listed at two levels, only the strongest one stays."""
+    for levels in rules.values():
+        seen = set()
+        for level in ("strong", "medium", "weak"):
+            levels[level] = [k for k in levels.get(level, []) if not (k in seen or seen.add(k))]
+    return rules
+
+
+DOCUMENT_RULES = _dedupe_levels(DOCUMENT_RULES)
 
 
 # ── the engine (pure: no database) ───────────────────────────────────────
@@ -120,6 +138,20 @@ def normalize_text(text):
     if not text:
         return ""
     return re.sub(r"\s+", " ", text.lower()).strip()
+
+
+# A measurement unit such as mg/dL is not a dose, and a "Ref. Doctor" line is not a prescriber: neither should push a
+# lab report towards "prescription".
+_UNIT_RE = re.compile(r"(?<![a-z])(?:mg|ml|mcg|ug|ng|pg|g|u|iu|miu|uiu|mmol|meq)\s*/\s*(?:dl|l|ml|min|hr|cumm|kg|hpf)(?![a-z])")
+_REF_DOCTOR_RE = re.compile(r"(?<![a-z])ref(?:erred|\.)?\s*(?:by|doctor)\b[^\n]*")
+
+
+def prepare_text(text):
+    """What the rules read: lower-cased, units and "Ref. Doctor" lines taken out, whitespace collapsed."""
+    t = (text or "").lower()
+    t = _REF_DOCTOR_RE.sub(" ", t)
+    t = _UNIT_RE.sub(" xunitx ", t)
+    return normalize_text(t)
 
 
 _PATTERNS = {}
@@ -132,15 +164,27 @@ def _pattern(keyword):
     return _PATTERNS[keyword]
 
 
+def _squash(s):
+    return re.sub(r"[^a-z0-9]", "", s)
+
+
+def _found(keyword, text, squashed):
+    """Whole-word match; for a phrase, also tolerate OCR dropping the spaces ("ReferenceRange")."""
+    if _pattern(keyword).search(text):
+        return True
+    return " " in keyword and len(_squash(keyword)) > 5 and _squash(keyword) in squashed
+
+
 def calculate_document_scores(text):
     """{type: {"score": int, "matched_rules": [{"keyword", "weight", "level"}]}} for every type that has rules."""
-    text = normalize_text(text)
+    text = prepare_text(text)
+    squashed = _squash(text)
     scores = {}
     for document_type, rules in DOCUMENT_RULES.items():
         score, matched = 0, []
         for level in ("strong", "medium", "weak"):
             for keyword in rules.get(level, []):
-                if _pattern(keyword).search(text):
+                if _found(keyword, text, squashed):
                     score += WEIGHTS[level]
                     matched.append({"keyword": keyword, "weight": WEIGHTS[level], "level": level})
         scores[document_type] = {"score": score, "matched_rules": matched}
@@ -219,6 +263,16 @@ def store_issued_type(document, document_type):
     return classification
 
 
+# ── the review flow: what a patient may choose, and what is final ──────────
+class DocumentLocked(ValueError):
+    """The document is confirmed (a person or the hospital decided its type): nothing may change it any more."""
+
+
+def document_type_choices():
+    """[{"code", "label"}] - what a person may file a document under (the one list every app reads)."""
+    return [{"code": code, "label": DOCUMENT_TYPES[code]} for code in CHOOSABLE_TYPES]
+
+
 # ── reading a document's classification (the model carries no shortcuts for these) ──
 def _classification(document):
     try:
@@ -241,6 +295,20 @@ def method_of(document):
 def score_of(document):
     c = _classification(document)
     return c.rule_score if c else None
+
+
+def is_confirmed(document):
+    """True once a person (or the hospital that issued it) has decided the type - the document is then locked."""
+    c = _classification(document)
+    return bool(c and c.status in (HUMAN_CLASSIFIED, ISSUED))
+
+
+def suggested_type_of(document):
+    """The type the rules filed it under, or None if they could not tell (or a person has already decided)."""
+    c = _classification(document)
+    if c and c.status == RULE_CLASSIFIED and c.ai_document_type not in (None, "", NOT_CLASSIFIED):
+        return c.ai_document_type
+    return None
 
 
 def best_guess_of(document):

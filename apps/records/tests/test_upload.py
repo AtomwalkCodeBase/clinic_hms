@@ -41,7 +41,7 @@ class UploadViewTests(TestCase):
         self.assertEqual((doc.processing_status, doc.patient.awpid, doc.file_name, doc.batch_id, doc.size, doc.document_type),
                          ("queued", "AWP-T1", "a.pdf", batch.id, len(PDF), "not_classified"))
         self.assertRegex(doc.file.name, rf"^documents/AWP-T1/{batch.id}/[0-9a-f]{{32}}\.pdf$")
-        start.assert_called_once_with([doc.id])
+        start.assert_called_once_with([doc.id], "instant")
 
     def test_the_file_goes_to_s3_through_the_file_field(self, put, storage, start, _resolve):
         self.post([pdf("a.pdf")])
@@ -60,7 +60,7 @@ class UploadViewTests(TestCase):
         self.assertEqual(docs.count(), 3)
         self.assertTrue(all(d.file.name.startswith(f"documents/AWP-T1/{batch.id}/") for d in docs))
         self.assertEqual(len(resp.data["data"]["documents"]), 3)
-        start.assert_called_once_with([d.id for d in docs.order_by("id")])
+        start.assert_called_once_with([d.id for d in docs.order_by("id")], "bulk")
 
     def test_a_long_file_name_is_cut_to_fit(self, put, storage, start, _resolve):
         self.post([SimpleUploadedFile("x" * 150 + ".pdf", PDF, content_type="application/pdf")])

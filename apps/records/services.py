@@ -19,8 +19,11 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
+from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import connections, transaction
+from django.db.models import Count, Q
+from django.utils.dateparse import parse_datetime
 
 from core import ocr, storage
 from core.file_validation import FileValidationError, validate_bytes
@@ -35,6 +38,12 @@ UPLOAD_THREADS = 8    # files sent to S3 at the same time
 _UPLOAD_EXT = {"pdf", "jpg", "jpeg", "png"}
 _DECLARED_MIME = {"application/pdf", "image/jpeg", "image/png"}
 Status = MedicalDocument.Status
+
+# Two Celery queues, so one file never waits behind someone else's big upload: "instant" is for a single file,
+# "bulk" for several. Run one worker per queue (celery -A atomwalk worker -Q instant / -Q bulk).
+INSTANT_QUEUE = "instant"
+BULK_QUEUE = "bulk"
+MAX_SUBMIT = 100            # decisions in one submit call
 
 
 # ── upload ───────────────────────────────────────────────────────────────
@@ -81,13 +90,13 @@ def save_upload(awpid, files):
     return batch, list(MedicalDocument.objects.filter(batch=batch).order_by("id"))
 
 
-def start_processing(document_ids):
-    """Queue each document's first stage. If the queue can't be reached the document is marked failed — the patient
-    sees it and can retry — rather than left "queued" for ever."""
+def start_processing(document_ids, queue=BULK_QUEUE):
+    """Queue each document's first stage on `queue`. If the queue can't be reached the document is marked failed -
+    the patient sees it and can retry - rather than left "queued" for ever."""
     from .tasks import extract_document_task
     for document_id in document_ids:
         try:
-            extract_document_task.delay(document_id)
+            extract_document_task.apply_async(args=[document_id, queue], queue=queue)
         except Exception:
             logger.exception("records: couldn't queue document %s", document_id)
             doc = MedicalDocument.objects.filter(pk=document_id, status=Status.QUEUED).first()
@@ -101,9 +110,11 @@ def batch_summary(batch):
     counts = {s: 0 for s in Status.values}
     for d in docs:
         counts[d.status] = counts.get(d.status, 0) + 1
+    finished = sum(counts.get(k, 0) for k in (Status.COMPLETED, Status.REVIEW_REQUIRED, Status.FAILED))
     return {
         "id": batch.id, "total_files": batch.total_files, "created_at": batch.created_at,
         "status": "processing" if batch.status == DocumentBatch.Status.PROCESSING else "completed",
+        "progress_percent": int(round(100.0 * finished / batch.total_files)) if batch.total_files else 100,
         "counts": counts,
         "documents": [{"id": d.id, "file_name": d.file_name, "size": d.size, "status": d.status,
                        "processing_status": d.status, "doc_type": d.document_type, "method": rules.method_of(d),
@@ -234,12 +245,95 @@ def reclassify_existing(limit=5000):
 
 
 def correct_document(doc, document_type):
-    """A person files the document under `document_type` — one file at a time. It replaces whatever the rules said.
+    """A person files the document under `document_type` - one file at a time. It replaces whatever the rules said
+    and locks the document: once decided, nobody (not the patient, not an admin) can change it again.
     Works on a failed document too: the file is still there, so it becomes a normal completed one."""
+    if rules.is_confirmed(doc):
+        raise rules.DocumentLocked("This document is confirmed and can't be changed.")
     if doc.status in MedicalDocument.IN_PROGRESS:
         raise ValueError("This file is still being read.")
     rules.store_human_choice(doc, document_type)
     _end(doc, Status.COMPLETED, error_message="")
+
+
+# ── the review step: which uploads still wait for the patient's decision ─────
+def review_starts_at():
+    """When the review step began (settings.RECORDS_REVIEW_FROM, an ISO date-time). Everything uploaded before it is
+    already part of the patient's documents and never needs review; unset means the review step is off."""
+    raw = getattr(settings, "RECORDS_REVIEW_FROM", "") or ""
+    when = parse_datetime(raw) if raw else None
+    if when is not None and when.tzinfo is None:
+        from django.utils import timezone
+        when = timezone.make_aware(when)
+    return when
+
+
+def awaiting_review_q():
+    """Q for a patient's own uploads, made after the review step began, whose type nobody has confirmed yet."""
+    start = review_starts_at()
+    if start is None:
+        return Q(pk__in=[])
+    return (Q(uploaded_by="patient", source_tenant_id__isnull=True, created_at__gte=start)
+            & ~Q(classification__status__in=(rules.HUMAN_CLASSIFIED, rules.ISSUED)))
+
+
+def document_counts(awpid):
+    """What the My Documents dropdown and the badges need: {"total", "awaiting_review", "unclassified", "by_type"}.
+    Only finished, confirmed-or-grandfathered documents count towards the types; the files waiting for review are
+    counted apart."""
+    docs = MedicalDocument.objects.using("default").filter(patient__awpid=awpid)
+    awaiting = awaiting_review_q()
+    done = (Status.COMPLETED, Status.REVIEW_REQUIRED)
+    by_type = {code: 0 for code in rules.CHOOSABLE_TYPES}
+    for row in docs.exclude(awaiting).filter(status__in=done).values("document_type").annotate(n=Count("id")):
+        if row["document_type"] in by_type:
+            by_type[row["document_type"]] = row["n"]
+    return {
+        "total": docs.exclude(awaiting).filter(status__in=done).count(),
+        "awaiting_review": docs.filter(awaiting, status__in=done).count(),
+        "unclassified": docs.exclude(awaiting).filter(status__in=done, document_type=rules.NOT_CLASSIFIED).count(),
+        "by_type": by_type,
+    }
+
+
+def submit_decisions(awpid, decisions):
+    """The patient's final answer for a list of files: [{"document_id", "document_type"}]. Each file is checked on
+    its own - a bad one never stops the rest. Returns ({"submitted": [id], "rejected": [{"document_id", "reason"}]}).
+    A submitted file gets the person's type and is locked. Sending the same list again changes nothing."""
+    wanted = [d["document_id"] for d in decisions]
+    docs = {d.id: d for d in MedicalDocument.objects.using("default").filter(patient__awpid=awpid, pk__in=wanted)
+            .select_related("classification")}
+    submitted, rejected, seen = [], [], set()
+
+    def reject(doc_id, reason):
+        rejected.append({"document_id": doc_id, "reason": reason})
+
+    for decision in decisions:
+        doc_id, doc_type = decision["document_id"], decision["document_type"]
+        doc = docs.get(doc_id)
+        if doc_id in seen:
+            continue
+        seen.add(doc_id)
+        if doc is None or doc.source_tenant_id or doc.uploaded_by == "staff":
+            reject(doc_id, "not_found")
+        elif doc_type not in rules.CHOOSABLE_TYPES:
+            reject(doc_id, "invalid_type")
+        elif rules.is_confirmed(doc):
+            reject(doc_id, "already_confirmed")
+        elif doc.status in MedicalDocument.IN_PROGRESS:
+            reject(doc_id, "still_processing")
+        elif doc.status == Status.FAILED:
+            reject(doc_id, "failed")
+        else:
+            try:
+                with transaction.atomic(using="default"):
+                    correct_document(doc, doc_type)
+                submitted.append(doc_id)
+            except rules.DocumentLocked:
+                reject(doc_id, "already_confirmed")
+            except ValueError:
+                reject(doc_id, "still_processing")
+    return {"submitted": submitted, "rejected": rejected}
 
 
 def retry_document(doc):
