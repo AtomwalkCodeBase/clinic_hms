@@ -432,9 +432,10 @@ CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cas
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 # Keep retrying the broker connection at worker start-up (Celery 5.3 only does so by default with a warning).
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
-# Redis re-delivers an unacknowledged (acks_late) task after this long. Must exceed the longest task
-# time limit (apps/records/tasks.py: 420s) plus its retry countdowns.
-CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 3600}
+# Redis re-delivers an unacknowledged (acks_late) task after this long, which is how a task lost when the worker was
+# killed comes back. It must exceed the longest a task can legitimately hold its message: a retry waits up to 300s
+# (retry_backoff_max) and then runs for at most 180s (the extract time limit), 480s in all (apps/records/tasks.py).
+CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 600}
 # Beat reads its schedule from the DB (django_celery_beat), not from a fixed dict here, so
 # SweepConfig can change the sweep interval live with no restart.
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
