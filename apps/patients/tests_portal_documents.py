@@ -1,7 +1,8 @@
 """
-Patient-portal document semantics (registry DB only): the list, retyping, retry, zip and the activity.
+Patient-portal document semantics (registry DB only): the list, retyping, retry, dismissing a failed file, zip and the
+activity.
 
-There is no patient-side delete: a document stays in the patient's records.
+A document stays in the patient's records. The one thing that can be removed is a file that failed.
 """
 
 from unittest import mock
@@ -12,7 +13,7 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.patients.portal_views import PortalDocumentDetailView, PortalDocumentListCreateView
 from apps.records.classification import CHOOSABLE_TYPES
-from apps.records.models import PatientDocumentClassification
+from apps.records.models import DocumentBatch, MedicalDocument, PatientDocumentClassification
 from apps.records.tests.helpers import identity, make_doc, reload
 from apps.registry.models import PatientAccount
 from core.authentication import MockUser
@@ -43,12 +44,56 @@ class PortalDocumentTests(TestCase):
     def patch(self, doc, **body):
         return self.call(PortalDocumentDetailView, "patch", body, doc_id=doc.id)
 
-    # ── there is no delete ──
-    def test_a_document_cannot_be_deleted_by_the_patient(self):
-        doc = self.make_doc()
-        self.assertEqual(self.call(PortalDocumentDetailView, "delete", doc_id=doc.id).status_code, 405)
+    # ── only a failed file can be dismissed ──
+    def dismiss(self, doc):
+        return self.call(PortalDocumentDetailView, "delete", doc_id=doc.id)
+
+    def test_a_document_the_patient_can_use_cannot_be_deleted(self):
+        for status in ("completed", "review_required", "queued", "extracting"):
+            doc = make_doc(self.acct.awpid, status=status)
+            resp = self.dismiss(doc)
+            self.assertEqual(resp.status_code, 409, status)
+            self.assertTrue(MedicalDocument.objects.filter(pk=doc.pk).exists(), status)
         with self.assertRaises(NoReverseMatch):
             reverse("portal-documents-bulk-delete")
+
+    def test_a_failed_file_can_be_dismissed_and_its_stored_copy_is_removed(self):
+        doc = make_doc(self.acct.awpid, status="failed", error_message="boom")
+        name = doc.file.name
+        with mock.patch("core.storage.delete") as delete:
+            resp = self.dismiss(doc)
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(MedicalDocument.objects.filter(pk=doc.pk).exists())
+        delete.assert_called_once_with(name)
+
+    def test_dismissing_keeps_the_batch_counters_right(self):
+        batch = DocumentBatch.objects.create(patient=identity(self.acct.awpid), total_files=3)
+        good = make_doc(self.acct.awpid, status="completed", batch=batch)
+        make_doc(self.acct.awpid, status="completed", batch=batch)
+        bad = make_doc(self.acct.awpid, status="failed", batch=batch)
+        batch.refresh()
+        with mock.patch("core.storage.delete"):
+            self.assertEqual(self.dismiss(bad).status_code, 200)
+        batch.refresh_from_db()
+        self.assertEqual((batch.total_files, batch.processed_files, batch.failed_files, batch.status), (2, 2, 0, "completed"))
+        self.assertTrue(MedicalDocument.objects.filter(pk=good.pk).exists())
+
+    def test_dismissing_the_only_file_of_a_batch_removes_the_batch(self):
+        batch = DocumentBatch.objects.create(patient=identity(self.acct.awpid), total_files=1)
+        bad = make_doc(self.acct.awpid, status="failed", batch=batch)
+        with mock.patch("core.storage.delete"):
+            self.assertEqual(self.dismiss(bad).status_code, 200)
+        self.assertFalse(DocumentBatch.objects.filter(pk=batch.pk).exists())
+
+    def test_someone_elses_failed_file_cannot_be_dismissed(self):
+        other = make_doc("AW-OTHER", status="failed")
+        self.assertEqual(self.dismiss(other).status_code, 404)
+        self.assertTrue(MedicalDocument.objects.filter(pk=other.pk).exists())
+
+    def test_a_hospital_issued_file_cannot_be_dismissed(self):
+        doc = make_doc(self.acct.awpid, status="failed", uploaded_by="staff")
+        self.assertEqual(self.dismiss(doc).status_code, 400)
+        self.assertTrue(MedicalDocument.objects.filter(pk=doc.pk).exists())
 
     # ── the list ──
     def test_the_list_shows_status_type_and_size(self):

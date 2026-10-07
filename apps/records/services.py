@@ -350,6 +350,25 @@ def retry_document(doc):
     _end(doc, Status.QUEUED, error_message="")
 
 
+def dismiss_document(doc):
+    """The patient removes a file that failed: its stored copy and its rows. Only a failed file can go - one that is in
+    progress, finished or confirmed is never deleted here - so nothing the patient can use is ever lost. The batch is
+    brought in line with what is left (and removed when nothing is)."""
+    if doc.status != Status.FAILED:
+        raise ValueError("Only a file that failed can be dismissed.")
+    batch, name = doc.batch, (doc.file.name if doc.file else "")
+    doc.delete()
+    _safe_delete(name)
+    if batch:
+        remaining = batch.documents.count()
+        if remaining:
+            batch.total_files = remaining
+            batch.save(update_fields=["total_files"])
+            batch.refresh()
+        else:
+            batch.delete()
+
+
 def create_issued_document(*, awpid, file_path, name, doc_type, source_tenant_id, source_ref, mime_type="application/pdf",
                            public_document_id="", document_date=None):
     """A document a hospital made for the patient (signed prescription, lab report, handwriting): it is already in

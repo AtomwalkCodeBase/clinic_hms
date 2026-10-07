@@ -81,6 +81,20 @@ export default function MyReportsPage() {
       refetch();
     } catch (err) { toastApiError(err, "That didn’t work — please try again."); }
   }
+  // A file that failed can be removed for good (the server refuses to delete anything else).
+  async function dismiss(doc) {
+    try {
+      await apiClient.delete(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { params: awpidParam });
+      toastSuccess("File removed.");
+      setOpenId(null);
+      refetch();
+    } catch (err) { toastApiError(err, "Couldn’t remove that file — please try again."); }
+  }
+  function askDismiss(doc) {
+    setLockDlg({ title: "Remove this file?",
+      message: `${doc.title} couldn’t be read. Removing it deletes it for good; you can upload it again any time.`,
+      actions: [{ label: "Cancel" }, { label: "Remove", primary: true, onClick: () => dismiss(doc) }] });
+  }
   function afterUpload({ sent, error, background }) {
     refetch();
     if (!background) return;                  // the dialog is still open and says it itself
@@ -207,7 +221,7 @@ export default function MyReportsPage() {
   const panel = openDoc && (
     <ReportPanel doc={openDoc} original={openDoc.duplicate_of ? byId.get(openDoc.duplicate_of) : null} patientAwpid={patientAwpid}
       priv={privEnabled ? privMap.get(openDoc.id) : undefined} onLock={privEnabled ? onLock : undefined}
-      onClose={() => setOpenId(null)} onAct={actOn} onChanged={refetch} />
+      onClose={() => setOpenId(null)} onAct={actOn} onDismiss={askDismiss} onChanged={refetch} />
   );
 
   return (
@@ -306,7 +320,7 @@ export default function MyReportsPage() {
                   <ReportRow key={d.id} doc={d} active={d.id === openId} selectMode={selectMode} selected={sel.has(d.id)}
                     priv={privEnabled ? privMap.get(d.id) : undefined} onLock={privEnabled ? onLock : undefined}
                     onClick={() => (selectMode ? toggleSel(d.id) : setOpenId(d.id))} onOpen={() => setOpenId(d.id)}
-                    onAct={actOn} />
+                    onAct={actOn} onDismiss={askDismiss} />
                 ))}
                 {hasMore && <button className="btn-outline" style={{ width: "100%" }} onClick={loadMore}>Load more</button>}
               </>

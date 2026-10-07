@@ -1691,8 +1691,23 @@ class PortalDocumentDetailView(APIView):
     PATCH  /api/v1/portal/documents/<id>/               — the patient acts on a document they uploaded:
            {doc_type}  correct its type (a human verdict, which the rules never overwrite)
            {action: "retry"}  try a file that failed again
+    DELETE /api/v1/portal/documents/<id>/               — dismiss a file that failed (removes it and its stored copy).
+           Any other file is refused with 409: a document the patient can use is never deleted.
     """
     permission_classes = [IsPatient]
+
+    def delete(self, request, doc_id):
+        from apps.records import services
+        doc, err = _own_document(request, doc_id)
+        if err:
+            return err
+        if doc.source_tenant_id or doc.uploaded_by == "staff":
+            return error("This report was issued by your hospital, so it can't be removed here.")
+        try:
+            services.dismiss_document(doc)
+        except ValueError as exc:
+            return error(str(exc), errors={"code": "not_failed"}, status=409)
+        return success(data={"dismissed": True, "id": doc_id})
 
     def get(self, request, doc_id):
         from apps.records.models import MedicalDocument

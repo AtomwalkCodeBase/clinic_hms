@@ -17,7 +17,7 @@ const STATE_LABEL = { processing: "Being read", ready: "Available", unclassified
 function explain(doc, original) {
   switch (stateOf(doc)) {
     case "processing": return { tone: "muted", title: "Still being read", body: "We’re reading this file now. This page updates by itself — you don’t need to wait." };
-    case "failed": return { tone: "error", title: "We couldn’t read this file", body: `${doc.error || "Something went wrong while reading it."} You can try again, file it under a type yourself, or delete it.` };
+    case "failed": return { tone: "error", title: "We couldn’t read this file", body: `${doc.error || "Something went wrong while reading it."} You can try again, or remove it and upload it again.` };
     case "duplicate": return { tone: "warn", title: "This file is already in your reports",
       body: `${original ? `It’s the same as “${original.title}”. ` : doc.error ? `${doc.error} ` : ""}We didn’t add it a second time. Keep it anyway if you want both copies, or delete this one.` };
     case "unclassified": return { tone: "warn", title: "We couldn’t tell what this is",
@@ -35,7 +35,7 @@ function InfoRow({ label, children }) {
   );
 }
 
-export default function ReportPanel({ doc, original, patientAwpid, priv, onLock, onClose, onAct, onChanged }) {
+export default function ReportPanel({ doc, original, patientAwpid, priv, onLock, onClose, onAct, onDismiss, onChanged }) {
   const { toastSuccess, toastApiError } = useToast();
   const [tab, setTab] = useState("details");
   const [detail, setDetail] = useState(null);           // the full record: file link, choosable types, activity
@@ -175,6 +175,7 @@ export default function ReportPanel({ doc, original, patientAwpid, priv, onLock,
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--color-border)" }}>
         {state === "failed" && <button className="btn-primary" disabled={busy} onClick={() => act({ action: "retry" }, "Trying again…")}>Try again</button>}
+        {state === "failed" && !hospital && onDismiss && <button className="btn-outline" disabled={busy} onClick={() => onDismiss(doc)}>Remove</button>}
         {state === "duplicate" && <button className="btn-primary" disabled={busy} onClick={() => act({ action: "keep" }, "Keeping it — reading it now.")}>Keep anyway</button>}
         {state !== "processing" && <button className="btn-outline" onClick={download}><Download size={15} /> Download</button>}
         {priv && onLock && state !== "processing" && (
