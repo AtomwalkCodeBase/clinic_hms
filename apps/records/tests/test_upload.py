@@ -187,3 +187,43 @@ class BatchDetailViewTests(TestCase):
     def test_someone_elses_batch_is_not_found(self, _resolve):
         batch = DocumentBatch.objects.create(patient=identity("AWP-OTHER"), total_files=1)
         self.assertEqual(self.get(batch.id).status_code, 404)
+
+
+@mock.patch("apps.records.views.start_processing")
+@mock.patch("apps.records.services.storage")
+@mock.patch("core.storage.put_bytes", side_effect=lambda key, data, mime_type: key)
+class UploadForWhomTests(TestCase):
+    """"Who is this for?" on the phone sends patient_awpid with the upload. The family link is checked for real here (the
+    tests above stub it out): a linked family member's upload is filed under them, anyone else's is refused."""
+    databases = {"default"}
+
+    def setUp(self):
+        from apps.registry.models import PatientAccount, PatientRelationship
+        self.acct = PatientAccount.objects.using("default").create(awpid="AWP-ME", full_name="Me", mobile="9333333331", password="x")
+        identity("AWP-ME")
+        identity("AWP-KID")
+        identity("AWP-STRANGER")
+        PatientRelationship.objects.using("default").create(guardian_awpid="AWP-ME", dependent_awpid="AWP-KID", relationship="child")
+
+    def post(self, awpid=None):
+        data = {"files": [pdf("a.pdf")], **({"patient_awpid": awpid} if awpid else {})}
+        request = APIRequestFactory().post("/api/v1/records/upload/", data, format="multipart")
+        force_authenticate(request, user=MockUser({"user_id": self.acct.id, "role": "patient", "awpid": "AWP-ME"}))
+        return UploadView.as_view()(request)
+
+    def test_with_no_one_chosen_the_upload_is_the_patients_own(self, put, storage, start):
+        self.assertEqual(self.post().status_code, 202)
+        self.assertEqual(MedicalDocument.objects.get().patient.awpid, "AWP-ME")
+
+    def test_a_linked_family_member_gets_the_upload(self, put, storage, start):
+        self.assertEqual(self.post("AWP-KID").status_code, 202)
+        doc = MedicalDocument.objects.get()
+        self.assertEqual(doc.patient.awpid, "AWP-KID")
+        self.assertIn("AWP-KID", doc.file.name)
+
+    def test_someone_not_linked_to_the_account_is_refused_and_nothing_is_saved(self, put, storage, start):
+        resp = self.post("AWP-STRANGER")
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(MedicalDocument.objects.count(), 0)
+        put.assert_not_called()
+        start.assert_not_called()
