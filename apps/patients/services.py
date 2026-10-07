@@ -765,13 +765,15 @@ class PatientService:
         # Lightweight only — no file_data here, so this history payload stays
         # small. Full content is fetched separately (by id) only when a
         # doctor actually opens a document.
-        # 'unsorted' / 'needs_review' rows are unconfirmed patient uploads —
-        # they must not reach another hospital over the HIE until a QR
-        # verifies them or the patient confirms the type. Hidden / deleted
-        # rows are excluded too.
+        # A patient's own upload that is still waiting for them to confirm its
+        # type is not theirs to share yet: it must not reach another hospital
+        # over the HIE until the patient has confirmed it (the same rule My
+        # Documents applies).
+        from apps.records.services import awaiting_review_q
         documents = list(
             MedicalDocument.objects.using("default")
             .filter(patient__awpid=awpid)
+            .exclude(awaiting_review_q())
             .filter(status="completed")
             .values("id", "file_name", "mime_type", "uploaded_by", "created_at",
                     title=F("file_name"), doc_type=F("document_type"))

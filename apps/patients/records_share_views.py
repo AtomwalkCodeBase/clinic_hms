@@ -43,6 +43,7 @@ from apps.registry.models import (
 )
 from apps.records.classification import DOCUMENT_TYPES
 from apps.records.models import MedicalDocument
+from apps.records.services import awaiting_review_q
 from apps.patients.portal_views import EMERGENCY_SHARE_CATEGORIES, _render_qr_data_uri
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,7 @@ def _vault_documents(awpid, limit=200):
         MedicalDocument.objects.using("default")
         .filter(patient__awpid=awpid)
         .exclude(id__in=linked_hw_ids)
+        .exclude(awaiting_review_q())          # an upload the patient has not confirmed yet is not theirs to share
         .filter(status="completed")
         .order_by("-created_at")[:limit]
     )
@@ -528,7 +530,7 @@ class RecordsShareDownloadView(APIView):
 
         doc = MedicalDocument.objects.using("default").filter(
             id=doc_id, patient__awpid=grant.awpid,
-        ).first()
+        ).exclude(awaiting_review_q()).first()
         if not doc:
             return error("That document isn't part of this patient's records.", status=404)
 
@@ -580,7 +582,7 @@ class RecordsShareDocumentViewView(APIView):
             return error("This access has ended.", status=403)
         doc = MedicalDocument.objects.using("default").filter(
             id=doc_id, patient__awpid=grant.awpid,
-        ).first()
+        ).exclude(awaiting_review_q()).first()
         if not doc:
             return error("That document isn't part of this patient's records.", status=404)
 
