@@ -39,6 +39,23 @@ _INIT_LOCK = threading.Lock()
 # that even decoding it is a risk is treated as unreadable (the patient then picks its type by hand).
 MAX_OCR_SIDE = 2500
 MAX_OCR_PIXELS = 100_000_000
+# The other extreme is just as dangerous: RapidOCR scales a tiny image UP before reading it, so a 1x1 pixel PNG (a
+# placeholder some phones hand over instead of the real file) made it allocate 4 GB and got the worker killed, and a
+# 1x500 strip took 7 GB. Measured: 16x16 is already fine (about 400 MB), so 32 px on the short side is a safe floor.
+MIN_OCR_SIDE = 32
+# A thin strip is the same trap in another form: the short side is scaled up, so the long side grows with the shape.
+# Measured peak memory on a 2500 px strip: 5:1 about 500 MB, 10:1 850 MB, 17:1 1.3 GB, 78:1 5.7 GB. A document photo is
+# about 1.4:1 (a long till receipt rarely passes 5:1), so anything thinner than 8:1 is not read.
+MAX_OCR_ASPECT = 8
+
+
+def image_size(raw: bytes):
+    """(width, height) read from the image header only (nothing is decoded), or None if it isn't an image."""
+    try:
+        from PIL import Image
+        return Image.open(io.BytesIO(raw)).size
+    except Exception:
+        return None
 
 
 def _open_for_ocr(image_bytes: bytes):
@@ -47,6 +64,12 @@ def _open_for_ocr(image_bytes: bytes):
         from PIL import Image
         img = Image.open(io.BytesIO(image_bytes))
         width, height = img.size
+        if min(width, height) < MIN_OCR_SIDE:
+            logger.warning("core.ocr: image of %dx%d is too small to read", width, height)
+            return None
+        if max(width, height) / min(width, height) > MAX_OCR_ASPECT:
+            logger.warning("core.ocr: image of %dx%d is too thin to read", width, height)
+            return None
         if width * height > MAX_OCR_PIXELS:
             logger.warning("core.ocr: image of %dx%d is too large to read", width, height)
             return None

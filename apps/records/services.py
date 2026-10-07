@@ -192,6 +192,13 @@ def extract_document(document_id):
             if len(raw) > MAX_FILE_BYTES:
                 raise ValueError("The file is over 250 MB.")
             mime = validate_bytes(raw)          # real PDF / JPEG / PNG, by content — before any parser sees it
+            if mime.startswith("image/"):
+                size = ocr.image_size(raw)
+                if size is None:
+                    raise ValueError("This image could not be opened. It may be damaged.")
+                if min(size) < ocr.MIN_OCR_SIDE:
+                    raise ValueError(f"This image is only {size[0]}x{size[1]} pixels, too small to be a document. "
+                                     "Please upload it again.")
         except FileValidationError as exc:
             fail_document(doc, f"This file is not a valid PDF, JPEG or PNG: {exc}")
             return False

@@ -61,6 +61,21 @@ class ExtractDocumentTests(TestCase):
         delay.assert_not_called()
 
     @mock.patch("apps.records.tasks.classify_document_task.apply_async")
+    def test_a_one_pixel_image_fails_with_a_clear_reason_and_is_never_read(self, delay, get):
+        import io
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("LA", (1, 1)).save(buf, "PNG")          # the placeholder that once killed the worker with 4 GB of OCR
+        get.return_value = buf.getvalue()
+        doc = make_doc(status=S.QUEUED)
+        with mock.patch("apps.records.services.extract_text") as extract:
+            extract_document_task(doc.id)
+        self.assertEqual(row(doc).status, S.FAILED)
+        self.assertIn("1x1 pixels", row(doc).error_message)
+        extract.assert_not_called()
+        delay.assert_not_called()
+
+    @mock.patch("apps.records.tasks.classify_document_task.apply_async")
     def test_a_file_over_the_limit_fails(self, delay, _get):
         doc = make_doc(status=S.QUEUED)
         with mock.patch("apps.records.services.MAX_FILE_BYTES", 10):

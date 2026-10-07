@@ -29,6 +29,21 @@ class OcrImageLimitTests(SimpleTestCase):
             self.assertIsNone(ocr._open_for_ocr(_png(1500, 1000)))
             self.assertIsNone(ocr._load_rgb(_png(1500, 1000)))
 
+    def test_a_tiny_image_is_refused_because_the_models_blow_it_up(self):
+        self.assertIsNone(ocr._open_for_ocr(_png(1, 1)))
+        self.assertIsNone(ocr._open_for_ocr(_png(1, 500)))
+        self.assertIsNotNone(ocr._open_for_ocr(_png(ocr.MIN_OCR_SIDE, ocr.MIN_OCR_SIDE)))
+
+    def test_a_thin_strip_is_refused_because_the_models_blow_it_up(self):
+        self.assertIsNone(ocr._open_for_ocr(_png(40, 2500)))        # 62:1
+        self.assertIsNone(ocr._open_for_ocr(_png(2500, 40)))
+        self.assertIsNone(ocr._open_for_ocr(_png(300, 2500)))       # 8.3:1
+        self.assertIsNotNone(ocr._open_for_ocr(_png(500, 2500)))    # 5:1, like a long receipt
+
+    def test_the_size_is_read_from_the_header(self):
+        self.assertEqual(ocr.image_size(_png(40, 60)), (40, 60))
+        self.assertIsNone(ocr.image_size(b"junk"))
+
     def test_bytes_that_are_not_an_image_give_nothing(self):
         self.assertIsNone(ocr._open_for_ocr(b"not an image"))
 
