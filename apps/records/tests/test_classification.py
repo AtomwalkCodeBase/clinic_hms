@@ -88,14 +88,14 @@ class EngineTests(SimpleTestCase):
         self.assertEqual((result["document_type"], result["status"]), (c.NOT_CLASSIFIED, c.REVIEW_REQUIRED))
 
     def test_a_winner_must_lead_by_the_margin(self):
-        # medical_bill 30 (invoice, tax invoice, gst) against prescription 26 (rx, prescription, tablet, syrup):
-        # it leads by 4, which is under MIN_MARGIN, so nobody wins
+        # prescription 26 (rx, prescription, tablet, syrup) against medical_bill 23 (invoice, tax invoice, gst):
+        # it leads by 3, which is under MIN_MARGIN, so nobody wins
         result = c.classify_document_by_rules("rx prescription tablet syrup invoice tax invoice gst")
-        self.assertEqual((result["score"], result["second_best_score"], result["score_margin"]), (30, 26, 4))
+        self.assertEqual((result["score"], result["second_best_score"], result["score_margin"]), (26, 23, 3))
         self.assertLess(result["score_margin"], c.MIN_MARGIN)
-        self.assertEqual((result["document_type"], result["best_guess"]), (c.NOT_CLASSIFIED, "medical_bill"))
-        # two more medium words on the winner's side and it leads by 13: classified ("subtotal" also matches the phrase "sub total")
-        clear = c.classify_document_by_rules("rx prescription tablet syrup invoice tax invoice gst discount subtotal")
+        self.assertEqual((result["document_type"], result["best_guess"]), (c.NOT_CLASSIFIED, "prescription"))
+        # a strong and two medium words more on the bill's side and it leads by 13: classified ("subtotal" also matches the phrase "sub total")
+        clear = c.classify_document_by_rules("rx prescription tablet syrup invoice tax invoice gst discount subtotal net payable")
         self.assertEqual((clear["score_margin"], clear["document_type"]), (13, "medical_bill"))
 
     def test_text_with_no_match_is_not_classified_with_no_guess(self):

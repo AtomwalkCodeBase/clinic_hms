@@ -11,7 +11,10 @@ Scoring (not a probability — nothing here is calibrated against labelled data 
 
     strong keyword    +10        medium keyword    +3        weak keyword    +1
 
-Keywords are matched as whole words (so "rx" is not found inside "xerox"), each keyword counts once. The type with
+Keywords are matched as whole words (so "rx" is not found inside "xerox"), each keyword counts once. A keyword also
+matches its plural ("prescription" finds "Prescriptions") and any spacing or hyphenation of its words ("follow up" finds
+"Follow-up" and "Followup"); near-duplicates ("x-ray"/"xray", "sub total"/"subtotal") count once. A dose pattern such as
+1-0-1 counts as a medium prescription signal. The type with
 the highest score wins only if it beats the runner-up by at least MIN_MARGIN points; otherwise the document is
 "not_classified" and needs a person (status "review_required"). A person's choice always replaces the rules'.
 
@@ -59,8 +62,9 @@ DOCUMENT_RULES = {
     "prescription": {
         "strong": ["prescription", "e-prescription", "rx", "c/o", "chief complaints", "medication prescribed", "take medicine", "prescribed by"],
         "medium": ["tablet", "tab", "capsule", "cap", "syrup", "syp", "injection", "inj", "mg", "ml", "dosage", "once daily", "twice daily",
+                   "once a day", "once in a day", "twice a day", "thrice a day", "three times a day", "dispense",
                    "bd", "tds", "od", "hs", "qid", "sos", "before food", "after food", "before breakfast", "at night", "ointment",
-                   "eye drops", "next visit", "review after", "adv"],
+                   "cream", "lotion", "drops", "topical", "orally", "eye drops", "next visit", "review after", "adv"],
         "weak": ["diagnosis", "advice", "follow up", "doctor", "dr", "timings"],
     },
     "lab_report": {
@@ -92,9 +96,9 @@ DOCUMENT_RULES = {
         "weak": ["complaint", "advice", "follow up", "plan", "review"],
     },
     "medical_bill": {
-        "strong": ["invoice", "tax invoice", "amount payable", "total amount", "bill no", "gst", "gstin", "net payable", "amount in words",
+        "strong": ["invoice", "tax invoice", "amount payable", "total amount", "bill no", "net payable", "amount in words",
                    "receipt", "authorised signatory", "payment mode"],
-        "medium": ["subtotal", "sub total", "discount", "quantity", "rate", "net amount", "qty", "mrp", "batch", "with thanks", "rupees", "charges"],
+        "medium": ["gst", "gstin", "subtotal", "sub total", "discount", "quantity", "rate", "net amount", "qty", "mrp", "batch", "with thanks", "rupees", "charges"],
         "weak": ["total", "amount", "paid"],
     },
     "vaccination_record": {
@@ -120,16 +124,30 @@ DOCUMENT_RULES = {
 }
 
 
+def _canon(keyword):
+    """What makes two keywords the same: letters and digits only, plural dropped ("x-ray" = "xray", "sub total" = "subtotal")."""
+    k = re.sub(r"[^a-z0-9]", "", keyword.lower())
+    return k[:-1] if len(k) > 3 and k.endswith("s") else k
+
+
 def _dedupe_levels(rules):
-    """A keyword counts once per type: if it is listed at two levels, only the strongest one stays."""
+    """A keyword counts once per type: if it is listed twice (at any level, spelt differently or as a plural), only the
+    strongest one stays."""
     for levels in rules.values():
         seen = set()
         for level in ("strong", "medium", "weak"):
-            levels[level] = [k for k in levels.get(level, []) if not (k in seen or seen.add(k))]
+            levels[level] = [k for k in levels.get(level, []) if not (_canon(k) in seen or seen.add(_canon(k)))]
     return rules
 
 
 DOCUMENT_RULES = _dedupe_levels(DOCUMENT_RULES)
+
+# Patterns that are not words. A written dose such as 1-0-1 or 0-1-0 (morning-noon-night) is a clue for a prescription,
+# but only a medium one: a discharge summary lists doses too. Each digit is 0-3 and none touches another digit, so a date
+# like 11-09-2026 can not match.
+PATTERN_RULES = {
+    "prescription": [("medium", "1-0-1 dose pattern", re.compile(r"(?<![0-9])[0-3]\s*-\s*[0-3]\s*-\s*[0-3](?![0-9])"))],
+}
 
 
 # ── the engine (pure: no database) ───────────────────────────────────────
@@ -158,9 +176,15 @@ _PATTERNS = {}
 
 
 def _pattern(keyword):
-    """Whole-word match: not glued to other letters (digits are fine, so "500mg" finds "mg")."""
+    """Whole-word match: not glued to other letters (digits are fine, so "500mg" finds "mg"). The words of a phrase may
+    be separated by spaces, hyphens or nothing at all ("follow up" = "Follow-up" = "Followup"), and the last word may
+    be a plural ("prescription" = "Prescriptions")."""
     if keyword not in _PATTERNS:
-        _PATTERNS[keyword] = re.compile(r"(?<![a-z])" + re.escape(keyword) + r"(?![a-z])")
+        words = [re.escape(w) for w in re.split(r"[\s\-]+", keyword) if w]
+        body = r"[\s\-]*".join(words)
+        if keyword[-1].isalpha():
+            body += "s?"
+        _PATTERNS[keyword] = re.compile(r"(?<![a-z])" + body + r"(?![a-z])")
     return _PATTERNS[keyword]
 
 
@@ -187,6 +211,10 @@ def calculate_document_scores(text):
                 if _found(keyword, text, squashed):
                     score += WEIGHTS[level]
                     matched.append({"keyword": keyword, "weight": WEIGHTS[level], "level": level})
+        for level, name, regex in PATTERN_RULES.get(document_type, []):
+            if regex.search(text):
+                score += WEIGHTS[level]
+                matched.append({"keyword": name, "weight": WEIGHTS[level], "level": level})
         scores[document_type] = {"score": score, "matched_rules": matched}
     return scores
 
