@@ -49,26 +49,19 @@ export function formatSize(bytes) {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-/** How strong a score is (it is points, not a percentage): "strong" 30+, "good" 20–29, "low" under 20. */
-export function confidenceTone(score) {
-  const n = score || 0;
-  return n >= 30 ? "strong" : n >= 20 ? "good" : "low";
-}
-
-/** The two chips on a row: what it is, and how sure we are (or who decided). */
+/** The two chips on a row: what it is, and who decided it (the hospital that issued it, or the patient). The rule engine's score is never shown. */
 export function chipsFor(doc) {
   switch (stateOf(doc)) {
     case "processing": return { type: { text: "Reading…", tone: "neutral" }, extra: null };
     case "failed": return { type: { text: "Couldn’t read", tone: "bad" }, extra: null };
     case "duplicate": return { type: { text: "Duplicate", tone: "warn" }, extra: null };
     case "unclassified":
-      return { type: { text: "Unable to classify", tone: "warn" },
-               extra: doc.score > 0 ? { text: `Score ${Math.round(doc.score)}`, tone: confidenceTone(doc.score) } : null };
+      return { type: { text: "Unable to classify", tone: "warn" }, extra: null };
     default: {
       const type = { text: typeLabel(doc.doc_type), tone: "type" };
       if (doc.source_tenant_id || doc.uploaded_by === "staff") return { type, extra: { text: "Issued by hospital", tone: "neutral" } };
       if (doc.method === "staff") return { type, extra: { text: "Verified by you", tone: "neutral" } };
-      return { type, extra: { text: `Score ${Math.round(doc.score || 0)}`, tone: confidenceTone(doc.score) } };
+      return { type, extra: null };
     }
   }
 }

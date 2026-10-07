@@ -7,7 +7,7 @@ import { calcAge, formatAge } from "./age";
 import { vaxBucket } from "./vaccination";
 import { chunkBySize } from "./files";
 import {
-  NEEDS_ATTENTION, chipsFor, confidenceTone, fileKind, formatSize, matchesSearch, sortReports, stateOf, statusLine, typeLabel,
+  NEEDS_ATTENTION, chipsFor, fileKind, formatSize, matchesSearch, sortReports, stateOf, statusLine, typeLabel,
 } from "./reports";
 
 test("addDays moves a YYYY-MM-DD date forwards and backwards across month ends", () => {
@@ -93,23 +93,22 @@ test("the line under a report says what happened, in plain words", () => {
   assert.equal(statusLine({ processing_status: "completed", doc_type: "scan", method: "staff" }).text, "Scan");
 });
 
-test("file kind, size and score tone", () => {
+test("file kind and size", () => {
   assert.equal(fileKind({ mime_type: "application/pdf" }), "pdf");
   assert.equal(fileKind({ file_name: "scan.JPG" }), "image");
   assert.equal(fileKind({ file_name: "notes.txt" }), "other");
   assert.equal(formatSize(850 * 1024), "850 KB");
   assert.equal(formatSize(1.2 * 1048576), "1.2 MB");
   assert.equal(formatSize(null), "");
-  assert.deepEqual([36, 30, 29, 20, 19, 0, null].map(confidenceTone), ["strong", "strong", "good", "good", "low", "low", "low"]);
 });
 
-test("the chips on a row say what it is and how strong the score is", () => {
+test("the chips on a row say what it is and who decided, never the score", () => {
   const done = (extra) => ({ processing_status: "completed", doc_type: "lab_report", score: 32.4, method: "rule", ...extra });
-  assert.deepEqual(chipsFor(done()), { type: { text: "Lab report", tone: "type" }, extra: { text: "Score 32", tone: "strong" } });
+  assert.deepEqual(chipsFor(done()), { type: { text: "Lab report", tone: "type" }, extra: null });
   assert.equal(chipsFor(done({ method: "staff" })).extra.text, "Verified by you");
   assert.equal(chipsFor(done({ source_tenant_id: 3 })).extra.text, "Issued by hospital");
   assert.equal(chipsFor({ processing_status: "completed", doc_type: "", score: 20 }).type.text, "Unable to classify");
-  assert.equal(chipsFor({ processing_status: "completed", doc_type: "", score: 20 }).extra.text, "Score 20");
+  assert.equal(chipsFor({ processing_status: "completed", doc_type: "", score: 20 }).extra, null);
   assert.equal(chipsFor({ processing_status: "rejected" }).type.text, "Duplicate");
   assert.equal(chipsFor({ processing_status: "failed" }).type.tone, "bad");
   assert.equal(chipsFor({ processing_status: "extracting" }).type.text, "Reading…");
