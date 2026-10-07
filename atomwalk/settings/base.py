@@ -397,24 +397,7 @@ else:
 # value — this feature is new, so there are no live QRs to invalidate yet.
 DOC_QR_SECRET = config("DOC_QR_SECRET", default="") or SECRET_KEY
 
-# OCR engine for no-QR document classification (core/ocr.py):
-#   "auto" (default) — RapidOCR (PaddleOCR's PP-OCR models on ONNX Runtime;
-#     pip-only, CPU, no system package) when installed, else Tesseract.
-#   "both" — always run RapidOCR AND Tesseract, concatenate their text (see
-#     core/ocr.py module docstring for the accuracy measurement).
-#   "rapidocr" | "paddleocr" | "tesseract" — force one.  "none" — disable OCR.
-DOC_OCR_ENGINE = config("DOC_OCR_ENGINE", default="auto")
-
-# Path to the tesseract binary — only used when DOC_OCR_ENGINE falls back to
-# Tesseract. Leave blank on Linux where `tesseract` is on PATH (apt install
-# tesseract-ocr); set it only if the binary lives somewhere non-standard
-# (some Windows dev machines) — core/ocr.py also auto-probes the usual paths.
-TESSERACT_CMD = config("TESSERACT_CMD", default="")
-
-# Tesseract page-segmentation mode. 6 ("assume a single uniform block of
-# text") measured far better than Tesseract's own default of 3 (automatic
-# layout analysis) on real phone photos — see core/ocr.py module docstring.
-DOC_OCR_TESSERACT_PSM = config("DOC_OCR_TESSERACT_PSM", default=6, cast=int)
+# OCR for classifying uploads (core/ocr.py) is RapidOCR only: there is no engine setting and no second engine.
 
 # ── Handwriting recognition (consultation scratchpad) ───────────────────────
 # The consult-pad QR flow photographs a handwritten SOAP note; a vision model
