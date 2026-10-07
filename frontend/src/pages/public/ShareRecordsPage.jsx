@@ -320,6 +320,8 @@ const CAT_LABEL = { prescription: "Prescription", lab: "Lab report", doc: "Docum
 
 
 const PANEL_ORDER = Object.keys(PANEL_LABELS);
+// Types this page never lists for a doctor. The server still sends them; they are only left out of what is shown.
+const HIDDEN_FROM_DOCTOR = new Set(["medical_bill"]);
 const NONPANEL_LABEL = { prescription: "Prescriptions", scan: "Imaging", discharge_summary: "Discharge summaries", other: "Other" };
 function docSections(d) {
   if (d.doc_type === "lab_report") {
@@ -562,7 +564,7 @@ function RecordsView({ token }) {
     clearInterval(timer.current);
   }
 
-  const docs = useMemo(() => data?.documents || [], [data]);
+  const docs = useMemo(() => (data?.documents || []).filter((d) => !HIDDEN_FROM_DOCTOR.has(d.doc_type)), [data]);
   const counts = useMemo(() => {
     const c = { all: docs.length, prescription: 0, lab: 0, doc: 0 };
     docs.forEach((d) => { c[catOf(d.doc_type)]++; });
