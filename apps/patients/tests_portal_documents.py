@@ -1,8 +1,9 @@
 """
-Patient-portal document semantics (registry DB only): the list, retyping, retry, dismissing a failed file, zip and the
+Patient-portal document semantics (registry DB only): the list, retyping, retry, removing an upload, zip and the
 activity.
 
-A document stays in the patient's records. The one thing that can be removed is a file that failed.
+A document stays in the patient's records. The only things that can be removed are an upload that failed and an upload
+that has been read but not yet confirmed by the patient.
 """
 
 from unittest import mock
@@ -44,11 +45,11 @@ class PortalDocumentTests(TestCase):
     def patch(self, doc, **body):
         return self.call(PortalDocumentDetailView, "patch", body, doc_id=doc.id)
 
-    # ── only a failed file can be dismissed ──
+    # ── only a failed file, or an upload still waiting for the patient's review, can be removed ──
     def dismiss(self, doc):
         return self.call(PortalDocumentDetailView, "delete", doc_id=doc.id)
 
-    def test_a_document_the_patient_can_use_cannot_be_deleted(self):
+    def test_a_document_in_the_patients_records_cannot_be_deleted(self):
         for status in ("completed", "review_required", "queued", "extracting"):
             doc = make_doc(self.acct.awpid, status=status)
             resp = self.dismiss(doc)
@@ -65,6 +66,36 @@ class PortalDocumentTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertFalse(MedicalDocument.objects.filter(pk=doc.pk).exists())
         delete.assert_called_once_with(name)
+
+    REVIEW_ON = "2000-01-01T00:00:00+00:00"
+
+    @override_settings(RECORDS_REVIEW_FROM=REVIEW_ON)
+    def test_a_read_upload_waiting_for_review_can_be_removed_and_its_stored_copy_is_removed(self):
+        suggested = make_doc(self.acct.awpid, status="completed", document_type="lab_report", by="rules")
+        unclassified = make_doc(self.acct.awpid, status="review_required", by="rules")
+        with mock.patch("core.storage.delete") as delete:
+            for doc in (suggested, unclassified):
+                self.assertEqual(self.dismiss(doc).status_code, 200, doc.status)
+                self.assertFalse(MedicalDocument.objects.filter(pk=doc.pk).exists())
+        self.assertEqual(delete.call_count, 2)
+
+    @override_settings(RECORDS_REVIEW_FROM=REVIEW_ON)
+    def test_a_confirmed_upload_or_one_still_being_read_cannot_be_removed(self):
+        confirmed = make_doc(self.acct.awpid, status="completed", document_type="lab_report", by="human")
+        for doc in (confirmed,
+                    make_doc(self.acct.awpid, status="queued"),
+                    make_doc(self.acct.awpid, status="extracting"),
+                    make_doc(self.acct.awpid, status="classifying")):
+            with mock.patch("core.storage.delete") as delete:
+                self.assertEqual(self.dismiss(doc).status_code, 409, doc.status)
+            delete.assert_not_called()
+            self.assertTrue(MedicalDocument.objects.filter(pk=doc.pk).exists(), doc.status)
+
+    @override_settings(RECORDS_REVIEW_FROM=REVIEW_ON)
+    def test_someone_elses_upload_waiting_for_review_cannot_be_removed(self):
+        other = make_doc("AW-OTHER", status="completed", document_type="lab_report", by="rules")
+        self.assertEqual(self.dismiss(other).status_code, 404)
+        self.assertTrue(MedicalDocument.objects.filter(pk=other.pk).exists())
 
     def test_dismissing_keeps_the_batch_counters_right(self):
         batch = DocumentBatch.objects.create(patient=identity(self.acct.awpid), total_files=3)

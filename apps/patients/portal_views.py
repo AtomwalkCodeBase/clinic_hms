@@ -1691,8 +1691,9 @@ class PortalDocumentDetailView(APIView):
     PATCH  /api/v1/portal/documents/<id>/               — the patient acts on a document they uploaded:
            {doc_type}  correct its type (a human verdict, which the rules never overwrite)
            {action: "retry"}  try a file that failed again
-    DELETE /api/v1/portal/documents/<id>/               — dismiss a file that failed (removes it and its stored copy).
-           Any other file is refused with 409: a document the patient can use is never deleted.
+    DELETE /api/v1/portal/documents/<id>/               — remove an upload: a file that failed, or one that has been
+           read but not yet confirmed by the patient (removes the row and its stored copy). A file still being read,
+           or one already confirmed, is refused with 409: a document in the patient's records is never deleted.
     """
     permission_classes = [IsPatient]
 
@@ -1706,7 +1707,7 @@ class PortalDocumentDetailView(APIView):
         try:
             services.dismiss_document(doc)
         except ValueError as exc:
-            return error(str(exc), errors={"code": "not_failed"}, status=409)
+            return error(str(exc), errors={"code": "not_removable"}, status=409)
         return success(data={"dismissed": True, "id": doc_id})
 
     def get(self, request, doc_id):

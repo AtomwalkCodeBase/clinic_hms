@@ -350,12 +350,23 @@ def retry_document(doc):
     _end(doc, Status.QUEUED, error_message="")
 
 
+def can_discard(doc):
+    """A patient may remove an upload that failed, or one that has been read but whose type they have not confirmed yet
+    (the Needs Review and Ready to Submit lists). Never one still being read - the worker is using it - and never one
+    already confirmed, which is part of their records."""
+    if doc.status == Status.FAILED:
+        return True
+    if doc.status not in (Status.COMPLETED, Status.REVIEW_REQUIRED):
+        return False
+    return MedicalDocument.objects.using("default").filter(pk=doc.pk).filter(awaiting_review_q()).exists()
+
+
 def dismiss_document(doc):
-    """The patient removes a file that failed: its stored copy and its rows. Only a failed file can go - one that is in
-    progress, finished or confirmed is never deleted here - so nothing the patient can use is ever lost. The batch is
+    """The patient removes an upload (see `can_discard`): its stored copy and its rows. A document that is being read
+    or is already confirmed is never deleted here, so nothing in the patient's records is ever lost. The batch is
     brought in line with what is left (and removed when nothing is)."""
-    if doc.status != Status.FAILED:
-        raise ValueError("Only a file that failed can be dismissed.")
+    if not can_discard(doc):
+        raise ValueError("Only a file that failed, or one you haven't confirmed yet, can be removed.")
     batch, name = doc.batch, (doc.file.name if doc.file else "")
     doc.delete()
     _safe_delete(name)
