@@ -1755,6 +1755,75 @@ class PortalDocumentDetailView(APIView):
         return success(data=_document_row(type(doc).objects.using("default").get(pk=doc.pk)))
 
 
+class PortalDocumentPreviewView(APIView):
+    """
+    GET /api/v1/portal/documents/<id>/preview/?page=1&width=300
+    A small JPEG picture of one page of the patient's own document (a PDF page, or the photo), for the thumbnails in the
+    document lists. Nothing is stored: it is drawn when asked, and the response carries cache headers and an ETag so a
+    phone asks once. The original file is untouched (Download serves it as it is).
+
+    404  no such document, or no such page (a photo has only page 1)
+    422  the file can't be drawn (damaged, password protected, too big or too thin); the app shows the type icon
+    """
+    permission_classes = [IsPatient]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "preview"
+
+    def get(self, request, doc_id):
+        import hashlib
+        from django.http import HttpResponse, HttpResponseNotModified
+        from core.file_validation import validate_bytes
+        from apps.records import previews
+
+        doc, err = _own_document(request, doc_id)
+        if err:
+            return err
+        try:
+            page = int(request.query_params.get("page") or 1)
+        except ValueError:
+            return error("page must be a number.")
+        width = previews.clamp_width(request.query_params.get("width"))
+        if page < 1:
+            return error("No such page.", status=404)
+
+        etag = '"%s"' % hashlib.md5(f"{doc.id}:{doc.file.name}:{page}:{width}".encode()).hexdigest()
+        cache = {"ETag": etag, "Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"}
+        if request.META.get("HTTP_IF_NONE_MATCH") == etag:
+            resp = HttpResponseNotModified()
+            for k, v in cache.items():
+                resp[k] = v
+            return resp
+
+        try:
+            size = doc.size or doc.file.size
+        except Exception:
+            size = None
+        if size and size > previews.MAX_BYTES:
+            return error("This file is too large to preview.", status=422)
+        try:
+            doc.file.open("rb")
+            try:
+                raw = doc.file.read()
+            finally:
+                doc.file.close()
+        except Exception:
+            logger.warning("preview: reading document %s failed", doc.id, exc_info=True)
+            return error("This file could not be read.", status=422)
+        try:
+            mime = validate_bytes(raw)
+            data = previews.render_preview(raw, mime, page, width)
+        except FileValidationError:
+            return error("This kind of file can't be previewed.", status=422)
+        except previews.NoSuchPage:
+            return error("No such page.", status=404)
+        except previews.PreviewUnavailable as exc:
+            return error(str(exc), status=422)
+        resp = HttpResponse(data, content_type="image/jpeg")
+        for k, v in cache.items():
+            resp[k] = v
+        return resp
+
+
 class PortalDocumentZipView(APIView):
     """
     POST /api/v1/portal/documents/zip/   body: { ids: [<doc_id>, ...] }  (max 100)

@@ -266,6 +266,9 @@ REST_FRAMEWORK = {
         "anon": "100/min",
         "user": "300/min",
         "login": "10/min",
+        # Document preview pictures (apps/patients/portal_views.py PortalDocumentPreviewView): a list of 50 files asks
+        # for 50 small thumbnails, so this is generous, but it keeps one phone from flooding the drawing.
+        "preview": "600/min",
         # OTP request/verify endpoints — tighter than login since these are
         # what a brute-force/SMS-bombing attempt would target. The per-
         # identifier resend cooldown (core.otp.RESEND_COOLDOWN_SECONDS) and
