@@ -3,7 +3,8 @@ Celery tasks of the records pipeline: orchestration only — the work is in serv
 classification.py.
 
     extract_document_task    file → content check → text (DocumentText), then queues classify_document_task
-    classify_document_task   rule engine → PatientDocumentClassification and the document's type
+    classify_document_task   rule engine → PatientDocumentClassification and the document's type, then queues
+    insights_document_task   the text → dated conditions, symptoms and medications (DocumentText.insights)
 
 Each task retries on an unexpected error (Celery's own retry, with backoff); once its retries are used up the document
 is marked failed, so the patient sees it and can retry. A file that can never work (empty, not a PDF/JPEG/PNG) is
@@ -56,3 +57,13 @@ def classify_document_task(self, document_id, queue=services.BULK_QUEUE):
             services.fail_document_by_id(document_id, f"Couldn't classify this file: {exc}")
             return
         raise
+    insights_document_task.apply_async(args=[document_id], queue=queue)
+
+
+@shared_task(soft_time_limit=120, time_limit=180, **_TASK_OPTS)
+def insights_document_task(self, document_id, queue=services.BULK_QUEUE):
+    """The extracted text → insights JSON for the timeline. Runs after classification, and for a hospital-issued
+    document (which has no text yet, so its file is read first). It never fails the document: it is already
+    finished, and a document without insights simply has no timeline entries (run_all() fills them)."""
+    from .timeline_insights import extract
+    extract.run_insights(document_id)

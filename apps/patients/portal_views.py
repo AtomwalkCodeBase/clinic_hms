@@ -24,6 +24,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework.throttling import ScopedRateThrottle
 
+from apps.patients.pediatrics.roadmap import rules_for
 from core.permissions import IsPatient
 from core.response import success, error, not_found
 from core.pagination import paginate_list, paginate_queryset
@@ -31,7 +32,6 @@ from .portal_access import resolve_target_awpid_and_dob
 from apps.tenants.utils import ensure_tenant_db
 from core.file_validation import validate_data_uri, FileValidationError
 from core.geo import haversine_km, parse_lat_lng
-from apps.patients.age_utils import age_years_months as _age_years_months
 from apps.records import classification as doc_rules
 from core import storage as blob_storage
 from apps.tenants.models import Tenant
@@ -156,16 +156,16 @@ class PortalRegisterView(APIView):
                 },
             )
 
-            acct = PatientAccount(
-                awpid=identity.awpid,
-                full_name=d["full_name"].strip(),
-                email=email,
-                mobile=mobile,
-                gender=gender,
-                date_of_birth=d.get("date_of_birth") or None,
-            )
-            acct.set_password(d["password"])
-            acct.save(using="default")
+            # the login goes on the same identity row (a walk-in who signs up claims the AWPID they already have)
+            if identity.password:
+                return error("An account with this mobile number already exists. Please log in.")
+            identity.mobile = mobile
+            identity.email = identity.email or email
+            identity.gender = identity.gender or gender
+            identity.date_of_birth = identity.date_of_birth or d.get("date_of_birth") or None
+            identity.set_password(d["password"])
+            identity.save(using="default")
+            acct = PatientAccount.objects.using("default").get(pk=identity.pk)
 
         logger.info("Patient account registered via OTP: account_id=%s awpid=%s email_verified=True", acct.id, acct.awpid)
         return success(
@@ -900,7 +900,6 @@ class PortalBookView(APIView):
                 is_dependent=target_awpid != acct.awpid,
                 guardian_name=(acct.full_name or "") if target_awpid != acct.awpid else "",
                 guardian_mobile=(acct.mobile or "") if target_awpid != acct.awpid else "",
-                guardian_awpid=acct.awpid if target_awpid != acct.awpid else "",
                 hie_consent_given=True,
                 hie_consent_at=timezone.now(),
                 payer_type="self",
@@ -2590,367 +2589,6 @@ class PortalHealthSummaryView(APIView):
         })
 
 
-# ── Growth ───────────────────────────────────────────────────────────────────
-
-class PortalGrowthView(APIView):
-    """
-    GET /api/v1/portal/growth/?patient_awpid=
-    Height/weight/BMI over time from the registry's SharedVital table (every
-    hospital's finalized visits) — cross-hospital by nature since the portal
-    has no single tenant DB to read from, unlike PatientGrowthView (staff
-    side), which also blends in that one hospital's own local Vitals.
-    """
-    permission_classes = [IsPatient]
-
-    def get(self, request):
-        from apps.registry.models import SharedVital
-
-        target_awpid, dob, err = resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-
-        series = []
-        for v in (SharedVital.objects.using("default")
-                  .filter(awpid=target_awpid).order_by("recorded_at")):
-            if v.height_cm or v.weight_kg or v.head_circumference_cm:
-                series.append({
-                    "date": str(v.recorded_at.date()),
-                    "height_cm": float(v.height_cm) if v.height_cm else None,
-                    "weight_kg": float(v.weight_kg) if v.weight_kg else None,
-                    "head_circumference_cm": float(v.head_circumference_cm) if v.head_circumference_cm else None,
-                    # "clinic" (recorded during a hospital visit) or "home"
-                    # (self-reported) — real field on SharedVital, shown on
-                    # the growth chart so a clicked point can honestly say
-                    # where the measurement came from instead of inventing
-                    # a source.
-                    "source": v.source,
-                })
-
-        _age_ym = _age_years_months(dob)
-        age_years = _age_ym[0] if _age_ym else None
-        age_months = _age_ym[1] if _age_ym else None
-        is_minor = age_years is not None and age_years < 18
-
-        # Percentile bands — same WHO LMS engine as the staff-side
-        # PatientGrowthView (see apps.registry.growth_reference). Gender
-        # isn't on PatientAccount/PatientIdentity uniformly enough to trust
-        # here without an extra lookup, so this reads it off PatientIdentity
-        # when available; no identity row (shouldn't normally happen) simply
-        # means no percentile overlay, same graceful fallback as an
-        # unsupported age/gender in get_percentile() itself.
-        percentile_available = False
-        if is_minor and dob:
-            from apps.registry.growth_reference import get_percentile, MEASUREMENTS
-            identity = PatientIdentity.objects.using("default").filter(awpid=target_awpid).first()
-            gender = getattr(identity, "gender", None)
-            if gender in ("M", "F"):
-                for p in series:
-                    try:
-                        reading_date = date.fromisoformat(p["date"])
-                    except ValueError:
-                        continue
-                    reading_age_months = (reading_date.year - dob.year) * 12 + (reading_date.month - dob.month)
-                    if reading_age_months < 0 or reading_age_months > 60:
-                        continue
-                    p["percentiles"] = {}
-                    for m in MEASUREMENTS:
-                        val = p.get({"weight": "weight_kg", "height": "height_cm", "head_circumference": "head_circumference_cm"}[m])
-                        result = get_percentile(m, gender, reading_age_months, val)
-                        if result:
-                            p["percentiles"][m] = result
-                            percentile_available = True
-
-        return success(data={
-            "date_of_birth": dob,
-            "age_years": age_years,
-            "age_months": age_months,
-            "is_minor": is_minor,
-            "series": series,
-            "latest": series[-1] if series else None,
-            "percentile_available": percentile_available,
-        })
-
-
-# ── Vaccinations ─────────────────────────────────────────────────────────────
-
-_MAX_VAX_BASE64_CHARS = 15_500_000  # ≈11MB, same cap as document uploads
-
-
-def _parse_portal_date(value, field_label):
-    """
-    Strictly parses a "YYYY-MM-DD" string and rejects implausible dates,
-    returning (parsed_date, error_response).
-
-    Why this exists: PortalVaccinationUploadView used to hand the raw
-    client string straight to SharedVaccination.objects.create(). A native
-    <input type="date"> lets a fast/fat-fingered year entry produce a
-    technically-well-formed-looking but wrong string like "82026-10-02"
-    (year 82026). Django's DateField only converts that value to SQL at
-    INSERT time, deep inside the ORM — a 5-digit year doesn't match its
-    YYYY-MM-DD parser, so it raises a bare django.core.exceptions.
-    ValidationError that DRF's exception handler doesn't catch, which
-    surfaces to the patient as an opaque 500 / generic "Something went
-    wrong" toast instead of a clear "check the date" message. Validating
-    up front turns a typo into an honest 400.
-    """
-    if not value:
-        return None, None
-    try:
-        parsed = datetime.strptime(str(value), "%Y-%m-%d").date()
-    except (ValueError, TypeError):
-        return None, error(
-            f"{field_label} must be a valid date.",
-            errors={"administered_date": "Enter a valid date."},
-        )
-    if parsed.year < 1900 or parsed > date.today():
-        return None, error(
-            f"{field_label} ({parsed.isoformat()}) doesn't look right — please check the year.",
-            errors={"administered_date": "Check the year — that date is out of range."},
-        )
-    return parsed, None
-
-
-def _portal_schedule_rules():
-    """
-    Which VaccinationSchedule's rules to use for the patient-portal's
-    cross-hospital aggregated vaccination views (PortalVaccinationListView,
-    PortalHealthTimelineView).
-
-    The portal doesn't scope a request to one hospital — a patient's
-    records can come from any tenant in the network — so there's no single
-    "current hospital" whose active_vaccination_schedule_id is obviously
-    correct the way there is on the staff side (see
-    apps/patients/growth_vaccination_views.py). Determining "the tenant of
-    the patient's most recent visit/booking" would require a fan-out scan
-    across every active tenant DB (same pattern as PortalHealthTimelineView's
-    visits section) just to pick a schedule for display purposes, which is
-    a lot of cross-DB cost for what is ultimately a reference roadmap, not
-    a billing-critical computation — so this pass takes the simpler,
-    explicitly-allowed fallback: always resolve to the global system
-    "Default Schedule" template (owner_tenant_id=None, is_template=True)
-    for every patient-portal view. Revisit if a hospital's custom schedule
-    needs to show up here too.
-    """
-    from apps.registry.models import VaccinationSchedule, VaccinationScheduleRule
-
-    schedule = (
-        VaccinationSchedule.objects.using("default")
-        .filter(owner_tenant_id__isnull=True, is_template=True, active=True)
-        .order_by("id")
-        .first()
-    )
-    if not schedule:
-        return []
-    return list(
-        VaccinationScheduleRule.objects.using("default")
-        .filter(schedule=schedule)
-        .order_by("sort_order")
-    )
-
-
-class PortalVaccinationListView(APIView):
-    """
-    GET /api/v1/portal/vaccinations/?patient_awpid=
-    Same roadmap staff see, for the account owner or a linked family member.
-    """
-    permission_classes = [IsPatient]
-
-    def get(self, request):
-        from apps.registry.vaccine_schedule import build_roadmap, summarize_roadmap
-
-        target_awpid, dob, err = resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-
-        rules = _portal_schedule_rules()
-        roadmap = build_roadmap(target_awpid, dob, rules)
-        summary = summarize_roadmap(roadmap)
-        return success(data={
-            "date_of_birth": dob,
-            "roadmap": roadmap,
-            "completed_count": summary["completed_count"],
-            "total_count": summary["total_count"],
-            "next_recommended": summary["next_recommended"],
-            "next_due": summary["next_due"],  # deprecated alias, see summarize_roadmap()
-            "stats": summary["stats"],
-        })
-
-
-def _portal_milestone_schedule_rules():
-    """Milestone analog of _portal_schedule_rules() above — same reasoning,
-    same simplification (always the global "Default Schedule" template)."""
-    from apps.registry.models import MilestoneSchedule, MilestoneScheduleRule
-
-    schedule = (
-        MilestoneSchedule.objects.using("default")
-        .filter(owner_tenant_id__isnull=True, is_template=True, active=True)
-        .order_by("id")
-        .first()
-    )
-    if not schedule:
-        return []
-    return list(
-        MilestoneScheduleRule.objects.using("default")
-        .filter(schedule=schedule)
-        .order_by("sort_order")
-    )
-
-
-class PortalMilestoneListView(APIView):
-    """
-    GET /api/v1/portal/milestones/?patient_awpid=
-    Same developmental-milestone roadmap staff see, for the account owner or
-    a linked family member — mirrors PortalVaccinationListView.
-    """
-    permission_classes = [IsPatient]
-
-    def get(self, request):
-        from apps.registry.milestone_roadmap import build_roadmap, summarize_roadmap
-
-        target_awpid, dob, err = resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-
-        rules = _portal_milestone_schedule_rules()
-        roadmap = build_roadmap(target_awpid, dob, rules)
-        summary = summarize_roadmap(roadmap)
-        return success(data={
-            "date_of_birth": dob,
-            "roadmap": roadmap,
-            "achieved_count": summary["achieved_count"],
-            "total_count": summary["total_count"],
-            "next_recommended": summary["next_recommended"],
-            "stats": summary["stats"],
-        })
-
-
-class PortalVaccinationUploadView(APIView):
-    """
-    POST /api/v1/portal/vaccinations/upload/
-    Body: { vaccine_name, administered_date, scheduled_label?, patient_awpid?,
-            file_data?, file_name?, mime_type? }
-    A parent self-reports a vaccination given outside the network (a
-    government camp, another clinic) — with an optional certificate photo.
-    Always lands as verification_status="pending_review", never "verified" —
-    only a doctor/nurse reviewing it (PatientVaccinationVerifyView) can
-    upgrade it. This is the whole point of tracking verification separately:
-    a self-reported entry must never render identically to a clinic record
-    until someone clinical has actually looked at it.
-    """
-    permission_classes = [IsPatient]
-
-    def post(self, request):
-        from apps.registry.models import SharedVaccination
-
-        target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-
-        d = request.data
-        vaccine_name = (d.get("vaccine_name") or "").strip()
-        administered_date = d.get("administered_date")
-        scheduled_label = (d.get("scheduled_label") or "").strip()
-        file_data = d.get("file_data") or ""
-        file_name = (d.get("file_name") or "").strip()
-        mime_type = (d.get("mime_type") or "").strip()
-
-        if not vaccine_name:
-            return error("Vaccine name is required.", errors={"vaccine_name": "Required."})
-        if not administered_date:
-            return error("Administered date is required.", errors={"administered_date": "Required."})
-
-        administered_date, date_err = _parse_portal_date(administered_date, "Administered date")
-        if date_err:
-            return date_err
-
-        if file_data:
-            if len(file_data) > _MAX_VAX_BASE64_CHARS:
-                return error("File is too large. Please upload a smaller file (under ~11MB).")
-            try:
-                mime_type = validate_data_uri(file_data)
-            except FileValidationError as exc:
-                return error(str(exc), errors={"file_data": str(exc)})
-            from apps.registry.models import PatientIdentity
-            _identity_row = PatientIdentity.objects.using("default").filter(awpid=target_awpid).first()
-            identity = blob_storage.identity_slug(
-                name=_identity_row.full_name if _identity_row else "", identifier=target_awpid,
-            )
-            try:
-                file_data = blob_storage.upload_data_uri(
-                    file_data, prefix="vaccination-certs", mime_type=mime_type,
-                    category="vaccination-certificate", identity=identity,
-                )
-            except blob_storage.StorageError as exc:
-                return error(str(exc), errors={"file_data": str(exc)})
-            # Named after what it is — the specific vaccine plus who it
-            # belongs to — not whatever the parent's phone/scanner called
-            # the file, and not just a generic "Vaccination Certificate"
-            # that's indistinguishable from any other patient's once
-            # downloaded outside this app's own folder-organized S3 view.
-            file_name = blob_storage.display_file_name(
-                "vaccination-certificate", mime_type,
-                detail=vaccine_name,
-                name=_identity_row.full_name if _identity_row else "",
-                identifier=target_awpid,
-            )
-
-        record = SharedVaccination.objects.using("default").create(
-            awpid=target_awpid,
-            vaccine_name=vaccine_name,
-            scheduled_label=scheduled_label,
-            administered_date=administered_date,
-            source=SharedVaccination.SOURCE_SELF_REPORTED,
-            verification_status=SharedVaccination.STATUS_PENDING,
-            file_name=file_name,
-            mime_type=mime_type,
-            file_data=file_data,
-            recorded_by="patient",
-        )
-        return success(data={
-            "id": record.id,
-            "vaccine_name": record.vaccine_name,
-            "administered_date": str(record.administered_date),
-            "verification_status": record.verification_status,
-        }, message="Submitted. This will show as pending review until a doctor confirms it.")
-
-
-class PortalVaccinationFileView(APIView):
-    """
-    GET /api/v1/portal/vaccinations/<record_id>/file/
-    Full content (file_data/mime_type) for one vaccination certificate — the
-    roadmap list only ever sends has_certificate (a boolean) to keep that
-    payload light, same reasoning/pattern as PortalLabReportFileView and
-    PatientDocumentDetailView. Ownership is checked against the account
-    owner or a linked family member, same as everywhere else on the portal.
-    """
-    permission_classes = [IsPatient]
-
-    def get(self, request, record_id):
-        from apps.registry.models import SharedVaccination, PatientRelationship
-
-        try:
-            record = SharedVaccination.objects.using("default").get(pk=record_id)
-        except SharedVaccination.DoesNotExist:
-            return not_found("Vaccination record not found.")
-
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-        if record.awpid != acct.awpid:
-            is_family = PatientRelationship.objects.using("default").filter(
-                guardian_awpid=acct.awpid, dependent_awpid=record.awpid,
-            ).exists()
-            if not is_family:
-                return error("This record does not belong to you.", status=403)
-
-        if not record.file_data:
-            return not_found("No certificate has been uploaded for this record.")
-
-        return success(data={
-            "file_data": blob_storage.signed_url(record.file_data),
-            "file_name": record.file_name,
-            "mime_type": record.mime_type,
-        })
-
-
 _TIMELINE_DEFAULT_LIMIT = 30
 
 
@@ -2982,7 +2620,7 @@ class PortalHealthTimelineView(APIView):
         from apps.lab.models import LabRequest
         from apps.registry.models import SharedVital
         from apps.records.models import MedicalDocument
-        from apps.registry.vaccine_schedule import build_roadmap
+        from apps.patients.pediatrics.vaccine_schedule import build_roadmap
 
         target_awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
@@ -3030,7 +2668,7 @@ class PortalHealthTimelineView(APIView):
 
         # ── Vaccinations (only administered ones — pending/due aren't "history") ──
         try:
-            roadmap = build_roadmap(target_awpid, dob, _portal_schedule_rules())
+            roadmap = build_roadmap(target_awpid, dob, rules_for("vaccination"))
             for item in roadmap:
                 if not item.get("administered_date"):
                     continue
@@ -3148,7 +2786,7 @@ class PortalNotificationsView(APIView):
         across every active tenant the same way PortalMyRecordsView does,
         since a patient's hospitals aren't known in advance.
       - Vaccination-due reminders — NOT stored anywhere. Computed live from
-        apps.registry.vaccine_schedule.build_roadmap() every time this is
+        apps.patients.pediatrics.vaccine_schedule.build_roadmap() every time this is
         called, because due-ness is just today's date vs. the patient's age
         against the schedule — persisting it would just be a second copy
         that could silently go stale (e.g. after a dose gets logged).
@@ -3162,7 +2800,7 @@ class PortalNotificationsView(APIView):
     def get(self, request):
         from apps.patients.models import Patient
         from apps.notifications.models import NotificationLog
-        from apps.registry.vaccine_schedule import build_roadmap
+        from apps.patients.pediatrics.vaccine_schedule import build_roadmap
 
         target_awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
@@ -3202,7 +2840,7 @@ class PortalNotificationsView(APIView):
         # as a date), so there's nothing honest to compare against a
         # "due soon" cutoff without re-deriving that math here too.
         try:
-            roadmap = build_roadmap(target_awpid, dob, _portal_schedule_rules())
+            roadmap = build_roadmap(target_awpid, dob, rules_for("vaccination"))
             for item in roadmap:
                 if item.get("status") == "unknown" and item.get("timing") == "due_now":
                     results.append({
@@ -3298,96 +2936,6 @@ class PortalChangePasswordView(APIView):
         acct.set_password(new)
         acct.save(using="default", update_fields=["password"])
         return success(message="Password changed successfully.")
-
-
-# ── Family members ────────────────────────────────────────────────────────
-
-class PortalFamilyListCreateView(APIView):
-    """
-    GET  /api/v1/portal/family/  — dependents linked to the logged-in account
-                                    (children, or anyone with no login of
-                                    their own — see PatientRelationship).
-    POST /api/v1/portal/family/  — add a new family member. Reuses the same
-                                    dedup logic as front-desk registration
-                                    (PatientService.resolve_dependent_identity)
-                                    keyed on (this account, name, DOB), so a
-                                    family member added here and one added by
-                                    a hospital's front desk under the same
-                                    person resolve to the same AWPID.
-    """
-    permission_classes = [IsPatient]
-
-    def get(self, request):
-        from apps.patients.services import PatientService
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-        members = PatientService.list_family_members(acct.awpid)
-        return success(data={"results": members})
-
-    def post(self, request):
-        from apps.patients.services import PatientService
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-        d = request.data
-        try:
-            member = PatientService.add_family_member(
-                guardian_awpid=acct.awpid,
-                guardian_mobile_raw=acct.mobile,
-                data={
-                    "full_name": (d.get("full_name") or "").strip(),
-                    "date_of_birth": d.get("date_of_birth"),
-                    "gender": d.get("gender", ""),
-                    "relationship": d.get("relationship", "other"),
-                },
-            )
-        except ValueError as exc:
-            return error(str(exc))
-        message = "Family member added." if member.get("created") else "Reconnected — their existing records are linked again."
-        return success(data=member, message=message)
-
-
-class PortalFamilyDetailView(APIView):
-    """
-    PATCH  /api/v1/portal/family/<awpid>/  — edit a family member's name/DOB/
-                                              gender/relationship.
-    DELETE /api/v1/portal/family/<awpid>/  — unlink a family member from this
-                                              account (their identity and any
-                                              existing booking/medical history
-                                              is untouched — see
-                                              PatientService.remove_family_member).
-    Both scoped to a PatientRelationship actually linking the logged-in
-    account to this AWPID, same ownership check PortalFamilyListCreateView's
-    sibling reads use elsewhere on the portal.
-    """
-    permission_classes = [IsPatient]
-
-    def patch(self, request, awpid):
-        from apps.patients.services import PatientService
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-        d = request.data
-        patch_data = {}
-        if "full_name" in d:
-            patch_data["full_name"] = d.get("full_name")
-        if "date_of_birth" in d:
-            patch_data["date_of_birth"] = d.get("date_of_birth")
-        if "gender" in d:
-            patch_data["gender"] = d.get("gender")
-        if "relationship" in d:
-            patch_data["relationship"] = d.get("relationship")
-        try:
-            member = PatientService.update_family_member(
-                guardian_awpid=acct.awpid, dependent_awpid=awpid, data=patch_data,
-            )
-        except ValueError as exc:
-            return error(str(exc))
-        return success(data=member, message="Family member updated.")
-
-    def delete(self, request, awpid):
-        from apps.patients.services import PatientService
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-        try:
-            PatientService.remove_family_member(guardian_awpid=acct.awpid, dependent_awpid=awpid)
-        except ValueError as exc:
-            return error(str(exc))
-        return success(message="Family member removed.")
 
 
 # ── Emergency QR ─────────────────────────────────────────────────────────────

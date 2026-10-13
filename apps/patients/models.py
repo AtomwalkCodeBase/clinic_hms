@@ -44,15 +44,13 @@ class Patient(models.Model):
     state           = models.CharField(max_length=100, blank=True)
     pincode         = models.CharField(max_length=10, blank=True)
 
-    # Dependent patients (children, or anyone with no mobile of their own) —
-    # plain per-tenant copy of the guardian's details, for display at this
-    # hospital only. The actual cross-hospital identity link lives in
-    # registry.PatientRelationship, keyed by AWPID, not these fields.
+    # Dependent patients (children, or anyone with no mobile of their own). WHO the guardian is and how they are
+    # related lives in one place only: registry.PatientRelationship (guardian_awpid / guardian_relation below read
+    # it). guardian_name / guardian_mobile are the contact details this hospital was given, kept here because the
+    # registry never stores a plain mobile number and an emergency registration has a name but no guardian identity.
     is_dependent        = models.BooleanField(default=False)
     guardian_name        = models.CharField(max_length=200, blank=True)
     guardian_mobile       = models.CharField(max_length=15, blank=True)
-    guardian_relation     = models.CharField(max_length=20, blank=True)  # child/parent/spouse/sibling/ward/other
-    guardian_awpid        = models.CharField(max_length=30, blank=True)  # the guardian's own AWPID, for reference
 
     # Emergency contact
     emergency_contact_name     = models.CharField(max_length=100, blank=True)
@@ -134,6 +132,25 @@ class Patient(models.Model):
         app_label = "patients"
         db_table  = "patient"
 
+    @property
+    def guardian_link(self):
+        """The registry's PatientRelationship for this dependent (their primary guardian), or None."""
+        if not self.is_dependent:
+            return None
+        if not hasattr(self, "_guardian_link"):
+            from apps.registry.models import PatientRelationship
+            self._guardian_link = (PatientRelationship.objects.using("default").filter(dependent_awpid=self.awpid)
+                                   .order_by("-is_primary", "id").first())
+        return self._guardian_link
+
+    @property
+    def guardian_awpid(self):
+        return self.guardian_link.guardian_awpid if self.guardian_link else ""
+
+    @property
+    def guardian_relation(self):
+        return self.guardian_link.relationship if self.guardian_link else ""
+
     def __str__(self):
         return f"{self.uhid} — {self.full_name}"
 
@@ -167,58 +184,4 @@ class Allergy(models.Model):
         return f"{self.patient.uhid} — {self.substance}"
 
 
-class BirthHistory(models.Model):
-    """
-    Pediatric birth history — one row per Patient, relevant only for minor
-    (child) patients. Captured either by front desk at registration (if the
-    parent/guardian knows the details on hand) or filled in/edited later by
-    the pediatrician during consultation — both are legitimate entry points,
-    so this is a separate editable record rather than a registration-only
-    field set. recorded_by / updated_by track StaffUser.id (no FK — staff
-    live in tenant DB but this app doesn't import apps.org.StaffUser to
-    avoid a circular app dependency; matches Allergy.recorded_by's pattern).
-    """
-    DELIVERY_NORMAL   = "normal"
-    DELIVERY_C_SECTION = "c_section"
-    DELIVERY_ASSISTED  = "assisted"      # forceps / vacuum
-    DELIVERY_UNKNOWN   = "unknown"
-    DELIVERY_MODE_CHOICES = [
-        (DELIVERY_NORMAL,    "Normal Vaginal Delivery"),
-        (DELIVERY_C_SECTION, "C-Section"),
-        (DELIVERY_ASSISTED,  "Assisted (Forceps/Vacuum)"),
-        (DELIVERY_UNKNOWN,   "Unknown"),
-    ]
-
-    patient = models.OneToOneField(Patient, on_delete=models.CASCADE,
-                                   related_name="birth_history")
-
-    # Gestational age at birth, in completed weeks — used to flag
-    # prematurity (< 37 weeks) on the pediatric summary.
-    gestational_age_weeks = models.PositiveSmallIntegerField(null=True, blank=True)
-    birth_weight_kg        = models.DecimalField(max_digits=4, decimal_places=2, null=True, blank=True)
-    delivery_mode           = models.CharField(max_length=12, choices=DELIVERY_MODE_CHOICES, blank=True)
-    # Multiple birth (twin/triplet/etc.) — free text since exact term varies
-    # ("twin", "triplet A of 3") rather than a rigid choice list.
-    multiple_birth          = models.CharField(max_length=50, blank=True)
-
-    nicu_admission = models.BooleanField(default=False)
-    nicu_days       = models.PositiveSmallIntegerField(null=True, blank=True)
-    birth_complications = models.TextField(blank=True)  # e.g. jaundice, birth asphyxia
-    congenital_conditions = models.TextField(blank=True)
-
-    apgar_score_1min  = models.PositiveSmallIntegerField(null=True, blank=True)
-    apgar_score_5min  = models.PositiveSmallIntegerField(null=True, blank=True)
-
-    notes = models.TextField(blank=True)
-
-    recorded_by = models.IntegerField(null=True, blank=True)  # StaffUser.id — who first captured this
-    recorded_at = models.DateTimeField(auto_now_add=True)
-    updated_by  = models.IntegerField(null=True, blank=True)  # StaffUser.id — who last edited this
-    updated_at  = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        app_label = "patients"
-        db_table  = "birth_history"
-
-    def __str__(self):
-        return f"{self.patient.uhid} — birth history"
+from apps.patients.pediatrics.models import BirthHistory  # noqa: E402,F401  (defined with the other pediatric models)

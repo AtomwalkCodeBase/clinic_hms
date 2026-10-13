@@ -40,11 +40,16 @@ import { DrugForm } from "./encounter/DrugForm";
 import { LabOrderSection } from "./encounter/LabOrderSection";
 import { PastConsultationTab } from "./encounter/PastConsultationTab";
 import { HistorySidebar } from "./encounter/HistorySidebar";
+import HealthTimeline from "../../components/timeline/HealthTimeline";
+import apiClient from "../../services/api.client";
 import { AdmissionReferralModal } from "./encounter/AdmissionReferralModal";
 import { FollowUpModal } from "./encounter/FollowUpModal";
 import { DocumentViewerDrawer } from "./encounter/DocumentViewerDrawer";
 import { ConsultPadQRModal } from "./encounter/ConsultPadQRModal";
 import { RecognisedTextModal } from "./encounter/RecognisedTextModal";
+
+// A source document of the timeline, through the staff endpoint (it applies the same hospital-sharing consent rule).
+const fetchTimelineDocument = (id) => apiClient.get(API_ENDPOINTS.PATIENTS.DOCUMENT(id));
 
 export default function EncounterPage() {
   const { id }   = useParams();
@@ -86,7 +91,7 @@ export default function EncounterPage() {
   // consultation workspace on first load; doctor opens it when needed.
   const [historyOpen, setHistoryOpen] = useState(false);
   const [viewerDoc, setViewerDoc] = useState(null); // document currently open in the resizable viewer
-  const [activeTab, setActiveTab] = useState("consultation"); // "past" | "consultation"
+  const [activeTab, setActiveTab] = useState("consultation"); // "past" | "consultation" | "timeline"
   const [admissionModalOpen, setAdmissionModalOpen] = useState(false); // Recommend Admission is a button + modal, not a tab — see AdmissionReferralModal
   const [followUpModalOpen, setFollowUpModalOpen] = useState(false); // Book Follow-up is a button + modal too — see FollowUpModal
 
@@ -816,6 +821,18 @@ export default function EncounterPage() {
           >
             {isFollowUp ? "Follow-up" : "Consultation"}
           </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("timeline")}
+            style={{
+              padding: "10px 16px", fontSize: 13, fontWeight: 600, border: "none", background: "none", cursor: "pointer",
+              color: activeTab === "timeline" ? "var(--color-primary)" : "var(--color-text-muted)",
+              borderBottom: activeTab === "timeline" ? "2px solid var(--color-primary)" : "2px solid transparent",
+              marginBottom: -1,
+            }}
+          >
+            Health Timeline
+          </button>
         </div>
 
         {activeTab === "consultation" && (
@@ -1416,6 +1433,10 @@ export default function EncounterPage() {
         </>
         )}
         {activeTab === "past" && <PastConsultationTab encounterId={id} />}
+        {activeTab === "timeline" && (
+          <HealthTimeline endpoint={API_ENDPOINTS.RECORDS.STAFF_TIMELINE(enc.patient_pk)} params={{ include_hidden: 1 }}
+                          fetchDocument={fetchTimelineDocument} audience="staff" />
+        )}
       </PageShell>
         </div>
         <HistorySidebar

@@ -34,7 +34,8 @@ export const API_ENDPOINTS = {
 
   RECORDS: {
     UPLOAD: `${API_V1}/records/upload/`,   // multipart, apps/records
-    BATCH:  (id) => `${API_V1}/records/batches/${id}/`,   // the batch, its counts, then its documents
+    TIMELINE: `${API_V1}/records/timeline/`,
+    STAFF_TIMELINE: (patientPk) => `${API_V1}/records/patients/${patientPk}/timeline/`,   // the same, for a doctor or nurse              // conditions / symptoms / medications by date
   },
   PLATFORM: {
     TENANTS:          `${API_V1}/platform/tenants/`,
@@ -74,7 +75,6 @@ export const API_ENDPOINTS = {
     PERMISSIONS:       `${API_V1}/org/permissions/`,
     ROLES:             `${API_V1}/org/roles/`,
     ROLE:       (id) => `${API_V1}/org/roles/${id}/`,
-    STAFF_ROLES:(id) => `${API_V1}/org/staff/${id}/roles/`,
     VACCINATION_SCHEDULES:        `${API_V1}/org/vaccination-schedules/`,
     VACCINATION_SCHEDULE:  (id) => `${API_V1}/org/vaccination-schedules/${id}/`,
     VACCINATION_SCHEDULE_ACTIVATE: (id) => `${API_V1}/org/vaccination-schedules/${id}/activate/`,
@@ -108,9 +108,7 @@ export const API_ENDPOINTS = {
     ATTACH_NETWORK:   `${API_V1}/patients/attach-network/`,
     SEARCH:           `${API_V1}/patients/search/`,
     FAMILY_TREE:      `${API_V1}/patients/family-tree/`,
-    DETAIL:     (id) => `${API_V1}/patients/${id}/`,
     HISTORY:    (id) => `${API_V1}/patients/${id}/history/`,
-    ALLERGIES:  (id) => `${API_V1}/patients/${id}/allergies/`,
     DOCUMENT:   (id) => `${API_V1}/patients/documents/${id}/`,
     LAB_RESULT: (id) => `${API_V1}/patients/lab-results/${id}/`,
     GROWTH:            (id) => `${API_V1}/patients/${id}/growth/`,
@@ -132,7 +130,6 @@ export const API_ENDPOINTS = {
     HISTORY:          `${API_V1}/opd/history/`,
     APPOINTMENTS:     `${API_V1}/opd/appointments/`,
     APPOINTMENTS_UPCOMING: `${API_V1}/opd/appointments/upcoming/`,
-    APPOINTMENT:(id) => `${API_V1}/opd/appointments/${id}/`,
     APPT_STATUS:(id) => `${API_V1}/opd/appointments/${id}/status/`,
     APPT_RESCHEDULE:(id) => `${API_V1}/opd/appointments/${id}/reschedule/`,
     APPT_VITALS:(id) => `${API_V1}/opd/appointments/${id}/vitals/`,
@@ -147,10 +144,8 @@ export const API_ENDPOINTS = {
     ENCOUNTER_CONSULT_SESSION:(id) => `${API_V1}/opd/encounters/${id}/consult-session/`,
     ENCOUNTER_INTERNAL_NOTE:(id) => `${API_V1}/opd/encounters/${id}/internal-note/`,   // the doctor's handwritten note PDF (doctor only)
     PRESCRIPTIONS:              `${API_V1}/opd/prescriptions/`,
-    PRESCRIPTION:        (id) => `${API_V1}/opd/prescriptions/${id}/`,
     PRESCRIPTION_ITEMS:  (id) => `${API_V1}/opd/prescriptions/${id}/items/`,
     PRESCRIPTION_ITEM: (rxId, itemId) => `${API_V1}/opd/prescriptions/${rxId}/items/${itemId}/`,
-    RX_ITEMS:            (id) => `${API_V1}/opd/prescriptions/${id}/items/`,
     FAVOURITES:                `${API_V1}/opd/favourites/`,
     FAVOURITE_ITEM:      (id) => `${API_V1}/opd/favourites/${id}/`,
     APPOINTMENT_TYPES:         `${API_V1}/opd/appointment-types/`,
@@ -167,7 +162,6 @@ export const API_ENDPOINTS = {
     DOCTORS:   (tenantId) => `${API_V1}/portal/hospitals/${tenantId}/doctors/`,
     DOCTOR_DETAIL: (tenantId, doctorId) => `${API_V1}/portal/hospitals/${tenantId}/doctors/${doctorId}/`,
     SLOTS: (tenantId, doctorId) => `${API_V1}/portal/hospitals/${tenantId}/doctors/${doctorId}/slots/`,
-    NEXT_TOKEN: (tenantId, doctorId) => `${API_V1}/portal/hospitals/${tenantId}/doctors/${doctorId}/next-token/`,
     BOOK:                  `${API_V1}/portal/book/`,
     MY_BOOKINGS:           `${API_V1}/portal/my-bookings/`,
     CANCEL_BOOKING:  (id) => `${API_V1}/portal/my-bookings/${id}/cancel/`,

@@ -14,10 +14,8 @@ from .views import (
     BedListCreateView, BedDetailView, BedMarkCleanView, BedMaintenanceView, BedBoardView,
     DepartmentAvailabilityView,
 )
-from .vaccination_schedule_views import (
+from apps.patients.pediatrics.schedule_views import (
     VaccinationScheduleListCreateView, VaccinationScheduleDetailView, VaccinationScheduleActivateView,
-)
-from .milestone_schedule_views import (
     MilestoneScheduleListCreateView, MilestoneScheduleDetailView, MilestoneScheduleActivateView,
 )
 

@@ -6,7 +6,7 @@ from django.test import TestCase
 from apps.records import classification as cls, services
 from apps.records.models import DocumentBatch, DocumentText, MedicalDocument, PatientDocumentClassification
 from apps.records.tasks import classify_document_task, extract_document_task
-from apps.records.tests.helpers import PDF, identity, make_doc, reload
+from apps.records.tests.helpers import PDF, identity, make_doc
 
 S = MedicalDocument.Status
 RX = "Dr ABC Rx Paracetamol Syrup 5 ml TDS Diagnosis: Viral fever"

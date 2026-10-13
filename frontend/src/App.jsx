@@ -117,6 +117,7 @@ const PatientRecords       = lazy(() => import("./pages/patient/RecordsPage"));
 const PatientPrescriptions = lazy(() => import("./pages/patient/PrescriptionsPage"));
 const PatientLabReports    = lazy(() => import("./pages/patient/LabReportsPage"));
 const PatientMyReports     = lazy(() => import("./pages/patient/MyReportsPage"));
+const PatientInsightsTimeline = lazy(() => import("./pages/patient/InsightsTimelinePage"));
 const PatientSharedRecordsPrivacy = lazy(() => import("./pages/patient/SharedRecordsPrivacyPage"));
 const PatientNotifications = lazy(() => import("./pages/patient/NotificationsPage"));
 const PatientMyProfile     = lazy(() => import("./pages/patient/MyProfilePage"));
@@ -401,6 +402,8 @@ export default function App() {
             element={<PatientRoute><PatientLabReports /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.MY_REPORTS}
             element={<PatientRoute><PatientMyReports /></PatientRoute>} />
+          <Route path={ROUTES.PATIENT.INSIGHTS_TIMELINE}
+            element={<PatientRoute><PatientInsightsTimeline /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.SHARED_RECORDS_PRIVACY}
             element={<PatientRoute><PatientSharedRecordsPrivacy /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.NOTIFICATIONS}

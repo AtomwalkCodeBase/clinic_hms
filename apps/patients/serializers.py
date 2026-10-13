@@ -211,7 +211,7 @@ class BirthHistorySerializer(serializers.ModelSerializer):
     CRUD serializer for BirthHistory — mirrors AllergySerializer's shape.
     Writable by both front desk (at registration) and doctor (edited later
     at consultation) per the pediatric workflow design; the view layer
-    (apps.patients.pediatric_views.BirthHistoryView) gates who can write via
+    (apps.patients.pediatrics.pediatric_views.BirthHistoryView) gates who can write via
     core.permissions.IsDoctorOrFrontDesk, not this serializer.
     """
     delivery_mode_display = serializers.CharField(source="get_delivery_mode_display", read_only=True)

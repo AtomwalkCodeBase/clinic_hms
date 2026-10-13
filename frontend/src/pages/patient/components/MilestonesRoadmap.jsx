@@ -1,13 +1,6 @@
-/**
- * pages/patient/components/MilestonesRoadmap.jsx
- * ------------------------------------------------
- * Read-only developmental-milestone roadmap for the patient portal — same
- * data (PortalMilestoneListView -> apps/registry/milestone_roadmap.py) and
- * status vocabulary the doctor's EncounterPage assesses against, just
- * without the assess form: a parent can see what's been recorded, not
- * record it themselves.
- */
+// Read-only developmental-milestone roadmap for the patient portal: what the doctor has recorded, without the form to record it.
 import { CheckCircle2, Calendar, HelpCircle, ListTree } from "lucide-react";
+import StatCard from "./StatCard";
 
 const STATUS_STYLE = {
   achieved:   { bg: "#ECFDF5", color: "#047857", label: "Achieved" },
@@ -15,54 +8,6 @@ const STATUS_STYLE = {
   concern:    { bg: "#FEF2F2", color: "#B91C1C", label: "Concern — flagged for follow-up" },
   unassessed: { bg: "var(--color-bg)", color: "var(--color-text-muted)", label: "Not Assessed" },
 };
-
-const CARD_THEMES = {
-  achieved: {
-    bg: "linear-gradient(135deg, var(--color-primary-light) 0%, var(--color-bg) 100%)",
-    iconBg: "var(--color-primary)", numColor: "var(--color-primary)", labelColor: "var(--color-primary)",
-    border: "color-mix(in srgb, var(--color-primary) 30%, white)",
-  },
-  upcoming: {
-    bg: "linear-gradient(135deg, #FEF3DC 0%, #FFF9EF 100%)",
-    iconBg: "var(--color-warning)", numColor: "#7A5418", labelColor: "var(--color-warning)", border: "#EDD49A",
-  },
-  needs_review: {
-    bg: "linear-gradient(135deg, #F1E9FA 0%, #F8F3FD 100%)",
-    iconBg: "#6B3FA0", numColor: "#4A2872", labelColor: "#6B3FA0", border: "#CDB8E8",
-  },
-  not_yet: {
-    bg: "linear-gradient(135deg, #F3F4F6 0%, #FAFAFA 100%)",
-    iconBg: "#6B7280", numColor: "#374151", labelColor: "#6B7280", border: "#D1D5DB",
-  },
-};
-
-function StatCard({ icon: Icon, theme, value, label }) {
-  const t = CARD_THEMES[theme];
-  return (
-    <div style={{
-      background: t.bg, border: `1.5px solid ${t.border}`, borderRadius: 16,
-      padding: "18px 20px", position: "relative", overflow: "hidden",
-    }}>
-      <div style={{
-        position: "absolute", right: -16, top: -16, width: 80, height: 80, borderRadius: "50%",
-        background: t.iconBg, opacity: 0.08, pointerEvents: "none",
-      }} />
-      <div style={{
-        width: 38, height: 38, borderRadius: 12, background: t.iconBg, color: "#fff",
-        display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12,
-      }}>
-        <Icon size={18} />
-      </div>
-      <div style={{
-        fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 34, lineHeight: 1,
-        color: t.numColor, letterSpacing: "-0.02em", marginBottom: 6,
-      }}>
-        {value}
-      </div>
-      <div style={{ fontSize: 13, fontWeight: 600, color: t.labelColor }}>{label}</div>
-    </div>
-  );
-}
 
 export default function MilestonesRoadmap({ milestones, isLoading }) {
   const roadmap = milestones?.roadmap || [];
@@ -106,10 +51,10 @@ export default function MilestonesRoadmap({ milestones, isLoading }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 20 }}
         className="vax-stats-grid">
-        <StatCard icon={CheckCircle2} theme="achieved" value={stats.achieved} label="Achieved" />
+        <StatCard icon={CheckCircle2} theme="success" value={stats.achieved} label="Achieved" />
         <StatCard icon={Calendar} theme="upcoming" value={stats.upcoming} label="Upcoming" />
-        <StatCard icon={HelpCircle} theme="needs_review" value={stats.needs_review} label="Needs Review" />
-        <StatCard icon={ListTree} theme="not_yet" value={stats.not_yet} label="Not Yet" />
+        <StatCard icon={HelpCircle} theme="review" value={stats.needs_review} label="Needs Review" />
+        <StatCard icon={ListTree} theme="neutral" value={stats.not_yet} label="Not Yet" />
       </div>
 
       <div className="card" style={{ padding: 16 }}>

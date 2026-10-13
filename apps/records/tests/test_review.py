@@ -154,7 +154,8 @@ class SubmitTests(TestCase):
 
     def test_the_answer_says_how_many_still_wait(self, _r):
         with override_settings(RECORDS_REVIEW_FROM=LONG_AGO):
-            a, b = reviewable(), reviewable()
+            a = reviewable()
+            reviewable()                       # a second one that stays waiting
             data = self.submit((a.id, "lab_report")).data["data"]
         self.assertEqual(data["counts"], {"awaiting_review": 1})
 

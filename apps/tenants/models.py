@@ -7,7 +7,6 @@ These live in the "default" (Registry) database — never in tenant DBs.
 Tables:
   Tenant        — one row per hospital/clinic
   Subscription  — licensing tier + feature gates + payment lifecycle
-  NextNumber    — sequential ID generator per branch/entity (NNTM pattern)
 """
 
 from django.db import models
@@ -224,26 +223,3 @@ class TenantAuditLog(models.Model):
 
     def __str__(self):
         return f"{self.tenant.name}: {self.action} {self.before_value} → {self.after_value}"
-
-
-class NextNumber(models.Model):
-    """
-    NNTM — Next Number Table Manager.
-    One row per (branch, entity) pair. get_next_number() in core/utils/nntm.py
-    uses SELECT FOR UPDATE inside an atomic transaction to guarantee uniqueness.
-
-    entity examples: "UHID", "INV", "LAB", "RX", "QUEUE"
-    """
-    branch_id   = models.IntegerField(db_index=True)   # references org.Branch
-    entity      = models.CharField(max_length=20)       # e.g. "UHID", "INV"
-    prefix      = models.CharField(max_length=10, default="")
-    last_number = models.PositiveBigIntegerField(default=0)
-    pad_length  = models.PositiveSmallIntegerField(default=6)
-
-    class Meta:
-        app_label = "tenants"
-        db_table  = "next_number"
-        unique_together = [("branch_id", "entity")]
-
-    def __str__(self):
-        return f"{self.prefix}{str(self.last_number).zfill(self.pad_length)}"

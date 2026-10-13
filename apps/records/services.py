@@ -380,11 +380,23 @@ def dismiss_document(doc):
             batch.delete()
 
 
+def _queue_insights(document_id):
+    """Read a hospital-issued document for the timeline too (its text, then its insights), once its row is committed.
+    The hospital's save never fails because the queue is down: run_all() fills in what was missed."""
+    def queue():
+        try:
+            from .tasks import insights_document_task
+            insights_document_task.apply_async(args=[document_id], queue=BULK_QUEUE)
+        except Exception:
+            logger.warning("records: couldn't queue insights for document %s", document_id, exc_info=True)
+    transaction.on_commit(queue, using="default")
+
+
 def create_issued_document(*, awpid, file_path, name, doc_type, source_tenant_id, source_ref, mime_type="application/pdf",
                            public_document_id="", document_date=None):
     """A document a hospital made for the patient (signed prescription, lab report, handwriting): it is already in
-    the bucket at `file_path` and already has its type, from its source, so it skips the pipeline and is stored as
-    completed."""
+    the bucket at `file_path` and already has its type, from its source, so it skips the upload pipeline (no
+    classification) and is stored as completed. Its text and timeline insights are read in the background."""
     doc = MedicalDocument(
         patient=PatientIdentity.objects.using("default").get(awpid=awpid), file_name=(name or "")[:100],
         mime_type=mime_type, uploaded_by="staff", source_tenant_id=source_tenant_id, source_ref=source_ref,
@@ -393,6 +405,7 @@ def create_issued_document(*, awpid, file_path, name, doc_type, source_tenant_id
     doc.save(using="default")
     rules.store_issued_type(doc, doc_type)
     doc.save(using="default", update_fields=["document_type"])
+    _queue_insights(doc.pk)
     return MedicalDocument.objects.using("default").get(pk=doc.pk)
 
 

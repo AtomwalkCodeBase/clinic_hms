@@ -220,8 +220,6 @@ class PatientService:
             is_dependent=is_dependent,
             guardian_name=data.get("guardian_name", "") if is_dependent else "",
             guardian_mobile=data.get("guardian_mobile", "") if is_dependent else "",
-            guardian_relation=data.get("relationship", "") if is_dependent else "",
-            guardian_awpid=guardian_awpid if is_dependent else "",
             # Consent
             dpdp_consent_captured=bool(data.get("dpdp_consent", False)),
             dpdp_consent_at=timezone.now() if data.get("dpdp_consent") else None,

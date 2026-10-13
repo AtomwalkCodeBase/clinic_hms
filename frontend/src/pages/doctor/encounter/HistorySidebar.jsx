@@ -47,6 +47,7 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   // lightweight-inline-form convention (LabOrderSection's search box,
   // DrugForm's "+ Add Drug" panel) rather than a modal.
   const [orderFormOpen, setOrderFormOpen] = useState(false);
+  const [showAllDocs, setShowAllDocs] = useState(false);          // Attachments: the first 5, or all of them
   const [orderForm, setOrderForm] = useState({ vaccine_name: "", reason: "", due_date: "", dose_number: "" });
   const [ordering, setOrdering] = useState(false);
   const [decliningId, setDecliningId] = useState(null);
@@ -199,7 +200,7 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   // RegisterPatientPage.jsx) — the doctor's job here is to review and, if
   // needed, add or correct it during consultation. POST creates the record
   // (first capture), PATCH edits an existing one — same create-vs-edit split
-  // as apps.patients.pediatric_views.BirthHistoryView.
+  // as apps/patients/pediatrics/pediatric_views.py BirthHistoryView.
   const [bhFormOpen, setBhFormOpen] = useState(false);
   const [bhForm, setBhForm] = useState(null); // populated on open, from birthHistoryData or blank
   const [bhSaving, setBhSaving] = useState(false);
@@ -284,7 +285,7 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
     unassessed: { bg: "var(--color-bg)", color: "var(--color-text-muted)", label: "Not Assessed" },
   };
 
-  // Status values from build_roadmap() (apps/registry/vaccine_schedule.py):
+  // Status values from build_roadmap() (apps/patients/pediatrics/vaccine_schedule.py):
   // "completed"/"pending_review"/"rejected"/"ordered"/"declined" when a real
   // record matches the slot, or "unknown" when none does — "unknown" is
   // never shown as "due"/"overdue"/"not yet due"; the backend genuinely
@@ -365,7 +366,7 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
         padding: "12px 14px", borderBottom: "1px solid var(--color-border)",
         position: "sticky", top: 0, background: "var(--color-surface)", zIndex: 1,
       }}>
-        <div style={{ fontWeight: 700, fontSize: 13 }}>Patient History</div>
+        <div style={{ fontWeight: 600, fontSize: 14 }}>Patient history</div>
         <button
           onClick={onToggle}
           title="Collapse"
@@ -431,17 +432,14 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
             )}
           </HistorySection>
 
-          <HistorySection title="Active Diagnoses" icon={<Stethoscope size={13} />} count={diagnoses.length} defaultOpen>
+          <HistorySection title="Active diagnoses" icon={<Stethoscope size={13} />} count={diagnoses.length} defaultOpen={diagnoses.length > 0}>
             {diagnoses.length === 0 ? <EmptyNote>No prior diagnoses on record.</EmptyNote> : (
-              <div style={{ display: "grid", gap: 8 }}>
+              <div>
                 {diagnoses.map((d, i) => (
-                  <div key={i} style={{
-                    borderRadius: 8, border: "1px solid var(--color-border)", padding: "8px 10px",
-                    background: "var(--color-bg)",
-                  }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text)" }}>{d.description}</div>
-                    <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 3, display: "flex", gap: 6, alignItems: "center" }}>
-                      <span style={{ fontFamily: "monospace", fontWeight: 700, color: "var(--color-primary)" }}>{d.icd10_code}</span>
+                  <div key={i} style={{ padding: "8px 0", borderTop: i ? "1px solid var(--color-border)" : "none" }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text)" }}>{d.description}</div>
+                    <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginTop: 2, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                      <span style={{ fontFamily: "monospace", fontWeight: 600, color: "var(--color-primary)" }}>{d.icd10_code}</span>
                       <span style={{ textTransform: "capitalize" }}>{d.clinical_status}</span>
                       {d.created_at && <span>· {new Date(d.created_at).toLocaleDateString("en-IN")}</span>}
                     </div>
@@ -451,16 +449,16 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
             )}
           </HistorySection>
 
-          <HistorySection title="Current Medications" icon={<Pill size={13} />} count={prescriptions.length}>
+          <HistorySection title="Current medications" icon={<Pill size={13} />} count={prescriptions.length} defaultOpen={prescriptions.length > 0}>
             {prescriptions.length === 0 ? <EmptyNote>No prior prescriptions on record.</EmptyNote> : (
-              <div style={{ display: "grid", gap: 8 }}>
+              <div>
                 {prescriptions.map((rx, i) => (
-                  <div key={i} style={{ borderRadius: 8, border: "1px solid var(--color-border)", padding: "8px 10px" }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--color-text-muted)", marginBottom: 4 }}>
+                  <div key={i} style={{ padding: "8px 0", borderTop: i ? "1px solid var(--color-border)" : "none" }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--color-text-muted)", marginBottom: 4 }}>
                       {rx.prescribed_on ? new Date(rx.prescribed_on).toLocaleDateString("en-IN") : "—"}
                     </div>
                     {(rx.items || []).map((it, j) => (
-                      <div key={j} style={{ fontSize: 12, color: "var(--color-text-secondary)", marginBottom: j === (rx.items.length - 1) ? 0 : 3 }}>
+                      <div key={j} style={{ fontSize: 12.5, color: "var(--color-text-secondary)", marginBottom: j === (rx.items.length - 1) ? 0 : 3 }}>
                         <strong style={{ color: "var(--color-text)" }}>{it.drug_name}</strong> {it.dose}{it.unit} — {it.frequency} · {it.route}
                         {it.duration_days ? ` × ${it.duration_days}d` : ""}
                       </div>
@@ -471,7 +469,7 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
             )}
           </HistorySection>
 
-          <HistorySection title="Latest Labs" icon={<FlaskConical size={13} />} count={labResults.length}>
+          <HistorySection title="Latest labs" icon={<FlaskConical size={13} />} count={labResults.length}>
             {labResults.length === 0 ? <EmptyNote>No prior lab results on record.</EmptyNote> : (
               <div style={{ display: "grid", gap: 12 }}>
                 {labGroups.map((group, gi) => (
@@ -516,7 +514,7 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
             )}
           </HistorySection>
 
-          <HistorySection title="Vitals Trend" icon={<Activity size={13} />} count={vitals.length}>
+          <HistorySection title="Vitals trend" icon={<Activity size={13} />} count={vitals.length}>
             {vitals.length === 0 ? <EmptyNote>No prior vitals on record.</EmptyNote> : (
               <div style={{ display: "grid", gap: 8 }}>
                 {vitals.slice(0, 8).map((v, i) => (
@@ -838,7 +836,7 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
           )}
 
           {growthData?.is_minor === true && (
-          <HistorySection title="Birth History" icon={<Baby size={13} />} count={bhExists ? 1 : 0}>
+          <HistorySection title="Birth history" icon={<Baby size={13} />} count={bhExists ? 1 : 0}>
             <div style={{ marginBottom: 10 }}>
               <button
                 type="button"
@@ -964,7 +962,7 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
           )}
 
           {growthData?.is_minor === true && (
-          <HistorySection title="Developmental Milestones" icon={<Baby size={13} />} count={milestoneData?.roadmap?.length}>
+          <HistorySection title="Developmental milestones" icon={<Baby size={13} />} count={milestoneData?.roadmap?.length}>
             {milestoneLoading ? <EmptyNote>Loading milestone roadmap…</EmptyNote> : !milestoneData?.roadmap?.length ? (
               <EmptyNote>No milestone schedule available.</EmptyNote>
             ) : (
@@ -1029,7 +1027,7 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
           </HistorySection>
           )}
 
-          <HistorySection title="Previous Visits" icon={<Clock size={13} />} count={timeline.length}>
+          <HistorySection title="Previous visits" icon={<Clock size={13} />} count={timeline.length}>
             {timelineLoading ? <EmptyNote>Loading visit timeline…</EmptyNote> : timeline.length === 0 ? (
               <EmptyNote>No prior visits at this hospital.</EmptyNote>
             ) : (
@@ -1045,7 +1043,7 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
                       }} />
                       {i !== timeline.length - 1 && <div style={{ width: 1.5, flex: 1, background: "var(--color-border)", marginTop: 2 }} />}
                     </div>
-                    <div style={{ fontSize: 11, minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 12, minWidth: 0, flex: 1 }}>
                       <div style={{ fontWeight: 700, color: "var(--color-text)" }}>
                         {new Date(v.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
                         {v.visit_type === "followup" && (
@@ -1063,31 +1061,38 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
             )}
           </HistorySection>
 
-          <HistorySection title="Attachments" icon={<Paperclip size={13} />} count={documents.length} defaultOpen>
+          <HistorySection title="Attachments" icon={<Paperclip size={13} />} count={documents.length} defaultOpen={documents.length > 0}>
             {documents.length === 0 ? <EmptyNote>No documents or handwritten notes on file yet.</EmptyNote> : (
-              <div style={{ display: "grid", gap: 6 }}>
-                {documents.map(d => (
+              <div>
+                {(showAllDocs ? documents : documents.slice(0, 5)).map((d, i) => (
                   <button
                     key={d.id}
                     onClick={() => onOpenDocument?.({ ...d, fetchUrl: API_ENDPOINTS.PATIENTS.DOCUMENT(d.id) })}
                     style={{
-                      display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left",
-                      padding: "8px 10px", borderRadius: 6, border: "1px solid var(--color-border)",
-                      background: "var(--color-bg)", cursor: "pointer", fontSize: 12,
+                      display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left",
+                      padding: "8px 0", border: "none", borderTop: i ? "1px solid var(--color-border)" : "none",
+                      background: "none", cursor: "pointer", fontSize: 12.5,
                     }}
                   >
-                    <Paperclip size={14} style={{ color: "var(--color-text-secondary)", flexShrink: 0 }} />
+                    <span style={{ width: 28, height: 28, borderRadius: 8, background: "var(--color-bg)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                      <Paperclip size={14} style={{ color: "var(--color-text-secondary)" }} />
+                    </span>
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.title}</div>
-                      <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+                      <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
                         {d.doc_type === "consult_note" ? "handwritten note" : d.doc_type?.replace("_", " ")}
                         {d.created_at && ` · ${new Date(d.created_at).toLocaleDateString("en-IN")}`}
-                        {d.uploaded_by === "patient" && " · uploaded by patient"}
+                        {d.uploaded_by === "patient" && " · patient upload"}
                         {d.doc_type === "consult_note" && d.uploaded_by === "staff" && " · written by doctor"}
                       </div>
                     </span>
                   </button>
                 ))}
+                {documents.length > 5 && (
+                  <button onClick={() => setShowAllDocs(v => !v)} style={{ background: "none", border: "none", padding: "8px 0 0", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "var(--color-primary)" }}>
+                    {showAllDocs ? "Show fewer" : `Show all ${documents.length}`}
+                  </button>
+                )}
               </div>
             )}
           </HistorySection>

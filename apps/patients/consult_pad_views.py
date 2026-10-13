@@ -504,21 +504,18 @@ def _run_tab_recognition(session_id, tab: str, pending_token: str):
 
 
 def _open_session_for_token(token: str):
-    """token -> (identity, latest open ConsultSession | None)."""
-    identity = PatientIdentity.objects.using("default").filter(consult_pad_token=token).first()
+    """token -> (identity, the ConsultSession while it is still open, else None). A token belongs to ONE consultation."""
+    session = ConsultSession.objects.using("default").filter(token=token).first()
+    identity = PatientIdentity.objects.using("default").filter(awpid=session.awpid).first() if session else None
     if not identity:
         return None, None
-    sess = None
-    if identity.consult_pad_owner_tenant_id:
-        sess = (ConsultSession.objects.using("default")
-                .filter(awpid=identity.awpid, tenant_id=identity.consult_pad_owner_tenant_id,
-                        status=ConsultSession.STATUS_OPEN)
-                .order_by("-created_at").first())
-        # Auto-expire a stale session so the phone doesn't keep writing to it.
-        if sess and sess.expires_at and sess.expires_at < timezone.now():
-            ConsultSession.objects.using("default").filter(id=sess.id).update(status=ConsultSession.STATUS_EXPIRED)
-            sess = None
-    return identity, sess
+    if session.status != ConsultSession.STATUS_OPEN:
+        return identity, None
+    # Auto-expire a stale session so the phone doesn't keep writing to it.
+    if session.expires_at and session.expires_at < timezone.now():
+        ConsultSession.objects.using("default").filter(id=session.id).update(status=ConsultSession.STATUS_EXPIRED)
+        return identity, None
+    return identity, session
 
 
 class ConsultPadView(APIView):
@@ -547,10 +544,8 @@ class ConsultPadView(APIView):
             })
         return success(data={
             "active": True,
-            # Identifies THIS consultation. The pad token is permanent and
-            # reused for every visit, so the phone uses this to tell whether
-            # crash-saved local writing belongs to the session it's resuming
-            # or to a previous one (which it then discards).
+            # Identifies THIS consultation, so the phone can tell whether crash-saved local writing belongs to the
+            # session it's resuming or to a previous one (which it then discards).
             "session_id": sess.id,
             "patient_name": identity.full_name,
             "patient_awpid": identity.awpid,

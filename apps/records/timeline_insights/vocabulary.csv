@@ -1,0 +1,174 @@
+kind,name,synonyms,nature
+condition,hypertension,htn|high blood pressure|hypertensive,chronic
+condition,type 2 diabetes,dm2|t2dm|niddm|type ii diabetes|type-2 diabetes,chronic
+condition,type 1 diabetes,t1dm|iddm|type i diabetes|type-1 diabetes,chronic
+condition,diabetes mellitus,diabetes|diabetic,chronic
+condition,hypothyroidism,hypothyroid,chronic
+condition,hyperthyroidism,hyperthyroid|thyrotoxicosis|graves disease,chronic
+condition,asthma,bronchial asthma,chronic
+condition,copd,chronic obstructive pulmonary disease,chronic
+condition,coronary artery disease,cad|ihd|ischemic heart disease|ischaemic heart disease,chronic
+condition,heart failure,chf|cardiac failure,chronic
+condition,atrial fibrillation,afib,chronic
+condition,dyslipidemia,hyperlipidemia|dyslipidaemia|high cholesterol|hypercholesterolemia,chronic
+condition,chronic kidney disease,ckd|chronic renal failure,chronic
+condition,epilepsy,seizure disorder,chronic
+condition,migraine,,chronic
+condition,obesity,,chronic
+condition,pcos,pcod|polycystic ovary syndrome|polycystic ovarian disease,chronic
+condition,gerd,acid reflux|gastroesophageal reflux,chronic
+condition,osteoarthritis,oa knee|knee osteoarthritis,chronic
+condition,rheumatoid arthritis,,chronic
+condition,osteoporosis,,chronic
+condition,depression,major depressive disorder,chronic
+condition,anxiety disorder,generalized anxiety|gad,chronic
+condition,psoriasis,,chronic
+condition,eczema,atopic dermatitis,chronic
+condition,allergic rhinitis,,chronic
+condition,hepatitis b,hbv,chronic
+condition,hepatitis c,hcv,chronic
+condition,benign prostatic hyperplasia,bph,chronic
+condition,gout,,chronic
+condition,anemia,anaemia|iron deficiency anemia|iron deficiency anaemia,
+condition,tuberculosis,tb|pulmonary tuberculosis,
+condition,viral fever,viral infection,acute
+condition,common cold,upper respiratory tract infection|urti|viral rhinitis,acute
+condition,pharyngitis,tonsillitis|throat infection,acute
+condition,bronchitis,acute bronchitis,acute
+condition,pneumonia,,acute
+condition,gastroenteritis,acute gastroenteritis|gastro enteritis|food poisoning,acute
+condition,urinary tract infection,uti,acute
+condition,dengue,dengue fever,acute
+condition,malaria,,acute
+condition,typhoid,enteric fever,acute
+condition,covid-19,covid|coronavirus,acute
+condition,chikungunya,,acute
+condition,conjunctivitis,pink eye,acute
+condition,otitis media,ear infection,acute
+condition,sinusitis,,acute
+condition,urticaria,hives,acute
+condition,cellulitis,,acute
+condition,appendicitis,,acute
+condition,chickenpox,varicella,acute
+condition,dehydration,,acute
+condition,fracture,,acute
+condition,sprain,,acute
+condition,jaundice,,acute
+condition,neonatal jaundice,physiological jaundice,acute
+symptom,fever,pyrexia|febrile|high temperature,acute
+symptom,cough,dry cough|productive cough,acute
+symptom,runny nose,running nose|nasal discharge|rhinorrhea,acute
+symptom,nasal congestion,blocked nose|stuffy nose,acute
+symptom,sore throat,throat pain,acute
+symptom,headache,,acute
+symptom,vomiting,emesis,acute
+symptom,nausea,,acute
+symptom,diarrhea,diarrhoea|loose motions|loose stools,acute
+symptom,constipation,,acute
+symptom,abdominal pain,stomach pain|tummy pain|pain abdomen,acute
+symptom,chest pain,,acute
+symptom,shortness of breath,breathlessness|dyspnea|dyspnoea|sob,acute
+symptom,wheezing,wheeze,acute
+symptom,fatigue,tiredness|weakness|lethargy,acute
+symptom,dizziness,giddiness|vertigo,acute
+symptom,body ache,myalgia|body pain|bodyache,acute
+symptom,joint pain,arthralgia,acute
+symptom,back pain,backache|low back pain,acute
+symptom,rash,skin rash,acute
+symptom,itching,pruritus,acute
+symptom,swelling,edema|oedema,acute
+symptom,loss of appetite,anorexia|poor appetite,acute
+symptom,weight loss,,acute
+symptom,burning micturition,dysuria|burning urination,acute
+symptom,frequent urination,polyuria,acute
+symptom,palpitations,,acute
+symptom,blurred vision,,acute
+symptom,loss of smell,anosmia,acute
+symptom,ear pain,earache,acute
+symptom,toothache,tooth pain,acute
+symptom,muscle cramps,cramps,acute
+medication,paracetamol,acetaminophen|dolo|crocin|calpol|pcm,
+medication,ibuprofen,brufen|combiflam,
+medication,diclofenac,voveran|dynapar,
+medication,aceclofenac,zerodol|hifenac,
+medication,amoxicillin,mox|novamox,
+medication,amoxicillin clavulanate,augmentin|clavam|amoxyclav,
+medication,azithromycin,azithral|azee|zithromax,
+medication,cefixime,taxim-o|zifi,
+medication,cefpodoxime,,
+medication,ciprofloxacin,ciplox|cipro,
+medication,levofloxacin,levoflox,
+medication,doxycycline,,
+medication,metronidazole,flagyl|metrogyl,
+medication,ors,oral rehydration salts|electral,
+medication,ondansetron,ondem|emeset,
+medication,domperidone,domstal,
+medication,pantoprazole,pantocid|pantop|pan-d|pan 40,
+medication,omeprazole,omez,
+medication,rabeprazole,razo,
+medication,esomeprazole,nexpro,
+medication,cetirizine,cetzine|okacet,
+medication,levocetirizine,levocet|xyzal,
+medication,montelukast,montair|montek,
+medication,fexofenadine,allegra|fexova,
+medication,salbutamol,asthalin|ventolin,
+medication,budesonide,budecort|pulmicort,
+medication,metformin,glycomet|glucophage|obimet,
+medication,glimepiride,amaryl|glimy,
+medication,gliclazide,diamicron,
+medication,sitagliptin,januvia,
+medication,vildagliptin,galvus,
+medication,insulin,lantus|mixtard|human actrapid|glargine,
+medication,amlodipine,amlong|norvasc|stamlo,
+medication,telmisartan,telma,
+medication,losartan,losar|cozaar,
+medication,olmesartan,olmezest,
+medication,atenolol,aten|tenormin,
+medication,metoprolol,metolar|betaloc,
+medication,ramipril,cardace,
+medication,hydrochlorothiazide,hctz,
+medication,furosemide,lasix,
+medication,atorvastatin,atorva|lipitor|storvas,
+medication,rosuvastatin,rosuvas|crestor,
+medication,clopidogrel,clopilet|plavix,
+medication,aspirin,ecosprin|disprin,
+medication,warfarin,acitrom,
+medication,levothyroxine,thyronorm|eltroxin|thyroxine,
+medication,prednisolone,wysolone,
+medication,amitriptyline,tryptomer,
+medication,escitalopram,nexito|lexapro,
+medication,sertraline,serta|zoloft,
+medication,alprazolam,alprax|restyl,
+medication,levetiracetam,levipil|keppra,
+medication,sodium valproate,valparin|epilex,
+medication,carbamazepine,tegretol,
+medication,folic acid,folvite,
+medication,iron supplement,oral iron|iron tablet|iron tablets|iron syrup|iron drops|ferrous ascorbate|ferrous sulphate|ferrous sulfate|fecontin|autrin,
+medication,vitamin d3,cholecalciferol|calcirol|d-rise,
+medication,vitamin b12,methylcobalamin|mecobalamin|neurobion,
+medication,calcium,shelcal|calcium carbonate,
+medication,zinc,zinc sulphate,
+medication,multivitamin,becosules|zincovit,
+condition,left ventricular dysfunction,lv systolic dysfunction|lv dysfunction|left ventricular systolic dysfunction,chronic
+condition,mitral regurgitation,,chronic
+condition,aortic regurgitation,,chronic
+condition,pulmonary hypertension,,chronic
+condition,myocardial infarction,heart attack|stemi|nstemi,
+condition,dyspepsia,indigestion|gastritis|acidity|hyperacidity,
+medication,spironolactone,aldactone,
+medication,amiodarone,cordarone|cordarex|cordaronex,
+medication,digoxin,lanoxin,
+medication,carvedilol,carca|cardivas,
+medication,bisoprolol,concor,
+medication,sacubitril valsartan,entresto|sacubitril,
+medication,dapagliflozin,forxiga,
+medication,empagliflozin,jardiance,
+medication,ticagrelor,brilinta,
+medication,apixaban,eliquis,
+medication,rivaroxaban,xarelto,
+medication,nitroglycerin,gtn|nitrocontin,
+medication,isosorbide,sorbitrate|imdur,
+medication,torsemide,dytor|torsinex,
+medication,antacid,digene|gelusil|mucaine,
+medication,probiotic,vizylac|sporlac|econorm,
+medication,levosalbutamol,levolin,

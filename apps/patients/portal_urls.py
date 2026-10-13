@@ -12,11 +12,13 @@ from .portal_views import (
     PortalLabReportFileView, PortalProfileView, PortalChangePasswordView,
     PortalMobileChangeRequestOTPView,
     PortalInvoiceListView, PortalInvoiceReceiptPDFView,
-    PortalFamilyListCreateView, PortalFamilyDetailView, PortalHealthSummaryView,
-    PortalVaccinationListView, PortalVaccinationUploadView, PortalVaccinationFileView, PortalGrowthView,
-    PortalMilestoneListView,
+    PortalHealthSummaryView,
     PortalHealthTimelineView, PortalNotificationsView, PortalNotificationMarkReadView,
     PortalEmergencyTokenView,
+)
+from .pediatrics.portal_views import (
+    PortalFamilyListCreateView, PortalFamilyDetailView, PortalVaccinationListView, PortalVaccinationUploadView,
+    PortalVaccinationFileView, PortalGrowthView, PortalMilestoneListView,
 )
 from .records_share_views import (
     RecordsShareCreateView, RecordsShareDecisionView, RecordsShareEndView,

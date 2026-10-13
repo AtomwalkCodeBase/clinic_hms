@@ -1,5 +1,5 @@
 """
-apps/registry/schedule_dicts.py
+apps/patients/pediatrics/schedule_dicts.py
 -------------------------------
 JSON shapes for vaccination / milestone schedules and rules, shared by the hospital-admin views
 (apps/org/{vaccination,milestone}_schedule_views.py) and the platform-admin template views

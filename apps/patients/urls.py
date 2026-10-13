@@ -12,7 +12,7 @@ from .views import (
     PatientDocumentDetailView,
     PatientLabResultDetailView,
 )
-from .growth_vaccination_views import (
+from apps.patients.pediatrics.growth_vaccination_views import (
     PatientGrowthView,
     PatientVaccinationListCreateView,
     PatientVaccinationVerifyView,
@@ -20,7 +20,7 @@ from .growth_vaccination_views import (
     PatientVaccinationDeclineView,
     PatientVaccinationAdministerView,
 )
-from .pediatric_views import (
+from apps.patients.pediatrics.pediatric_views import (
     BirthHistoryView,
     PatientMilestoneListCreateView,
 )

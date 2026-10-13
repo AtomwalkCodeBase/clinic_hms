@@ -1,15 +1,18 @@
 import logging
 import time
+from datetime import date
 
 from rest_framework.parsers import MultiPartParser
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from apps.patients.portal_access import resolve_target_awpid_and_dob
-from core.permissions import IsPatient
+from core.permissions import IsDoctorOrNurse, IsPatient
 from core.response import error, not_found, success
 from . import classification as rules
 from .models import DocumentBatch
 from .serializers import SubmitSerializer, UploadSerializer
+from .timeline_insights.extract import build_timeline
 from .services import (BULK_QUEUE, INSTANT_QUEUE, awaiting_review_q, batch_summary, save_upload, start_processing,
                        submit_decisions)
 
@@ -110,3 +113,64 @@ class SubmitView(APIView):
                             .filter(awaiting_review_q(), patient__awpid=awpid,
                                     status__in=(MedicalDocument.Status.COMPLETED, MedicalDocument.Status.REVIEW_REQUIRED)).count()}
         return success(data=result)
+
+
+def _timeline_filters(request):
+    """(the timeline's filters from the query string, None), or (None, the 400 to return)."""
+    q = request.query_params
+    try:
+        start, end = [date.fromisoformat(q[k]).isoformat() if q.get(k) else None for k in ("from", "to")]
+    except ValueError:
+        return None, error("from and to must be dates like 2026-03-14.")
+    return dict(start=start, end=end, kind=q.get("kind"), name=q.get("name"), nature=q.get("nature"), when=q.get("when"),
+                include_hidden=q.get("include_hidden") == "1"), None
+
+
+class TimelineView(APIView):
+    """
+    GET /api/v1/records/timeline/?from=2026-01-01&to=2026-06-30&kind=condition&name=diabetes&nature=chronic&when=current
+
+    The findings read out of the patient's confirmed documents (conditions, symptoms, medications), one per date and
+    name, grouped by day, newest first: {"days": [{"date", "entries": [...]}], "undated": [...]}. A patient's upload is
+    dated by the date written in it, a hospital document by its own date; a finding with no date is "undated". Each
+    entry lists its "sources" (the reports that mention it). Every filter is optional:
+    from/to (ISO dates), kind (condition|symptom|medication), name (part of a name), nature (acute|chronic|unknown),
+    when (current|history|planned|resolved). include_hidden=1 also returns "no cough", "father has diabetes" and "asthma suspected" style mentions.
+    """
+    permission_classes = [IsPatient]
+
+    def get(self, request):
+        awpid, _dob, err = resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        filters, err = _timeline_filters(request)
+        if err:
+            return err
+        return success(data=build_timeline(awpid, **filters))
+
+
+class StaffTimelineView(APIView):
+    """
+    GET /api/v1/records/patients/<pk>/timeline/   (same filters as the patient's timeline)
+
+    The same health timeline for a doctor or nurse looking at one of this hospital's patients, with what the patient
+    does not get: the medications (with dose and frequency), and the suspected / negated / family findings when asked
+    for. It follows the rule the other cross-hospital views use: a patient who has agreed to record sharing
+    (hie_consent_given) shows everything; otherwise only the documents this hospital issued. The view is audited.
+    Returns what the patient's timeline returns, plus "consent_given".
+    """
+    permission_classes = [IsAuthenticated, IsDoctorOrNurse]
+
+    def get(self, request, pk):
+        from apps.patients.models import Patient
+        from core.audit import log_action
+        patient = Patient.objects.using(request.tenant_db).filter(pk=pk).first()
+        if not patient:
+            return not_found("Patient not found.")
+        filters, err = _timeline_filters(request)
+        if err:
+            return err
+        consent = patient.hie_consent_given
+        data = build_timeline(patient.awpid, audience="staff", tenant_id=None if consent else request.tenant_id, **filters)
+        log_action(request, request.tenant_db, action="patient.timeline.view", resource_type="Patient", resource_id=patient.pk)
+        return success(data={**data, "consent_given": consent})

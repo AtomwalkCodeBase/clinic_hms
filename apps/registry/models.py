@@ -14,6 +14,7 @@ DPDP Act compliance:
   - AWPID is the platform's cross-provider patient identifier.
 """
 
+import secrets
 from datetime import timedelta
 
 from django.db import models
@@ -101,23 +102,20 @@ class PatientIdentity(models.Model):
     blood_group         = models.CharField(max_length=5, blank=True)
     preferred_language  = models.CharField(max_length=10, default="en")
 
-    # Permanent "consultation scratchpad" QR token — a doctor mid-consult
-    # shows this patient's QR, scans it on a phone, hand-writes a SOAP note
-    # with a finger, and it's filed back against this patient as a PDF (see
-    # apps/patients/consult_pad_views.py). Unlike the emergency token this
-    # one never expires and is the SAME code every visit — one QR per
-    # patient, so it can be printed on a card / stuck in a paper file.
-    # null until a doctor first opens the QR for this patient; rotate it
-    # (PatientConsultPadQRView ?rotate=1) to revoke a leaked code.
-    consult_pad_token   = models.CharField(max_length=64, unique=True, null=True, blank=True, db_index=True)
-    # The last hospital (Tenant.id) that opened this patient's pad QR. The
-    # pad submission itself is unauthenticated (it's reached by scanning a
-    # public QR), so it has no tenant context of its own — this is how a
-    # submitted note gets stamped with "which hospital captured it", which
-    # in turn is what lets that hospital always see its own consult notes in
-    # the patient history even before the patient has consented to
-    # cross-hospital record sharing.
-    consult_pad_owner_tenant_id = models.IntegerField(null=True, blank=True)
+    # ── Portal login ────────────────────────────────────────────────────────────
+    # A person who has signed up to the patient portal has these filled in (password != ""); a walk-in registered
+    # by a front desk does not. This used to be a separate patient_account table keyed by the same AWPID. Login is
+    # by mobile (or AWPID / email); the plain mobile is kept only for people with a login.
+    mobile        = models.CharField(max_length=15, unique=True, null=True, blank=True)
+    password      = models.CharField(max_length=128, blank=True)
+    photo         = models.TextField(blank=True)      # base64 data URI, same pattern as StaffUser.photo
+    is_active     = models.BooleanField(default=True)
+    last_login    = models.DateTimeField(null=True, blank=True)
+    # Account-level emergency contact: asked once, applies at every hospital this person books at (unlike the
+    # per-hospital Patient.emergency_contact_*).
+    emergency_contact_name     = models.CharField(max_length=200, blank=True)
+    emergency_contact_phone    = models.CharField(max_length=15, blank=True)
+    emergency_contact_relation = models.CharField(max_length=30, blank=True)
 
     created_at          = models.DateTimeField(auto_now_add=True)
     updated_at          = models.DateTimeField(auto_now=True)
@@ -125,6 +123,14 @@ class PatientIdentity(models.Model):
     class Meta:
         app_label = "registry"
         db_table  = "patient_identity"
+
+    def set_password(self, raw):
+        from django.contrib.auth.hashers import make_password
+        self.password = make_password(raw)
+
+    def check_password(self, raw):
+        from django.contrib.auth.hashers import check_password
+        return check_password(raw, self.password)
 
     def __str__(self):
         return f"{self.awpid} — {self.full_name}"
@@ -279,343 +285,6 @@ class SharedVital(models.Model):
         db_table  = "shared_vital"
 
 
-class SharedBirthHistory(models.Model):
-    """
-    Cross-hospital mirror of apps.patients.models.BirthHistory — written
-    through (best-effort, same pattern as apps.registry.hie.sync_encounter_to_hie) from
-    BirthHistoryView.post()/patch() whenever a hospital captures or edits a
-    child's birth history, so it's visible to the Emergency QR summary
-    (apps/patients/emergency_views.py) and any other cross-hospital view,
-    the same way vitals/diagnoses/prescriptions already are.
-
-    One row per awpid (unlike SharedVital, which keeps a history of
-    readings) — birth history is a single fact set about one birth event,
-    not a repeated measurement, so a hospital editing it overwrites the
-    shared copy rather than appending a new one. source_tenant_id records
-    whichever hospital most recently wrote it, for provenance only.
-    """
-    awpid = models.CharField(max_length=30, unique=True, db_index=True)
-    gestational_age_weeks = models.PositiveSmallIntegerField(null=True, blank=True)
-    birth_weight_kg = models.DecimalField(max_digits=4, decimal_places=2, null=True, blank=True)
-    delivery_mode = models.CharField(max_length=12, blank=True)
-    multiple_birth = models.CharField(max_length=50, blank=True)
-    nicu_admission = models.BooleanField(default=False)
-    nicu_days = models.PositiveSmallIntegerField(null=True, blank=True)
-    birth_complications = models.TextField(blank=True)
-    congenital_conditions = models.TextField(blank=True)
-    apgar_score_1min = models.PositiveSmallIntegerField(null=True, blank=True)
-    apgar_score_5min = models.PositiveSmallIntegerField(null=True, blank=True)
-    source_tenant_id = models.IntegerField()
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        app_label = "registry"
-        db_table  = "shared_birth_history"
-
-
-class SharedVaccination(models.Model):
-    """
-    Vaccination record for a patient, visible across every hospital in the
-    network — either administered by a hospital here (source="clinic",
-    auto-verified since a clinician logged it directly), self-reported by
-    the patient/parent with an uploaded certificate from outside the network
-    (source="self_reported", starts as verification_status="pending_review"
-    until a doctor or nurse at ANY hospital reviews the attached certificate
-    and marks it verified or rejected — see PatientVaccinationVerifyView), or
-    a doctor's ad-hoc clinical decision recorded before any administration
-    happens (source="doctor_ordered" — see the state-machine note below).
-
-    Deliberately NOT auto-verified just because it was uploaded — an
-    unreviewed self-reported record must never render identically to a
-    clinic-administered one in the UI; that distinction is the whole point
-    of tracking verification_status separately from "does a record exist".
-
-    file_data is a base64 data URI (same inline-storage pattern as
-    SharedDocument) for the uploaded certificate image/PDF, when there is one.
-
-    State-machine note (doctor order → nurse administers, or doctor
-    declines): verification_status was originally a narrow "has this
-    self-reported upload been reviewed" flag, but it's really the record's
-    overall lifecycle status, so it's reused (not duplicated into a second
-    field) for two more states instead of adding a parallel status column
-    that would need to be kept in sync with it:
-      - STATUS_ORDERED ("ordered"): a doctor recorded an ad-hoc vaccine
-        recommendation (PatientVaccinationOrderView) that hasn't been given
-        yet. administered_date is null until a nurse administers it
-        (PatientVaccinationAdministerView), at which point the SAME row
-        flips to source=SOURCE_CLINIC, verification_status=STATUS_VERIFIED,
-        and administered_date is filled in — "ordered" never needed its own
-        model, it's just an earlier point in one record's life.
-      - STATUS_DECLINED ("declined"): a doctor marked a schedule slot as not
-        clinically required for this patient (PatientVaccinationDeclineView).
-        Also administered_date-less — nothing was given, nothing ever will
-        be for this slot. build_roadmap() surfaces this as status="declined"
-        (never "unknown", never "due_now") so the UI stops prompting for it.
-    A dedicated "order status" field was considered and rejected: it would
-    only ever be meaningful for source=SOURCE_DOCTOR_ORDERED rows, which is
-    exactly the kind of confusing multi-purpose-field split the task brief
-    warned against — verification_status already models "where is this
-    record in its review/administration lifecycle" for every other source,
-    so ordered/declined are just two more values of the same lifecycle.
-    """
-    SOURCE_CLINIC = "clinic"
-    SOURCE_SELF_REPORTED = "self_reported"
-    SOURCE_DOCTOR_ORDERED = "doctor_ordered"
-    SOURCE_CHOICES = [
-        (SOURCE_CLINIC, "Clinic administered"),
-        (SOURCE_SELF_REPORTED, "Self reported"),
-        (SOURCE_DOCTOR_ORDERED, "Doctor ordered"),
-    ]
-
-    STATUS_VERIFIED = "verified"
-    STATUS_PENDING  = "pending_review"
-    STATUS_REJECTED = "rejected"
-    STATUS_ORDERED  = "ordered"
-    STATUS_DECLINED = "declined"
-    VERIFICATION_CHOICES = [
-        (STATUS_VERIFIED, "Verified"),
-        (STATUS_PENDING,  "Pending review"),
-        (STATUS_REJECTED, "Rejected"),
-        (STATUS_ORDERED,  "Ordered (not yet administered)"),
-        (STATUS_DECLINED, "Declined / not required"),
-    ]
-
-    awpid               = models.CharField(max_length=30, db_index=True)
-    vaccine_name        = models.CharField(max_length=100)
-    # The default-schedule label this fulfills (e.g. "18 months"), blank if
-    # it doesn't match a standard schedule slot (see vaccine_schedule.py).
-    scheduled_label     = models.CharField(max_length=50, blank=True)
-    # Null for an "ordered" (not yet given) or "declined" (never given)
-    # record — those describe a clinical decision, not an administration
-    # event, so there is no real date to store until/unless one happens.
-    administered_date   = models.DateField(null=True, blank=True)
-    # Only meaningful for source=SOURCE_DOCTOR_ORDERED / verification_status
-    # in (STATUS_ORDERED, STATUS_DECLINED) — when the doctor recommends the
-    # vaccine be given by, or blank if no target date was set.
-    due_date             = models.DateField(null=True, blank=True)
-    # Doctor's free-text clinical reason for an ad-hoc order or a decline —
-    # e.g. "catch-up dose, missed at birth" or "contraindicated: egg allergy".
-    reason               = models.TextField(blank=True)
-    dose_number          = models.PositiveIntegerField(null=True, blank=True)
-
-    source              = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_CLINIC)
-    verification_status = models.CharField(max_length=20, choices=VERIFICATION_CHOICES, default=STATUS_VERIFIED, db_index=True)
-    verified_by_name    = models.CharField(max_length=200, blank=True)  # snapshot — staff live in tenant DBs, no FK across DBs
-    verified_at         = models.DateTimeField(null=True, blank=True)
-    review_notes        = models.TextField(blank=True)
-
-    file_name           = models.CharField(max_length=255, blank=True)
-    mime_type            = models.CharField(max_length=100, blank=True)
-    file_data            = models.TextField(blank=True)
-
-    source_tenant_id    = models.IntegerField(null=True, blank=True)  # which hospital logged/verified this; null if purely self-reported and never reviewed
-    recorded_by          = models.CharField(max_length=20, default="patient")  # "patient" or "staff"
-
-    created_at           = models.DateTimeField(auto_now_add=True)
-    updated_at           = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        app_label = "registry"
-        db_table  = "shared_vaccination"
-        indexes = [models.Index(fields=["awpid", "verification_status"])]
-        ordering  = ["administered_date"]
-
-    def __str__(self):
-        return f"{self.awpid} — {self.vaccine_name} ({self.verification_status})"
-
-
-class VaccinationSchedule(models.Model):
-    """
-    A named, ordered set of vaccination rules (VaccinationScheduleRule) that
-    a hospital's roadmap is built against — replaces the single hardcoded
-    DEFAULT_VACCINE_SCHEDULE list in vaccine_schedule.py with a configurable,
-    per-hospital schedule.
-
-    owner_tenant_id is null for system-level templates (e.g. the "Default
-    Schedule" seeded by this app's data migration from the old hardcoded
-    list) and set to a Tenant.id for a hospital's own editable copy. Plain
-    IntegerField, not a real FK — see the comment on Tenant.
-    active_vaccination_schedule_id in apps/tenants/models.py for why this
-    codebase avoids cross-app FKs even when both sides live in the same DB.
-
-    is_template marks a schedule meant to be cloned as a starting point
-    (system templates, or a hospital's own saved variant) rather than
-    edited in place by every tenant that points at it — primarily relevant
-    for the null-owner system templates in v1.
-    """
-    name            = models.CharField(max_length=200)
-    description     = models.TextField(blank=True)
-    owner_tenant_id = models.IntegerField(null=True, blank=True)  # null = system-level template; mirrors Tenant.id, no FK across apps
-    is_template     = models.BooleanField(default=False)
-    active          = models.BooleanField(default=True)  # soft-disable instead of delete
-    created_at      = models.DateTimeField(auto_now_add=True)
-    updated_at      = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        app_label = "registry"
-        db_table  = "vaccination_schedule"
-
-    def __str__(self):
-        return self.name
-
-
-class VaccinationScheduleRule(models.Model):
-    """
-    One vaccine/dose slot within a VaccinationSchedule — e.g. "BCG, dose 1,
-    Birth, min_age_days=0". build_roadmap() iterates a schedule's rules
-    (ordered by sort_order) the same way it used to iterate the hardcoded
-    DEFAULT_VACCINE_SCHEDULE list.
-
-    min_age_days/max_age_days describe the recommended age window — used
-    only to compute the informational "timing" (upcoming vs due_now) on a
-    roadmap slot with no matching record. They are NOT used to fabricate an
-    "overdue" verdict; see vaccine_schedule.py's status-semantics comment.
-    """
-    schedule         = models.ForeignKey(VaccinationSchedule, on_delete=models.CASCADE, related_name="rules")
-    vaccine_name     = models.CharField(max_length=100)
-    dose_number      = models.PositiveIntegerField(default=1)
-    scheduled_label  = models.CharField(max_length=50)  # human milestone label, e.g. "Birth", "6 weeks", "9 months"
-    min_age_days     = models.PositiveIntegerField()
-    max_age_days     = models.PositiveIntegerField(null=True, blank=True)
-    mandatory        = models.BooleanField(default=True)
-    sort_order       = models.PositiveIntegerField(default=0)
-
-    class Meta:
-        app_label = "registry"
-        db_table  = "vaccination_schedule_rule"
-        ordering  = ["sort_order"]
-
-    def __str__(self):
-        return f"{self.schedule.name} — {self.vaccine_name} ({self.scheduled_label})"
-
-
-class MilestoneSchedule(models.Model):
-    """
-    A named, ordered set of developmental-milestone rules
-    (MilestoneScheduleRule) that a hospital's pediatric milestone roadmap is
-    built against. Exact structural mirror of VaccinationSchedule above —
-    hospital-configurable via the same clone-a-template pattern: platform
-    admin maintains system templates (owner_tenant_id=None, is_template=
-    True), a hospital admin clones one into their own editable copy
-    (owner_tenant_id=<tenant>), and Tenant.active_milestone_schedule_id
-    (apps/tenants/models.py) points at whichever schedule is currently live
-    for that hospital's staff-facing roadmap.
-
-    See VaccinationSchedule's docstring for the full rationale (owner_tenant_id
-    as a plain IntegerField rather than a cross-app FK, is_template's role) —
-    it applies identically here.
-    """
-    name            = models.CharField(max_length=200)
-    description     = models.TextField(blank=True)
-    owner_tenant_id = models.IntegerField(null=True, blank=True)  # null = system-level template
-    is_template     = models.BooleanField(default=False)
-    active          = models.BooleanField(default=True)
-    created_at      = models.DateTimeField(auto_now_add=True)
-    updated_at      = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        app_label = "registry"
-        db_table  = "milestone_schedule"
-
-    def __str__(self):
-        return self.name
-
-
-class MilestoneScheduleRule(models.Model):
-    """
-    One developmental-milestone slot within a MilestoneSchedule — e.g.
-    domain="gross_motor", milestone="Sits without support", expected at
-    min_age_days=180 (6 months). Mirrors VaccinationScheduleRule exactly;
-    milestone_roadmap.build_roadmap() iterates a schedule's rules the same
-    way vaccine_schedule.build_roadmap() iterates VaccinationScheduleRule.
-    """
-    DOMAIN_GROSS_MOTOR = "gross_motor"
-    DOMAIN_FINE_MOTOR  = "fine_motor"
-    DOMAIN_LANGUAGE    = "language"
-    DOMAIN_COGNITIVE   = "cognitive"
-    DOMAIN_SOCIAL      = "social_emotional"
-    DOMAIN_CHOICES = [
-        (DOMAIN_GROSS_MOTOR, "Gross Motor"),
-        (DOMAIN_FINE_MOTOR,  "Fine Motor"),
-        (DOMAIN_LANGUAGE,    "Language / Communication"),
-        (DOMAIN_COGNITIVE,   "Cognitive"),
-        (DOMAIN_SOCIAL,      "Social / Emotional"),
-    ]
-
-    schedule         = models.ForeignKey(MilestoneSchedule, on_delete=models.CASCADE, related_name="rules")
-    domain           = models.CharField(max_length=20, choices=DOMAIN_CHOICES)
-    milestone        = models.CharField(max_length=200)   # e.g. "Sits without support"
-    scheduled_label  = models.CharField(max_length=50)     # human age-window label, e.g. "6 months"
-    min_age_days     = models.PositiveIntegerField()
-    max_age_days     = models.PositiveIntegerField(null=True, blank=True)
-    mandatory        = models.BooleanField(default=True)   # false = "nice to note", not a red-flag if missed
-    sort_order       = models.PositiveIntegerField(default=0)
-
-    class Meta:
-        app_label = "registry"
-        db_table  = "milestone_schedule_rule"
-        ordering  = ["sort_order"]
-
-    def __str__(self):
-        return f"{self.schedule.name} — {self.milestone} ({self.scheduled_label})"
-
-
-class SharedMilestoneRecord(models.Model):
-    """
-    Per-patient developmental-milestone achievement record, visible across
-    every hospital in the network — mirrors SharedVaccination's shape and
-    verification-free simplicity (no cross-hospital certificate-review
-    workflow here; a milestone is simply observed and recorded by clinical
-    staff at the time of an encounter, source is always "clinic").
-
-    status:
-      ACHIEVED  — the child has reached this milestone; achieved_date set.
-      NOT_YET   — assessed and explicitly not yet reached (still tracked,
-                  not just silently absent — lets the roadmap distinguish
-                  "asked, not yet doing it" from "never assessed").
-      CONCERN   — flagged by the pediatrician as a possible developmental
-                  delay worth follow-up; achieved_date stays null.
-    A roadmap slot with no matching record at all is simply "not assessed"
-    (computed by build_roadmap(), not stored as a row) — matches
-    vaccine_schedule.build_roadmap()'s "no record = pending/upcoming" logic.
-    """
-    STATUS_ACHIEVED = "achieved"
-    STATUS_NOT_YET  = "not_yet"
-    STATUS_CONCERN  = "concern"
-    STATUS_CHOICES = [
-        (STATUS_ACHIEVED, "Achieved"),
-        (STATUS_NOT_YET,  "Not Yet"),
-        (STATUS_CONCERN,  "Concern Flagged"),
-    ]
-
-    awpid            = models.CharField(max_length=30, db_index=True)
-    domain           = models.CharField(max_length=20, choices=MilestoneScheduleRule.DOMAIN_CHOICES)
-    milestone        = models.CharField(max_length=200)
-    # The schedule-rule label this fulfills (e.g. "6 months"), blank if it
-    # doesn't match a standard schedule slot.
-    scheduled_label  = models.CharField(max_length=50, blank=True)
-    status           = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_ACHIEVED)
-    achieved_date    = models.DateField(null=True, blank=True)
-    assessed_date    = models.DateField(null=True, blank=True)  # when this observation was made, regardless of status
-    notes            = models.TextField(blank=True)
-
-    recorded_by_name = models.CharField(max_length=200, blank=True)  # snapshot — staff live in tenant DBs, no FK across DBs
-    source_tenant_id = models.IntegerField(null=True, blank=True)
-
-    created_at       = models.DateTimeField(auto_now_add=True)
-    updated_at       = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        app_label = "registry"
-        db_table  = "shared_milestone_record"
-        indexes = [models.Index(fields=["awpid", "domain"])]
-        ordering  = ["assessed_date"]
-
-    def __str__(self):
-        return f"{self.awpid} — {self.milestone} ({self.status})"
-
-
 class BlacklistedToken(models.Model):
     """
     JWT revocation list. Populated on logout (or admin-forced revocation).
@@ -635,55 +304,33 @@ class BlacklistedToken(models.Model):
         return self.jti
 
 
-class PatientAccount(models.Model):
-    """
-    Patient portal login account (registry DB — global, cross-tenant).
-    Password hashed with Django's hashers. Linked to PatientIdentity via awpid.
+class _AccountQuerySet(models.QuerySet):
+    def create(self, **fields):
+        """An account is a login on an identity: reuse the identity with this AWPID if there is one."""
+        identity, _ = PatientIdentity._base_manager.using(self.db).get_or_create(
+            awpid=fields["awpid"], defaults={"full_name": fields.get("full_name") or "Patient"})
+        for name, value in fields.items():
+            setattr(identity, name, value)
+        identity.save(using=self.db)
+        return self.get(pk=identity.pk)
 
-    Login identifier is mobile (or awpid), not email — email is kept as an
-    optional field (still shown/editable on My Profile, useful for
-    notifications) but is no longer unique-enforced as a login key, and
-    registration no longer requires it.
+
+class _AccountManager(models.Manager.from_queryset(_AccountQuerySet)):
+    def get_queryset(self):
+        return super().get_queryset().exclude(password="")
+
+
+class PatientAccount(PatientIdentity):
     """
-    awpid         = models.CharField(max_length=30, unique=True, db_index=True)
-    full_name     = models.CharField(max_length=200)
-    # Optional now — mobile is the login identifier. null=True (not just
-    # blank=True) so multiple accounts with no email don't collide under the
-    # unique constraint (Postgres allows many NULLs, not many '').
-    email         = models.EmailField(unique=True, db_index=True, blank=True, null=True)
-    mobile        = models.CharField(max_length=15, unique=True, db_index=True)
-    password      = models.CharField(max_length=128)
-    gender        = models.CharField(max_length=1, blank=True)   # M/F/O
-    date_of_birth = models.DateField(null=True, blank=True)
-    # Base64 data URI, same storage pattern as StaffUser.photo — no object
-    # storage configured yet, fine for avatar-sized images.
-    photo         = models.TextField(blank=True)
-    is_active     = models.BooleanField(default=True)
-    created_at    = models.DateTimeField(auto_now_add=True)
-    last_login    = models.DateTimeField(null=True, blank=True)
-    # Account-level emergency contact — asked once, applies across every
-    # hospital this account books at (unlike Patient.emergency_contact_*,
-    # which is per-tenant and only exists once a local Patient row is
-    # created). Kept here so it's visible/editable from My Profile even
-    # before the patient's first booking anywhere.
-    emergency_contact_name     = models.CharField(max_length=200, blank=True)
-    emergency_contact_phone    = models.CharField(max_length=15, blank=True)
-    emergency_contact_relation = models.CharField(max_length=30, blank=True)
+    A patient identity that can log in to the portal (password set). Same row and table as PatientIdentity
+    (patient_identity); this class only narrows queries to people who have a login, so the portal and auth code
+    keep saying "account". The row id is both the account id and the identity id.
+    """
+    objects = _AccountManager()
 
     class Meta:
+        proxy = True
         app_label = "registry"
-        db_table  = "patient_account"
-
-    def set_password(self, raw):
-        from django.contrib.auth.hashers import make_password
-        self.password = make_password(raw)
-
-    def check_password(self, raw):
-        from django.contrib.auth.hashers import check_password
-        return check_password(raw, self.password)
-
-    def __str__(self):
-        return f"{self.email} ({self.awpid})"
 
 
 class OTPCode(models.Model):
@@ -775,7 +422,7 @@ class PortalBooking(models.Model):
     The authoritative appointment lives in the tenant DB; this row lets the
     patient list their bookings across hospitals without scanning every tenant.
     """
-    account         = models.ForeignKey(PatientAccount, on_delete=models.CASCADE,
+    account         = models.ForeignKey(PatientIdentity, on_delete=models.CASCADE,
                                         related_name="bookings")
     tenant_id       = models.IntegerField(db_index=True)
     db_name         = models.CharField(max_length=100, db_index=True)
@@ -851,11 +498,15 @@ class EmergencyAccessLog(models.Model):
         return f"{self.awpid} — {self.event} @ {self.created_at}"
 
 
+def new_pad_token():
+    return secrets.token_urlsafe(32)
+
+
 class ConsultSession(models.Model):
     """
     A live handwriting session for ONE consultation. The doctor opens it from
-    an encounter (EncounterConsultSessionView), scans the patient's permanent
-    QR, and writes on a phone across two tabs — Prescription and Internal Note
+    an encounter (EncounterConsultSessionView), scans this session's QR (its
+    own `token`), and writes on a phone across two tabs — Prescription and Internal Note
     — with every stroke autosaved here. It stays `open`, surviving the pad
     being closed and re-scanned, until the encounter is signed.
 
@@ -864,8 +515,7 @@ class ConsultSession(models.Model):
     plain `.using("default")`. Scoped by no-FK id fields, this codebase's
     cross-DB convention:
       encounter_id  → the tenant-DB OPDEncounter this belongs to
-      tenant_id     → which hospital (also how the phone endpoint routes,
-                      via PatientIdentity.consult_pad_owner_tenant_id)
+      tenant_id     → which hospital
 
     `*_pages` hold the raw canvas as "data:image/png;base64,..." strings —
     session scratch, discarded when status flips to signed/expired. The
@@ -882,6 +532,9 @@ class ConsultSession(models.Model):
         (STATUS_EXPIRED, "Expired"),
     ]
 
+    # The secret in the QR / link the phone opens (no login). One per consultation, so it also says which hospital and
+    # which patient the phone is writing for.
+    token           = models.CharField(max_length=64, unique=True, db_index=True, default=new_pad_token)
     awpid           = models.CharField(max_length=30, db_index=True)
     tenant_id       = models.IntegerField(db_index=True)
     encounter_id    = models.UUIDField(db_index=True)
@@ -1127,3 +780,11 @@ class RecordsPrivacy(models.Model):
     def for_awpid(cls, awpid):
         obj, _ = cls.objects.using("default").get_or_create(awpid=awpid)
         return obj
+
+
+# The pediatric models (birth history, vaccinations, schedules, milestones) are defined in apps/patients/pediatrics/models.py
+# and keep app_label "registry"; imported here so `from apps.registry.models import ...` keeps working.
+from apps.patients.pediatrics.models import (  # noqa: E402,F401
+    Schedule, ScheduleRule, SharedBirthHistory, SharedMilestoneRecord, SharedVaccination,
+    VaccinationSchedule, VaccinationScheduleRule, MilestoneSchedule, MilestoneScheduleRule,
+)

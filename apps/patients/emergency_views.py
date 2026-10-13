@@ -101,7 +101,7 @@ def _resolve_emergency_contact(awpid):
 def _birth_history(awpid):
     """
     A child's birth history, if any hospital has captured it — written
-    through from BirthHistoryView (see apps.patients.pediatric_views) into
+    through from BirthHistoryView (see apps.patients.pediatrics.pediatric_views) into
     registry.SharedBirthHistory. Returns None (not an empty dict) when
     nothing's on file, so the frontend can tell "no birth history" apart
     from "not applicable" the same way it already does for emergency_contact.
@@ -130,7 +130,7 @@ def _milestone_concerns(awpid):
     the only milestone information an ER doctor treating an unfamiliar
     child actually needs in an emergency (a full achieved/not-yet roadmap is
     a well-child-visit concern, not an acute-care one; see
-    apps.registry.milestone_roadmap for that fuller view, used by the
+    apps.patients.pediatrics.milestone_roadmap for that fuller view, used by the
     doctor's own consultation screen and the parent's portal). Sourced
     straight from SharedMilestoneRecord — no schedule merge needed here,
     just "what has a clinician actually flagged."

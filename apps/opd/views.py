@@ -870,8 +870,8 @@ class AppointmentRescheduleView(APIView):
 
 
 class VitalsView(APIView):
-    """POST /api/v1/opd/appointments/<id>/vitals/"""
-    permission_classes = [IsTenantStaff]
+    """POST /api/v1/opd/appointments/<id>/vitals/ (nurse or doctor)"""
+    permission_classes = [IsDoctorOrNurse]
 
     def post(self, request, pk):
         db = request.tenant_db
@@ -1251,7 +1251,6 @@ class EncounterConsultSessionView(APIView):
     def post(self, request, pk):
         if (request.data or {}).get("action") == "recognise":
             return self._recognise(request, pk)
-        import secrets
         from django.conf import settings
         from apps.registry.models import PatientIdentity, ConsultSession
         from apps.patients.models import Patient
@@ -1269,11 +1268,6 @@ class EncounterConsultSessionView(APIView):
         if not identity:
             return api_not_found("This patient has no registry identity yet.")
 
-        if not identity.consult_pad_token:
-            identity.consult_pad_token = secrets.token_urlsafe(32)
-        identity.consult_pad_owner_tenant_id = request.tenant_id
-        identity.save(using="default", update_fields=["consult_pad_token", "consult_pad_owner_tenant_id", "updated_at"])
-
         sess = _open_consult_session(enc.id, request.tenant_id)
         if not sess:
             sess = ConsultSession.objects.using("default").create(
@@ -1282,7 +1276,7 @@ class EncounterConsultSessionView(APIView):
                 expires_at=timezone.now() + timedelta(hours=12),
             )
 
-        pad_url = f"{settings.FRONTEND_URL.rstrip('/')}/consult-pad/{identity.consult_pad_token}"
+        pad_url = f"{settings.FRONTEND_URL.rstrip('/')}/consult-pad/{sess.token}"
         return success(data={
             "session_id": sess.id, "status": sess.status,
             "pad_url": pad_url, "qr_image": render_qr_data_uri(pad_url),

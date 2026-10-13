@@ -5,13 +5,11 @@ from .views import (
     TenantStaffDetailView, TenantStaffResetPasswordView,
     PlatformUserListView, PlanListView,
 )
-from .vaccination_template_views import (
+from apps.patients.pediatrics.schedule_views import (
     VaccinationTemplateListCreateView, VaccinationTemplateDetailView,
-)
-from .classification_rule_views import DocumentReportView, DocumentCorrectView, ReclassifyView
-from .milestone_template_views import (
     MilestoneTemplateListCreateView, MilestoneTemplateDetailView,
 )
+from .classification_rule_views import DocumentReportView, DocumentCorrectView, ReclassifyView
 
 urlpatterns = [
     path("records/report/",         DocumentReportView.as_view(), name="platform-records-report"),
@@ -32,7 +30,7 @@ urlpatterns = [
 
     # System-level vaccination schedule templates (owner_tenant_id=None,
     # is_template=True) — cloned by hospital admins via
-    # apps.org.vaccination_schedule_views.VaccinationScheduleListCreateView.
+    # apps.patients.pediatrics.schedule_views (VaccinationScheduleListCreateView).
     path("vaccination-templates/", VaccinationTemplateListCreateView.as_view(), name="platform-vaccination-template-list-create"),
     path("vaccination-templates/<int:pk>/", VaccinationTemplateDetailView.as_view(), name="platform-vaccination-template-detail"),
 

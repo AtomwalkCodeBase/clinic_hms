@@ -105,6 +105,7 @@ class DocumentText(models.Model):
     document = models.OneToOneField(MedicalDocument, on_delete=models.CASCADE, related_name="text")
     extracted_text = models.TextField(blank=True)
     engine = models.CharField(max_length=30, blank=True)             # what read it: "pdf_text" or "ocr"
+    insights = models.JSONField(null=True, blank=True)               # dated conditions / symptoms / medications found in the text (timeline_insights/extract.py); null = not run yet
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

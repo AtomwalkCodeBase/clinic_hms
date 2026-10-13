@@ -7,7 +7,7 @@ from django.test import SimpleTestCase, TestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.registry.models import MilestoneSchedule, VaccinationSchedule
-from apps.registry.schedule_dicts import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
+from apps.patients.pediatrics.schedule_dicts import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
 from core.authentication import MockUser
 
 
@@ -52,7 +52,7 @@ class PlatformTemplateListTests(TestCase):
         return view.as_view()(request)
 
     def test_vaccination_templates(self):
-        from apps.platform_admin.vaccination_template_views import VaccinationTemplateListCreateView
+        from apps.patients.pediatrics.schedule_views import VaccinationTemplateListCreateView
         VaccinationSchedule.objects.using("default").create(name="India UIP", is_template=True)
         resp = self.get(VaccinationTemplateListCreateView)
         self.assertEqual(resp.status_code, 200)
@@ -62,7 +62,7 @@ class PlatformTemplateListTests(TestCase):
         self.assertEqual((row["rule_count"], row["tenants_using"]), (0, 0))
 
     def test_milestone_templates(self):
-        from apps.platform_admin.milestone_template_views import MilestoneTemplateListCreateView
+        from apps.patients.pediatrics.schedule_views import MilestoneTemplateListCreateView
         MilestoneSchedule.objects.using("default").create(name="WHO milestones", is_template=True)
         resp = self.get(MilestoneTemplateListCreateView)
         self.assertEqual(resp.status_code, 200)
