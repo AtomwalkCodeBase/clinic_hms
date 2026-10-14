@@ -3,7 +3,7 @@ apps/lab/archive.py
 -------------------
 store_lab_report_document() — on delivery (apps/lab/signals.py), store the
 LabReport as a MedicalDocument(document_type=lab_report) so it shows in the
-patient's My Reports. Idempotent by source_ref = "labreport:<id>".
+patient's My Reports. Idempotent by source_type "lab_report" + source_id = the report id.
 
 The file is the PDF/image the lab uploaded (normalised to PDF, QR-stamped),
 or else a PDF generated from the released result (apps/lab/pdf.py).
@@ -35,8 +35,8 @@ def store_lab_report_document(report, db, hospital_id):
     if not awpid:
         return None
 
-    src_ref = f"labreport:{report.id}"
-    existing = MedicalDocument.objects.using("default").filter(source_ref=src_ref).first()
+    source = {"source_type": MedicalDocument.Source.LAB_REPORT, "source_id": str(report.id)}
+    existing = MedicalDocument.objects.using("default").filter(**source).first()
     if existing is not None:
         return existing
 
@@ -88,6 +88,6 @@ def store_lab_report_document(report, db, hospital_id):
     )
     return create_issued_document(
         awpid=awpid, file_path=file_path, name=f"{title}.pdf", doc_type="lab_report",
-        source_hospital_id=hospital_id, source_ref=src_ref, public_document_id=report.report_number or "",
+        source_hospital_id=hospital_id, **source, public_document_id=report.report_number or "",
         document_date=when,
     )

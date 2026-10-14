@@ -4,7 +4,7 @@ from unittest import mock
 from django.test import TestCase
 
 from apps.records import classification as cls, services
-from apps.atomwalk.models import DocumentBatch, DocumentText, MedicalDocument, PatientDocumentClassification
+from apps.atomwalk.models import DocumentBatch, DocumentExtraction, MedicalDocument, PatientDocumentClassification
 from apps.records.tasks import classify_document_task, extract_document_task
 from apps.records.tests.helpers import PDF, identity, make_doc
 
@@ -32,7 +32,7 @@ class ExtractDocumentTests(TestCase):
         extract_document_task(doc.id)
         doc = row(doc)
         self.assertEqual((doc.status, doc.mime_type, doc.size), (S.CLASSIFYING, "application/pdf", len(PDF)))
-        text = DocumentText.objects.get(document=doc)
+        text = DocumentExtraction.objects.get(document=doc)
         self.assertEqual((text.extracted_text, text.engine), ("hemoglobin glucose", "pdf_text"))
         delay.assert_called_once_with(args=[doc.id, "bulk"], queue="bulk")
 

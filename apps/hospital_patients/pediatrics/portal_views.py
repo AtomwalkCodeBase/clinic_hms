@@ -20,13 +20,14 @@ from core.permissions import IsPatient
 from core.response import success, error, not_found
 
 from apps.hospital_patients.age_utils import age_years_months
-from apps.hospital_patients.pediatrics.common import growth_point, has_measurement, parse_date, text
+from apps.hospital_patients.pediatrics.common import parse_date, text
 from apps.hospital_patients.pediatrics.growth_reference import add_percentiles
 from apps.hospital_patients.pediatrics.roadmap import rules_for
 from apps.hospital_patients.portal_access import resolve_target_awpid_and_dob
 from apps.hospital_patients.services import PatientService
 from apps.atomwalk.models import (
-    PatientAccount, Patient, PatientRelationship, SharedVaccination, SharedVital)
+    PatientAccount, Patient, PatientRelationship, ImmunizationRecord)
+from apps.atomwalk.vitals import growth_points
 
 _MAX_CERTIFICATE_CHARS = 15_500_000      # about 11 MB of base64, the same cap as document uploads
 
@@ -37,15 +38,14 @@ def _account(request):
 
 # ── growth ────────────────────────────────────────────────────────────────────────────────────────────────────────
 class PortalGrowthView(APIView):
-    """Readings come from SharedVital (every hospital's visits), with source "clinic" or "home"."""
+    """Readings come from growth_measurement and vitals (every hospital's visits), with source "clinic" or "home"."""
     permission_classes = [IsPatient]
 
     def get(self, request):
         awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
-        readings = SharedVital.objects.using("default").filter(awpid=awpid).order_by("recorded_at")
-        series = [growth_point(v, v.source) for v in readings if has_measurement(v)]
+        series = growth_points(awpid)
         age = age_years_months(dob)
         is_minor = age is not None and age[0] < 18
         gender = getattr(Patient.objects.using("default").filter(awpid=awpid).first(), "gender", None)
@@ -132,9 +132,9 @@ class PortalVaccinationUploadView(APIView):
             file_name = blob_storage.display_file_name("vaccination-certificate", mime_type, detail=name,
                                                        name=owner_name, identifier=awpid)
 
-        record = SharedVaccination.objects.using("default").create(
-            awpid=awpid, vaccine_name=name, scheduled_label=text(d, "scheduled_label"), administered_date=given_on,
-            source=SharedVaccination.SOURCE_SELF_REPORTED, verification_status=SharedVaccination.STATUS_PENDING,
+        record = ImmunizationRecord.objects.using("default").create(
+            patient=Patient.objects.using("default").filter(awpid=awpid).first(), vaccine_name=name, scheduled_label=text(d, "scheduled_label"), administered_date=given_on,
+            source=ImmunizationRecord.SOURCE_SELF_REPORTED, verification_status=ImmunizationRecord.STATUS_PENDING,
             file_name=file_name, mime_type=mime_type, file_data=file_key, recorded_by="patient")
         return success(data={"id": record.id, "vaccine_name": record.vaccine_name,
                              "administered_date": str(record.administered_date),
@@ -147,12 +147,13 @@ class PortalVaccinationFileView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request, record_id):
-        record = SharedVaccination.objects.using("default").filter(pk=record_id).first()
+        record = ImmunizationRecord.objects.using("default").filter(pk=record_id).first()
         if not record:
             return not_found("Vaccination record not found.")
         account = _account(request)
-        if record.awpid != account.awpid and not PatientRelationship.objects.using("default").filter(
-                guardian_awpid=account.awpid, dependent_awpid=record.awpid).exists():
+        owner_awpid = record.patient.awpid if record.patient_id else ""
+        if owner_awpid != account.awpid and not PatientRelationship.objects.using("default").filter(
+                guardian_awpid=account.awpid, dependent_awpid=owner_awpid).exists():
             return error("This record does not belong to you.", status=403)
         if not record.file_data:
             return not_found("No certificate has been uploaded for this record.")

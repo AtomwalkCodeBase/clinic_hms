@@ -1,5 +1,5 @@
 from apps.records import classification as rules
-from apps.atomwalk.models import DocumentText, MedicalDocument, PatientDocumentClassification
+from apps.atomwalk.models import DocumentExtraction, MedicalDocument, PatientDocumentClassification
 from apps.atomwalk.models import Patient
 
 PDF = b"%PDF-1.4\n" + b"x" * 100
@@ -19,7 +19,7 @@ def make_doc(awpid="AWP-T1", *, status="queued", document_type=rules.NOT_CLASSIF
     doc.file = "documents/AWP-T1/1/1.pdf"
     doc.save()
     if text is not None:
-        DocumentText.objects.create(document=doc, extracted_text=text, engine="ocr")
+        DocumentExtraction.objects.create(document=doc, extracted_text=text, engine="ocr")
     if by == "rules":
         PatientDocumentClassification.objects.create(
             document=doc, ai_document_type=document_type, rule_score=20, final_document_type=document_type,

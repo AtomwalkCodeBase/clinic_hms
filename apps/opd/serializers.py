@@ -1,14 +1,25 @@
 from rest_framework import serializers
 from apps.hospital_patients.age_utils import age_years_months as _age_years_months
 from apps.billing.models import OptionList
-from .models import Appointment, Vitals, OPDEncounter, Prescription, PrescriptionItem, PrescriptionFavourite
+from .models import Appointment, OPDEncounter, Prescription, PrescriptionItem, PrescriptionFavourite
 
 
-class VitalsSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Vitals
-        exclude = ["appointment"]
-        read_only_fields = ["id", "recorded_at", "bmi"]
+class VitalsSerializer(serializers.Serializer):
+    """The vitals of one visit (kept in Atomwalk, see apps/atomwalk/vitals.py): what a nurse enters, and what the screens read back."""
+    recorded_at = serializers.DateTimeField(read_only=True)
+    recorded_by_user_id = serializers.UUIDField(read_only=True)
+    systolic_bp = serializers.IntegerField(required=False, allow_null=True)
+    diastolic_bp = serializers.IntegerField(required=False, allow_null=True)
+    pulse_rate = serializers.IntegerField(required=False, allow_null=True)
+    temperature = serializers.DecimalField(max_digits=4, decimal_places=1, required=False, allow_null=True)
+    spo2 = serializers.IntegerField(required=False, allow_null=True)
+    respiratory_rate = serializers.IntegerField(required=False, allow_null=True)
+    weight_kg = serializers.DecimalField(max_digits=5, decimal_places=1, required=False, allow_null=True)
+    height_cm = serializers.DecimalField(max_digits=5, decimal_places=1, required=False, allow_null=True)
+    bmi = serializers.DecimalField(max_digits=4, decimal_places=1, read_only=True)
+    blood_sugar_rbs = serializers.IntegerField(required=False, allow_null=True)
+    head_circumference_cm = serializers.DecimalField(max_digits=4, decimal_places=1, required=False, allow_null=True)
+    nurse_notes = serializers.CharField(required=False, allow_blank=True)
 
 
 class AppointmentSerializer(serializers.ModelSerializer):
@@ -314,7 +325,8 @@ class OPDEncounterCreateSerializer(serializers.ModelSerializer):
         encounter = OPDEncounter(**validated_data)
         encounter.save(using=db)
         if vitals_data:
-            Vitals.objects.using(db).create(appointment=encounter.appointment, **vitals_data)
+            from apps.opd.vitals_service import record_vitals
+            record_vitals(encounter.appointment, db, None, None, vitals_data)
         return encounter
 
 

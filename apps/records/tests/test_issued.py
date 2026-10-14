@@ -15,7 +15,7 @@ class IssuedDocumentTests(TestCase):
         identity("AWP-T1")
         doc = services.create_issued_document(
             awpid="AWP-T1", file_path="patients/AWP-T1/prescriptions/x.pdf", name="Prescription RX-000123 — 2026-09-12.pdf",
-            doc_type="prescription", source_hospital_id=3, source_ref="encounter:9", public_document_id="RX-000123",
+            doc_type="prescription", source_hospital_id=3, source_type="encounter", source_id="9", public_document_id="RX-000123",
             document_date=datetime.date(2026, 9, 12))
         self.assertEqual((doc.status, doc.document_type, doc.uploaded_by), ("completed", "prescription", "staff"))
         self.assertEqual((doc.document_ref, doc.document_date, doc.source_hospital_id, doc.source_ref),
@@ -25,26 +25,26 @@ class IssuedDocumentTests(TestCase):
     def test_the_file_is_the_one_already_in_the_bucket(self):
         identity("AWP-T1")
         doc = services.create_issued_document(awpid="AWP-T1", file_path="patients/AWP-T1/lab-reports/r.pdf", name="r.pdf",
-                                              doc_type="lab_report", source_hospital_id=3, source_ref="labreport:1")
+                                              doc_type="lab_report", source_hospital_id=3, source_type="lab_report", source_id="1")
         self.assertEqual((doc.file.name, doc.file_name), ("patients/AWP-T1/lab-reports/r.pdf", "r.pdf"))
 
     def test_a_long_name_is_cut_to_fit(self):
         identity("AWP-T1")
         doc = services.create_issued_document(awpid="AWP-T1", file_path="p", name="x" * 150 + ".pdf", doc_type="other",
-                                              source_hospital_id=3, source_ref="x")
+                                              source_hospital_id=3, source_type="encounter", source_id="x")
         self.assertEqual(len(doc.file_name), 100)
 
     def test_it_skips_the_rules_and_records_that_the_hospital_chose_the_type(self):
         identity("AWP-T1")
         doc = services.create_issued_document(awpid="AWP-T1", file_path="p", name="x.pdf", doc_type="lab_report",
-                                              source_hospital_id=3, source_ref="labreport:1")
+                                              source_hospital_id=3, source_type="lab_report", source_id="1")
         c = PatientDocumentClassification.objects.get(document=doc)
         self.assertEqual((c.classifier, c.status, c.final_document_type, c.rule_score), ("hospital", "issued", "lab_report", None))
 
     def test_a_type_that_is_not_one_of_the_fixed_types_becomes_other(self):
         identity("AWP-T1")
         doc = services.create_issued_document(awpid="AWP-T1", file_path="p", name="x.pdf", doc_type="vaccination_card",
-                                              source_hospital_id=3, source_ref="x")
+                                              source_hospital_id=3, source_type="encounter", source_id="x")
         self.assertEqual(doc.document_type, "other")
 
 

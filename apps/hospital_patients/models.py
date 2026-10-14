@@ -184,4 +184,3 @@ class Allergy(models.Model):
         return f"{self.patient.uhid} — {self.substance}"
 
 
-from apps.hospital_patients.pediatrics.models import BirthHistory  # noqa: E402,F401  (defined with the other pediatric models)

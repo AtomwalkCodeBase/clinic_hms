@@ -349,7 +349,7 @@ def best_guess_of(document):
 
 def text_of(document):
     try:
-        return document.text.extracted_text
+        return document.extraction.extracted_text
     except ObjectDoesNotExist:
         return ""
 

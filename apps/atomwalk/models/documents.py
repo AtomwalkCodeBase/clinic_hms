@@ -70,9 +70,17 @@ class MedicalDocument(models.Model):
     status = models.CharField(max_length=15, choices=Status.choices, default=Status.QUEUED, db_index=True)
     error_message = models.TextField(blank=True)                     # why it failed
     document_type = models.CharField(max_length=30, choices=rules.DOCUMENT_TYPE_CHOICES, default=rules.NOT_CLASSIFIED)
-    # Hospital-issued documents: which hospital made it, what from, and what is printed on it.
+    # Where it came from: an upload, or something a hospital issued (which hospital, what it was made from, what is printed on it).
+    class Source(models.TextChoices):
+        UPLOAD = "upload"                                     # a file a patient or staff member uploaded
+        ENCOUNTER = "encounter"                               # a hospital's typeset prescription; source_id is the encounter id
+        ENCOUNTER_HANDWRITTEN_RX = "encounter_handwritten_rx"  # the consult pad's handwritten prescription; the encounter id
+        LAB_REQUEST = "lab_request"                           # a file attached to a lab request; "<hospital db>:<request id>"
+        LAB_REPORT = "lab_report"                             # a hospital's lab report; the report id
+
+    source_type = models.CharField(max_length=30, choices=Source.choices, default=Source.UPLOAD, db_index=True)
+    source_id = models.CharField(max_length=80, blank=True, db_index=True)
     source_hospital_id = models.CharField(max_length=30, null=True, blank=True)
-    source_ref = models.CharField(max_length=120, blank=True)        # "encounter:<id>", "labreq:<db>:<id>"
     document_ref = models.CharField(max_length=40, blank=True)
     uploaded_by = models.CharField(max_length=10, default="patient")   # patient | staff
     created_at = models.DateTimeField(auto_now_add=True)
@@ -90,20 +98,42 @@ class MedicalDocument(models.Model):
     def processing_status(self):
         return self.status
 
+    @property
+    def source_ref(self):
+        """The source as one text, for API output: "encounter:<id>", "lab_request:<db>:<id>" ... (empty for an upload)."""
+        return f"{self.source_type}:{self.source_id}" if self.source_id else ""
 
-class DocumentText(models.Model):
-    """The text read out of a document (PDF text layer or OCR)."""
-    document = models.OneToOneField(MedicalDocument, on_delete=models.CASCADE, related_name="text")
+
+class DocumentExtraction(models.Model):
+    """What was read out of a document, one row per document: its text (PDF text layer or OCR) and what was found in the
+    text (the dated conditions, symptoms and medications of the timeline)."""
+    class Status(models.TextChoices):
+        PENDING = "pending"
+        DONE = "done"
+        FAILED = "failed"
+        SKIPPED = "skipped"
+
+    document = models.OneToOneField(MedicalDocument, on_delete=models.CASCADE, related_name="extraction")
+    patient = models.ForeignKey("atomwalk.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="extractions")
     extracted_text = models.TextField(blank=True)
     engine = models.CharField(max_length=30, blank=True)             # what read it: "pdf_text" or "ocr"
-    insights = models.JSONField(null=True, blank=True)               # dated conditions / symptoms / medications found in the text (timeline_insights/extract.py); null = not run yet
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING, db_index=True)   # of the findings, not the text
+    doc_type = models.CharField(max_length=24, blank=True)
+    document_date = models.DateField(null=True, blank=True)
+    date_source = models.CharField(max_length=10, blank=True)       # "document" (printed on it) or "upload"
+    extractor_version = models.CharField(max_length=30, blank=True)
+    normalised = models.JSONField(default=dict, blank=True)         # the findings, as the timeline reads them (timeline_insights/extract.py)
+    warnings = models.JSONField(default=list, blank=True)
+    error = models.TextField(blank=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = "document_text"
+        db_table = "document_extraction"
 
     def __str__(self):
-        return f"text of document {self.document_id}"
+        return f"extraction of document {self.document_id}"
 
 
 class PatientDocumentClassification(models.Model):

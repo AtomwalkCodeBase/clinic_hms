@@ -27,7 +27,7 @@ from apps.atomwalk.hie import sync_encounter_to_hie
 from apps.org.models import Branch, StaffUser
 from apps.hospital_patients.models import Allergy, HospitalPatient
 from apps.atomwalk.models import MedicalDocument
-from apps.atomwalk.models import Patient, SharedAllergy, SharedDiagnosis, SharedLabResult
+from apps.atomwalk.models import ClinicalEvent, LabResult, Patient, SharedAllergy
 from apps.hospitals.models import Hospital
 
 
@@ -46,6 +46,7 @@ class ProvenanceFixtureMixin:
         self.patient = HospitalPatient.objects.using(db).create(
             awpid="AW-PROV-1", uhid="UHID-P1", branch=self.branch, full_name="Prov Patient",
         )
+        Patient.objects.using("default").get_or_create(awpid="AW-PROV-1", defaults={"full_name": "Prov Patient"})
 
 
 def _fake_encounter():
@@ -66,19 +67,19 @@ class SyncToHieTests(ProvenanceFixtureMixin, HospitalDBTestCase):
     def test_uses_the_hospital_id_it_is_given(self):
         self.make_fixture()
         sync_encounter_to_hie(_fake_encounter(), self.hospital_alias, self.patient, hospital_id=self.hospital.id)
-        self.assertEqual(SharedDiagnosis.objects.using("default").get().source_hospital_id, self.hospital.id)
+        self.assertEqual(ClinicalEvent.objects.using("default").get().source_hospital_id, self.hospital.id)
 
     def test_resolves_the_hospital_from_the_db_alias_when_not_given(self):
         self.make_fixture()
         sync_encounter_to_hie(_fake_encounter(), self.hospital_alias, self.patient)
-        self.assertEqual(SharedDiagnosis.objects.using("default").get().source_hospital_id, self.hospital.id)
+        self.assertEqual(ClinicalEvent.objects.using("default").get().source_hospital_id, self.hospital.id)
 
     def test_two_hospitals_do_not_overwrite_each_others_rows(self):
         """With both stamped 0 the update_or_create key (awpid, hospital, ICD code) collapsed to one row."""
         self.make_fixture()
         sync_encounter_to_hie(_fake_encounter(), self.hospital_alias, self.patient, hospital_id=11)
         sync_encounter_to_hie(_fake_encounter(), self.hospital_alias, self.patient, hospital_id=22)
-        rows = SharedDiagnosis.objects.using("default").order_by("source_hospital_id")
+        rows = ClinicalEvent.objects.using("default").order_by("source_hospital_id")
         self.assertEqual([r.source_hospital_id for r in rows], [11, 22])
 
 
@@ -115,7 +116,7 @@ class LabHospitalIdTests(ProvenanceFixtureMixin, HospitalDBTestCase):
                 request=req, patient=self.patient, report_number="LR-1",
                 status="delivered", delivered_at=timezone.now(), result_summary="ok",
             )
-        self.assertEqual(SharedLabResult.objects.using("default").get().source_hospital_id, self.hospital.id)
+        self.assertEqual(LabResult.objects.using("default").get().source_hospital_id, self.hospital.id)
         self.assertEqual(archive.call_args.args[2], self.hospital.id)   # the vault-mirror gets it too
 
     def test_attach_document_view_stamps_the_request_hospital(self):
@@ -130,5 +131,5 @@ class LabHospitalIdTests(ProvenanceFixtureMixin, HospitalDBTestCase):
                 hospital_id=self.hospital.id, features=("feat_lab",), view_kwargs={"pk": req.pk},
             )
         self.assertLess(resp.status_code, 300, resp.data)
-        doc = MedicalDocument.objects.using("default").get(source_ref__startswith="labreq:")
+        doc = MedicalDocument.objects.using("default").get(source_type="lab_request")
         self.assertEqual(doc.source_hospital_id, str(self.hospital.id))

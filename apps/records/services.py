@@ -4,8 +4,8 @@ pipeline, so one bad file never blocks the rest of its batch. Two independently-
 
     save_upload()         files to the private S3 bucket through MedicalDocument.file, one DocumentBatch, one
                           MedicalDocument per file (status "queued"); start_processing() queues each
-    extract_document()    file → content check → PDF text layer or OCR → DocumentText         (queued → extracting)
-    classify_document()   DocumentText → rule engine (classification.py) → PatientDocumentClassification
+    extract_document()    file → content check → PDF text layer or OCR → DocumentExtraction       (queued → extracting)
+    classify_document()   DocumentExtraction → rule engine (classification.py) → PatientDocumentClassification
                           and MedicalDocument.document_type                                    (→ classifying)
 
 Every document ends "completed", "review_required" (read, but the rules could not tell what it is) or "failed",
@@ -29,7 +29,7 @@ from core import ocr, storage
 from core.file_validation import FileValidationError, validate_bytes
 from apps.atomwalk.models import Patient
 from . import classification as rules
-from apps.atomwalk.models import DocumentBatch, DocumentText, MedicalDocument
+from apps.atomwalk.models import DocumentBatch, DocumentExtraction, MedicalDocument
 from .serializers import MAX_FILE_BYTES
 
 logger = logging.getLogger(__name__)
@@ -206,7 +206,7 @@ def extract_document(document_id):
             fail_document(doc, exc)
             return False
         text, engine = extract_text(raw, mime)
-        DocumentText.objects.update_or_create(document=doc, defaults={"extracted_text": text, "engine": engine})
+        DocumentExtraction.objects.update_or_create(document=doc, defaults={"patient": doc.patient, "extracted_text": text, "engine": engine})
         doc.mime_type, doc.size, doc.status = mime, len(raw), Status.CLASSIFYING
         doc.save(update_fields=["mime_type", "size", "status", "updated_at"])
         return True
@@ -235,7 +235,7 @@ def reclassify_existing(limit=5000):
     docs = (MedicalDocument.objects
             .filter(status__in=(Status.COMPLETED, Status.REVIEW_REQUIRED), source_hospital_id__isnull=True,
                     classification__status__in=(rules.RULE_CLASSIFIED, rules.REVIEW_REQUIRED),
-                    text__isnull=False)
+                    extraction__isnull=False)
             .order_by("id")[:limit])
     for doc in docs:
         before = doc.document_type
@@ -392,14 +392,15 @@ def _queue_insights(document_id):
     transaction.on_commit(queue, using="default")
 
 
-def create_issued_document(*, awpid, file_path, name, doc_type, source_hospital_id, source_ref, mime_type="application/pdf",
+def create_issued_document(*, awpid, file_path, name, doc_type, source_hospital_id, source_type, source_id, mime_type="application/pdf",
                            public_document_id="", document_date=None):
     """A document a hospital made for the patient (signed prescription, lab report, handwriting): it is already in
     the bucket at `file_path` and already has its type, from its source, so it skips the upload pipeline (no
     classification) and is stored as completed. Its text and timeline insights are read in the background."""
     doc = MedicalDocument(
         patient=Patient.objects.using("default").get(awpid=awpid), file_name=(name or "")[:100],
-        mime_type=mime_type, uploaded_by="staff", source_hospital_id=source_hospital_id, source_ref=source_ref,
+        mime_type=mime_type, uploaded_by="staff", source_hospital_id=source_hospital_id,
+        source_type=source_type, source_id=source_id,
         document_ref=public_document_id, document_date=document_date, status=Status.COMPLETED)
     doc.file = file_path
     doc.save(using="default")

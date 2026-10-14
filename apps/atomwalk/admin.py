@@ -1,11 +1,11 @@
 from django.contrib import admin
 from .models import (
     Patient,
-    SharedDiagnosis,
-    SharedPrescription,
-    SharedLabResult,
+    ClinicalEvent,
+    LabResult,
     SharedAllergy,
-    SharedVital,
+    Vitals,
+    GrowthMeasurement,
     VaccinationSchedule,
     VaccinationScheduleRule,
 )
@@ -18,21 +18,21 @@ class PatientAdmin(admin.ModelAdmin):
     readonly_fields = ["awpid", "mobile_hash", "created_at", "updated_at"]
 
 
-@admin.register(SharedDiagnosis)
-class SharedDiagnosisAdmin(admin.ModelAdmin):
-    list_display  = ["awpid", "icd10_code", "clinical_status", "created_at"]
-    search_fields = ["awpid", "icd10_code"]
+@admin.register(ClinicalEvent)
+class ClinicalEventAdmin(admin.ModelAdmin):
+    list_display  = ["patient", "event_type", "icd10", "clinical_status", "event_date"]
+    search_fields = ["patient__awpid", "icd10"]
 
 
-@admin.register(SharedLabResult)
-class SharedLabResultAdmin(admin.ModelAdmin):
-    list_display  = ["awpid", "test_name", "delivered_at"]
-    search_fields = ["awpid", "test_name"]
+@admin.register(LabResult)
+class LabResultAdmin(admin.ModelAdmin):
+    list_display  = ["patient", "test_name", "delivered_at"]
+    search_fields = ["patient__awpid", "test_name"]
 
 
-admin.site.register(SharedPrescription)
 admin.site.register(SharedAllergy)
-admin.site.register(SharedVital)
+admin.site.register(Vitals)
+admin.site.register(GrowthMeasurement)
 
 
 class VaccinationScheduleRuleInline(admin.TabularInline):

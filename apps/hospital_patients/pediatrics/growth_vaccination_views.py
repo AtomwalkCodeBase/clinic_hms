@@ -11,7 +11,7 @@ Staff growth chart and vaccination endpoints, all under /api/v1/patients/:
   POST  <pk>/vaccinations/decline/       doctor: mark a slot not required
   POST  <pk>/vaccinations/administer/    nurse or doctor: mark a dose given (closes a doctor's order, or logs a new dose)
 
-Data from OTHER hospitals (SharedVital, SharedVaccination) only shows once the patient has consented to sharing
+Data from OTHER hospitals (growth_measurement, vitals, immunization_record) only shows once the patient has consented to sharing
 (hie_consent_given); what this hospital recorded always shows.
 A vaccination's state is its `verification_status`: "ordered" (doctor asked for it) becomes "verified" once given, or
 "declined" if not needed; a parent's upload starts "pending_review".
@@ -28,12 +28,13 @@ from core.response import success, created, error, not_found
 
 from apps.hospital_patients.age_utils import age_years_months
 from apps.hospital_patients.pediatrics.common import (
-    PATIENT_NOT_FOUND, get_patient, growth_point, has_measurement, parse_date, staff_name as _staff_name, text as _text)
+    PATIENT_NOT_FOUND, get_patient, parse_date, staff_name as _staff_name, text as _text)
 from apps.hospital_patients.pediatrics.growth_reference import add_percentiles
 from apps.hospital_patients.pediatrics.roadmap import rules_for
-from apps.atomwalk.models import SharedVaccination, SharedVital
+from apps.atomwalk.models import ImmunizationRecord, Patient
+from apps.atomwalk.vitals import growth_points
 
-V = SharedVaccination
+V = ImmunizationRecord
 
 
 def _given(request):
@@ -44,13 +45,14 @@ def _given(request):
 
 def _new_record(request, patient, **fields):
     return V.objects.using("default").create(
-        awpid=patient.awpid, source_hospital_id=request.hospital_id, recorded_by="staff", **fields)
+        patient=Patient.objects.using("default").filter(awpid=patient.awpid).first(),
+        source_hospital_id=request.hospital_id, recorded_by="staff", **fields)
 
 
 def _already_recorded(patient, name, given_on, dose_number):
     """The same dose (vaccine, date and dose number) is already on this child's record."""
     return V.objects.using("default").filter(
-        awpid=patient.awpid, vaccine_name__iexact=name, administered_date=given_on, dose_number=dose_number).exists()
+        patient__awpid=patient.awpid, vaccine_name__iexact=name, administered_date=given_on, dose_number=dose_number).exists()
 
 
 _DUPLICATE = "This dose is already recorded for this patient."
@@ -82,20 +84,9 @@ def _certificate(patient, data, vaccine_name):
 
 
 # ── growth ────────────────────────────────────────────────────────────────────────────────────────────────────────
-def _growth_series(patient, db):
+def _growth_series(patient, hospital_id):
     """One point per day: this hospital's readings, plus other hospitals' on days we have none (if consented)."""
-    from apps.opd.models import Appointment, Vitals
-
-    appointments = Appointment.objects.using(db).filter(patient_id=patient.uuid).values_list("id", flat=True)
-    points = {}
-    for v in Vitals.objects.using(db).filter(appointment_id__in=list(appointments)).order_by("recorded_at"):
-        if has_measurement(v):
-            points[v.recorded_at.date()] = {**growth_point(v, "this_hospital"), "bmi": float(v.bmi) if v.bmi else None}
-    if patient.hie_consent_given:
-        for v in SharedVital.objects.using("default").filter(awpid=patient.awpid).order_by("recorded_at"):
-            if has_measurement(v):
-                points.setdefault(v.recorded_at.date(), {**growth_point(v, "other_hospital"), "bmi": None})
-    return sorted(points.values(), key=lambda p: p["date"])
+    return growth_points(patient.awpid, hospital_id=hospital_id, include_other=patient.hie_consent_given)
 
 
 class PatientGrowthView(APIView):
@@ -105,7 +96,7 @@ class PatientGrowthView(APIView):
         patient = get_patient(request, pk)
         if not patient:
             return not_found(PATIENT_NOT_FOUND)
-        series = _growth_series(patient, request.hospital_db)
+        series = _growth_series(patient, request.hospital_id)
         age = age_years_months(patient.date_of_birth)
         is_minor = age is not None and age[0] < 18
         return success(data={
@@ -220,7 +211,7 @@ class PatientVaccinationDeclineView(APIView):
             return not_found(PATIENT_NOT_FOUND)
         d = request.data
         if d.get("record_id"):
-            record = V.objects.using("default").filter(pk=d["record_id"], awpid=patient.awpid).first()
+            record = V.objects.using("default").filter(pk=d["record_id"], patient__awpid=patient.awpid).first()
             if not record:
                 return not_found("Vaccination record not found for this patient.")
         else:
@@ -258,7 +249,7 @@ class PatientVaccinationAdministerView(APIView):
         d = request.data
         record = None
         if d.get("record_id"):
-            record = V.objects.using("default").filter(pk=d["record_id"], awpid=patient.awpid).first()
+            record = V.objects.using("default").filter(pk=d["record_id"], patient__awpid=patient.awpid).first()
             if not record:
                 return not_found("Vaccination record not found for this patient.")
         name = record.vaccine_name if record else _text(d, "vaccine_name")

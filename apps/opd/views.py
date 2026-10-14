@@ -41,7 +41,9 @@ from apps.billing.option_list_views import DropdownListCreateView, DropdownDetai
 from apps.atomwalk.hie import sync_encounter_to_hie
 from .services import auto_generate_invoice
 
-from .models import Appointment, OPDEncounter, Prescription, PrescriptionItem, PrescriptionFavourite, Vitals
+from .models import Appointment, OPDEncounter, Prescription, PrescriptionItem, PrescriptionFavourite
+from .vitals_service import record_vitals
+from apps.atomwalk.vitals import attach_vitals, recorded
 from .serializers import (
     AppointmentSerializer, AppointmentCreateSerializer, AppointmentStatusUpdateSerializer,
     OPDEncounterSerializer, OPDEncounterCreateSerializer,
@@ -215,11 +217,12 @@ class AppointmentListCreateView(APIView):
             default=5,
             output_field=IntegerField(),
         )
-        qs = qs.select_related("vitals").annotate(
+        qs = qs.annotate(
             _prio=status_priority
         ).order_by("_prio", "token_number")
         db = request.hospital_db
         page_items, meta = paginate_queryset(request, qs)
+        attach_vitals(page_items)
         serializer = AppointmentSerializer(page_items, many=True, context={"db": db})
         return Response({
             "results": serializer.data,
@@ -340,7 +343,7 @@ class AppointmentHistoryView(APIView):
         from apps.hospital_patients.models import HospitalPatient
 
         db = request.hospital_db
-        qs = Appointment.objects.using(db).select_related("vitals")
+        qs = Appointment.objects.using(db)
 
         if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
             qs = qs.filter(doctor_user_id=request.user.id)
@@ -374,6 +377,7 @@ class AppointmentHistoryView(APIView):
 
         qs = qs.order_by("-scheduled_date", "-token_number")
         page_items, meta = paginate_queryset(request, qs)
+        attach_vitals(page_items)
         serializer = AppointmentSerializer(page_items, many=True, context={"db": db})
         data = serializer.data
 
@@ -402,15 +406,13 @@ class AppointmentHistoryView(APIView):
             # doctor's own record, kept on the consult session (ConsultSession.note_pdf), never a patient document.
             from apps.atomwalk.models import ConsultSession
             typeset_rx_docs, hw_rx_docs = {}, {}
-            wanted_refs = []
-            for i in enc_ids:
-                wanted_refs += [f"encounter:{i}", f"encounter:{i}:handwritten:rx"]
+            Source = MedicalDocument.Source
             for d in (MedicalDocument.objects.using("default")
-                      .filter(source_ref__in=wanted_refs)
-                      .values("id", "source_ref", "document_type")):
-                ref = d["source_ref"]
-                eid = ref.split(":", 2)[1]
-                if ref.endswith(":handwritten:rx"):
+                      .filter(source_type__in=(Source.ENCOUNTER, Source.ENCOUNTER_HANDWRITTEN_RX),
+                              source_id__in=[str(i) for i in enc_ids])
+                      .values("id", "source_type", "source_id", "document_type")):
+                eid = d["source_id"]
+                if d["source_type"] == Source.ENCOUNTER_HANDWRITTEN_RX:
                     hw_rx_docs[eid] = d["id"]
                 elif d["document_type"] == "prescription":
                     typeset_rx_docs[eid] = d["id"]
@@ -467,7 +469,7 @@ class AppointmentUpcomingView(APIView):
         from apps.hospital_patients.models import HospitalPatient
 
         db = request.hospital_db
-        qs = Appointment.objects.using(db).select_related("vitals")
+        qs = Appointment.objects.using(db)
 
         acts_as = getattr(request.user, "acts_as", [])
         if request.user.role == "doctor" or "doctor" in acts_as:
@@ -534,6 +536,7 @@ class AppointmentUpcomingView(APIView):
         qs = qs.order_by("scheduled_date", F("scheduled_time").asc(nulls_last=True), "token_number")
 
         page_items, meta = paginate_queryset(request, qs)
+        attach_vitals(page_items)
         serializer = AppointmentSerializer(page_items, many=True, context={"db": db})
         return Response({"results": serializer.data, "pagination": meta})
 
@@ -702,9 +705,7 @@ class MonitoringListView(APIView):
         items_by_rx = {}
         for item in PrescriptionItem.objects.using(db).filter(prescription_id__in=[rx.id for rx in rx_by_encounter.values()]):
             items_by_rx.setdefault(item.prescription_id, []).append(item)
-        vitals_appt_ids = set(
-            Vitals.objects.using(db).filter(appointment_id__in=appt_ids).values_list("appointment_id", flat=True)
-        )
+        vitals_appt_ids = recorded(appt_ids)
 
         results = []
         for enc in page_items:
@@ -757,7 +758,7 @@ class AppointmentDetailView(APIView):
     def get(self, request, pk):
         db = request.hospital_db
         try:
-            appt = Appointment.objects.using(db).select_related("vitals").get(pk=pk)
+            appt = Appointment.objects.using(db).get(pk=pk)
         except Appointment.DoesNotExist:
             return api_not_found("Appointment not found.")
         return Response(AppointmentSerializer(appt, context={"db": db}).data)
@@ -890,10 +891,7 @@ class VitalsView(APIView):
         serializer = VitalsSerializer(data=vitals_data)
         serializer.is_valid(raise_exception=True)
 
-        vitals, created = Vitals.objects.using(db).update_or_create(
-            appointment=appt,
-            defaults={**serializer.validated_data, "recorded_by_user_id": request.user.id},
-        )
+        vitals, created = record_vitals(appt, db, request.hospital_id, request.user.id, serializer.validated_data)
 
         # Update chief complaint on appointment if provided
         appt_update_fields = ["status"]
@@ -1129,7 +1127,7 @@ def _store_handwriting_pdfs(enc, db, hospital_id, session_id):
 
     Best-effort: any failure here is logged and swallowed, never blocks the
     sign. On success the now-redundant base64 canvas is cleared from the
-    ConsultSession row. Idempotent via source_ref.
+    ConsultSession row. Idempotent via the document's source.
     """
     if not session_id:
         return
@@ -1170,9 +1168,9 @@ def _store_handwriting_pdfs(enc, db, hospital_id, session_id):
         for tab, pages, doc_type, prefix, category, title in specs:
             if not pages:
                 continue
-            ref = f"encounter:{enc.id}:handwritten:{tab}"
+            ref = {"source_type": MedicalDocument.Source.ENCOUNTER_HANDWRITTEN_RX, "source_id": str(enc.id)}
             already = (bool(sess.note_pdf) if tab == "note"
-                       else MedicalDocument.objects.using("default").filter(source_ref=ref).exists())
+                       else MedicalDocument.objects.using("default").filter(**ref).exists())
             if already:
                 cleared[tab] = True  # already archived on a prior attempt
                 continue
@@ -1190,7 +1188,7 @@ def _store_handwriting_pdfs(enc, db, hospital_id, session_id):
             else:
                 create_issued_document(
                     awpid=awpid, file_path=file_path, name=f"{title}.pdf", doc_type=doc_type,
-                    source_hospital_id=hospital_id, source_ref=ref, document_date=visit_date,
+                    source_hospital_id=hospital_id, **ref, document_date=visit_date,
                 )
             cleared[tab] = True
 

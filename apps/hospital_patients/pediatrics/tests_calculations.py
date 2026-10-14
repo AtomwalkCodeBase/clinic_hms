@@ -13,9 +13,9 @@ from django.test import SimpleTestCase, TestCase
 from apps.hospital_patients.pediatrics import growth_reference as who
 from apps.hospital_patients.pediatrics import roadmap
 from apps.hospital_patients.pediatrics.vaccine_schedule import build_roadmap, summarize_roadmap
-from apps.atomwalk.models import Schedule, ScheduleRule, SharedVaccination
+from apps.atomwalk.models import ImmunizationRecord, Patient, Schedule, ScheduleRule
 
-V = SharedVaccination
+V = ImmunizationRecord
 
 
 def value_at_z(measurement, sex, age_months, z):
@@ -140,7 +140,8 @@ class RoadmapContentTests(TestCase):
         self.dob = dt.date.today() - timedelta(days=60)           # a 2-month-old
 
     def record(self, name="BCG", label="Birth", **fields):
-        base = dict(awpid="AW-K", vaccine_name=name, scheduled_label=label, source=V.SOURCE_CLINIC,
+        kid = Patient.objects.using("default").get_or_create(awpid="AW-K", defaults={"full_name": "Kid"})[0]
+        base = dict(patient=kid, vaccine_name=name, scheduled_label=label, source=V.SOURCE_CLINIC,
                     verification_status=V.STATUS_VERIFIED, source_hospital_id=1, administered_date=dt.date.today())
         return V.objects.using("default").create(**{**base, **fields})
 

@@ -20,33 +20,16 @@ from core.audit import log_action
 from core.permissions import IsHospitalStaff, IsDoctorOrFrontDesk, IsDoctorOrNurse
 from core.response import success, created, error, not_found
 
-from apps.hospital_patients.models import BirthHistory
 from apps.hospital_patients.pediatrics.common import PATIENT_NOT_FOUND, get_patient, parse_date, staff_name, text
 from apps.hospital_patients.pediatrics.roadmap import rules_for
 from apps.hospital_patients.serializers import BirthHistorySerializer
-from apps.atomwalk.models import SharedBirthHistory, MilestoneRecord
+from apps.atomwalk.models import BirthHistory, MilestoneRecord, Patient
 
 logger = logging.getLogger(__name__)
 
-_SHARED_FIELDS = ["gestational_age_weeks", "birth_weight_kg", "delivery_mode", "multiple_birth", "nicu_admission",
-                  "nicu_days", "birth_complications", "congenital_conditions", "apgar_score_1min", "apgar_score_5min"]
-
-
-def _share_birth_history(bh, patient, hospital_id):
-    """
-    Copy the birth history to the atomwalk so other hospitals and the emergency summary see it. Never blocks the save.
-    Returns the id of ANOTHER hospital whose shared copy this replaced, or None.
-    """
-    try:
-        shared = SharedBirthHistory.objects.using("default")
-        previous = shared.filter(awpid=patient.awpid).values_list("source_hospital_id", flat=True).first()
-        shared.update_or_create(
-            awpid=patient.awpid,
-            defaults={**{f: getattr(bh, f) for f in _SHARED_FIELDS}, "source_hospital_id": hospital_id})
-        return previous if previous not in (None, hospital_id) else None
-    except Exception:
-        logger.exception("Sharing birth history failed for patient=%s", patient.id)
-        return None
+def _shared_patient(patient):
+    """The patient's row in Atomwalk, where the birth history is kept for every hospital."""
+    return Patient.objects.using("default").filter(awpid=patient.awpid).first()
 
 
 class BirthHistoryView(APIView):
@@ -57,7 +40,7 @@ class BirthHistoryView(APIView):
         patient = get_patient(request, pk)
         if not patient:
             return not_found(PATIENT_NOT_FOUND)
-        bh = BirthHistory.objects.using(request.hospital_db).filter(patient=patient).first()
+        bh = BirthHistory.objects.using("default").filter(patient__awpid=patient.awpid).first()
         if not bh:
             return success(data=None, message="No birth history recorded yet.")
         return success(data=BirthHistorySerializer(bh).data)
@@ -66,32 +49,35 @@ class BirthHistoryView(APIView):
         patient = get_patient(request, pk)
         if not patient:
             return not_found(PATIENT_NOT_FOUND)
-        if BirthHistory.objects.using(request.hospital_db).filter(patient=patient).exists():
+        shared = _shared_patient(patient)
+        if not shared:
+            return error("This patient has no shared identity yet, so a birth history can't be kept for them.", status=400)
+        if BirthHistory.objects.using("default").filter(patient=shared).exists():
             return error("Birth history already exists for this patient — use PATCH to edit it.", status=400)
         serializer = BirthHistorySerializer(data=request.data)
         if not serializer.is_valid():
             return error(message="Validation error.", errors=serializer.errors)
-        bh = BirthHistory.objects.using(request.hospital_db).create(
-            patient=patient, recorded_by=request.user.id, **serializer.validated_data)
-        replaced = _share_birth_history(bh, patient, request.hospital_id)
+        bh = BirthHistory.objects.using("default").create(
+            patient=shared, recorded_by=request.user.id, source_hospital_id=request.hospital_id, **serializer.validated_data)
         log_action(request, request.hospital_db, "birth_history.create", resource_type="BirthHistory",
-                   resource_id=bh.id, patient_id=patient.uuid, metadata={"replaced_other_hospitals_copy": replaced})
+                   resource_id=bh.id, patient_id=patient.uuid, metadata={"replaced_other_hospitals_copy": None})
         return created(data=BirthHistorySerializer(bh).data, message="Birth history recorded.")
 
     def patch(self, request, pk):
         patient = get_patient(request, pk)
         if not patient:
             return not_found(PATIENT_NOT_FOUND)
-        bh = BirthHistory.objects.using(request.hospital_db).filter(patient=patient).first()
+        bh = BirthHistory.objects.using("default").filter(patient__awpid=patient.awpid).first()
         if not bh:
             return not_found("No birth history recorded yet for this patient — use POST to create it.")
         serializer = BirthHistorySerializer(bh, data=request.data, partial=True)
         if not serializer.is_valid():
             return error(message="Validation error.", errors=serializer.errors)
         before = {f: getattr(bh, f) for f in serializer.validated_data}
-        serializer.save(updated_by=request.user.id)
+        previous_hospital = bh.source_hospital_id
+        serializer.save(updated_by=request.user.id, source_hospital_id=request.hospital_id)
         changed = {f: [str(old), str(getattr(bh, f))] for f, old in before.items() if getattr(bh, f) != old}
-        replaced = _share_birth_history(bh, patient, request.hospital_id)
+        replaced = previous_hospital if previous_hospital not in (None, request.hospital_id) else None
         log_action(request, request.hospital_db, "birth_history.update", resource_type="BirthHistory",
                    resource_id=bh.id, patient_id=patient.uuid,
                    metadata={"changed": changed, "replaced_other_hospitals_copy": replaced})
@@ -137,7 +123,7 @@ class PatientMilestoneListCreateView(APIView):
         # only an achieved milestone has an achieved date (today unless one is given)
         achieved = (achieved_on or date.today()) if status == M.STATUS_ACHIEVED else None
         record = M.objects.using("default").create(
-            awpid=patient.awpid, domain=domain, milestone=milestone, scheduled_label=text(d, "scheduled_label"),
+            patient=_shared_patient(patient), domain=domain, milestone=milestone, scheduled_label=text(d, "scheduled_label"),
             status=status, achieved_date=achieved, assessed_date=assessed_on or date.today(),
             notes=text(d, "notes"), recorded_by_name=staff_name(request), source_hospital_id=request.hospital_id)
         return created(data={

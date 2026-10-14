@@ -4,7 +4,7 @@ apps/opd/archive.py
 store_prescription_document() — on encounter sign, render the Prescription to
 a PDF (with the "scan to save in My Reports" QR, apps/opd/pdf.py) and store it
 as a MedicalDocument(document_type=prescription). Idempotent by
-source_ref = "encounter:<id>".
+source_type = "encounter", source_id = the encounter id.
 
 All hospital-DB reads are explicit .using(db) with pk filters — no relation
 traversal, which this project's multi-DB router mis-routes to "default".
@@ -52,10 +52,11 @@ def store_prescription_document(rx, db, hospital_id):
         pass
 
     visit_date = appt.scheduled_date if appt else (rx.created_at.date() if rx.created_at else None)
-    src_ref = f"encounter:{rx.encounter_id}"
+    source = {"source_type": MedicalDocument.Source.ENCOUNTER, "source_id": str(rx.encounter_id)}
 
-    existing = MedicalDocument.objects.using("default").filter(source_ref=src_ref).first()
+    existing = MedicalDocument.objects.using("default").filter(**source).first()
     if existing is not None:
+        _write_drug_items(existing, items)
         return existing
 
     pdf_bytes = generate_prescription_pdf(
@@ -68,8 +69,20 @@ def store_prescription_document(rx, db, hospital_id):
         pdf_uri, prefix=f"patients/{patient.awpid}/prescriptions", mime_type="application/pdf",
         category="prescription",
     )
-    return create_issued_document(
+    doc = create_issued_document(
         awpid=patient.awpid, file_path=file_path, name=f"{title}.pdf", doc_type="prescription",
-        source_hospital_id=hospital_id, source_ref=src_ref, public_document_id=rx.rx_number or "",
+        source_hospital_id=hospital_id, **source, public_document_id=rx.rx_number or "",
         document_date=visit_date,
     )
+    _write_drug_items(doc, items)
+    return doc
+
+
+def _write_drug_items(doc, items):
+    """The drugs on the prescription, kept with its document so other hospitals can see what was prescribed."""
+    from apps.atomwalk.models import SharedPrescriptionItem
+    rows = SharedPrescriptionItem.objects.using("default")
+    rows.filter(document=doc).delete()
+    rows.bulk_create(SharedPrescriptionItem(
+        document=doc, drug_name=i.drug_name, dose=i.dosage, frequency=i.frequency, route=i.route, duration_days=i.duration_days)
+        for i in items)

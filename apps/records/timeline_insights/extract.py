@@ -1,7 +1,7 @@
 """
 Timeline insights: the text of a document → the words it mentions, with the date each belongs to.
 
-    extracted text → medSpaCy (vocabulary.csv words + ConText flags) → DocumentText.insights     (run_insights)
+    extracted text → medSpaCy (vocabulary.csv words + ConText flags) → DocumentExtraction.normalised     (run_insights)
     insights + vocabulary.csv  → name, kind, acute / chronic → one finding per date and name      (build_timeline)
 
 Extraction stores only what needs the text: the word as written, its date, its sentence and four flags (negated,
@@ -21,11 +21,14 @@ from functools import lru_cache
 from pathlib import Path
 
 from django.db.models import Q
+from django.utils import timezone
 
-from apps.atomwalk.models import DocumentText, MedicalDocument
+from apps.atomwalk.models import DocumentExtraction, MedicalDocument
 from ..services import awaiting_review_q, extract_text
 
 logger = logging.getLogger(__name__)
+
+EXTRACTOR_VERSION = "medspacy-1"
 VERSION = 3
 VOCABULARY = Path(__file__).with_name("vocabulary.csv")
 _MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
@@ -133,10 +136,10 @@ def _text_of(doc):
     """The document's extracted text. A hospital-issued document skipped the upload pipeline, so it has none yet:
     read it from its file now, the same way an upload is read."""
     try:
-        return doc.text.extracted_text
-    except DocumentText.DoesNotExist:
+        return doc.extraction.extracted_text
+    except DocumentExtraction.DoesNotExist:
         text, engine = extract_text(_read_file(doc), doc.mime_type or "application/pdf")
-        DocumentText.objects.create(document=doc, extracted_text=text, engine=engine)
+        DocumentExtraction.objects.create(document=doc, patient=doc.patient, extracted_text=text, engine=engine)
         return text
 
 
@@ -145,7 +148,9 @@ def run_insights(document_id):
     doc = MedicalDocument.objects.get(pk=document_id)
     hospital_date = (doc.document_date or doc.created_at.date()) if doc.source_hospital_id else None
     insights = build_insights(_text_of(doc), hospital_date)
-    DocumentText.objects.filter(document=doc).update(insights=insights)
+    DocumentExtraction.objects.filter(document=doc).update(
+        normalised=insights, status=DocumentExtraction.Status.DONE, processed_at=timezone.now(), error="", doc_type=doc.document_type[:24],
+        document_date=hospital_date, date_source="document" if hospital_date else "", extractor_version=EXTRACTOR_VERSION)
 
 
 def run_all(redo=False):
@@ -153,7 +158,7 @@ def run_all(redo=False):
     after adding rows to vocabulary.csv). Returns how many were done."""
     docs = MedicalDocument.objects.filter(status__in=(MedicalDocument.Status.COMPLETED, MedicalDocument.Status.REVIEW_REQUIRED))
     if not redo:
-        docs = docs.filter(Q(text__isnull=True) | Q(text__insights__isnull=True))
+        docs = docs.filter(Q(extraction__isnull=True) | ~Q(extraction__status=DocumentExtraction.Status.DONE))
     done = 0
     for document_id in list(docs.values_list("id", flat=True)):
         try:
@@ -178,16 +183,16 @@ def build_timeline(awpid, *, audience="patient", hospital_id=None, start=None, e
     cross-hospital sharing."""
     from apps.hospitals.models import Hospital
     vocab = _vocabulary()
-    docs = list(MedicalDocument.objects.filter(patient__awpid=awpid, text__insights__isnull=False,
+    docs = list(MedicalDocument.objects.filter(patient__awpid=awpid, extraction__status=DocumentExtraction.Status.DONE,
                                                status__in=(MedicalDocument.Status.COMPLETED, MedicalDocument.Status.REVIEW_REQUIRED))
-                .exclude(awaiting_review_q()).select_related("text"))
+                .exclude(awaiting_review_q()).select_related("extraction"))
     if hospital_id is not None:
         docs = [d for d in docs if d.source_hospital_id == str(hospital_id)]
     hospitals = dict(Hospital.objects.using("default").filter(id__in={int(d.source_hospital_id) for d in docs if str(d.source_hospital_id or "").isdigit()})
                      .values_list("id", "name"))             # the hospital behind a hospital-issued document
     merged = {}
     for d in docs:
-        for e in d.text.insights["entries"]:
+        for e in d.extraction.normalised["entries"]:
             if e["word"] not in vocab:
                 continue
             canonical, word_kind, word_nature = vocab[e["word"]]

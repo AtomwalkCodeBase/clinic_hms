@@ -2,9 +2,9 @@
 Celery tasks of the records pipeline: orchestration only — the work is in services.py and the rules are in
 classification.py.
 
-    extract_document_task    file → content check → text (DocumentText), then queues classify_document_task
+    extract_document_task    file → content check → text (DocumentExtraction), then queues classify_document_task
     classify_document_task   rule engine → PatientDocumentClassification and the document's type, then queues
-    insights_document_task   the text → dated conditions, symptoms and medications (DocumentText.insights)
+    insights_document_task   the text → dated conditions, symptoms and medications (DocumentExtraction.normalised)
 
 Each task retries on an unexpected error (Celery's own retry, with backoff); once its retries are used up the document
 is marked failed, so the patient sees it and can retry. A file that can never work (empty, not a PDF/JPEG/PNG) is

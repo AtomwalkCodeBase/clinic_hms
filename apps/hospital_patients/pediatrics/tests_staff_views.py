@@ -8,14 +8,13 @@ from datetime import timedelta
 from decimal import Decimal
 from unittest import mock
 
-from django.utils import timezone
 
 from apps.hospital_patients.pediatrics import growth_vaccination_views as vax_views
 from apps.hospital_patients.pediatrics import pediatric_views as ped_views
-from apps.atomwalk.models import SharedBirthHistory, MilestoneRecord, SharedVaccination, SharedVital
+from apps.atomwalk.models import BirthHistory, GrowthMeasurement, ImmunizationRecord, MilestoneRecord, Patient
 from core.testing import HospitalDBTestCase, requires_hospital_db
 
-V = SharedVaccination
+V = ImmunizationRecord
 
 
 @requires_hospital_db
@@ -34,6 +33,7 @@ class PediatricStaffTests(HospitalDBTestCase):
             awpid="AW-KID-1", uhid="UHID-K1", branch=self.branch, full_name="Kid One", gender="F",
             date_of_birth=dt.date.today() - timedelta(days=730), is_dependent=True,
         )
+        self.shared = Patient.objects.using("default").create(awpid="AW-KID-1", full_name="Kid One", gender="F", is_dependent=True)
         self.appt = Appointment.objects.using(db).create(
             patient_id=self.child.uuid, patient_awpid=self.child.awpid, doctor_user_id=uuid.UUID(int=5),
             doctor_name="Dr X", branch_id=self.branch.id, scheduled_date=dt.date.today(),
@@ -44,14 +44,15 @@ class PediatricStaffTests(HospitalDBTestCase):
         return self.call_view(view.as_view(), method, path, user_id=7, role=role, data=data,
                               hospital_id=self.hospital.id, view_kwargs={"pk": pk or self.child.pk}, **kw)
 
-    def vax(self, **fields):
-        base = dict(awpid=self.child.awpid, vaccine_name="BCG", scheduled_label="Birth", source=V.SOURCE_CLINIC,
+    def vax(self, awpid=None, **fields):
+        person = Patient.objects.using("default").get_or_create(awpid=awpid, defaults={"full_name": awpid})[0] if awpid else self.shared
+        base = dict(patient=person, vaccine_name="BCG", scheduled_label="Birth", source=V.SOURCE_CLINIC,
                     verification_status=V.STATUS_VERIFIED, source_hospital_id=self.hospital.id)
         return V.objects.using("default").create(**{**base, **fields})
 
     def add_vitals(self, **fields):
-        from apps.opd.models import Vitals
-        return Vitals.objects.using(self.hospital_alias).create(appointment=self.appt, **fields)
+        from apps.opd.vitals_service import record_vitals
+        return record_vitals(self.appt, self.hospital_alias, self.hospital.id, None, fields)[0]
 
     def test_only_a_doctor_or_nurse_can_record_vitals(self):
         from apps.opd.views import VitalsView
@@ -72,8 +73,8 @@ class PediatricStaffTests(HospitalDBTestCase):
         self.assertTrue(data["percentile_available"])
 
     def test_growth_hides_other_hospitals_readings_until_the_patient_consents(self):
-        SharedVital.objects.using("default").create(
-            awpid=self.child.awpid, recorded_at=timezone.now() - timedelta(days=30), weight_kg=Decimal("11"),
+        GrowthMeasurement.objects.using("default").create(
+            patient=self.shared, measured_on=dt.date.today() - timedelta(days=30), weight_kg=Decimal("11"),
             source_hospital_id=self.hospital.id + 1)
         self.assertEqual(self.call(vax_views.PatientGrowthView, "get").data["data"]["series"], [])
         type(self.child).objects.using(self.hospital_alias).filter(pk=self.child.pk).update(hie_consent_given=True)
@@ -243,7 +244,7 @@ class PediatricStaffTests(HospitalDBTestCase):
         self.assertEqual(self.call(view, "post", role="front_desk", data=body).status_code, 201)
         self.assertEqual(self.call(view, "post", data=body).status_code, 400)        # already exists
         self.assertEqual(self.call(view, "patch", data={"apgar_score_5min": 9}).status_code, 200)
-        shared = SharedBirthHistory.objects.using("default").get(awpid=self.child.awpid)
+        shared = BirthHistory.objects.using("default").get(patient__awpid=self.child.awpid)
         self.assertEqual((shared.gestational_age_weeks, shared.apgar_score_5min, shared.source_hospital_id), (38, 9, self.hospital.id))
         self.assertEqual(self.call(view, "get").data["data"]["gestational_age_weeks"], 38)
 
@@ -257,11 +258,11 @@ class PediatricStaffTests(HospitalDBTestCase):
         self.assertEqual(rows[1].metadata["changed"]["gestational_age_weeks"], ["38", "36"])
         self.assertEqual(rows[1].patient_id, self.child.uuid)
 
-    def test_the_audit_log_notes_when_another_hospitals_shared_copy_is_replaced(self):
+    def test_the_audit_log_notes_when_another_hospitals_birth_history_is_replaced(self):
         from apps.org.models import AuditLog
-        SharedBirthHistory.objects.using("default").create(awpid=self.child.awpid, gestational_age_weeks=40, source_hospital_id=self.hospital.id + 50)
-        self.call(ped_views.BirthHistoryView, "post", data={"gestational_age_weeks": 38})
-        row = AuditLog.objects.using(self.hospital_alias).get(action="birth_history.create")
+        BirthHistory.objects.using("default").create(patient=self.shared, gestational_age_weeks=40, source_hospital_id=self.hospital.id + 50)
+        self.call(ped_views.BirthHistoryView, "patch", data={"gestational_age_weeks": 38})
+        row = AuditLog.objects.using(self.hospital_alias).get(action="birth_history.update")
         self.assertEqual(row.metadata["replaced_other_hospitals_copy"], self.hospital.id + 50)
 
     def test_editing_a_missing_birth_history_is_not_found(self):

@@ -7,11 +7,12 @@ Covers:
   - Prescription   : Rx header linked to encounter
   - PrescriptionItem: individual drug lines
   - PrescriptionFavourite: doctor's saved drug templates
-  - Vitals         : recorded per encounter
+  - the visit's vitals are not here: they are kept in Atomwalk (apps/atomwalk/vitals.py), read through Appointment.vitals
 """
 
 import uuid
 from django.db import models
+from django.utils.functional import cached_property
 
 
 class Appointment(models.Model):
@@ -117,39 +118,11 @@ class Appointment(models.Model):
     def __str__(self):
         return f"Appt #{self.token_number} — {self.patient_awpid} ({self.status})"
 
-
-class Vitals(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    appointment = models.OneToOneField(Appointment, on_delete=models.CASCADE, related_name="vitals")
-    recorded_at = models.DateTimeField(auto_now_add=True)
-    recorded_by_user_id = models.UUIDField(null=True, blank=True)
-
-    # Core vitals
-    systolic_bp      = models.IntegerField(null=True, blank=True)       # mmHg
-    diastolic_bp     = models.IntegerField(null=True, blank=True)       # mmHg
-    pulse_rate       = models.IntegerField(null=True, blank=True)       # bpm
-    temperature      = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)  # °F
-    spo2             = models.IntegerField(null=True, blank=True)        # %
-    respiratory_rate = models.IntegerField(null=True, blank=True)       # /min
-    weight_kg        = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
-    height_cm        = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
-    bmi              = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
-    blood_sugar_rbs  = models.IntegerField(null=True, blank=True)       # mg/dL random blood sugar
-    # Pediatric-only measurement — nurse UI only shows this field when the
-    # patient is a minor (see growthData.is_minor gating in frontend). Kept
-    # nullable/optional for adult encounters where it's simply never entered.
-    head_circumference_cm = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
-    nurse_notes      = models.TextField(blank=True)                     # nurse observations
-
-    class Meta:
-        app_label = "opd"
-        db_table = "vitals"
-
-    def save(self, *args, **kwargs):
-        if self.weight_kg and self.height_cm and self.height_cm > 0:
-            h_m = float(self.height_cm) / 100
-            self.bmi = round(float(self.weight_kg) / (h_m ** 2), 1)
-        super().save(*args, **kwargs)
+    @cached_property
+    def vitals(self):
+        """This visit's vitals (apps/atomwalk/vitals.py), or None. A list of appointments loads them in one go with attach_vitals()."""
+        from apps.atomwalk.vitals import visit_vitals
+        return visit_vitals(self.id)
 
 
 class OPDEncounter(models.Model):

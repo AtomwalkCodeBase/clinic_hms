@@ -137,22 +137,21 @@ def _patient_name(awpid):
 # consult-pad handwritten prescription is folded into its typeset sibling as
 # `handwritten_doc_id` rather than showing as its own row.
 def _vault_documents(awpid, limit=200):
+    Source = MedicalDocument.Source
     hw_rows = list(
         MedicalDocument.objects.using("default")
-        .filter(patient__awpid=awpid, source_ref__endswith=":handwritten:rx")
-        .values_list("id", "source_ref")
+        .filter(patient__awpid=awpid, source_type=Source.ENCOUNTER_HANDWRITTEN_RX)
+        .values_list("id", "source_id")
     )
-    base_refs = set(
+    base_ids = set(
         MedicalDocument.objects.using("default")
-        .filter(patient__awpid=awpid, source_ref__startswith="encounter:")
-        .exclude(source_ref__contains=":handwritten:")
-        .values_list("source_ref", flat=True)
+        .filter(patient__awpid=awpid, source_type=Source.ENCOUNTER)
+        .values_list("source_id", flat=True)
     )
     hw_by_base, linked_hw_ids = {}, []
-    for hid, ref in hw_rows:
-        base = ref.rsplit(":handwritten:rx", 1)[0]
-        if base in base_refs:
-            hw_by_base[base] = hid
+    for hid, encounter_id in hw_rows:
+        if encounter_id in base_ids:
+            hw_by_base[encounter_id] = hid
             linked_hw_ids.append(hid)
 
     rows = (
@@ -174,7 +173,7 @@ def _vault_documents(awpid, limit=200):
         "public_document_id": d.document_ref,
         "created_at":        d.created_at,
         "source_hospital_id":  d.source_hospital_id,
-        "handwritten_doc_id": hw_by_base.get(d.source_ref),
+        "handwritten_doc_id": hw_by_base.get(d.source_id) if d.source_type == Source.ENCOUNTER else None,
     } for d in rows]
 
 

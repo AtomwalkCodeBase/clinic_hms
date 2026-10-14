@@ -52,7 +52,7 @@ from core import storage as blob_storage
 from core.emergency_access import decode_emergency_token, EmergencyTokenError
 from apps.atomwalk.models import (
     Patient, PatientAccount, PatientRelationship,
-    SharedLabResult, SharedVaccination,
+    LabResult, ImmunizationRecord,
     EmergencyAccessLog,
 )
 from apps.atomwalk.models import MedicalDocument
@@ -102,12 +102,12 @@ def _birth_history(awpid):
     """
     A child's birth history, if any hospital has captured it — written
     through from BirthHistoryView (see apps.hospital_patients.pediatrics.pediatric_views) into
-    atomwalk.SharedBirthHistory. Returns None (not an empty dict) when
+    atomwalk.BirthHistory. Returns None (not an empty dict) when
     nothing's on file, so the frontend can tell "no birth history" apart
     from "not applicable" the same way it already does for emergency_contact.
     """
-    from apps.atomwalk.models import SharedBirthHistory
-    bh = SharedBirthHistory.objects.using("default").filter(awpid=awpid).first()
+    from apps.atomwalk.models import BirthHistory
+    bh = BirthHistory.objects.using("default").filter(patient__awpid=awpid).first()
     if not bh:
         return None
     return {
@@ -138,7 +138,7 @@ def _milestone_concerns(awpid):
     from apps.atomwalk.models import MilestoneRecord
     records = (
         MilestoneRecord.objects.using("default")
-        .filter(awpid=awpid, status=MilestoneRecord.STATUS_CONCERN)
+        .filter(patient__awpid=awpid, status=MilestoneRecord.STATUS_CONCERN)
         .order_by("-assessed_date")[:20]
     )
     return [{
@@ -159,9 +159,9 @@ def _vaccination_history(awpid):
     signed URL here, not returned as raw base64.
     """
     records = (
-        SharedVaccination.objects.using("default")
-        .filter(awpid=awpid)
-        .exclude(verification_status=SharedVaccination.STATUS_DECLINED)
+        ImmunizationRecord.objects.using("default")
+        .filter(patient__awpid=awpid)
+        .exclude(verification_status=ImmunizationRecord.STATUS_DECLINED)
         .order_by("-administered_date", "-created_at")[:50]
     )
     out = []
@@ -216,7 +216,7 @@ class EmergencySummaryView(APIView):
         lab_result_ids = [r["id"] for r in history["lab_results"] if r.get("has_file")]
         lab_files = {
             r.id: blob_storage.signed_url(r.file_data)
-            for r in SharedLabResult.objects.using("default").filter(id__in=lab_result_ids)
+            for r in LabResult.objects.using("default").filter(id__in=lab_result_ids)
         }
         for r in history["lab_results"]:
             r["file_url"] = lab_files.get(r["id"], "")

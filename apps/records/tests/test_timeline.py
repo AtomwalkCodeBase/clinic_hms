@@ -8,7 +8,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.hospital_patients.models import HospitalPatient
-from apps.atomwalk.models import DocumentText
+from apps.atomwalk.models import DocumentExtraction
 from apps.records.tests.helpers import make_doc
 from apps.records.tests.test_review import RESOLVE_RECORDS, call
 from apps.records.timeline_insights import extract
@@ -169,7 +169,7 @@ class TimelineEndpointTests(TestCase):
         with mock.patch.object(extract, "_read_file", return_value=b"%PDF"), \
                 mock.patch.object(extract, "extract_text", return_value=("Date: 01/01/2020" + chr(10) + "Fever, cough.", "pdf_text")):
             extract.run_insights(doc.id)
-        self.assertTrue(DocumentText.objects.filter(document=doc).exists())
+        self.assertTrue(DocumentExtraction.objects.filter(document=doc).exists())
         self.assertIn("2025-05-01", [d["date"] for d in self.days(name="fever")])
 
     def test_a_word_no_longer_in_the_vocabulary_is_skipped(self):

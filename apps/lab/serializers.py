@@ -144,7 +144,7 @@ class LabRequestSerializer(serializers.ModelSerializer):
             return None
         from apps.atomwalk.models import MedicalDocument
         doc = (MedicalDocument.objects.using("default")
-               .filter(patient__awpid=awpid, source_ref=f"labreq:{db}:{obj.id}")
+               .filter(patient__awpid=awpid, source_type=MedicalDocument.Source.LAB_REQUEST, source_id=f"{db}:{obj.id}")
                .order_by("-created_at").first())
         if not doc:
             return None

@@ -113,6 +113,8 @@ class EncounterSignWorkflowTests(HospitalDBTestCase):
         self.patient = HospitalPatient.objects.using(db).create(
             awpid="AW-SIGN-1", uhid="UHID-S1", branch=self.branch, full_name="Sign Patient",
         )
+        from apps.atomwalk.models import Patient
+        Patient.objects.using("default").get_or_create(awpid="AW-SIGN-1", defaults={"full_name": "Sign Patient"})
         NextNumber.objects.using(db).create(branch_id=self.branch.id, entity="invoice", prefix="INV-")
         appt = Appointment.objects.using(db).create(
             patient_id=self.patient.uuid, patient_awpid=self.patient.awpid,
@@ -137,7 +139,7 @@ class EncounterSignWorkflowTests(HospitalDBTestCase):
         from apps.billing.models import Invoice, InvoiceItem
         from apps.opd.models import OPDEncounter
         from apps.org.models import AuditLog
-        from apps.atomwalk.models import SharedDiagnosis
+        from apps.atomwalk.models import ClinicalEvent
 
         resp = self.sign()
         self.assertEqual(resp.status_code, 200, getattr(resp, "data", None))
@@ -152,8 +154,8 @@ class EncounterSignWorkflowTests(HospitalDBTestCase):
         self.assertEqual((inv.subtotal, inv.tax_amount, inv.total_amount),
                          (_Decimal("500.00"), _Decimal("50.00"), _Decimal("550.00")))
 
-        dx = SharedDiagnosis.objects.using("default").get()          # HIE mirror, stamped with the hospital
-        self.assertEqual((dx.awpid, dx.icd10_code, dx.source_hospital_id), ("AW-SIGN-1", "B34.9", self.hospital.id))
+        dx = ClinicalEvent.objects.using("default").get()            # HIE mirror, stamped with the hospital
+        self.assertEqual((dx.patient.awpid, dx.icd10, dx.source_hospital_id), ("AW-SIGN-1", "B34.9", self.hospital.id))
 
         self.assertTrue(AuditLog.objects.using(db).filter(action="encounter.sign").exists())
 

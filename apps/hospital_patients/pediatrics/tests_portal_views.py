@@ -8,16 +8,15 @@ from decimal import Decimal
 from unittest import mock
 
 from django.test import TestCase
-from django.utils import timezone
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.hospital_patients.pediatrics import portal_views as views
 from apps.atomwalk.models import (
     MilestoneScheduleRule, PatientAccount, Patient, PatientRelationship, MilestoneRecord,
-    SharedVaccination, SharedVital)
+    ImmunizationRecord, GrowthMeasurement, Vitals)
 from core.authentication import MockUser
 
-V = SharedVaccination
+V = ImmunizationRecord
 
 
 class PortalPediatricTests(TestCase):
@@ -35,16 +34,17 @@ class PortalPediatricTests(TestCase):
         force_authenticate(request, user=MockUser({"user_id": self.mom.id, "role": "patient", "awpid": "AW-MOM"}))
         return view.as_view()(request, **kwargs)
 
-    def vaccination(self, **fields):
-        base = dict(awpid="AW-KID", vaccine_name="BCG", scheduled_label="Birth", source=V.SOURCE_CLINIC,
+    def vaccination(self, awpid="AW-KID", **fields):
+        person = Patient.objects.using("default").get_or_create(awpid=awpid, defaults={"full_name": awpid})[0]
+        base = dict(patient=person, vaccine_name="BCG", scheduled_label="Birth", source=V.SOURCE_CLINIC,
                     verification_status=V.STATUS_VERIFIED, source_hospital_id=1)
         return V.objects.using("default").create(**{**base, **fields})
 
     # ── growth ────────────────────────────────────────────────────────────────
     def test_growth_shows_a_family_members_readings_with_percentiles(self):
-        SharedVital.objects.using("default").create(
-            awpid="AW-KID", recorded_at=timezone.now(), weight_kg=Decimal("12"), height_cm=Decimal("85"), source_hospital_id=1)
-        SharedVital.objects.using("default").create(awpid="AW-KID", recorded_at=timezone.now(), spo2=98, source_hospital_id=1)
+        GrowthMeasurement.objects.using("default").create(
+            patient=self.kid, measured_on=dt.date.today(), weight_kg=Decimal("12"), height_cm=Decimal("85"), source_hospital_id=1)
+        Vitals.objects.using("default").create(patient=self.kid, spo2=98, source_hospital_id=1)    # not a growth measurement: left out
         data = self.call(views.PortalGrowthView, query="?patient_awpid=AW-KID").data["data"]
         self.assertTrue(data["is_minor"])
         self.assertEqual(len(data["series"]), 1)                       # a reading with no growth measurement is left out
@@ -57,8 +57,7 @@ class PortalPediatricTests(TestCase):
         self.assertEqual(self.call(views.PortalGrowthView, query="?patient_awpid=AW-STRANGER").status_code, 403)
 
     def test_an_adult_gets_no_percentiles(self):
-        SharedVital.objects.using("default").create(
-            awpid="AW-MOM", recorded_at=timezone.now(), weight_kg=Decimal("60"), source_hospital_id=1)
+        Vitals.objects.using("default").create(patient=self.mom, weight_kg=Decimal("60"), source_hospital_id=1)
         data = self.call(views.PortalGrowthView).data["data"]
         self.assertFalse(data["is_minor"])
         self.assertFalse(data["percentile_available"])
@@ -75,7 +74,7 @@ class PortalPediatricTests(TestCase):
     def test_the_milestone_roadmap_shows_an_assessment(self):
         slot = MilestoneScheduleRule.objects.using("default").first()          # a slot of the seeded default schedule
         MilestoneRecord.objects.using("default").create(
-            awpid="AW-KID", domain=slot.domain, milestone=slot.milestone, scheduled_label=slot.scheduled_label,
+            patient=self.kid, domain=slot.domain, milestone=slot.milestone, scheduled_label=slot.scheduled_label,
             status="achieved", achieved_date=dt.date.today(), assessed_date=dt.date.today())
         data = self.call(views.PortalMilestoneListView, query="?patient_awpid=AW-KID").data["data"]
         self.assertEqual(sum(1 for r in data["roadmap"] if r["status"] == "achieved"), 1)
@@ -89,7 +88,7 @@ class PortalPediatricTests(TestCase):
         resp = self.upload(vaccine_name=" Polio ", administered_date="2025-03-04", scheduled_label="6 weeks")
         self.assertEqual(resp.status_code, 200)
         record = V.objects.using("default").get()
-        self.assertEqual((record.awpid, record.vaccine_name, record.source, record.verification_status, record.recorded_by),
+        self.assertEqual((record.patient.awpid, record.vaccine_name, record.source, record.verification_status, record.recorded_by),
                          ("AW-KID", "Polio", V.SOURCE_SELF_REPORTED, V.STATUS_PENDING, "patient"))
 
     def test_an_upload_needs_a_name_and_a_plausible_date(self):

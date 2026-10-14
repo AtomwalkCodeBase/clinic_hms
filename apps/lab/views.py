@@ -351,7 +351,7 @@ class LabRequestAttachDocumentView(APIView):
     LabRequestChoiceView already lets a nurse mark a request "outside" on the
     patient's behalf, but nothing let them finish the job. Writes to the same
     atomwalk MedicalDocument table, tagged with the same
-    "labreq:<db>:<request_id>" source_ref the patient's own upload would use,
+    source (a lab request, "<db>:<request_id>") the patient's own upload would use,
     so LabRequestSerializer.attached_document and the patient's own
     PortalLabOrderListView pick it up identically regardless of who
     uploaded it — same document, same visibility, from either side.
@@ -379,6 +379,7 @@ class LabRequestAttachDocumentView(APIView):
             return error(str(exc), errors={"file_data": str(exc)})
 
         from apps.records.classification import CHOOSABLE_TYPES
+        from apps.atomwalk.models import MedicalDocument
         from apps.records.services import create_issued_document
 
         doc_type = request.data.get("doc_type") or "lab_report"
@@ -407,7 +408,8 @@ class LabRequestAttachDocumentView(APIView):
 
         doc = create_issued_document(
             awpid=patient.awpid, file_path=file_key, name=file_name, mime_type=mime_type,
-            doc_type=doc_type, source_hospital_id=source_hospital_id, source_ref=f"labreq:{db}:{req.id}",
+            doc_type=doc_type, source_hospital_id=source_hospital_id,
+            source_type=MedicalDocument.Source.LAB_REQUEST, source_id=f"{db}:{req.id}",
         )
 
         # Attaching an outside report only makes sense once the request is

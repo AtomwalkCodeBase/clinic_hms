@@ -36,7 +36,7 @@ def build_roadmap(awpid, date_of_birth, rules, *, viewer_hospital_id=None, hie_c
     """
     from apps.atomwalk.models import MilestoneRecord
 
-    records = MilestoneRecord.objects.using("default").filter(awpid=awpid)
+    records = MilestoneRecord.objects.using("default").filter(patient__awpid=awpid)
     if not hie_consent:
         from django.db.models import Q
         records = records.filter(Q(source_hospital_id__isnull=True) | Q(source_hospital_id=viewer_hospital_id))

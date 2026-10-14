@@ -15,22 +15,24 @@ from .patient import (  # noqa: F401
     PatientBooking,
 )
 from .documents import (  # noqa: F401
+    records_storage,
     get_file_path,
     DocumentBatch,
     MedicalDocument,
-    DocumentText,
+    DocumentExtraction,
     PatientDocumentClassification,
-    records_storage,
 )
 from .clinical import (  # noqa: F401
-    SharedDiagnosis,
-    SharedPrescription,
+    HealthEpisode,
+    ClinicalEvent,
+    RecurrenceFlag,
     SharedPrescriptionItem,
-    SharedLabResult,
+    LabResult,
     SharedAllergy,
-    SharedVital,
-    SharedBirthHistory,
-    SharedVaccination,
+    Vitals,
+    GrowthMeasurement,
+    BirthHistory,
+    ImmunizationRecord,
     MilestoneRecord,
 )
 from .schedules import (  # noqa: F401
@@ -42,6 +44,7 @@ from .schedules import (  # noqa: F401
     MilestoneScheduleRule,
 )
 from .access import (  # noqa: F401
+    new_pad_token,
     StaffMobileIndex,
     BlacklistedToken,
     OTPCode,
@@ -49,5 +52,4 @@ from .access import (  # noqa: F401
     ConsultSession,
     RecordsShareRequest,
     RecordsPrivacy,
-    new_pad_token,
 )

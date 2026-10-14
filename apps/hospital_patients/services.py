@@ -16,9 +16,9 @@ from core.utils.nntm     import get_next_number
 from apps.org.models     import Branch
 from apps.atomwalk.models import (
     Patient, PatientRelationship,
-    SharedDiagnosis, SharedVital, SharedAllergy,
-    SharedLabResult, SharedPrescription,
+    ClinicalEvent, SharedAllergy, LabResult,
 )
+from apps.atomwalk.vitals import history_readings
 from apps.atomwalk.models import MedicalDocument
 from .models import HospitalPatient
 
@@ -707,22 +707,13 @@ class PatientService:
         source_hospital_id is EXCLUDED from all results.
         """
         diagnoses = list(
-            SharedDiagnosis.objects.using("default")
-            .filter(awpid=awpid)
-            .values("icd10_code", "description", "clinical_status", "onset_date", "created_at")
+            ClinicalEvent.objects.using("default")
+            .filter(patient__awpid=awpid, event_type="DIAGNOSIS", is_rejected=False)
             .order_by("-created_at")
+            .values("clinical_status", "created_at", icd10_code=F("icd10"), description=F("condition_text"), onset_date=F("event_date"))
         )
 
-        vitals = list(
-            SharedVital.objects.using("default")
-            .filter(awpid=awpid)
-            .values(
-                "recorded_at", "source", "bp_systolic", "bp_diastolic", "pulse_rate",
-                "spo2", "temperature", "weight_kg", "height_cm", "head_circumference_cm",
-                "resp_rate", "blood_sugar_mgdl"
-            )
-            .order_by("-recorded_at")[:20]  # last 20 vital records
-        )
+        vitals = history_readings(awpid, 20)  # last 20 vital records
 
         allergies = list(
             SharedAllergy.objects.using("default")
@@ -731,8 +722,8 @@ class PatientService:
         )
 
         lab_results = list(
-            SharedLabResult.objects.using("default")
-            .filter(awpid=awpid)
+            LabResult.objects.using("default")
+            .filter(patient__awpid=awpid, delivered_at__isnull=False)
             .values("id", "test_name", "result_summary", "delivered_at", "mime_type")
             .order_by("-delivered_at")[:20]
         )
@@ -741,14 +732,14 @@ class PatientService:
 
         prescriptions = []
         for rx in (
-            SharedPrescription.objects.using("default")
-            .filter(awpid=awpid)
-            .prefetch_related("items")
-            .order_by("-prescribed_on")[:10]
+            MedicalDocument.objects.using("default")
+            .filter(patient__awpid=awpid, source_type=MedicalDocument.Source.ENCOUNTER)
+            .prefetch_related("drug_items")
+            .order_by("-document_date")[:10]
         ):
             prescriptions.append({
-                "prescribed_on": rx.prescribed_on,
-                "items": list(rx.items.values(
+                "prescribed_on": rx.document_date,
+                "items": list(rx.drug_items.values(
                     "drug_name", "dose", "unit", "frequency", "route", "duration_days"
                 )),
             })

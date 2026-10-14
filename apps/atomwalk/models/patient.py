@@ -157,10 +157,9 @@ class PatientBooking(models.Model):
     hospital_name   = models.CharField(max_length=200)
     appointment_id  = models.UUIDField()
     doctor_name     = models.CharField(max_length=255, blank=True)
-    # Which patient this booking is actually for — the account owner by
-    # default, or a linked family member (see PatientRelationship). Blank
-    # patient_awpid on older rows means "the account owner" (back-compat).
-    patient_awpid   = models.CharField(max_length=30, blank=True)
+    # Which patient this booking is actually for: the account owner by default
+    # (empty), or a linked family member (see PatientRelationship).
+    patient         = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="bookings_for")
     patient_name    = models.CharField(max_length=200, blank=True)
     scheduled_date  = models.DateField()
     chief_complaint = models.TextField(blank=True)

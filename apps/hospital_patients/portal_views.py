@@ -17,7 +17,7 @@ from datetime import date, datetime, time as dtime, timedelta
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -985,7 +985,7 @@ class PortalBookView(APIView):
             scheduled_date=scheduled_date,
             chief_complaint=chief_complaint,
             status="scheduled",
-            patient_awpid=target_awpid,
+            patient=acct if target_awpid == acct.awpid else Patient.objects.using("default").filter(awpid=target_awpid).first(),
             patient_name=target_name,
         )
 
@@ -1029,7 +1029,8 @@ class PortalMyRecordsView(APIView):
 
     def get(self, request):
         from apps.hospital_patients.models import HospitalPatient
-        from apps.opd.models import Appointment, OPDEncounter, Prescription, Vitals
+        from apps.opd.models import Appointment, OPDEncounter, Prescription
+        from apps.atomwalk.vitals import visit_vitals
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
 
@@ -1074,7 +1075,7 @@ class PortalMyRecordsView(APIView):
                         "signed":          False,
                         "vitals":          None,
                     }
-                    v = Vitals.objects.using(db).filter(appointment_id=appt.id).first()
+                    v = visit_vitals(appt.id)
                     if v:
                         record["vitals"] = {
                             "bp": f"{v.systolic_bp}/{v.diastolic_bp}" if v.systolic_bp and v.diastolic_bp else None,
@@ -1295,7 +1296,7 @@ class PortalMyBookingsView(APIView):
 
         qs = PatientBooking.objects.using("default").filter(
             account_id=request.user.id
-        ).order_by("-scheduled_date", "-id")
+        ).select_related("patient").order_by("-scheduled_date", "-id")
         bookings, meta = paginate_queryset(request, qs)
 
         # Batched once per page (not per booking) — city/state are the same
@@ -1436,7 +1437,7 @@ class PortalMyBookingsView(APIView):
                 # Blank on bookings made before family members existed —
                 # those were always for the account owner.
                 "patient_name": b.patient_name or None,
-                "patient_awpid": b.patient_awpid or None,
+                "patient_awpid": b.patient.awpid if b.patient else None,
                 # "Booked on" — when this appointment was actually reserved,
                 # distinct from the visit date itself (see reference mockup's
                 # "Booked on" field).
@@ -1573,17 +1574,18 @@ class PortalRescheduleBookingView(APIView):
 # patient's read / zip endpoints over apps.records.MedicalDocument.
 
 def _handwritten_siblings(awpid):
-    """The consult pad's raw handwritten Rx ("encounter:<id>:handwritten:rx")
+    """The consult pad's raw handwritten Rx (source "encounter_handwritten_rx")
     hangs off its typeset prescription instead of being its own row.
-    Returns ({typeset source_ref: handwriting doc id}, [handwriting ids to hide])."""
+    Returns ({encounter id: handwriting doc id}, [handwriting ids to hide])."""
     from apps.atomwalk.models import MedicalDocument
-    docs = MedicalDocument.objects.using("default").filter(patient__awpid=awpid, source_ref__startswith="encounter:")
-    typeset = set(docs.exclude(source_ref__contains=":handwritten:").values_list("source_ref", flat=True))
+    Source = MedicalDocument.Source
+    docs = MedicalDocument.objects.using("default").filter(
+        patient__awpid=awpid, source_type__in=(Source.ENCOUNTER, Source.ENCOUNTER_HANDWRITTEN_RX))
+    typeset = set(docs.filter(source_type=Source.ENCOUNTER).values_list("source_id", flat=True))
     by_base = {}
-    for hid, ref in docs.filter(source_ref__endswith=":handwritten:rx").values_list("id", "source_ref"):
-        base = ref.rsplit(":handwritten:rx", 1)[0]
-        if base in typeset:
-            by_base[base] = hid
+    for hid, encounter_id in docs.filter(source_type=Source.ENCOUNTER_HANDWRITTEN_RX).values_list("id", "source_id"):
+        if encounter_id in typeset:
+            by_base[encounter_id] = hid
     return by_base, list(by_base.values())
 
 
@@ -1674,7 +1676,7 @@ class PortalDocumentListCreateView(APIView):
         if doc_type:
             qs = qs.filter(document_type=doc_type)
         page_items, meta = paginate_queryset(request, qs)
-        return Response({"results": [_document_row(d, hw_by_base.get(d.source_ref)) for d in page_items],
+        return Response({"results": [_document_row(d, hw_by_base.get(d.source_id) if d.source_type == d.Source.ENCOUNTER else None) for d in page_items],
                          "pagination": meta})
 
 
@@ -1725,10 +1727,10 @@ class PortalDocumentDetailView(APIView):
         want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
         dl_name = doc.file_name or "document.pdf"
         hw_id = None
-        if doc.document_type == "prescription" and doc.source_ref.startswith("encounter:") \
-                and ":handwritten:" not in doc.source_ref:
+        if doc.document_type == "prescription" and doc.source_type == MedicalDocument.Source.ENCOUNTER:
             hw_id = (MedicalDocument.objects.using("default")
-                     .filter(patient_id=doc.patient_id, source_ref=f"{doc.source_ref}:handwritten:rx")
+                     .filter(patient_id=doc.patient_id, source_type=MedicalDocument.Source.ENCOUNTER_HANDWRITTEN_RX,
+                             source_id=doc.source_id)
                      .values_list("id", flat=True).first())
         return success(data={
             **_document_row(doc, hw_id),
@@ -1876,7 +1878,7 @@ class PortalLabOrderListView(APIView):
                     if r.patient_choice == "outside":
                         from apps.atomwalk.models import MedicalDocument
                         doc = (MedicalDocument.objects.using("default")
-                               .filter(patient__awpid=target_awpid, source_ref=f"labreq:{db}:{r.id}")
+                               .filter(patient__awpid=target_awpid, source_type=MedicalDocument.Source.LAB_REQUEST, source_id=f"{db}:{r.id}")
                                .order_by("-created_at").first())
                         if doc:
                             attached_doc = {"id": doc.id, "title": doc.file_name, "created_at": doc.created_at}
@@ -1901,7 +1903,7 @@ class PortalLabOrderListView(APIView):
                         "ordered_at": r.ordered_at,
                         "report": report,
                         "attached_document": attached_doc,
-                        "source_ref": f"labreq:{db}:{r.id}",
+                        "source_ref": f"lab_request:{db}:{r.id}",
                     })
             except Exception as e:
                 logger.warning("lab-orders: skipped %s (%s)", db, e)
@@ -2035,10 +2037,10 @@ class PortalPrescriptionListView(APIView):
                 # sign (apps.opd.views._store_handwriting_pdfs). Keyed by
                 # encounter, doc_type "prescription" (patient-visible).
                 hw_by_enc = {
-                    d.source_ref.split(":")[1]: d.id
+                    d.source_id: d.id
                     for d in MedicalDocument.objects.using("default").filter(
                         patient__awpid=target_awpid, document_type="prescription",
-                        source_ref__endswith=":handwritten:rx",
+                        source_type=MedicalDocument.Source.ENCOUNTER_HANDWRITTEN_RX,
                     )
                 }
 
@@ -2517,7 +2519,7 @@ class PortalHealthSummaryView(APIView):
     tracks either of those concepts yet):
       - blood_group        from Patient (set at registration)
       - active_allergies    from SharedAllergy (same HIE table doctors see)
-      - active_diagnoses    from SharedDiagnosis where clinical_status="active"
+      - active_diagnoses    from ClinicalEvent (diagnoses) where clinical_status="active"
       - last_visit          most recent PatientBooking for this patient
       - linked_hospitals    every hospital this patient has a booking record
                              at, with their most recent visit there — this
@@ -2532,7 +2534,7 @@ class PortalHealthSummaryView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.atomwalk.models import PatientBooking, SharedAllergy, SharedDiagnosis, PatientRelationship
+        from apps.atomwalk.models import PatientBooking, SharedAllergy, ClinicalEvent, PatientRelationship
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
 
@@ -2552,24 +2554,23 @@ class PortalHealthSummaryView(APIView):
             .values("substance", "reaction", "severity")
         )
         diagnoses = list(
-            SharedDiagnosis.objects.using("default")
-            .filter(awpid=target_awpid, clinical_status="active")
-            .values("description", "onset_date")
-            .order_by("-onset_date")[:5]
+            ClinicalEvent.objects.using("default")
+            .filter(patient__awpid=target_awpid, event_type="DIAGNOSIS", clinical_status="active", is_rejected=False)
+            .order_by("-event_date")
+            .values(description=F("condition_text"), onset_date=F("event_date"))[:5]
         )
 
         bookings = list(
             PatientBooking.objects.using("default")
-            .filter(patient_awpid=target_awpid)
+            .filter(patient__awpid=target_awpid)
             .order_by("-scheduled_date")
         )
-        # Older rows (before family-member booking existed) left patient_awpid
-        # blank to mean "the account owner" — include those too when we're
+        # A booking with no patient is one for the account owner — include those too when we're
         # looking at the account's own summary.
         if target_awpid == acct.awpid:
             bookings += list(
                 PatientBooking.objects.using("default")
-                .filter(account_id=acct.id, patient_awpid="")
+                .filter(account_id=acct.id, patient__isnull=True)
                 .order_by("-scheduled_date")
             )
 
@@ -2627,7 +2628,7 @@ class PortalHealthTimelineView(APIView):
         from apps.hospital_patients.models import HospitalPatient
         from apps.opd.models import Appointment, OPDEncounter
         from apps.lab.models import LabRequest
-        from apps.atomwalk.models import SharedVital
+        from apps.atomwalk.vitals import history_readings
         from apps.atomwalk.models import MedicalDocument
         from apps.hospital_patients.pediatrics.vaccine_schedule import build_roadmap
 
@@ -2697,16 +2698,16 @@ class PortalHealthTimelineView(APIView):
 
         # ── Growth ──────────────────────────────────────────────────────
         try:
-            for v in SharedVital.objects.using("default").filter(awpid=target_awpid).order_by("-recorded_at")[:limit]:
-                if not (v.height_cm or v.weight_kg):
+            for v in history_readings(target_awpid, limit):
+                if not (v["height_cm"] or v["weight_kg"]):
                     continue
                 bits = []
-                if v.height_cm:
-                    bits.append(f"Height {v.height_cm} cm")
-                if v.weight_kg:
-                    bits.append(f"Weight {v.weight_kg} kg")
+                if v["height_cm"]:
+                    bits.append(f"Height {v['height_cm']} cm")
+                if v["weight_kg"]:
+                    bits.append(f"Weight {v['weight_kg']} kg")
                 entries.append({
-                    "date":      str(v.recorded_at.date()),
+                    "date":      str(v["recorded_at"].date()),
                     "type":      "growth",
                     "icon_hint": "trending-up",
                     "title":     "Growth check",

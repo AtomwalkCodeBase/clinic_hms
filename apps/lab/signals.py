@@ -1,7 +1,7 @@
 """
 apps/lab/signals.py
 --------------------
-Write-through: when a LabReport is delivered, mirror it to atomwalk.SharedLabResult.
+Write-through: when a LabReport is delivered, mirror it to atomwalk.LabResult.
 """
 
 import logging
@@ -26,10 +26,13 @@ def on_report_delivered(sender, instance, **kwargs):
     if instance.status != "delivered" or not instance.delivered_at:
         return
 
-    from apps.atomwalk.models import SharedLabResult
+    from apps.atomwalk.models import LabResult, Patient
     try:
-        SharedLabResult.objects.using("default").update_or_create(
-            awpid=instance.patient.awpid,
+        shared = Patient.objects.using("default").filter(awpid=instance.patient.awpid).first()
+        if shared is None:
+            raise LookupError(f"{instance.patient.awpid} has no shared patient")
+        LabResult.objects.using("default").update_or_create(
+            patient=shared,
             source_hospital_id=_get_source_hospital_id(instance),
             delivered_at=instance.delivered_at,
             defaults={
@@ -42,7 +45,7 @@ def on_report_delivered(sender, instance, **kwargs):
             },
         )
     except Exception:
-        logger.exception("HIE SharedLabResult write failed for report=%s", instance.id)
+        logger.exception("HIE LabResult write failed for report=%s", instance.id)
 
     # Mirror into the My Reports document vault (MedicalDocument) — same as
     # prescriptions get on sign, so a delivered lab report shows in the

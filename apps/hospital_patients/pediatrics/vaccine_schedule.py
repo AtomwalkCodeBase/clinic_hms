@@ -2,7 +2,7 @@
 apps/hospital_patients/pediatrics/vaccine_schedule.py
 --------------------------------------------
 A child's vaccination roadmap: a hospital's schedule (VaccinationScheduleRule rows) laid over the child's real
-SharedVaccination records. See roadmap.py for how slots are matched and what `timing` means.
+ImmunizationRecord records. See roadmap.py for how slots are matched and what `timing` means.
 
 A slot's `status`:
   record exists  "completed" (verified), "pending_review" (a parent's upload), "rejected", "ordered" (doctor asked for
@@ -43,13 +43,13 @@ def build_roadmap(awpid, date_of_birth, rules, *, viewer_hospital_id=None, hie_c
     hospital's staff must be able to review a parent's upload. Only the staff roadmap passes False; the patient
     portal never filters.
     """
-    from apps.atomwalk.models import SharedVaccination
+    from apps.atomwalk.models import ImmunizationRecord
 
-    records = SharedVaccination.objects.using("default").filter(awpid=awpid)
+    records = ImmunizationRecord.objects.using("default").filter(patient__awpid=awpid)
     if not hie_consent:
         from django.db.models import Q
         records = records.filter(Q(source_hospital_id__isnull=True) | Q(source_hospital_id=viewer_hospital_id)
-                                 | Q(verification_status=SharedVaccination.STATUS_PENDING))
+                                 | Q(verification_status=ImmunizationRecord.STATUS_PENDING))
 
     def open_slot(rule, timing):
         return {

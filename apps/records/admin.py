@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from apps.atomwalk.models import DocumentBatch, DocumentText, MedicalDocument, PatientDocumentClassification
+from apps.atomwalk.models import DocumentBatch, DocumentExtraction, MedicalDocument, PatientDocumentClassification
 
 
 @admin.register(DocumentBatch)
@@ -9,10 +9,10 @@ class DocumentBatchAdmin(admin.ModelAdmin):
     search_fields = ["patient__awpid"]
 
 
-class DocumentTextInline(admin.StackedInline):
-    model = DocumentText
+class DocumentExtractionInline(admin.StackedInline):
+    model = DocumentExtraction
     extra = 0
-    readonly_fields = ["extracted_text", "engine", "created_at"]
+    readonly_fields = ["extracted_text", "engine", "normalised", "created_at"]
     can_delete = False
 
 
@@ -28,4 +28,4 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
     list_filter = ["status", "document_type", "uploaded_by"]
     search_fields = ["patient__awpid", "file_name"]
     readonly_fields = ["error_message", "created_at", "updated_at"]
-    inlines = [DocumentTextInline, PatientDocumentClassificationInline]
+    inlines = [DocumentExtractionInline, PatientDocumentClassificationInline]

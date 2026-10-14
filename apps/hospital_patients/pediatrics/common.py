@@ -22,18 +22,6 @@ def staff_name(request, fallback="Staff"):
     return getattr(request.user, "full_name", None) or getattr(request.user, "email", fallback)
 
 
-def has_measurement(reading):
-    return bool(reading.height_cm or reading.weight_kg or reading.head_circumference_cm)
-
-
-def growth_point(reading, source):
-    """One growth-chart point from a Vitals or SharedVital row."""
-    number = lambda x: float(x) if x else None                      # noqa: E731
-    return {"date": str(reading.recorded_at.date()), "height_cm": number(reading.height_cm),
-            "weight_kg": number(reading.weight_kg), "head_circumference_cm": number(reading.head_circumference_cm),
-            "source": source}
-
-
 def parse_date(value, field, label, *, allow_future=False):
     """
     (date, None) for a YYYY-MM-DD value between 1900 and today (or later when allow_future); a blank value gives

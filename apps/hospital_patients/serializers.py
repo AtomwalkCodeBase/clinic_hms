@@ -12,7 +12,8 @@ SharedRecordSerializer    — read-only: clinical records from HIE (cross-hospit
 
 from django.core.validators import RegexValidator
 from rest_framework import serializers
-from .models import HospitalPatient, Allergy, BirthHistory
+from apps.atomwalk.models import BirthHistory
+from .models import HospitalPatient, Allergy
 
 # Consent is never withheld from an emergency patient because a reason
 # wasn't supplied — this is the always-applied default, matching the legal

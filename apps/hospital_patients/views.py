@@ -415,24 +415,24 @@ class PatientLabResultDetailView(APIView):
     permission_classes = [IsAuthenticated, IsDoctorOrNurse]
 
     def get(self, request, result_id):
-        from apps.atomwalk.models import SharedLabResult
+        from apps.atomwalk.models import LabResult
         try:
-            r = SharedLabResult.objects.using("default").get(pk=result_id)
-        except SharedLabResult.DoesNotExist:
+            r = LabResult.objects.using("default").get(pk=result_id)
+        except LabResult.DoesNotExist:
             return not_found("Lab result not found.")
 
         # Same HIE-consent gate as PatientDocumentDetailView above — see
         # that view's comment.
-        owner = HospitalPatient.objects.using(request.hospital_db).filter(awpid=r.awpid).first()
+        owner = HospitalPatient.objects.using(request.hospital_db).filter(awpid=r.patient.awpid if r.patient_id else "").first()
         if not owner or not owner.hie_consent_given:
             from core.audit import log_action
             log_action(request, request.hospital_db, action="patient.lab_result.view_blocked_no_consent",
-                        resource_type="SharedLabResult", resource_id=r.id)
+                        resource_type="LabResult", resource_id=r.id)
             return error("This patient hasn't consented to cross-hospital record sharing.", status=403)
 
         from core.audit import log_action
         log_action(request, request.hospital_db, action="patient.lab_result.view",
-                    resource_type="SharedLabResult", resource_id=r.id)
+                    resource_type="LabResult", resource_id=r.id)
 
         return success(data={
             "id": r.id, "test_name": r.test_name, "result_summary": r.result_summary,

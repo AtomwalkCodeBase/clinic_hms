@@ -30,7 +30,7 @@ def sync_patient_booking(appointment, db_name):
     that's the normal case for most front-desk walk-ins, not an error.
     """
     try:
-        from apps.atomwalk.models import PatientAccount, PatientRelationship, PatientBooking
+        from apps.atomwalk.models import Patient, PatientAccount, PatientRelationship, PatientBooking
         from apps.hospitals.models import Hospital
         from apps.hospital_patients.models import HospitalPatient
 
@@ -76,7 +76,7 @@ def sync_patient_booking(appointment, db_name):
             scheduled_date=appointment.scheduled_date,
             chief_complaint=appointment.chief_complaint or "",
             status=appointment.status,
-            patient_awpid=patient_awpid,
+            patient=Patient.objects.using("default").filter(awpid=patient_awpid).first(),
             patient_name=patient_name,
         )
     except Exception:

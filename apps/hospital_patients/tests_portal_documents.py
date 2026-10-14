@@ -182,7 +182,7 @@ class PortalDocumentTests(TestCase):
         self.assertEqual(reload(doc).document_type, "not_classified")
 
     def test_the_type_of_a_hospital_issued_report_cannot_be_changed(self):
-        doc = self.make_doc(uploaded_by="staff", source_hospital_id="7", source_ref="encounter:abc")
+        doc = self.make_doc(uploaded_by="staff", source_hospital_id="7", source_type="encounter", source_id="abc")
         self.assertEqual(self.patch(doc, doc_type="imaging_report").status_code, 400)
 
     def test_the_detail_offers_the_fixed_types(self):
