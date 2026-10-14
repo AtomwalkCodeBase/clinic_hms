@@ -121,7 +121,7 @@ class PortalRegisterView(APIView):
         mobile = (d.get("mobile") or "").strip()
         if not re.match(r"^\d{10}$", mobile):
             return error("Enter a valid 10-digit mobile number.", errors={"mobile": "Invalid format."})
-        if PatientAccount.objects.using("default").filter(mobile=mobile).exists():
+        if PatientAccount.objects.using("default").with_mobile(mobile).exists():
             return error("An account with this mobile number already exists. Please log in.")
         from core.realworld_validation import validate_mobile_real
         is_valid, reason = validate_mobile_real(mobile)
@@ -159,7 +159,6 @@ class PortalRegisterView(APIView):
             # the login goes on the same identity row (a walk-in who signs up claims the AWPID they already have)
             if identity.password:
                 return error("An account with this mobile number already exists. Please log in.")
-            identity.mobile = mobile
             identity.email = identity.email or email
             identity.gender = identity.gender or gender
             identity.date_of_birth = identity.date_of_birth or d.get("date_of_birth") or None
@@ -169,7 +168,7 @@ class PortalRegisterView(APIView):
 
         logger.info("Patient account registered via OTP: account_id=%s awpid=%s email_verified=True", acct.id, acct.awpid)
         return success(
-            data={"awpid": acct.awpid, "mobile": acct.mobile},
+            data={"awpid": acct.awpid, "mobile": mobile},
             message="Account created. You can now log in.",
         )
 
@@ -795,6 +794,15 @@ class PortalBookView(APIView):
         if payment_preference not in dict(Appointment.PAYMENT_PREFERENCE_CHOICES):
             payment_preference = Appointment.PAYMENT_PAY_AT_DESK
 
+        # The hospital's own patient row keeps a phone number it can call, but the account stores the mobile only
+        # scrambled, so the number comes from the patient here (it must be the number on their account).
+        contact_mobile = (d.get("mobile") or "").strip()
+        if contact_mobile:
+            from apps.registry.models import mobile_hash_of
+            acct_hash = PatientAccount.objects.using("default").filter(pk=request.user.id).values_list("mobile_hash", flat=True).first()
+            if not re.match(r"^\d{10}$", contact_mobile) or mobile_hash_of(contact_mobile) != acct_hash:
+                return Response({"error": "That is not the mobile number on your account."}, status=400)
+
         if not tenant_id or not doctor_id:
             return Response({"error": "tenant_id and doctor_id are required."}, status=400)
 
@@ -895,11 +903,11 @@ class PortalBookView(APIView):
                 date_of_birth=target_dob,
                 # Patient.mobile/email are NOT NULL — a portal account that
                 # signed up by mobile has email=None, so coalesce to "".
-                mobile=(acct.mobile or "") if target_awpid == acct.awpid else "",
+                mobile=contact_mobile if target_awpid == acct.awpid else "",
                 email=(acct.email or "") if target_awpid == acct.awpid else "",
                 is_dependent=target_awpid != acct.awpid,
                 guardian_name=(acct.full_name or "") if target_awpid != acct.awpid else "",
-                guardian_mobile=(acct.mobile or "") if target_awpid != acct.awpid else "",
+                guardian_mobile=contact_mobile if target_awpid != acct.awpid else "",
                 hie_consent_given=True,
                 hie_consent_at=timezone.now(),
                 payer_type="self",
@@ -2356,7 +2364,8 @@ class PortalProfileView(APIView):
             "awpid":         acct.awpid,
             "full_name":     acct.full_name,
             "email":         acct.email,
-            "mobile":        acct.mobile,
+            "mobile":        "",                       # stored only scrambled; the screen says "on file"
+            "mobile_on_file": bool(acct.mobile_hash),
             "gender":        acct.gender,
             "date_of_birth": acct.date_of_birth,
             "created_at":    acct.created_at,
@@ -2385,6 +2394,7 @@ class PortalProfileView(APIView):
         if "mobile" in d:
             from apps.registry.models import PatientIdentity
             from core.utils.hashing import hash_mobile, normalize_mobile
+            from apps.registry.models import mobile_hash_of
 
             mobile = (d.get("mobile") or "").strip()
             if mobile and not re.match(r"^\d{10}$", mobile):
@@ -2393,7 +2403,7 @@ class PortalProfileView(APIView):
             # Only an actual CHANGE needs re-verification — re-sending the
             # same number the frontend already has loaded shouldn't force
             # the patient through an OTP for a no-op.
-            mobile_changed = bool(mobile) and mobile != acct.mobile
+            mobile_changed = bool(mobile) and mobile_hash_of(mobile) != acct.mobile_hash
             if mobile_changed:
                 from core.otp import decode_action_token, OTPError
                 from apps.registry.models import OTPCode
@@ -2405,7 +2415,7 @@ class PortalProfileView(APIView):
                 if payload.get("target_id") != acct.id or payload.get("identifier") != (acct.email or "").lower():
                     return error("Verification does not match this account.", errors={"mobile": "Verification required."})
 
-            if mobile and PatientAccount.objects.using("default").filter(mobile=mobile).exclude(pk=acct.id).exists():
+            if mobile and PatientAccount.objects.using("default").with_mobile(mobile).exclude(pk=acct.id).exists():
                 return error("Another account already uses this mobile number.", errors={"mobile": "Already in use."})
 
             # Keep the network-wide PatientIdentity.mobile_hash in sync — it's
@@ -2425,8 +2435,6 @@ class PortalProfileView(APIView):
                     return error("Another patient record already uses this mobile number.", errors={"mobile": "Already in use."})
                 PatientIdentity.objects.using("default").filter(awpid=acct.awpid).update(mobile_hash=mobile_hash)
 
-            acct.mobile = mobile
-            fields.append("mobile")
             if mobile_changed:
                 logger.info("Patient mobile number changed via OTP re-verification: "
                             "account_id=%s awpid=%s", acct.id, acct.awpid)
@@ -2489,7 +2497,8 @@ class PortalProfileView(APIView):
             "awpid":         acct.awpid,
             "full_name":     acct.full_name,
             "email":         acct.email,
-            "mobile":        acct.mobile,
+            "mobile":        "",
+            "mobile_on_file": bool(acct.mobile_hash or d.get("mobile")),
             "gender":        acct.gender,
             "date_of_birth": acct.date_of_birth,
             "emergency_contact_name":     acct.emergency_contact_name,

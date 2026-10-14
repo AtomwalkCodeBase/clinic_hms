@@ -102,7 +102,7 @@ def _resolve_patient_target(identifier):
             return PatientAccount.objects.using("default").get(awpid__iexact=identifier, is_active=True)
         if "@" in identifier:
             return PatientAccount.objects.using("default").get(email__iexact=identifier, is_active=True)
-        return PatientAccount.objects.using("default").get(mobile=identifier, is_active=True)
+        return PatientAccount.objects.using("default").with_mobile(identifier).get(is_active=True)
     except PatientAccount.DoesNotExist:
         return None
 
@@ -146,11 +146,12 @@ class OTPRequestView(APIView):
             if not acct:
                 return error("We couldn't find an account with those details.")
             target_type, target_id = "patient", acct.id
-            # Send to whichever channel the caller actually typed — but if
-            # they typed the AWPID, fall back to the account's own mobile
-            # (an AWPID isn't itself a deliverable channel).
+            # Send to whichever channel the caller actually typed — but if they typed the AWPID (not itself a
+            # deliverable channel), send to the account's email: the mobile is stored only scrambled.
             if identifier.upper().startswith("AWPID-"):
-                identifier = acct.mobile
+                if not acct.email:
+                    return error("There is no email on this account. Enter your mobile number instead.")
+                identifier = acct.email.lower()
 
         elif purpose == OTPCode.PURPOSE_LOGIN_PATIENT:
             acct = _resolve_patient_target(identifier)
@@ -158,7 +159,9 @@ class OTPRequestView(APIView):
                 return error("We couldn't find an account with those details.")
             target_type, target_id = "patient", acct.id
             if identifier.upper().startswith("AWPID-"):
-                identifier = acct.mobile
+                if not acct.email:
+                    return error("There is no email on this account. Enter your mobile number instead.")
+                identifier = acct.email.lower()
 
         elif purpose == OTPCode.PURPOSE_REGISTRATION_PATIENT:
             from apps.registry.models import PatientAccount
@@ -217,8 +220,8 @@ class OTPVerifyView(APIView):
         if purpose in (OTPCode.PURPOSE_PASSWORD_RESET_PATIENT, OTPCode.PURPOSE_LOGIN_PATIENT) \
                 and identifier.upper().startswith("AWPID-"):
             acct = _resolve_patient_target(identifier)
-            if acct:
-                identifier = acct.mobile
+            if acct and acct.email:
+                identifier = acct.email.lower()
 
         try:
             otp = verify_otp(purpose, identifier, code)

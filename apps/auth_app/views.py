@@ -262,7 +262,7 @@ class PatientLoginView(APIView):
             elif "@" in login_id:
                 acct = PatientAccount.objects.using("default").get(email__iexact=login_id, is_active=True)
             else:
-                acct = PatientAccount.objects.using("default").get(mobile=login_id, is_active=True)
+                acct = PatientAccount.objects.using("default").with_mobile(login_id).get(is_active=True)
         except PatientAccount.DoesNotExist:
             return error("Invalid credentials.")
 

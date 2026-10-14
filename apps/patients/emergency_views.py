@@ -92,7 +92,7 @@ def _resolve_emergency_contact(awpid):
         if guardian:
             return {
                 "name": guardian.full_name,
-                "phone": guardian.mobile,
+                "phone": guardian.emergency_contact_phone or "",    # the guardian's own number is stored only scrambled
                 "relation": "Parent/Guardian",
             }
     return None

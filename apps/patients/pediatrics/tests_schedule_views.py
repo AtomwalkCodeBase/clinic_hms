@@ -167,3 +167,31 @@ class ScheduleEndpointTests(TestCase):
         milestone = self.make_template("milestone")
         self.assertEqual(self.platform("vaccination", "get", pk=milestone, detail=True).status_code, 404)
         self.assertEqual(self.hospital("vaccination", "post", pk=milestone, suffix="ScheduleActivateView").status_code, 404)
+
+    # ── rule numbers ──────────────────────────────────────────────────────────
+    def test_rule_numbers_must_be_whole_numbers_and_the_maximum_cannot_be_below_the_minimum(self):
+        for kind in KINDS:
+            with self.subTest(kind):
+                for bad in ({"min_age_days": "abc"}, {"min_age_days": -5}, {"min_age_days": 1.5},
+                            {"min_age_days": 100, "max_age_days": 10}, {"sort_order": -1}):
+                    resp = self.platform(kind, "post", {"name": f"T-{kind}", "rules": [rule(kind, "A", **bad)]})
+                    self.assertEqual(resp.status_code, 400, bad)
+                self.assertFalse(Schedule.objects.filter(name=f"T-{kind}").exists())          # nothing is created when a rule is wrong
+                ok = self.platform(kind, "post", {"name": f"T-{kind}", "rules": [rule(kind, "A", min_age_days="180", max_age_days=365)]})
+                self.assertEqual(ok.status_code, 201, ok.data)
+
+    def test_a_bad_rule_in_an_edit_changes_nothing_and_clearing_the_maximum_is_allowed(self):
+        for kind in KINDS:
+            with self.subTest(kind):
+                key = KINDS[kind]["name_key"]
+                pk = self.make_template(kind, [rule(kind, "A", min_age_days=100, max_age_days=200)])
+                first = self.platform(kind, "get", pk=pk, detail=True).data["data"]["rules"][0]
+                bad = self.platform(kind, "patch", {"name": "Renamed", "rules": [
+                    {"id": first["id"], key: "A2"}, {"id": first["id"], "max_age_days": 50}]}, pk=pk, detail=True)
+                self.assertEqual(bad.status_code, 400)
+                data = self.platform(kind, "get", pk=pk, detail=True).data["data"]
+                self.assertEqual((data["name"], data["rules"][0][key]), (f"{kind} std", "A"))                 # untouched
+                self.assertEqual(self.platform(kind, "patch", {"rules": [{"id": first["id"], "min_age_days": 300}]}, pk=pk, detail=True).status_code, 400)
+                cleared = self.platform(kind, "patch", {"rules": [{"id": first["id"], "max_age_days": None}]}, pk=pk, detail=True)
+                self.assertEqual(cleared.status_code, 200)
+                self.assertIsNone(cleared.data["data"]["rules"][0]["max_age_days"])

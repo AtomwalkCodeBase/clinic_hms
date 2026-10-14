@@ -90,6 +90,7 @@ export default function PatientDoctorProfilePage() {
 
   const [date,   setDate]   = useState(TODAY);
   const [reason, setReason] = useState("");
+  const [contactMobile, setContactMobile] = useState("");     // the hospital needs a number it can call; the account keeps it only scrambled
   const [slots, setSlots] = useState([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState(null);
@@ -191,6 +192,7 @@ export default function PatientDoctorProfilePage() {
         scheduled_time: selectedSlot,
         chief_complaint: reason,
         payment_preference: paymentPreference,
+        ...(contactMobile.trim() ? { mobile: contactMobile.trim() } : {}),
         ...(bookingFor !== "self" ? { patient_awpid: bookingFor } : {}),
         ...(dataSharingConsent ? { data_sharing_consent: true } : {}),
       });
@@ -605,6 +607,13 @@ export default function PatientDoctorProfilePage() {
               <input
                 className="form-input" placeholder="e.g. Fever since 2 days"
                 value={reason} onChange={e => setReason(e.target.value)}
+                style={{ marginBottom: 16, width: "100%" }}
+              />
+
+              <label className="stat-label" style={{ display: "block", marginBottom: 6 }}>Your mobile number (so the hospital can reach you)</label>
+              <input
+                className="form-input" placeholder="10-digit number on your account" inputMode="numeric" maxLength={10}
+                value={contactMobile} onChange={e => setContactMobile(e.target.value.replace(/\D/g, ""))}
                 style={{ marginBottom: 16, width: "100%" }}
               />
 

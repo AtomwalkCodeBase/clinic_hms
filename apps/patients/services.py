@@ -447,7 +447,7 @@ class PatientService:
         return members
 
     @staticmethod
-    def add_family_member(guardian_awpid: str, guardian_mobile_raw: str, data: dict) -> dict:
+    def add_family_member(guardian_awpid: str, guardian_mobile_hash: str, data: dict) -> dict:
         """
         Portal self-service equivalent of the dependent path in register() —
         adds a family member under the logged-in account without needing a
@@ -460,16 +460,9 @@ class PatientService:
         if not data.get("date_of_birth"):
             raise ValueError("Date of birth is required to identify a family member across hospitals.")
 
-        guardian_mobile_hash = ""
-        if guardian_mobile_raw:
-            try:
-                guardian_mobile_hash = hash_mobile(normalize_mobile(guardian_mobile_raw))
-            except ValueError:
-                pass
-
         identity, created = PatientService.resolve_dependent_identity(
             guardian_awpid=guardian_awpid,
-            guardian_mobile_hash=guardian_mobile_hash,
+            guardian_mobile_hash=guardian_mobile_hash or "",
             full_name=data["full_name"],
             date_of_birth=data.get("date_of_birth"),
             gender=data.get("gender", ""),

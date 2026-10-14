@@ -27,6 +27,35 @@ from core.response import success, created, error, not_found
 from apps.patients.pediatrics.schedule_dicts import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
 
 
+class _InvalidRule(ValueError):
+    """A rule in the request has a number that can't be right; the message says which."""
+
+
+_NUMBERS = ("min_age_days", "max_age_days", "dose_number", "sort_order")
+
+
+def _whole_number(value, key):
+    """The value as a whole number of 0 or more, or _InvalidRule."""
+    try:
+        number = int(value) if not isinstance(value, bool) and float(value) == int(float(value)) else None
+    except (TypeError, ValueError):
+        number = None
+    if number is None or number < 0:
+        raise _InvalidRule(f"{key.replace('_', ' ').capitalize()} must be a whole number of 0 or more.")
+    return number
+
+
+def _checked_numbers(rd, current=None):
+    """The numeric fields given in `rd` as whole numbers, checked against each other (the maximum age may not be below the
+    minimum). `current` is the existing rule when editing, so a change to one age is checked against the other."""
+    numbers = {k: _whole_number(rd[k], k) for k in _NUMBERS if rd.get(k) not in (None, "")}
+    low = numbers.get("min_age_days", getattr(current, "min_age_days", None))
+    high = numbers["max_age_days"] if "max_age_days" in numbers else (None if "max_age_days" in rd else getattr(current, "max_age_days", None))
+    if low is not None and high is not None and high < low:
+        raise _InvalidRule("The maximum age cannot be below the minimum age.")
+    return numbers
+
+
 class _Kind:
     def __init__(self, noun, tenant_column, name_key, extra_key, extra_default, rule_dict, template_message):
         self.noun, self.tenant_column, self.name_key = noun, tenant_column, name_key
@@ -50,11 +79,12 @@ class _Kind:
             return None
         if self.extra_default is None and rd.get(self.extra_key) not in dict(self.Rule.DOMAIN_CHOICES):
             return None
+        numbers = _checked_numbers(rd)
         return {
-            self.name_key: rd[self.name_key], self.extra_key: rd.get(self.extra_key, self.extra_default),
-            "scheduled_label": rd["scheduled_label"], "min_age_days": rd["min_age_days"],
-            "max_age_days": rd.get("max_age_days"), "mandatory": rd.get("mandatory", True),
-            "sort_order": rd.get("sort_order", default_sort),
+            self.name_key: rd[self.name_key], self.extra_key: numbers.get(self.extra_key, rd.get(self.extra_key, self.extra_default)),
+            "scheduled_label": rd["scheduled_label"], "min_age_days": numbers["min_age_days"],
+            "max_age_days": numbers.get("max_age_days"), "mandatory": rd.get("mandatory", True),
+            "sort_order": numbers.get("sort_order", default_sort),
         }
 
     def rules_json(self, schedule):
@@ -69,7 +99,21 @@ MILESTONE = _Kind("milestone", "active_milestone_schedule_id", "milestone", "dom
 
 
 def _edit(kind, schedule, d):
-    """Apply a PATCH body to a schedule and its rules. Returns how many rule changes were made."""
+    """Apply a PATCH body to a schedule and its rules. Returns how many rule changes were made. Raises _InvalidRule, before
+    anything is saved, when a rule's numbers are wrong."""
+    rules_in = [rd for rd in (d["rules"] if isinstance(d.get("rules"), list) else []) if isinstance(rd, dict)]
+    existing = {str(r.id): r for r in schedule.rules.all()}
+    checked = {}
+    for rd in rules_in:
+        if rd.get("_delete"):
+            continue
+        current = existing.get(str(rd.get("id"))) if rd.get("id") else None
+        if "min_age_days" in rd and rd["min_age_days"] in (None, ""):
+            raise _InvalidRule("Minimum age is required.")
+        checked[id(rd)] = _checked_numbers(rd, current) if (current or rd.get("min_age_days") is not None) else {}
+        if not rd.get("id"):
+            kind.new_rule(rd, 0)                                    # also checks the rest of a new rule
+
     changed = []
     if "name" in d and (d["name"] or "").strip():
         schedule.name = d["name"].strip()
@@ -85,9 +129,7 @@ def _edit(kind, schedule, d):
 
     touched = 0
     Rule = kind.Rule
-    for rd in d["rules"] if isinstance(d.get("rules"), list) else []:
-        if not isinstance(rd, dict):
-            continue
+    for rd in rules_in:
         rid = rd.get("id")
         if rid and rd.get("_delete"):
             Rule.objects.using("default").filter(pk=rid, schedule=schedule).delete()
@@ -96,7 +138,7 @@ def _edit(kind, schedule, d):
             rule = Rule.objects.using("default").filter(pk=rid, schedule=schedule).first()
             fields = [f for f in kind.editable if f in rd] if rule else []
             for f in fields:
-                setattr(rule, f, rd[f])
+                setattr(rule, f, checked[id(rd)].get(f, None if rd[f] in (None, "") else rd[f]) if f in _NUMBERS else rd[f])
             if fields:
                 rule.save(using="default", update_fields=fields)
                 touched += 1
@@ -173,7 +215,10 @@ def hospital_views(kind):
             schedule = kind.Schedule.objects.using("default").filter(pk=pk, owner_tenant_id=request.tenant_id).first()
             if not schedule:
                 return not_found("Schedule not found, or not owned by this hospital — clone a template first.")
-            touched = _edit(kind, schedule, request.data)
+            try:
+                touched = _edit(kind, schedule, request.data)
+            except _InvalidRule as exc:
+                return error(str(exc))
             rules, rules_json = kind.rules_json(schedule)
             return success(data={**schedule_dict(schedule, rule_count=len(rules)), "rules": rules_json},
                            message=f"Schedule updated ({touched} rule change(s)).")
@@ -219,15 +264,15 @@ def template_views(kind):
             name = (d.get("name") or "").strip()
             if not name:
                 return error("Name is required.", errors={"name": "Required."})
+            rules_in = d.get("rules") if isinstance(d.get("rules"), list) else []
+            try:
+                checked = [kind.new_rule(rd, i) if isinstance(rd, dict) else None for i, rd in enumerate(rules_in)]
+            except _InvalidRule as exc:
+                return error(str(exc))
             template = kind.Schedule.objects.using("default").create(
                 name=name, description=(d.get("description") or "").strip(), owner_tenant_id=None,
                 is_template=True, active=bool(d.get("active", True)))
-            rules_in = d.get("rules") if isinstance(d.get("rules"), list) else []
-            rules = []
-            for i, rd in enumerate(rules_in):
-                values = kind.new_rule(rd, i) if isinstance(rd, dict) else None
-                if values:
-                    rules.append(kind.Rule(schedule=template, **values))
+            rules = [kind.Rule(schedule=template, **values) for values in checked if values]
             if rules:
                 kind.Rule.objects.using("default").bulk_create(rules)
             return created(data=template_dict(template, rule_count=len(rules), tenants_using=0),
@@ -247,7 +292,10 @@ def template_views(kind):
             template = get_template(pk)
             if not template:
                 return not_found("Template not found.")
-            touched = _edit(kind, template, request.data)
+            try:
+                touched = _edit(kind, template, request.data)
+            except _InvalidRule as exc:
+                return error(str(exc))
             rules, rules_json = kind.rules_json(template)
             return success(data={**template_dict(template, rule_count=len(rules)), "rules": rules_json},
                            message=f"Template updated ({touched} rule change(s)).")

@@ -105,8 +105,8 @@ class PatientIdentity(models.Model):
     # ── Portal login ────────────────────────────────────────────────────────────
     # A person who has signed up to the patient portal has these filled in (password != ""); a walk-in registered
     # by a front desk does not. This used to be a separate patient_account table keyed by the same AWPID. Login is
-    # by mobile (or AWPID / email); the plain mobile is kept only for people with a login.
-    mobile        = models.CharField(max_length=15, unique=True, null=True, blank=True)
+    # by mobile (or AWPID / email): the number typed is scrambled and matched on mobile_hash, so the plain number is
+    # never stored here.
     password      = models.CharField(max_length=128, blank=True)
     photo         = models.TextField(blank=True)      # base64 data URI, same pattern as StaffUser.photo
     is_active     = models.BooleanField(default=True)
@@ -304,9 +304,24 @@ class BlacklistedToken(models.Model):
         return self.jti
 
 
+def mobile_hash_of(raw):
+    """The scrambled form of a mobile number as typed: what hospitals and the login match on."""
+    from core.utils.hashing import hash_mobile, normalize_mobile
+    return hash_mobile(normalize_mobile(raw))
+
+
 class _AccountQuerySet(models.QuerySet):
+    def with_mobile(self, raw):
+        """The accounts whose mobile number is the one typed (matched by its scrambled form); none if it isn't a phone number."""
+        try:
+            return self.filter(mobile_hash=mobile_hash_of(raw))
+        except ValueError:
+            return self.none()
+
     def create(self, **fields):
         """An account is a login on an identity: reuse the identity with this AWPID if there is one."""
+        if "mobile" in fields:                                  # the number is kept only in scrambled form
+            fields["mobile_hash"] = mobile_hash_of(fields.pop("mobile"))
         identity, _ = PatientIdentity._base_manager.using(self.db).get_or_create(
             awpid=fields["awpid"], defaults={"full_name": fields.get("full_name") or "Patient"})
         for name, value in fields.items():

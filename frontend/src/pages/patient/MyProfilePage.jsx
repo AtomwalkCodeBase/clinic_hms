@@ -467,7 +467,7 @@ export default function MyProfilePage() {
                     <input className="profile-edit-input" style={inputStyle} value={form.full_name} onChange={set("full_name")} required />
                   </div>
                   <div><label style={labelStyle}>Mobile</label>
-                    <input className="profile-edit-input" style={inputStyle} value={form.mobile} onChange={set("mobile")} placeholder="9876543210" />
+                    <input className="profile-edit-input" style={inputStyle} value={form.mobile} onChange={set("mobile")} placeholder={profile?.mobile_on_file ? "Number on file — type a new one to change it" : "9876543210"} />
                   </div>
                   <div><label style={labelStyle}>Gender</label>
                     <select className="profile-edit-input" style={inputStyle} value={form.gender} onChange={set("gender")}>

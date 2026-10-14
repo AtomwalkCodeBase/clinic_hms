@@ -16,6 +16,7 @@ from datetime import date
 
 from rest_framework.views import APIView
 
+from core.audit import log_action
 from core.permissions import IsHospitalStaff, IsDoctorOrFrontDesk, IsDoctorOrNurse
 from core.response import success, created, error, not_found
 
@@ -32,13 +33,20 @@ _SHARED_FIELDS = ["gestational_age_weeks", "birth_weight_kg", "delivery_mode", "
 
 
 def _share_birth_history(bh, patient, tenant_id):
-    """Copy the birth history to the registry so other hospitals and the emergency summary see it. Never blocks the save."""
+    """
+    Copy the birth history to the registry so other hospitals and the emergency summary see it. Never blocks the save.
+    Returns the id of ANOTHER hospital whose shared copy this replaced, or None.
+    """
     try:
-        SharedBirthHistory.objects.using("default").update_or_create(
+        shared = SharedBirthHistory.objects.using("default")
+        previous = shared.filter(awpid=patient.awpid).values_list("source_tenant_id", flat=True).first()
+        shared.update_or_create(
             awpid=patient.awpid,
             defaults={**{f: getattr(bh, f) for f in _SHARED_FIELDS}, "source_tenant_id": tenant_id})
+        return previous if previous not in (None, tenant_id) else None
     except Exception:
         logger.exception("Sharing birth history failed for patient=%s", patient.id)
+        return None
 
 
 class BirthHistoryView(APIView):
@@ -65,7 +73,9 @@ class BirthHistoryView(APIView):
             return error(message="Validation error.", errors=serializer.errors)
         bh = BirthHistory.objects.using(request.tenant_db).create(
             patient=patient, recorded_by=request.user.id, **serializer.validated_data)
-        _share_birth_history(bh, patient, request.tenant_id)
+        replaced = _share_birth_history(bh, patient, request.tenant_id)
+        log_action(request, request.tenant_db, "birth_history.create", resource_type="BirthHistory",
+                   resource_id=bh.id, patient_id=patient.uuid, metadata={"replaced_other_hospitals_copy": replaced})
         return created(data=BirthHistorySerializer(bh).data, message="Birth history recorded.")
 
     def patch(self, request, pk):
@@ -78,8 +88,13 @@ class BirthHistoryView(APIView):
         serializer = BirthHistorySerializer(bh, data=request.data, partial=True)
         if not serializer.is_valid():
             return error(message="Validation error.", errors=serializer.errors)
+        before = {f: getattr(bh, f) for f in serializer.validated_data}
         serializer.save(updated_by=request.user.id)
-        _share_birth_history(bh, patient, request.tenant_id)
+        changed = {f: [str(old), str(getattr(bh, f))] for f, old in before.items() if getattr(bh, f) != old}
+        replaced = _share_birth_history(bh, patient, request.tenant_id)
+        log_action(request, request.tenant_db, "birth_history.update", resource_type="BirthHistory",
+                   resource_id=bh.id, patient_id=patient.uuid,
+                   metadata={"changed": changed, "replaced_other_hospitals_copy": replaced})
         return success(data=BirthHistorySerializer(bh).data, message="Birth history updated.")
 
 

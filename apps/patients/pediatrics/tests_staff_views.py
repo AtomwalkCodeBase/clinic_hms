@@ -247,6 +247,23 @@ class PediatricStaffTests(TenantDBTestCase):
         self.assertEqual((shared.gestational_age_weeks, shared.apgar_score_5min, shared.source_tenant_id), (38, 9, self.tenant.id))
         self.assertEqual(self.call(view, "get").data["data"]["gestational_age_weeks"], 38)
 
+    def test_birth_history_changes_are_written_to_the_audit_log(self):
+        from apps.org.models import AuditLog
+        view = ped_views.BirthHistoryView
+        self.call(view, "post", data={"gestational_age_weeks": 38, "delivery_mode": "normal"})
+        self.call(view, "patch", data={"gestational_age_weeks": 36, "notes": "late preterm"})
+        rows = list(AuditLog.objects.using(self.tenant_alias).filter(resource_type="BirthHistory").order_by("id"))
+        self.assertEqual([r.action for r in rows], ["birth_history.create", "birth_history.update"])
+        self.assertEqual(rows[1].metadata["changed"]["gestational_age_weeks"], ["38", "36"])
+        self.assertEqual(rows[1].patient_id, self.child.uuid)
+
+    def test_the_audit_log_notes_when_another_hospitals_shared_copy_is_replaced(self):
+        from apps.org.models import AuditLog
+        SharedBirthHistory.objects.using("default").create(awpid=self.child.awpid, gestational_age_weeks=40, source_tenant_id=self.tenant.id + 50)
+        self.call(ped_views.BirthHistoryView, "post", data={"gestational_age_weeks": 38})
+        row = AuditLog.objects.using(self.tenant_alias).get(action="birth_history.create")
+        self.assertEqual(row.metadata["replaced_other_hospitals_copy"], self.tenant.id + 50)
+
     def test_editing_a_missing_birth_history_is_not_found(self):
         self.assertEqual(self.call(ped_views.BirthHistoryView, "patch", data={"notes": "x"}).status_code, 404)
 
