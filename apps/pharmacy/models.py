@@ -14,7 +14,7 @@ the pharmacist's dispensing queue at all — see PendingPrescriptionsView).
 
 from django.db import models
 from apps.org.models import StaffUser, Branch
-from apps.patients.models import Patient
+from apps.hospital_patients.models import HospitalPatient
 from apps.prescriptions.models import Drug
 from apps.opd.models import PrescriptionItem
 
@@ -101,7 +101,7 @@ class MedicationDoseLog(models.Model):
 
     prescription_item = models.ForeignKey(PrescriptionItem, on_delete=models.PROTECT,
                                           related_name="dose_logs")
-    patient         = models.ForeignKey(Patient, on_delete=models.PROTECT)
+    patient         = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT)
     status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default="given", db_index=True)
     administered_by = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True,
                                         limit_choices_to={"role": "nurse"})

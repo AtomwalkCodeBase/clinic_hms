@@ -17,7 +17,7 @@ class DrugSearchView(APIView):
         q = request.query_params.get("q", "").strip()
         if len(q) < 2:
             return error("Query must be at least 2 characters.")
-        drugs = Drug.objects.using(request.tenant_db).filter(
+        drugs = Drug.objects.using(request.hospital_db).filter(
             name__icontains=q, is_active=True
         )[:30]
         return success(data=DrugSerializer(drugs, many=True).data)
@@ -48,7 +48,7 @@ class DrugCatalogView(APIView):
         return [IsAuthenticated(), IsHospitalStaff(), RequireFeature("feat_pharmacy")()]
 
     def get(self, request):
-        drugs = Drug.objects.using(request.tenant_db)
+        drugs = Drug.objects.using(request.hospital_db)
         if request.query_params.get("include_inactive") != "1":
             drugs = drugs.filter(is_active=True)
 
@@ -72,7 +72,7 @@ class DrugCatalogView(APIView):
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
 
-        db = request.tenant_db
+        db = request.hospital_db
         validated = dict(s.validated_data)
         # Code is never typed by hand — NNTM assigns it, same as the lab
         # catalog's test codes, so codes stay unique and consistently formatted.
@@ -93,7 +93,7 @@ class DrugCatalogView(APIView):
             return ""
 
         # Idempotent — covers branches created before "drug" existed as an
-        # NNTM entity, so older tenants don't hit a missing-row DoesNotExist.
+        # NNTM entity, so older hospitals don't hit a missing-row DoesNotExist.
         NextNumber.objects.using(db).get_or_create(
             branch_id=branch_id, entity="drug",
             defaults={"prefix": "DRG-", "pad_length": 4, "last_number": 0},
@@ -123,7 +123,7 @@ class DrugFormTypeListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalStaff(), RequireFeature("feat_pharmacy")()]
 
     def get(self, request):
-        forms = OptionList.objects.using(request.tenant_db).filter(list_type=OptionList.LIST_DRUG_FORM)
+        forms = OptionList.objects.using(request.hospital_db).filter(list_type=OptionList.LIST_DRUG_FORM)
         if request.query_params.get("include_inactive") != "1":
             forms = forms.filter(is_active=True)
         return success(data=DrugFormTypeSerializer(forms, many=True).data)
@@ -134,7 +134,7 @@ class DrugFormTypeListCreateView(APIView):
             return error("Validation error.", errors=s.errors)
         data = dict(s.validated_data)
         data["value"] = data.get("label", "")
-        form = OptionList.objects.using(request.tenant_db).create(
+        form = OptionList.objects.using(request.hospital_db).create(
             list_type=OptionList.LIST_DRUG_FORM, is_system=False, **data
         )
         return created(data=DrugFormTypeSerializer(form).data, message="Drug form added.")
@@ -146,7 +146,7 @@ class DrugFormTypeDetailView(APIView):
 
     def patch(self, request, pk):
         try:
-            form = OptionList.objects.using(request.tenant_db).get(pk=pk, list_type=OptionList.LIST_DRUG_FORM)
+            form = OptionList.objects.using(request.hospital_db).get(pk=pk, list_type=OptionList.LIST_DRUG_FORM)
         except OptionList.DoesNotExist:
             return not_found("Drug form not found.")
         s = DrugFormTypeSerializer(form, data=request.data, partial=True)
@@ -156,7 +156,7 @@ class DrugFormTypeDetailView(APIView):
             setattr(form, attr, val)
         if "label" in s.validated_data:
             form.value = s.validated_data["label"]
-        form.save(using=request.tenant_db)
+        form.save(using=request.hospital_db)
         return success(data=DrugFormTypeSerializer(form).data, message="Drug form updated.")
 
 
@@ -166,7 +166,7 @@ class DrugCatalogDetailView(APIView):
 
     def patch(self, request, pk):
         try:
-            drug = Drug.objects.using(request.tenant_db).get(pk=pk)
+            drug = Drug.objects.using(request.hospital_db).get(pk=pk)
         except Drug.DoesNotExist:
             return not_found("Drug not found.")
         s = DrugSerializer(drug, data=request.data, partial=True)

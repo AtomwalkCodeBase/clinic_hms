@@ -148,7 +148,7 @@ function InHouseBody({ order, saving, chooseAndSave }) {
 // opens it in a new tab — the list endpoint only ever sends has_file (a
 // boolean) to keep the payload light, same pattern as the doctor/nurse
 // document viewers.
-function ViewInHouseReportButton({ tenantDb, requestId }) {
+function ViewInHouseReportButton({ hospitalDb, requestId }) {
   const { toastApiError } = useToast();
   const [loading, setLoading] = useState(false);
 
@@ -156,7 +156,7 @@ function ViewInHouseReportButton({ tenantDb, requestId }) {
     const win = window.open("", "_blank");
     setLoading(true);
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PORTAL.LAB_REPORT_FILE(tenantDb, requestId));
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.LAB_REPORT_FILE(hospitalDb, requestId));
       const data = res.data?.data || res.data;
       if (data?.file_data) {
         openDataUrlInNewTab(win, data.file_data);
@@ -190,7 +190,7 @@ function LabOrderCard({ order, onChanged, patientAwpid }) {
     setSaving(true);
     try {
       await apiClient.post(API_ENDPOINTS.PORTAL.LAB_ORDER_CHOICE, {
-        tenant_db: order.tenant_db, request_id: order.id,
+        hospital_db: order.hospital_db, request_id: order.id,
         patient_choice: choice, payment_preference: paymentPreference || "",
       });
       toastSuccess(choice === "in_house" ? "Got it — see you at the lab." : "Okay — upload the report once you have it.");
@@ -291,7 +291,7 @@ function LabOrderCard({ order, onChanged, patientAwpid }) {
               </div>
             )}
             {order.report.has_file && (
-              <ViewInHouseReportButton tenantDb={order.tenant_db} requestId={order.id} />
+              <ViewInHouseReportButton hospitalDb={order.hospital_db} requestId={order.id} />
             )}
           </div>
 
@@ -449,7 +449,7 @@ export default function PatientLabReportsPage() {
   // NOTE: patient_awpid is wired through here so the query fires with the
   // right param the moment the backend supports it, but as of this change
   // neither endpoint actually filters by it yet — see PortalLabOrderListView
-  // and PortalDocumentListCreateView.get in apps/patients/portal_views.py,
+  // and PortalDocumentListCreateView.get in apps/hospital_patients/portal_views.py,
   // both of which always resolve to `acct.awpid` (the logged-in account
   // owner) with no patient_awpid query-param handling at all (unlike
   // PortalMyRecordsView / PortalHealthSummaryView / PortalGrowthView /
@@ -496,7 +496,7 @@ export default function PatientLabReportsPage() {
         ) : (
           <div style={{ display: "grid", gap: 14, marginBottom: 18 }}>
             {orders.map(o => (
-              <LabOrderCard key={`${o.tenant_db}-${o.id}`} order={o} onChanged={() => { refetchOrders(); refetchDocs(); }} patientAwpid={patientAwpid} />
+              <LabOrderCard key={`${o.hospital_db}-${o.id}`} order={o} onChanged={() => { refetchOrders(); refetchDocs(); }} patientAwpid={patientAwpid} />
             ))}
           </div>
         )}

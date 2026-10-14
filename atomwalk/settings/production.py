@@ -52,7 +52,7 @@ LOGGING = {
     "formatters": {
         "json": {
             "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
-            "format": "%(asctime)s %(levelname)s %(name)s %(request_id)s %(tenant_id)s %(user_id)s %(message)s",
+            "format": "%(asctime)s %(levelname)s %(name)s %(request_id)s %(hospital_id)s %(user_id)s %(message)s",
         }
     },
     "handlers": {

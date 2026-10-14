@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import DocumentBatch, DocumentText, MedicalDocument, PatientDocumentClassification
+from apps.atomwalk.models import DocumentBatch, DocumentText, MedicalDocument, PatientDocumentClassification
 
 
 @admin.register(DocumentBatch)

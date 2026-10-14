@@ -1,5 +1,5 @@
 """
-Tenant DB — OPD domain models.
+Hospital DB — OPD domain models.
 
 Covers:
   - Appointment    : booking + queue state machine
@@ -49,12 +49,12 @@ class Appointment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     patient_id = models.UUIDField(db_index=True)           # FK → patients.patient.id
     patient_awpid = models.CharField(max_length=30, db_index=True)
-    doctor_user_id = models.UUIDField(db_index=True)       # registry_user.id
+    doctor_user_id = models.UUIDField(db_index=True)       # atomwalk_user.id
     doctor_name = models.CharField(max_length=255)
     # Nullable: existing rows predate this field. Multi-branch hospitals should
     # backfill from booked_by_user_id's branch before relying on this filter;
     # new bookings get it from the booking user automatically (see views.py).
-    branch_id = models.IntegerField(null=True, blank=True, db_index=True)  # org.Branch.id (tenant DB)
+    branch_id = models.IntegerField(null=True, blank=True, db_index=True)  # org.Branch.id (hospital DB)
 
     appointment_type = models.CharField(max_length=15, default=TYPE_OPD)
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default=STATUS_SCHEDULED, db_index=True)
@@ -70,8 +70,8 @@ class Appointment(models.Model):
     # the hospital edits its room assignments later. Nullable: rooms are
     # opt-in — a hospital that hasn't set any up just gets no room shown,
     # nothing else breaks. Plain int/text, not a real FK — org.Room lives in
-    # the same tenant DB but in a different app; matches this codebase's
-    # existing convention of not adding cross-app FKs (see Tenant.
+    # the same hospital DB but in a different app; matches this codebase's
+    # existing convention of not adding cross-app FKs (see Hospital.
     # active_vaccination_schedule_id for the same reasoning).
     room_id = models.IntegerField(null=True, blank=True)
     room_name = models.CharField(max_length=100, blank=True)

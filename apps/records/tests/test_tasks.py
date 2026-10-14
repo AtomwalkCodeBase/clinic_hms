@@ -4,7 +4,7 @@ from unittest import mock
 from django.test import TestCase
 
 from apps.records import classification as cls, services
-from apps.records.models import DocumentBatch, DocumentText, MedicalDocument, PatientDocumentClassification
+from apps.atomwalk.models import DocumentBatch, DocumentText, MedicalDocument, PatientDocumentClassification
 from apps.records.tasks import classify_document_task, extract_document_task
 from apps.records.tests.helpers import PDF, identity, make_doc
 
@@ -297,7 +297,7 @@ class ReclassifyTests(TestCase):
 
     def test_a_persons_choice_and_a_hospital_document_are_never_touched(self):
         human = make_doc(status=S.COMPLETED, document_type="lab_report", by="human", text=RX)
-        issued = make_doc(status=S.COMPLETED, document_type="lab_report", by="issued", text=RX, source_tenant_id="3")
+        issued = make_doc(status=S.COMPLETED, document_type="lab_report", by="issued", text=RX, source_hospital_id="3")
         self.assertEqual(services.reclassify_existing()["checked"], 0)
         self.assertEqual((row(human).document_type, row(issued).document_type), ("lab_report", "lab_report"))
 

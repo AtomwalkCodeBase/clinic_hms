@@ -10,7 +10,7 @@
  *
  * Deliberately a SEPARATE page from RegisterPatientPage / QuickRegisterModal:
  * this is the only registration path that requires neither a mobile number
- * nor a guardian (see apps/patients/serializers.py::PatientEmergencyRegisterSerializer
+ * nor a guardian (see apps/hospital_patients/serializers.py::PatientEmergencyRegisterSerializer
  * and docs/PENDING_IMPROVEMENTS.md item 1).
  *
  * Consent is NOT collected here — it's explicitly deferred, with a reason

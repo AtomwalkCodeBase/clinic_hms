@@ -20,7 +20,7 @@ from apps.billing.models import OptionList
 from apps.billing.option_list_views import DropdownListCreateView, DropdownDetailView
 from apps.billing.services import recompute_invoice_totals
 from apps.org.models import Bed
-from apps.patients.models import Patient
+from apps.hospital_patients.models import HospitalPatient
 from apps.compliance.models import ConsentRecord
 
 from .models import AdmissionReferral, Admission, AdmissionDeposit, PatientMovement
@@ -82,7 +82,7 @@ class RecommendAdmissionView(APIView):
     permission_classes = [IsAuthenticated, IsDoctor]
 
     def post(self, request):
-        s = RecommendAdmissionSerializer(data=request.data, context={"tenant_db": request.tenant_db})
+        s = RecommendAdmissionSerializer(data=request.data, context={"hospital_db": request.hospital_db})
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         v = s.validated_data
@@ -102,10 +102,10 @@ class RecommendAdmissionView(APIView):
             guardian_consent_by=v.get("guardian_consent_by", ""),
             recommended_by_id=request.user.id,
         )
-        referral.save(using=request.tenant_db)
+        referral.save(using=request.hospital_db)
 
         log_action(
-            request, request.tenant_db, action="ipd.referral.recommend",
+            request, request.hospital_db, action="ipd.referral.recommend",
             resource_type="AdmissionReferral", resource_id=str(referral.id),
             patient_id=referral.patient_id,
             metadata={"admission_type": referral.admission_type, "admission_source": referral.admission_source},
@@ -125,7 +125,7 @@ class AcceptExternalReferralView(APIView):
 
     def post(self, request, pk):
         try:
-            referral = AdmissionReferral.objects.using(request.tenant_db).get(pk=pk)
+            referral = AdmissionReferral.objects.using(request.hospital_db).get(pk=pk)
         except AdmissionReferral.DoesNotExist:
             return not_found("Referral not found.")
 
@@ -137,10 +137,10 @@ class AcceptExternalReferralView(APIView):
         from django.utils import timezone
         referral.accepted_by_id = request.user.id
         referral.accepted_at = timezone.now()
-        referral.save(using=request.tenant_db, update_fields=["accepted_by_id", "accepted_at"])
+        referral.save(using=request.hospital_db, update_fields=["accepted_by_id", "accepted_at"])
 
         log_action(
-            request, request.tenant_db, action="ipd.referral.accept",
+            request, request.hospital_db, action="ipd.referral.accept",
             resource_type="AdmissionReferral", resource_id=str(referral.id),
             patient_id=referral.patient_id,
         )
@@ -163,7 +163,7 @@ class RegisterExternalReferralView(APIView):
     permission_classes = [IsAuthenticated, IsFrontDesk]
 
     def post(self, request):
-        s = RegisterExternalReferralSerializer(data=request.data, context={"tenant_db": request.tenant_db})
+        s = RegisterExternalReferralSerializer(data=request.data, context={"hospital_db": request.hospital_db})
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         v = s.validated_data
@@ -188,10 +188,10 @@ class RegisterExternalReferralView(APIView):
             recommended_by_id=request.user.id,
             front_desk_logged=True,
         )
-        referral.save(using=request.tenant_db)
+        referral.save(using=request.hospital_db)
 
         log_action(
-            request, request.tenant_db, action="ipd.referral.register_external",
+            request, request.hospital_db, action="ipd.referral.register_external",
             resource_type="AdmissionReferral", resource_id=str(referral.id),
             patient_id=referral.patient_id,
             metadata={
@@ -225,7 +225,7 @@ class PendingReferralsListView(APIView):
     permission_classes = [IsAuthenticated, (IsFrontDesk | IsDoctor)]
 
     def get(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         if IsFrontDesk().has_permission(request, self):
             status_filter = request.query_params.get("status", AdmissionReferral.STATUS_PENDING)
             qs = AdmissionReferral.objects.using(db).filter(status=status_filter)
@@ -253,11 +253,11 @@ class CompleteAdmissionView(APIView):
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         v = s.validated_data
-        db = request.tenant_db
+        db = request.hospital_db
 
         # NOTE: this used to be `@transaction.atomic` (no `using=`) on the
         # method itself, which silently wraps a transaction on the DEFAULT
-        # alias only — never on the tenant DB alias this view actually
+        # alias only — never on the hospital DB alias this view actually
         # writes to. That went unnoticed because this view had never been
         # exercised against a real Postgres before (see the module-level
         # caveat on apps/opd/tests.py's DB-backed tests, which flags the
@@ -266,7 +266,7 @@ class CompleteAdmissionView(APIView):
         # `TransactionManagementError: select_for_update cannot be used
         # outside of a transaction` on the very next line — so this must be
         # an explicit `with transaction.atomic(using=db):` scoped to the
-        # tenant alias, not the bare decorator.
+        # hospital alias, not the bare decorator.
         with transaction.atomic(using=db):
             try:
                 referral = AdmissionReferral.objects.using(db).select_for_update().get(pk=v["referral_id"])
@@ -281,7 +281,7 @@ class CompleteAdmissionView(APIView):
                     "countersigned by one of this hospital's own doctors."
                 )
 
-            patient = Patient.objects.using(db).get(pk=referral.patient_id)
+            patient = HospitalPatient.objects.using(db).get(pk=referral.patient_id)
 
             # NNTM — same collision-free sequence mechanism as UHID/invoice/
             # lab/Rx/queue numbers. entity="admission" (see core/utils/nntm.py).
@@ -349,11 +349,11 @@ class AdmissionDepositView(APIView):
 
     def post(self, request, pk):
         try:
-            admission = Admission.objects.using(request.tenant_db).get(pk=pk)
+            admission = Admission.objects.using(request.hospital_db).get(pk=pk)
         except Admission.DoesNotExist:
             return not_found("Admission not found.")
 
-        s = AdmissionDepositSerializer(data=request.data, context={"tenant_db": request.tenant_db})
+        s = AdmissionDepositSerializer(data=request.data, context={"hospital_db": request.hospital_db})
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
 
@@ -364,10 +364,10 @@ class AdmissionDepositView(APIView):
             transaction_ref=s.validated_data.get("transaction_ref", ""),
             collected_by_id=request.user.id,
         )
-        deposit.save(using=request.tenant_db)
+        deposit.save(using=request.hospital_db)
 
         log_action(
-            request, request.tenant_db, action="ipd.admission.deposit",
+            request, request.hospital_db, action="ipd.admission.deposit",
             resource_type="Admission", resource_id=str(admission.id),
             patient_id=admission.patient_id,
             metadata={"amount": str(deposit.amount), "payment_mode": deposit.payment_mode},
@@ -381,7 +381,7 @@ class AdmissionListView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
-        qs = Admission.objects.using(request.tenant_db).all()
+        qs = Admission.objects.using(request.hospital_db).all()
         status_filter = request.query_params.get("status")
         if status_filter:
             qs = qs.filter(status=status_filter)
@@ -402,16 +402,16 @@ class AdmissionDetailView(APIView):
 
     def get(self, request, pk):
         try:
-            admission = Admission.objects.using(request.tenant_db).get(pk=pk)
+            admission = Admission.objects.using(request.hospital_db).get(pk=pk)
         except Admission.DoesNotExist:
             return not_found("Admission not found.")
         data = AdmissionSerializer(admission).data
-        deposits = AdmissionDeposit.objects.using(request.tenant_db).filter(admission=admission)
+        deposits = AdmissionDeposit.objects.using(request.hospital_db).filter(admission=admission)
         data["deposits"] = AdmissionDepositSerializer(deposits, many=True).data
         return success(data=data)
 
     def patch(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             admission = Admission.objects.using(db).get(pk=pk)
         except Admission.DoesNotExist:
@@ -455,7 +455,7 @@ class AssignBedView(APIView):
     permission_classes = [IsAuthenticated, IsFrontDesk]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         with transaction.atomic(using=db):
             try:
                 admission = Admission.objects.using(db).select_for_update().get(pk=pk)
@@ -467,7 +467,7 @@ class AssignBedView(APIView):
             if admission.bed_id:
                 return error("This admission already has a bed assigned. Release it first to reassign.")
 
-            s = AssignBedSerializer(data=request.data, context={"tenant_db": db, "admission_id": str(admission.id)})
+            s = AssignBedSerializer(data=request.data, context={"hospital_db": db, "admission_id": str(admission.id)})
             if not s.is_valid():
                 return error("Validation error.", errors=s.errors)
 
@@ -517,7 +517,7 @@ class ReleaseBedView(APIView):
     permission_classes = [IsAuthenticated, IsFrontDesk]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         with transaction.atomic(using=db):
             try:
                 admission = Admission.objects.using(db).select_for_update().get(pk=pk)
@@ -576,7 +576,7 @@ class ReserveBedView(APIView):
     permission_classes = [IsAuthenticated, IsFrontDesk]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         with transaction.atomic(using=db):
             try:
                 admission = Admission.objects.using(db).select_for_update().get(pk=pk)
@@ -587,7 +587,7 @@ class ReserveBedView(APIView):
             if admission.bed_id:
                 return error("This admission already has a bed assigned.")
 
-            s = ReserveBedSerializer(data=request.data, context={"tenant_db": db})
+            s = ReserveBedSerializer(data=request.data, context={"hospital_db": db})
             if not s.is_valid():
                 return error("Validation error.", errors=s.errors)
 
@@ -614,7 +614,7 @@ class CancelBedReservationView(APIView):
     permission_classes = [IsAuthenticated, IsFrontDesk]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         with transaction.atomic(using=db):
             try:
                 admission = Admission.objects.using(db).select_for_update().get(pk=pk)
@@ -654,7 +654,7 @@ class TransferBedView(APIView):
     permission_classes = [IsAuthenticated, IsFrontDesk]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         with transaction.atomic(using=db):
             try:
                 admission = Admission.objects.using(db).select_for_update().get(pk=pk)
@@ -665,7 +665,7 @@ class TransferBedView(APIView):
             if not admission.bed_id:
                 return error("This admission has no current bed to transfer from.")
 
-            s = TransferBedSerializer(data=request.data, context={"tenant_db": db})
+            s = TransferBedSerializer(data=request.data, context={"hospital_db": db})
             if not s.is_valid():
                 return error("Validation error.", errors=s.errors)
             to_bed_id = s.validated_data["to_bed_id"]
@@ -720,7 +720,7 @@ class DischargeAdmissionView(APIView):
     permission_classes = [IsAuthenticated, IsFrontDesk]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         with transaction.atomic(using=db):
             try:
                 admission = Admission.objects.using(db).select_for_update().get(pk=pk)
@@ -795,7 +795,7 @@ class GenerateInvoiceView(APIView):
         from apps.billing.models import Invoice, InvoiceItem, Payment, OptionList as BillingOptionList
         from apps.billing.serializers import InvoiceSerializer
 
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             admission = Admission.objects.using(db).select_related("bed", "bed__room").get(pk=pk)
         except Admission.DoesNotExist:
@@ -872,7 +872,7 @@ class AwaitingBedListView(APIView):
     permission_classes = [IsAuthenticated, IsFrontDesk]
 
     def get(self, request):
-        qs = Admission.objects.using(request.tenant_db).filter(
+        qs = Admission.objects.using(request.hospital_db).filter(
             bed__isnull=True, status__in=[Admission.STATUS_REQUESTED, Admission.STATUS_ADMITTED],
         ).order_by("created_at")
         return success(data=AdmissionSerializer(qs, many=True).data)
@@ -887,7 +887,7 @@ class AdmissionMovementsView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         if not Admission.objects.using(db).filter(pk=pk).exists():
             return not_found("Admission not found.")
         qs = PatientMovement.objects.using(db).filter(admission_id=pk).order_by("moved_at")
@@ -910,7 +910,7 @@ class MyReferralsListView(APIView):
     permission_classes = [IsAuthenticated, IsDoctor]
 
     def get(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         qs = AdmissionReferral.objects.using(db).filter(
             Q(recommended_by_id=request.user.id) | Q(accepted_by_id=request.user.id)
         )
@@ -929,7 +929,7 @@ class MyAdmittedPatientsView(APIView):
     permission_classes = [IsAuthenticated, IsDoctor]
 
     def get(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         qs = Admission.objects.using(db).filter(ordering_doctor_id=request.user.id)
         if request.query_params.get("include_discharged") != "1":
             qs = qs.filter(status__in=[Admission.STATUS_REQUESTED, Admission.STATUS_ADMITTED, Admission.STATUS_ACTIVE])

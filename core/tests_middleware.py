@@ -1,7 +1,7 @@
 """
 core/tests_middleware.py
 ------------------------
-Which paths JWTTenantMiddleware lets through without a Bearer token.
+Which paths JWTHospitalMiddleware lets through without a Bearer token.
 """
 
 from django.conf import settings
@@ -19,7 +19,7 @@ class ExemptPathTests(TestCase):
         resp = self.client.get("/django-admin/login/")
         self.assertEqual(resp.status_code, 200)
 
-    def test_tenant_api_still_requires_a_token(self):
+    def test_hospital_api_still_requires_a_token(self):
         resp = self.client.get("/api/v1/org/branches/")
         self.assertEqual(resp.status_code, 401)
 
@@ -39,25 +39,25 @@ class ExemptPathTests(TestCase):
                 self.assertEqual(self.client.get(path).status_code, 200)
 
 
-class TenantResolutionTests(TestCase):
-    """JWTTenantMiddleware: which DB alias a token's db_name claim may select."""
+class HospitalResolutionTests(TestCase):
+    """JWTHospitalMiddleware: which DB alias a token's db_name claim may select."""
 
     def setUp(self):
         from django.http import HttpResponse
-        from core.db_router import get_tenant_db, set_tenant_db
-        from core.middleware import JWTTenantMiddleware
+        from core.db_router import get_hospital_db, set_hospital_db
+        from core.middleware import JWTHospitalMiddleware
 
         self.seen = []
 
         def view(request):
-            self.seen.append(get_tenant_db())
+            self.seen.append(get_hospital_db())
             return HttpResponse("ok")
 
-        self.middleware = JWTTenantMiddleware(view)
-        self.addCleanup(set_tenant_db, None)
+        self.middleware = JWTHospitalMiddleware(view)
+        self.addCleanup(set_hospital_db, None)
         from core.logging_context import reset_request_identity
         self.addCleanup(reset_request_identity)
-        self.addCleanup(settings.DATABASES.pop, "aw_tenant_mw", None)
+        self.addCleanup(settings.DATABASES.pop, "aw_hospital_mw", None)
 
     def call(self, **claims):
         import time
@@ -68,28 +68,28 @@ class TenantResolutionTests(TestCase):
         token = jwt.encode(payload, settings.JWT_SIGNING_KEY, algorithm="HS256")
         return self.middleware(RequestFactory().get("/api/v1/opd/stats/", HTTP_AUTHORIZATION=f"Bearer {token}"))
 
-    def test_a_staff_token_without_a_tenant_is_rejected(self):
+    def test_a_staff_token_without_a_hospital_is_rejected(self):
         self.assertEqual(self.call().status_code, 401)
 
     def test_an_unknown_db_name_is_rejected_and_not_registered(self):
-        resp = self.call(db_name="aw_tenant_mw")
+        resp = self.call(db_name="aw_hospital_mw")
         self.assertEqual(resp.status_code, 401)
-        self.assertNotIn("aw_tenant_mw", settings.DATABASES)
+        self.assertNotIn("aw_hospital_mw", settings.DATABASES)
 
-    def test_an_active_tenants_alias_is_registered_and_selected(self):
-        from apps.tenants.models import Tenant
-        Tenant.objects.using("default").create(name="MW", subdomain="mw", db_name="aw_tenant_mw")
-        resp = self.call(db_name="aw_tenant_mw")
+    def test_an_active_hospitals_alias_is_registered_and_selected(self):
+        from apps.hospitals.models import Hospital
+        Hospital.objects.using("default").create(name="MW", subdomain="mw", db_name="aw_hospital_mw")
+        resp = self.call(db_name="aw_hospital_mw")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn("aw_tenant_mw", settings.DATABASES)
-        self.assertEqual(self.seen, ["aw_tenant_mw"])
+        self.assertIn("aw_hospital_mw", settings.DATABASES)
+        self.assertEqual(self.seen, ["aw_hospital_mw"])
 
-    def test_an_inactive_tenant_is_rejected(self):
-        from apps.tenants.models import Tenant
-        Tenant.objects.using("default").create(name="MW", subdomain="mw", db_name="aw_tenant_mw", is_active=False)
-        self.assertEqual(self.call(db_name="aw_tenant_mw").status_code, 401)
+    def test_an_inactive_hospital_is_rejected(self):
+        from apps.hospitals.models import Hospital
+        Hospital.objects.using("default").create(name="MW", subdomain="mw", db_name="aw_hospital_mw", is_active=False)
+        self.assertEqual(self.call(db_name="aw_hospital_mw").status_code, 401)
 
-    def test_platform_and_patient_tokens_never_select_a_tenant_alias(self):
+    def test_platform_and_patient_tokens_never_select_a_hospital_alias(self):
         for claims in ({"is_platform": True, "role": "platform_admin"}, {"role": "patient"}):
             with self.subTest(claims=claims):
                 self.seen.clear()
@@ -97,9 +97,9 @@ class TenantResolutionTests(TestCase):
                 self.assertEqual(self.seen, ["default"])
 
     def test_the_alias_does_not_leak_into_the_next_request(self):
-        from apps.tenants.models import Tenant
-        Tenant.objects.using("default").create(name="MW", subdomain="mw", db_name="aw_tenant_mw")
-        self.call(db_name="aw_tenant_mw")
+        from apps.hospitals.models import Hospital
+        Hospital.objects.using("default").create(name="MW", subdomain="mw", db_name="aw_hospital_mw")
+        self.call(db_name="aw_hospital_mw")
         self.seen.clear()
         self.middleware(__import__("django.test", fromlist=["RequestFactory"]).RequestFactory().get("/health/"))
         self.assertEqual(self.seen, ["default"])

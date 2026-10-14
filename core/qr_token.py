@@ -21,8 +21,8 @@ own env var because rotating it invalidates every previously printed QR.
 The QR itself encodes issue_url()'s output — a plain
 "<FRONTEND_URL>/view-report/<token>" link, not the bare token — so a generic
 scanner (Google Lens, any camera app) can open it as a normal webpage
-(apps/patients/document_view_views.py) showing a view-consent prompt. The app's
-own capture flow (apps/patients/portal_views.py "My Reports pipeline") still
+(apps/hospital_patients/document_view_views.py) showing a view-consent prompt. The app's
+own capture flow (apps/hospital_patients/portal_views.py "My Reports pipeline") still
 works unmodified: it forwards whatever string the camera decoded straight
 through to verify(), which accepts either shape (see _extract_token below).
 """

@@ -7,14 +7,14 @@ from .views import (
     StaffProfileView, MyStaffProfileDetailsView,
     StaffBranchesView, MyBranchesView, StaffDoctorsView,
     PermissionListView, RoleListCreateView, RoleDetailView, StaffRolesView,
-    TenantSettingsView, DoctorScheduleView,
+    HospitalSettingsView, DoctorScheduleView,
     FloorListCreateView, FloorDetailView,
     RoomListCreateView, RoomDetailView,
     RoomAssignmentListCreateView, RoomAssignmentDetailView,
     BedListCreateView, BedDetailView, BedMarkCleanView, BedMaintenanceView, BedBoardView,
     DepartmentAvailabilityView,
 )
-from apps.patients.pediatrics.schedule_views import (
+from apps.hospital_patients.pediatrics.schedule_views import (
     VaccinationScheduleListCreateView, VaccinationScheduleDetailView, VaccinationScheduleActivateView,
     MilestoneScheduleListCreateView, MilestoneScheduleDetailView, MilestoneScheduleActivateView,
 )
@@ -77,8 +77,8 @@ urlpatterns = [
     path("milestone-schedules/<int:pk>/",    MilestoneScheduleDetailView.as_view(),     name="milestone-schedule-detail"),
     path("milestone-schedules/<int:pk>/activate/", MilestoneScheduleActivateView.as_view(), name="milestone-schedule-activate"),
 
-    # Tenant-level clinical settings (fee_ownership, etc.)
-    path("settings/",                          TenantSettingsView.as_view(),   name="tenant-settings"),
+    # Hospital-level clinical settings (fee_ownership, etc.)
+    path("settings/",                          HospitalSettingsView.as_view(),   name="hospital-settings"),
 
     # Doctor working-hours schedule
     path("staff/<int:pk>/schedule/",           DoctorScheduleView.as_view(),   name="doctor-schedule"),

@@ -195,7 +195,7 @@ export function AppointmentsPageContent({ embedded = false }) {
   // dependent's guardian/parent name (backend now matches guardian_name
   // too — see PatientService.search) ───────────────────────────────────
   const [isBrowseMode, setIsBrowseMode] = useState(true);
-  // Search intentionally remains hospital-scoped. When the registry knows a
+  // Search intentionally remains hospital-scoped. When the atomwalk knows a
   // mobile number but this hospital has no local Patient row, surface that
   // distinction instead of telling reception the person does not exist.
   const [networkMatch, setNetworkMatch] = useState(null);
@@ -294,8 +294,8 @@ export function AppointmentsPageContent({ embedded = false }) {
   // Load slots when doctor / date changes
   useEffect(() => {
     setSlots([]); setSlot("");
-    if (!doctorId || !date || !user?.tenant_id) return;
-    apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(user.tenant_id, doctorId), { params: { date } })
+    if (!doctorId || !date || !user?.hospital_id) return;
+    apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(user.hospital_id, doctorId), { params: { date } })
       .then(({ data }) => setSlots((data?.results || []).filter(s => !s.past)))
       .catch(() => setSlots([]));
   }, [doctorId, date, user]);
@@ -305,10 +305,10 @@ export function AppointmentsPageContent({ embedded = false }) {
   // refresh in the background so it greys out instead of failing at
   // confirm time, and drop the current selection if it was the one taken.
   useEffect(() => {
-    if (!doctorId || !date || !user?.tenant_id || booking) return undefined;
+    if (!doctorId || !date || !user?.hospital_id || booking) return undefined;
     const id = setInterval(() => {
       if (document.hidden) return;
-      apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(user.tenant_id, doctorId), { params: { date } })
+      apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(user.hospital_id, doctorId), { params: { date } })
         .then(({ data }) => {
           const fresh = (data?.results || []).filter(s => !s.past);
           setSlots(fresh);

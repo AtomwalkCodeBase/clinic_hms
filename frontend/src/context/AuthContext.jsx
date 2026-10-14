@@ -5,7 +5,7 @@
  * and the loading state across the entire app.
  *
  * What it stores:
- *   user      — decoded JWT payload (id, email, role, db_name, tenant_id, license_tier)
+ *   user      — decoded JWT payload (id, email, role, db_name, hospital_id, license_tier)
  *   isLoading — true while verifying token on first mount
  *
  * It does NOT store permissions — see PermissionContext.jsx.
@@ -42,7 +42,7 @@ export function AuthProvider({ children }) {
           ...decoded,
           full_name: decoded.full_name || extra.full_name || "",
           photo: extra.photo || "",
-          // Hospital's own logo (Tenant.logo) — same reasoning as photo:
+          // Hospital's own logo (Hospital.logo) — same reasoning as photo:
           // too big for the JWT, fetched fresh so AppShell's topbar picks
           // up a newly-uploaded logo without needing a fresh login.
           logo: extra.logo || "",

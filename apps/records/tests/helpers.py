@@ -1,13 +1,13 @@
 from apps.records import classification as rules
-from apps.records.models import DocumentText, MedicalDocument, PatientDocumentClassification
-from apps.registry.models import PatientIdentity
+from apps.atomwalk.models import DocumentText, MedicalDocument, PatientDocumentClassification
+from apps.atomwalk.models import Patient
 
 PDF = b"%PDF-1.4\n" + b"x" * 100
 
 
 def identity(awpid="AWP-T1"):
-    """documents.patient is a real foreign key to patient_identity (by AWPID)."""
-    return PatientIdentity.objects.get_or_create(awpid=awpid, defaults={"full_name": "Test Patient"})[0]
+    """documents.patient is a real foreign key to patient (by AWPID)."""
+    return Patient.objects.get_or_create(awpid=awpid, defaults={"full_name": "Test Patient"})[0]
 
 
 def make_doc(awpid="AWP-T1", *, status="queued", document_type=rules.NOT_CLASSIFIED, by=None, text=None, batch=None,

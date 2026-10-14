@@ -258,7 +258,7 @@ function LabOrdersForEncounter({ encounterId }) {
 }
 
 // ─── Vaccinations due today — mirrors the LabOrdersForEncounter pattern:
-// fetch this patient's roadmap (apps/patients/pediatrics/vaccine_schedule.py
+// fetch this patient's roadmap (apps/hospital_patients/pediatrics/vaccine_schedule.py
 // build_roadmap(), same GET the doctor's EncounterPage history sidebar
 // uses) and surface only what's actionable for a nurse right now: a
 // doctor-ordered vaccine not yet given ("ordered"), or a routine schedule

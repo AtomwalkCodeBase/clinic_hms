@@ -10,7 +10,7 @@ ConsentRecord   — immutable proof-of-consent trail (DPDP data-processing
 AccessLog (PHI access audit trail) was removed here (2026-08-17) — it was
 never wired to anything and duplicated a system that already exists and is
 already live: apps.org.AuditLog, written via core.audit.log_action() from
-apps/opd/views.py and apps/patients/views.py. See apps/compliance/views.py's
+apps/opd/views.py and apps/hospital_patients/views.py. See apps/compliance/views.py's
 AuditLogListView, which reads from apps.org.AuditLog rather than this app —
 there is only one PHI access-log table in this codebase, not two.
 
@@ -19,7 +19,7 @@ Data is NEVER deleted regardless of account status (legal requirement).
 
 from django.db import models
 from apps.org.models import StaffUser
-from apps.patients.models import Patient
+from apps.hospital_patients.models import HospitalPatient
 
 
 class RecordAmendment(models.Model):
@@ -34,7 +34,7 @@ class RecordAmendment(models.Model):
         ("rejected", "Rejected with Reason"),
     ]
 
-    patient         = models.ForeignKey(Patient, on_delete=models.PROTECT,
+    patient         = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT,
                                         related_name="amendments")
     resource_type   = models.CharField(max_length=50)   # which table/field
     resource_id     = models.IntegerField()
@@ -63,7 +63,7 @@ class ConsentRecord(models.Model):
     Immutable proof-of-consent trail (DPDP Act 2023).
 
     Patient.dpdp_consent_captured/dpdp_consent_at and
-    Patient.hie_consent_given/hie_consent_at (apps.patients.models) are the
+    Patient.hie_consent_given/hie_consent_at (apps.hospital_patients.models) are the
     fast "is this patient currently consented" flags checked at request time
     — see PatientHistoryView and PortalBookView. Those fields are mutable
     columns on a row that's updated for other reasons too, so they're not
@@ -73,8 +73,8 @@ class ConsentRecord(models.Model):
 
     ConsentRecord is the append-only trail behind those flags — one row
     per consent EVENT, written at the same two points the boolean flags are
-    set (apps.patients.services.PatientService.register for front-desk
-    registration, apps.patients.portal_views.PortalBookView for a patient's
+    set (apps.hospital_patients.services.PatientService.register for front-desk
+    registration, apps.hospital_patients.portal_views.PortalBookView for a patient's
     first booking at a new hospital), never edited or deleted afterward.
     """
     CONSENT_DPDP_PROCESSING = "dpdp_data_processing"
@@ -96,7 +96,7 @@ class ConsentRecord(models.Model):
         (SOURCE_PORTAL,     "Patient Portal"),
     ]
 
-    patient         = models.ForeignKey(Patient, on_delete=models.PROTECT,
+    patient         = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT,
                                         related_name="consent_records")
     consent_type    = models.CharField(max_length=30, choices=CONSENT_TYPE_CHOICES, db_index=True)
     granted         = models.BooleanField(default=True)

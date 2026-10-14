@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from core import storage as blob_storage
 from apps.billing.models import OptionList
-from apps.patients.age_utils import age_years_months as _age_years_months
+from apps.hospital_patients.age_utils import age_years_months as _age_years_months
 from .models import LabTest, LabRequest, LabReport, LabReportItem
 
 
@@ -28,8 +28,8 @@ class LabTestSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"]
 
     def validate_sample_type(self, value):
-        tenant_db = self.context.get("tenant_db")
-        if tenant_db and not OptionList.objects.using(tenant_db).filter(
+        hospital_db = self.context.get("hospital_db")
+        if hospital_db and not OptionList.objects.using(hospital_db).filter(
             list_type=OptionList.LIST_SAMPLE_TYPE, value=value, is_active=True,
         ).exists():
             raise serializers.ValidationError("Not a configured sample type for this hospital.")
@@ -142,7 +142,7 @@ class LabRequestSerializer(serializers.ModelSerializer):
             awpid = obj.patient.awpid
         except Exception:
             return None
-        from apps.records.models import MedicalDocument
+        from apps.atomwalk.models import MedicalDocument
         doc = (MedicalDocument.objects.using("default")
                .filter(patient__awpid=awpid, source_ref=f"labreq:{db}:{obj.id}")
                .order_by("-created_at").first())

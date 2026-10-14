@@ -12,7 +12,7 @@ from .models import NurseDoctorAssignment
 
 
 def get_nurse_doctor_ids(nurse_id, db_name):
-    """All doctor IDs a nurse is assigned to, in this tenant DB."""
+    """All doctor IDs a nurse is assigned to, in this hospital DB."""
     return set(
         NurseDoctorAssignment.objects.using(db_name)
         .filter(nurse_id=nurse_id)

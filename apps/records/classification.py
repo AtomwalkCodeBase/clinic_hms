@@ -246,7 +246,7 @@ def classify_document_by_rules(text):
 def store_rule_result(document, result):
     """Save the rules' verdict: the classification row and the document's current type. A person's choice is
     never overwritten. Does not touch the document's pipeline status."""
-    from .models import PatientDocumentClassification
+    from apps.atomwalk.models import PatientDocumentClassification
     classification, _ = PatientDocumentClassification.objects.using("default").get_or_create(document=document)
     if classification.status in (HUMAN_CLASSIFIED, ISSUED):
         return classification
@@ -267,7 +267,7 @@ def store_human_choice(document, document_type):
     """A person files the document under `document_type`. It replaces whatever the rules said."""
     if document_type not in CHOOSABLE_TYPES:
         raise ValueError("Choose one of the available document types.")
-    from .models import PatientDocumentClassification
+    from apps.atomwalk.models import PatientDocumentClassification
     classification, _ = PatientDocumentClassification.objects.using("default").get_or_create(document=document)
     classification.human_document_type = document_type
     classification.final_document_type = document_type
@@ -279,7 +279,7 @@ def store_human_choice(document, document_type):
 
 def store_issued_type(document, document_type):
     """A hospital-issued document brings its own type: no rules, no review."""
-    from .models import PatientDocumentClassification
+    from apps.atomwalk.models import PatientDocumentClassification
     document_type = document_type if document_type in CHOOSABLE_TYPES else "other"
     classification, _ = PatientDocumentClassification.objects.using("default").get_or_create(document=document)
     classification.classifier = CLASSIFIER_HOSPITAL

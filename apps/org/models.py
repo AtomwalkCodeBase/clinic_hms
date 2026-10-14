@@ -1,12 +1,12 @@
 """
 apps/org/models.py
 ------------------
-Tenant DB models for organisational structure.
+Hospital DB models for organisational structure.
 
 Tables: Branch, Department, StaffUser, DoctorProfile
 
 Notes:
-  - StaffUser extends Django's User (stored per-tenant).
+  - StaffUser extends Django's User (stored per-hospital).
   - set_unusable_password() is called on creation — staff set their own passwords
     via the self-service setup-password endpoint.
   - Branch.lat/lng for map display.
@@ -19,7 +19,7 @@ from django.db import models
 class NextNumber(models.Model):
     """
     NNTM — Next Number Table Manager.
-    One row per (branch, entity) pair. Lives in tenant DB (app_label="org").
+    One row per (branch, entity) pair. Lives in hospital DB (app_label="org").
     get_next_number() in core/utils/nntm.py uses SELECT FOR UPDATE for uniqueness.
 
     Entities: uhid, invoice, lab_report, prescription, queue
@@ -77,14 +77,14 @@ class Department(models.Model):
 
 class StaffUser(models.Model):
     """
-    Per-tenant staff user. Plain Django model (not AUTH_USER_MODEL).
+    Per-hospital staff user. Plain Django model (not AUTH_USER_MODEL).
     Passwords are stored as Django-hashed strings but NEVER set by admin —
     staff use the invite + setup-password flow.
 
     role choices must match JWT role claims and frontend ROLES constants.
 
     Login identifier is phone (mobile number), not email — see
-    registry.StaffMobileIndex. email is kept as an optional field (still
+    atomwalk.StaffMobileIndex. email is kept as an optional field (still
     useful for notifications/records) but is no longer required or used to
     route login.
     """
@@ -128,9 +128,9 @@ class StaffUser(models.Model):
     phone               = models.CharField(max_length=20, unique=True)
     # Optional secondary login identifier for hospitals that already run an
     # HR/payroll system with employee IDs (enterprise tier mainly). Unlike
-    # phone, this is only unique WITHIN this tenant's own database — two
+    # phone, this is only unique WITHIN this hospital's own database — two
     # hospitals can both have an "EMP-001" — so logging in with it requires
-    # a tenant hint (hospital subdomain) that mobile-based login doesn't
+    # a hospital hint (hospital subdomain) that mobile-based login doesn't
     # need. See StaffLoginView / docs/onboarding_auth_rbac_architecture.md 3.1.2.
     employee_id         = models.CharField(max_length=50, unique=True, null=True, blank=True)
     date_of_birth       = models.DateField(null=True, blank=True)
@@ -245,7 +245,7 @@ class Permission(models.Model):
     Fixed catalog of grantable actions — see apps.org.rbac.PERMISSION_CATALOG
     for the canonical list of codes and apps.org.rbac.SYSTEM_ROLE_PERMISSIONS
     for which system role grants which codes by default. Seeded into every
-    tenant DB by the 0013 migration; not editable via the API (the catalog
+    hospital DB by the 0013 migration; not editable via the API (the catalog
     itself is a deploy-time constant — what a hospital CAN configure is which
     permissions a custom Role grants, not the existence of a permission).
     """
@@ -263,7 +263,7 @@ class Permission(models.Model):
 
 class Role(models.Model):
     """
-    A named bundle of permissions. Every tenant DB is seeded with the 6
+    A named bundle of permissions. Every hospital DB is seeded with the 6
     system roles (is_system_role=True) matching StaffUser.ROLE_CHOICES —
     these back the existing hardcoded Is* permission classes and can't be
     edited or deleted via the API. Hospitals on the enterprise tier
@@ -273,7 +273,7 @@ class Role(models.Model):
     fast-path primary role used for JWT claims and the existing Is* DRF
     permission checks (see docs/onboarding_auth_rbac_architecture.md 4.3).
     Role/Permission/UserRole is an additive layer for hospitals that need
-    finer-grained or custom grants beyond the 6 defaults — most tenants will
+    finer-grained or custom grants beyond the 6 defaults — most hospitals will
     never touch this beyond viewing it.
     """
     name          = models.CharField(max_length=100)
@@ -293,8 +293,8 @@ class Role(models.Model):
     # patient booking search" needs an explicit identity signal, not an
     # inference from which permission codes happen to be checked. Every
     # hardcoded Is* check in core/permissions.py and every "list all
-    # doctors"-style query (apps.org.views.DoctorListView, apps.tenants.
-    # limits, apps.patients.portal_views) treats role="custom" staff whose
+    # doctors"-style query (apps.org.views.DoctorListView, apps.hospitals.
+    # limits, apps.hospital_patients.portal_views) treats role="custom" staff whose
     # custom_role.acts_as contains a key the same as staff whose literal
     # `role` field equals that key. Empty for a blank/never-set list (never
     # None — see apps.org.rbac.resolve_acts_as, which always wants an
@@ -327,7 +327,7 @@ class UserRole(models.Model):
     Extra roles a staff member holds beyond their primary StaffUser.role —
     e.g. a doctor who's also the hospital admin at a small clinic. The
     primary role always keeps working via the fast-path Is* checks; this
-    table only matters for tenants using custom RBAC (get_effective_permissions
+    table only matters for hospitals using custom RBAC (get_effective_permissions
     unions the primary role's system-role permissions with anything granted
     here).
     """
@@ -427,8 +427,8 @@ class StaffProfile(models.Model):
 
 class AuditLog(models.Model):
     """
-    Who did what to which patient record, when. Lives per-tenant since
-    patient records are per-tenant; use core.audit.log_action() to write
+    Who did what to which patient record, when. Lives per-hospital since
+    patient records are per-hospital; use core.audit.log_action() to write
     entries rather than creating rows directly.
 
     Deliberately append-only from the application layer — no update/delete
@@ -576,7 +576,7 @@ class Room(models.Model):
     # hospital-configurable via billing.OptionList(list_type="room_type"),
     # same mechanism as Invoice.status / Payment.payment_mode / Drug.form.
     # Validated at the view layer (org.views.RoomListCreateView/RoomDetailView),
-    # not here, since a DB choices= constraint can't be extended per-tenant.
+    # not here, since a DB choices= constraint can't be extended per-hospital.
     """
 
     branch      = models.ForeignKey(Branch, on_delete=models.CASCADE, related_name="rooms")

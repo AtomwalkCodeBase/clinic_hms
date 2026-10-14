@@ -4,7 +4,7 @@ core/utils/hashing.py
 DPDP Act 2023 compliant hashing utilities.
 
 mobile_hash: SHA-256 of the normalized phone number (+91XXXXXXXXXX format).
-We never store plain mobile numbers in the Registry DB — only the hash.
+We never store plain mobile numbers in the Atomwalk DB — only the hash.
 This allows patient lookup by phone without storing the phone number itself.
 """
 
@@ -53,7 +53,7 @@ def hash_mobile(mobile: str) -> str:
     """
     Return the SHA-256 hash of a normalized mobile number.
 
-    This is the value stored in patient_identity.mobile_hash.
+    This is the value stored in patient.mobile_hash.
     Used for patient lookup and deduplication without storing PII.
 
     Args:
@@ -72,7 +72,7 @@ def verify_mobile(mobile: str, stored_hash: str) -> bool:
 
     Args:
         mobile:      Raw mobile number to check.
-        stored_hash: The SHA-256 hash stored in patient_identity.mobile_hash.
+        stored_hash: The SHA-256 hash stored in patient.mobile_hash.
 
     Returns:
         True if the mobile matches the hash, False otherwise.

@@ -1,14 +1,14 @@
-from apps.org.views import TenantSettingsView
-from apps.tenants.models import Tenant
-from core.testing import TenantDBTestCase, requires_tenant_db
+from apps.org.views import HospitalSettingsView
+from apps.hospitals.models import Hospital
+from core.testing import HospitalDBTestCase, requires_hospital_db
 
 
-@requires_tenant_db
-class TenantSettingsAccessTests(TenantDBTestCase):
+@requires_hospital_db
+class HospitalSettingsAccessTests(HospitalDBTestCase):
     def get(self, role):
-        tenant = Tenant.objects.using("default").create(name="T", subdomain="t", db_name="x", fee_ownership="hospital")
-        return self.call_view(TenantSettingsView.as_view(), "get", "/api/v1/org/settings/",
-                              user_id=1, role=role, tenant_id=tenant.id)
+        hospital = Hospital.objects.using("default").create(name="T", subdomain="t", db_name="x", fee_ownership="hospital")
+        return self.call_view(HospitalSettingsView.as_view(), "get", "/api/v1/org/settings/",
+                              user_id=1, role=role, hospital_id=hospital.id)
 
     def test_doctor_reads_only_fee_ownership(self):
         resp = self.get("doctor")
@@ -21,6 +21,6 @@ class TenantSettingsAccessTests(TenantDBTestCase):
         self.assertIn("default_tax_rate", resp.data["data"])
 
     def test_doctor_cannot_patch(self):
-        resp = self.call_view(TenantSettingsView.as_view(), "patch", "/api/v1/org/settings/",
+        resp = self.call_view(HospitalSettingsView.as_view(), "patch", "/api/v1/org/settings/",
                               user_id=1, role="doctor", data={"fee_ownership": "doctor"})
         self.assertEqual(resp.status_code, 403)

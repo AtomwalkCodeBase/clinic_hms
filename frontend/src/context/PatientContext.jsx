@@ -9,7 +9,7 @@
  *
  * Convention: awpid === null means "self" (the account owner) — this
  * matches the backend's own convention (see _resolve_target_awpid_and_dob
- * in apps/patients/portal_views.py: an empty/missing patient_awpid
+ * in apps/hospital_patients/portal_views.py: an empty/missing patient_awpid
  * defaults to the account owner). Pages that call the my-records /
  * health-summary / growth / vaccinations endpoints should only send a
  * patient_awpid param when selectedPatient.awpid is set.

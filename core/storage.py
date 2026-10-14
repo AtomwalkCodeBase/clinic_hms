@@ -6,9 +6,9 @@ doctor signatures, lab reports, patient-uploaded documents, vaccination
 certificates).
 
 Replaces the old convention of storing files as base64 data URIs directly in
-a Postgres TextField (StaffUser.photo, PatientAccount.photo, Tenant.logo,
+a Postgres TextField (StaffUser.photo, PatientAccount.photo, Hospital.logo,
 DoctorProfile.digital_signature, LabReport.file_url, and
-registry.SharedDocument / SharedLabResult / SharedVaccination.file_data) —
+atomwalk.SharedDocument / SharedLabResult / SharedVaccination.file_data) —
 that was fine for a demo but doesn't scale: every row load pulls the full
 file bytes through Postgres, backups balloon with binary data, and there's
 no CDN/caching in front of any of it.
@@ -49,7 +49,7 @@ def sanitize_folder_name(name: str) -> str:
     Normalize a hospital admin's chosen S3 folder name into a safe key
     segment: lowercase, alphanumeric + hyphens only, no leading/trailing or
     repeated hyphens. Returns "" for a blank/all-invalid input — callers
-    treat that the same as "not set" (see tenant_folder() below).
+    treat that the same as "not set" (see hospital_folder() below).
     """
     if not name:
         return ""
@@ -57,21 +57,21 @@ def sanitize_folder_name(name: str) -> str:
     return slug[:_FOLDER_MAX_LEN].rstrip("-")
 
 
-def tenant_folder(tenant) -> str:
+def hospital_folder(hospital) -> str:
     """
-    The S3 folder segment to use for this tenant's uploads — their own
-    chosen Tenant.storage_folder (hospital admin editable via
+    The S3 folder segment to use for this hospital's uploads — their own
+    chosen Hospital.storage_folder (hospital admin editable via
     /api/v1/org/settings/) if they've set one, otherwise the auto-generated
     db_name. This is the ONE place that fallback is resolved, so every
     upload call site (staff photos, doctor signatures, hospital logo, lab
     reports) picks up a folder rename automatically instead of needing to
     be updated one by one.
 
-    Takes the Tenant model instance, not just its id/db_name, since
+    Takes the Hospital model instance, not just its id/db_name, since
     storage_folder already went through sanitize_folder_name() at write
-    time (see TenantSettingsView.patch()) — no re-sanitizing needed here.
+    time (see HospitalSettingsView.patch()) — no re-sanitizing needed here.
     """
-    return tenant.storage_folder or tenant.db_name
+    return hospital.storage_folder or hospital.db_name
 
 
 def identity_slug(*, name: str = "", identifier: str = "") -> str:

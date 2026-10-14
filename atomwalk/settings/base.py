@@ -2,9 +2,9 @@
 Base settings for Atomwalk Healthcare Platform.
 
 Architecture:
-  - 'default' DB  → Registry DB (shared: tenants, users, subscriptions)
-  - Tenant DBs    → one PostgreSQL DB per hospital, resolved at request time
-                    via TenantDatabaseRouter using thread-local context
+  - 'default' DB  → Atomwalk DB (shared: hospitals, users, subscriptions)
+  - Hospital DBs    → one PostgreSQL DB per hospital, resolved at request time
+                    via HospitalDatabaseRouter using thread-local context
 """
 
 from pathlib import Path
@@ -89,18 +89,18 @@ THIRD_PARTY_APPS = [
     "corsheaders",
     "django_filters",
     "drf_spectacular",
-    "django_celery_beat",   # DB-backed Beat schedule; kept in sync by apps.records.models.SweepConfig
+    "django_celery_beat",   # DB-backed Beat schedule; kept in sync by apps.atomwalk.models.SweepConfig
 ]
 
 LOCAL_APPS = [
-    # Registry DB apps (live in 'default' DB)
-    "apps.tenants",
-    "apps.registry",
+    # Atomwalk DB apps (live in 'default' DB)
+    "apps.hospitals",
+    "apps.atomwalk",
     "apps.records",
-    # Per-tenant apps
+    # Per-hospital apps
     "apps.auth_app",
     "apps.org",
-    "apps.patients",
+    "apps.hospital_patients",
     "apps.opd",
     "apps.ipd",  # Phase 1 — admission intake only. See apps/ipd/models.py module docstring.
     # apps.scheduling removed — duplicate of apps.opd's Appointment/queue models,
@@ -136,8 +136,8 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    # Atomwalk: JWT decode + tenant DB routing (must be after Django's auth middleware)
-    "core.middleware.JWTTenantMiddleware",
+    # Atomwalk: JWT decode + hospital DB routing (must be after Django's auth middleware)
+    "core.middleware.JWTHospitalMiddleware",
 ]
 
 ROOT_URLCONF = "atomwalk.urls"
@@ -162,30 +162,30 @@ WSGI_APPLICATION = "atomwalk.wsgi.application"
 ASGI_APPLICATION = "atomwalk.asgi.application"
 
 # ── Databases ────────────────────────────────────────────────────────────────
-# 'default' is always the Registry DB.
-# Tenant DBs are added dynamically at runtime via TenantDatabaseRouter.
+# 'default' is always the Atomwalk DB.
+# Hospital DBs are added dynamically at runtime via HospitalDatabaseRouter.
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": config("REGISTRY_DB_NAME", default="atomwalk_registry"),
-        "USER": config("REGISTRY_DB_USER", default="postgres"),
-        "PASSWORD": config("REGISTRY_DB_PASSWORD", default="password"),
-        "HOST": config("REGISTRY_DB_HOST", default="localhost"),
-        "PORT": config("REGISTRY_DB_PORT", default="5432"),
+        "NAME": config("ATOMWALK_DB_NAME", default="atomwalk"),
+        "USER": config("ATOMWALK_DB_USER", default="postgres"),
+        "PASSWORD": config("ATOMWALK_DB_PASSWORD", default="password"),
+        "HOST": config("ATOMWALK_DB_HOST", default="localhost"),
+        "PORT": config("ATOMWALK_DB_PORT", default="5432"),
         "OPTIONS": {"options": "-c search_path=public"},
         "CONN_MAX_AGE": 60,
     }
 }
 
-# Tenant DB connection template (populated by TenantDatabaseRouter at runtime)
+# Hospital DB connection template (populated by HospitalDatabaseRouter at runtime)
 # Must include all keys Django's DatabaseWrapper accesses directly (not via .get()).
-TENANT_DB_CONFIG_TEMPLATE = {
+HOSPITAL_DB_CONFIG_TEMPLATE = {
     "ENGINE": "django.db.backends.postgresql",
     "NAME": "",
-    "USER": config("TENANT_DB_USER", default="postgres"),
-    "PASSWORD": config("TENANT_DB_PASSWORD", default="password"),
-    "HOST": config("TENANT_DB_HOST", default="localhost"),
-    "PORT": config("TENANT_DB_PORT", default="5432"),
+    "USER": config("HOSPITAL_DB_USER", default="postgres"),
+    "PASSWORD": config("HOSPITAL_DB_PASSWORD", default="password"),
+    "HOST": config("HOSPITAL_DB_HOST", default="localhost"),
+    "PORT": config("HOSPITAL_DB_PORT", default="5432"),
     "CONN_MAX_AGE": 60,
     "TIME_ZONE": None,
     "OPTIONS": {},
@@ -195,7 +195,7 @@ TENANT_DB_CONFIG_TEMPLATE = {
 }
 
 # Custom DB router
-DATABASE_ROUTERS = ["core.db_router.TenantDatabaseRouter"]
+DATABASE_ROUTERS = ["core.db_router.HospitalDatabaseRouter"]
 
 # ── Password Validation ──────────────────────────────────────────────────────
 AUTH_PASSWORD_VALIDATORS = [
@@ -230,13 +230,13 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ── Custom User Model ────────────────────────────────────────────────────────
 # Using Django's built-in User for platform admin (Django admin panel).
-# Per-tenant staff use apps.org.StaffUser, which extends AbstractUser separately.
+# Per-hospital staff use apps.org.StaffUser, which extends AbstractUser separately.
 # AUTH_USER_MODEL is intentionally NOT overridden — StaffUser is a standalone model.
 
 # ── DRF ─────────────────────────────────────────────────────────────────────
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "core.authentication.JWTTenantAuthentication",
+        "core.authentication.JWTHospitalAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -272,23 +272,23 @@ REST_FRAMEWORK = {
         # per-code attempt cap (core.otp.MAX_VERIFY_ATTEMPTS) are the real
         # defenses; this is a per-IP backstop on top of them.
         "otp": "6/min",
-        # Emergency QR summary view (apps/patients/emergency_views.py) — public,
+        # Emergency QR summary view (apps/hospital_patients/emergency_views.py) — public,
         # unauthenticated, reachable by anyone with the token. The token itself
         # is an unguessable signed JWT and expires in ~20 minutes, so this is a
         # per-IP backstop against scripted enumeration, not the primary defense.
         "emergency": "20/min",
-        # Consultation-scratchpad pad (apps/patients/consult_pad_views.py) —
+        # Consultation-scratchpad pad (apps/hospital_patients/consult_pad_views.py) —
         # public, unauthenticated, reached by scanning a permanent per-patient
         # QR. The 43-char random token is the real gate; this is a per-IP
         # backstop against someone scripting note spam against a leaked code.
         "consult_pad": "20/min",
-        # "Records Access" break-glass sharing (apps/patients/records_share_views.py)
+        # "Records Access" break-glass sharing (apps/hospital_patients/records_share_views.py)
         # — public, unauthenticated, token-gated. Higher than the others
         # because the doctor's laptop polls the status endpoint every few
         # seconds while it waits for the patient to approve. The 32-char
         # random token is the real gate; this is a per-IP backstop.
         "records_share": "90/min",
-        # Public document-view page (apps/patients/document_view_views.py) —
+        # Public document-view page (apps/hospital_patients/document_view_views.py) —
         # what a printed prescription/lab-report QR opens for a non-app
         # scanner (Google Lens etc). Permanent, unguessable signed token is
         # the real gate; this is a per-IP backstop.
@@ -322,7 +322,7 @@ CORS_ALLOW_HEADERS = (*_cors_default_headers, "x-share-device")
 # ── API Docs (drf-spectacular) ───────────────────────────────────────────────
 SPECTACULAR_SETTINGS = {
     "TITLE": "Atomwalk Healthcare Platform API",
-    "DESCRIPTION": "Multi-tenant hospital management system API",
+    "DESCRIPTION": "Multi-hospital hospital management system API",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
@@ -414,7 +414,7 @@ CONSULT_PAD_LLM_MODEL = config("CONSULT_PAD_LLM_MODEL", default="qwen/qwen3.8-27
 CONSULT_PAD_LLM_KEY   = config("CONSULT_PAD_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
 
 # All three sweep settings (instant-upload file limit, per-run dispatch limit, and how often the
-# sweep runs) are Platform Admin-editable at runtime — apps.records.models.SweepConfig, via
+# sweep runs) are Platform Admin-editable at runtime — apps.atomwalk.models.SweepConfig, via
 # apps/platform_admin/classification_rule_views.py. No env vars, no restart, for any of them: the
 # interval is DB-backed (django_celery_beat's DatabaseScheduler below), kept in sync by
 # SweepConfig.save() creating/updating its PeriodicTask + IntervalSchedule rows.

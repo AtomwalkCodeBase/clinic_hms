@@ -2,7 +2,7 @@
 from django.test import SimpleTestCase, TestCase
 
 from apps.records import classification as c
-from apps.records.models import PatientDocumentClassification
+from apps.atomwalk.models import PatientDocumentClassification
 from apps.records.tests.helpers import make_doc, reload
 
 RX = "Dr ABC Rx Paracetamol Syrup 5 ml TDS Diagnosis: Viral fever"

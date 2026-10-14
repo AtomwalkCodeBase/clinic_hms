@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from apps.patients.age_utils import age_years_months as _age_years_months
+from apps.hospital_patients.age_utils import age_years_months as _age_years_months
 from apps.billing.models import OptionList
 from .models import Appointment, Vitals, OPDEncounter, Prescription, PrescriptionItem, PrescriptionFavourite
 
@@ -54,10 +54,10 @@ class AppointmentSerializer(serializers.ModelSerializer):
 
     def _get_patient(self, obj):
         try:
-            from apps.patients.models import Patient
+            from apps.hospital_patients.models import HospitalPatient
             db = self.context.get("db") or (getattr(obj, "_state", None) and obj._state.db)
             if db:
-                return Patient.objects.using(db).filter(uuid=obj.patient_id).first()
+                return HospitalPatient.objects.using(db).filter(uuid=obj.patient_id).first()
         except Exception:
             pass
         return None
@@ -106,8 +106,8 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
         ]
 
     def validate_appointment_type(self, value):
-        tenant_db = self.context.get("tenant_db")
-        if tenant_db and not OptionList.objects.using(tenant_db).filter(
+        hospital_db = self.context.get("hospital_db")
+        if hospital_db and not OptionList.objects.using(hospital_db).filter(
             list_type=OptionList.LIST_APPOINTMENT_TYPE, value=value, is_active=True,
         ).exists():
             raise serializers.ValidationError("Not a configured appointment type for this hospital.")
@@ -191,10 +191,10 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
 
     def _patient(self, obj):
         try:
-            from apps.patients.models import Patient
+            from apps.hospital_patients.models import HospitalPatient
             db = getattr(obj._state, "db", None) or self.context.get("db")
             if db:
-                return Patient.objects.using(db).filter(uuid=obj.patient_id).first()
+                return HospitalPatient.objects.using(db).filter(uuid=obj.patient_id).first()
         except Exception:
             pass
         return None

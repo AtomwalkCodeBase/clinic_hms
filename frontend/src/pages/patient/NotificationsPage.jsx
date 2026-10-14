@@ -50,15 +50,15 @@ export default function NotificationsPage() {
   const unreadCount = data?.unread_count ?? 0;
 
   async function markRead(n) {
-    // Only real NotificationLog rows ("<tenant_db>:<log_id>") can be marked
+    // Only real NotificationLog rows ("<hospital_db>:<log_id>") can be marked
     // read — vaccination-due items are computed live with no backing row.
     const sepIndex = n.id.indexOf(":");
     if (sepIndex === -1 || n.type === "vaccination_due") return;
-    const tenantDb = n.id.slice(0, sepIndex);
+    const hospitalDb = n.id.slice(0, sepIndex);
     const logId = n.id.slice(sepIndex + 1);
     setMarkingId(n.id);
     try {
-      await apiClient.post(API_ENDPOINTS.PORTAL.NOTIFICATION_READ(tenantDb, logId));
+      await apiClient.post(API_ENDPOINTS.PORTAL.NOTIFICATION_READ(hospitalDb, logId));
       refetch();
     } catch {
       // Best-effort — leaving it unread just means it stays highlighted, not harmful.

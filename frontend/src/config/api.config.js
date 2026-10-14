@@ -1,7 +1,7 @@
 /**
  * config/api.config.js
  * --------------------
- * Central registry of ALL API endpoints used by Atomwalk HMS frontend.
+ * Central atomwalk of ALL API endpoints used by Atomwalk HMS frontend.
  *
  * Rules:
  *   - Never hardcode any URL in a component or service file.
@@ -38,13 +38,13 @@ export const API_ENDPOINTS = {
     STAFF_TIMELINE: (patientPk) => `${API_V1}/records/patients/${patientPk}/timeline/`,   // the same, for a doctor or nurse              // conditions / symptoms / medications by date
   },
   PLATFORM: {
-    TENANTS:          `${API_V1}/platform/tenants/`,
-    TENANT:     (id) => `${API_V1}/platform/tenants/${id}/`,
-    TENANT_AUDIT_LOG: (id) => `${API_V1}/platform/tenants/${id}/audit-log/`,
-    TENANT_OVERVIEW:  (id) => `${API_V1}/platform/tenants/${id}/overview/`,
-    TENANT_STAFF:     (id) => `${API_V1}/platform/tenants/${id}/staff/`,
-    TENANT_STAFF_DETAIL: (id, staffId) => `${API_V1}/platform/tenants/${id}/staff/${staffId}/`,
-    TENANT_STAFF_RESET_PASSWORD: (id, staffId) => `${API_V1}/platform/tenants/${id}/staff/${staffId}/reset-password/`,
+    HOSPITALS:          `${API_V1}/platform/hospitals/`,
+    HOSPITAL:     (id) => `${API_V1}/platform/hospitals/${id}/`,
+    HOSPITAL_AUDIT_LOG: (id) => `${API_V1}/platform/hospitals/${id}/audit-log/`,
+    HOSPITAL_OVERVIEW:  (id) => `${API_V1}/platform/hospitals/${id}/overview/`,
+    HOSPITAL_STAFF:     (id) => `${API_V1}/platform/hospitals/${id}/staff/`,
+    HOSPITAL_STAFF_DETAIL: (id, staffId) => `${API_V1}/platform/hospitals/${id}/staff/${staffId}/`,
+    HOSPITAL_STAFF_RESET_PASSWORD: (id, staffId) => `${API_V1}/platform/hospitals/${id}/staff/${staffId}/reset-password/`,
     STATS:            `${API_V1}/platform/stats/`,
     PLANS:            `${API_V1}/platform/plans/`,
     USERS:            `${API_V1}/platform/users/`,
@@ -159,25 +159,25 @@ export const API_ENDPOINTS = {
     STATS:                 `${API_V1}/portal/stats/`,
     SEARCH:                `${API_V1}/portal/search/`,
     SPECIALTIES:           `${API_V1}/portal/specialties/`,
-    DOCTORS:   (tenantId) => `${API_V1}/portal/hospitals/${tenantId}/doctors/`,
-    DOCTOR_DETAIL: (tenantId, doctorId) => `${API_V1}/portal/hospitals/${tenantId}/doctors/${doctorId}/`,
-    SLOTS: (tenantId, doctorId) => `${API_V1}/portal/hospitals/${tenantId}/doctors/${doctorId}/slots/`,
+    DOCTORS:   (hospitalId) => `${API_V1}/portal/hospitals/${hospitalId}/doctors/`,
+    DOCTOR_DETAIL: (hospitalId, doctorId) => `${API_V1}/portal/hospitals/${hospitalId}/doctors/${doctorId}/`,
+    SLOTS: (hospitalId, doctorId) => `${API_V1}/portal/hospitals/${hospitalId}/doctors/${doctorId}/slots/`,
     BOOK:                  `${API_V1}/portal/book/`,
     MY_BOOKINGS:           `${API_V1}/portal/my-bookings/`,
     CANCEL_BOOKING:  (id) => `${API_V1}/portal/my-bookings/${id}/cancel/`,
     RESCHEDULE_BOOKING:(id) => `${API_V1}/portal/my-bookings/${id}/reschedule/`,
     MY_RECORDS:            `${API_V1}/portal/my-records/`,
     INVOICES:              `${API_V1}/portal/invoices/`,
-    INVOICE_RECEIPT: (tenantDb, id) => `${API_V1}/portal/invoices/${tenantDb}/${id}/receipt/`,
+    INVOICE_RECEIPT: (hospitalDb, id) => `${API_V1}/portal/invoices/${hospitalDb}/${id}/receipt/`,
     DOCUMENTS:             `${API_V1}/portal/documents/`,
     DOCUMENT: (id) =>       `${API_V1}/portal/documents/${id}/`,
     DOCUMENTS_ZIP:         `${API_V1}/portal/documents/zip/`,
     LAB_ORDERS:            `${API_V1}/portal/lab-orders/`,
     LAB_ORDER_CHOICE:      `${API_V1}/portal/lab-orders/choice/`,
-    LAB_REPORT_FILE: (tenantDb, requestId) => `${API_V1}/portal/lab-orders/${tenantDb}/${requestId}/report/`,
+    LAB_REPORT_FILE: (hospitalDb, requestId) => `${API_V1}/portal/lab-orders/${hospitalDb}/${requestId}/report/`,
     PRESCRIPTIONS:         `${API_V1}/portal/prescriptions/`,
     PRESCRIPTION_CHOICE:   `${API_V1}/portal/prescriptions/choice/`,
-    PRESCRIPTION_RECEIPT: (tenantDb, id) => `${API_V1}/portal/prescriptions/${tenantDb}/${id}/receipt/`,
+    PRESCRIPTION_RECEIPT: (hospitalDb, id) => `${API_V1}/portal/prescriptions/${hospitalDb}/${id}/receipt/`,
     PROFILE:                `${API_V1}/portal/profile/`,
     CHANGE_PASSWORD:        `${API_V1}/portal/profile/change-password/`,
     // Forgot-password is now OTP-based — see AUTH.OTP_REQUEST / AUTH.OTP_VERIFY
@@ -193,7 +193,7 @@ export const API_ENDPOINTS = {
     MILESTONES:             `${API_V1}/portal/milestones/`,
     TIMELINE:               `${API_V1}/portal/timeline/`,
     NOTIFICATIONS:          `${API_V1}/portal/notifications/`,
-    NOTIFICATION_READ: (tenantDb, id) => `${API_V1}/portal/notifications/${tenantDb}/${id}/read/`,
+    NOTIFICATION_READ: (hospitalDb, id) => `${API_V1}/portal/notifications/${hospitalDb}/${id}/read/`,
     EMERGENCY_TOKEN:        `${API_V1}/portal/emergency/token/`,
     // "Share Records" — patient-authenticated half: the patient CREATES the
     // session here, then approves / ends / releases downloads / lists access.
@@ -211,7 +211,7 @@ export const API_ENDPOINTS = {
   },
 
   // "Share Records" — public, token-gated half the doctor's laptop reads
-  // (see apps/patients/records_share_views.py). publicClient: no login.
+  // (see apps/hospital_patients/records_share_views.py). publicClient: no login.
   RECORDS_SHARE: {
     // The doctor's laptop binds itself to a session — by the patient's
     // 6-digit code (typed at /s) or by the link's own token.
@@ -223,7 +223,7 @@ export const API_ENDPOINTS = {
     CLOSE:   (token) => `${API_V1}/records-share/${token}/close/`,
   },
 
-  // Emergency QR summary — public, no auth (see apps/patients/emergency_views.py).
+  // Emergency QR summary — public, no auth (see apps/hospital_patients/emergency_views.py).
   // Fetched with publicClient, not apiClient, since the person scanning this
   // has no Atomwalk login at all.
   EMERGENCY: {
@@ -231,7 +231,7 @@ export const API_ENDPOINTS = {
   },
 
   // Public document-view page — what a printed prescription/lab-report QR
-  // opens for a non-app scanner (see apps/patients/document_view_views.py).
+  // opens for a non-app scanner (see apps/hospital_patients/document_view_views.py).
   // Fetched with publicClient only after the patient clicks "Yes" on the
   // confirm prompt — nothing is fetched before that.
   VIEW_REPORT: {
@@ -239,7 +239,7 @@ export const API_ENDPOINTS = {
   },
 
   // Consultation handwriting pad — public, no auth (see
-  // apps/patients/consult_pad_views.py). One URL: GET returns the live
+  // apps/hospital_patients/consult_pad_views.py). One URL: GET returns the live
   // session (both tabs' saved pages + recognised text), PUT autosaves one
   // tab. Fetched with publicClient — the phone has no session in that browser.
   CONSULT_PAD: {

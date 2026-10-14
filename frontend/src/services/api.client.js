@@ -51,7 +51,7 @@ function normaliseError(error) {
     ? `Something went wrong. If this keeps happening, contact ${APP_CONFIG.SUPPORT_EMAIL}.`
     : `Could not reach the server. Check your connection, or contact ${APP_CONFIG.SUPPORT_EMAIL} if it persists.`;
   // Most views return the standard {message: ...} shape (core/response.py),
-  // but a chunk of apps/patients/portal_views.py predates that helper and
+  // but a chunk of apps/hospital_patients/portal_views.py predates that helper and
   // hand-rolls Response({"error": "..."}, status=...) instead — same intent,
   // different key. Without this fallback every real, specific reason (hospital
   // not found, not enrolled for online booking, etc.) silently collapsed into

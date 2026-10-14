@@ -15,7 +15,7 @@ class StockListView(APIView):
     permission_classes = [IsAuthenticated, IsPharmacist, RequireFeature("feat_pharmacy")]
 
     def get(self, request):
-        qs = Stock.objects.using(request.tenant_db).select_related("drug").order_by("drug__name")
+        qs = Stock.objects.using(request.hospital_db).select_related("drug").order_by("drug__name")
         if bid := request.query_params.get("branch_id"):
             qs = qs.filter(branch_id=bid)
         if request.query_params.get("low_only") == "1":
@@ -37,7 +37,7 @@ class StockListView(APIView):
         s = StockSerializer(data=request.data)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
-        db = request.tenant_db
+        db = request.hospital_db
         d = s.validated_data
         added = d["quantity"]
         if added <= 0:
@@ -83,7 +83,7 @@ class DispenseView(APIView):
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
 
-        db    = request.tenant_db
+        db    = request.hospital_db
         qty   = s.validated_data["quantity"]
 
         # One transaction for the whole stock movement, holding a row lock on the batch:
@@ -154,8 +154,8 @@ class DispenseView(APIView):
         try:
             from decimal import Decimal
             from apps.billing.models import Invoice, InvoiceItem
-            from apps.billing.services import recompute_invoice_totals, tenant_default_tax_rate
-            from apps.patients.models import Patient
+            from apps.billing.services import recompute_invoice_totals, hospital_default_tax_rate
+            from apps.hospital_patients.models import HospitalPatient
             from core.utils.nntm import get_next_number
 
             # Its own savepoint: a failure half-way (invoice created, line item not) rolls the
@@ -173,12 +173,12 @@ class DispenseView(APIView):
                     else stock.unit_cost if stock.unit_cost is not None
                     else getattr(stock.drug, "default_mrp", None) or Decimal("0")
                 )
-                tax_rate = tenant_default_tax_rate(request.tenant_id)
+                tax_rate = hospital_default_tax_rate(request.hospital_id)
 
                 if rx.invoice_id:
                     invoice = Invoice.objects.using(db).get(pk=rx.invoice_id)
                 else:
-                    patient = Patient.objects.using(db).get(uuid=rx.patient_id)
+                    patient = HospitalPatient.objects.using(db).get(uuid=rx.patient_id)
                     invoice_number, _ = get_next_number(branch_id=patient.branch_id or 1, entity="invoice", using=db)
                     invoice = Invoice.objects.using(db).create(
                         patient=patient, branch=patient.branch, invoice_number=invoice_number,
@@ -219,7 +219,7 @@ class PendingPrescriptionsView(APIView):
     whether the patient even intends to fill it at this pharmacy.
 
     Deliberately not reusing opd.PrescriptionDetailView — that's shaped for
-    the doctor/clinical view (IsTenantStaff, bare ids), not the pharmacist
+    the doctor/clinical view (IsHospitalStaff, bare ids), not the pharmacist
     screen, which needs patient/doctor names resolved and per-item
     dispensed quantity.
     """
@@ -228,10 +228,10 @@ class PendingPrescriptionsView(APIView):
     def get(self, request):
         from django.db.models import Sum
         from apps.opd.models import Prescription
-        from apps.patients.models import Patient
+        from apps.hospital_patients.models import HospitalPatient
         from apps.org.models import StaffUser
 
-        db = request.tenant_db
+        db = request.hospital_db
         status_filter = request.query_params.get("status", Prescription.STATUS_ACTIVE)
         qs = (Prescription.objects.using(db)
               .filter(status=status_filter, patient_choice=Prescription.CHOICE_IN_HOUSE)
@@ -247,7 +247,7 @@ class PendingPrescriptionsView(APIView):
         # unwrap trick applied there).
         patient_uuids = {p.patient_id for p in page_items}
         doctor_pks = {(d.int if hasattr(d, "int") else d) for d in {p.doctor_user_id for p in page_items}}
-        patients = {p.uuid: p for p in Patient.objects.using(db).filter(uuid__in=patient_uuids)}
+        patients = {p.uuid: p for p in HospitalPatient.objects.using(db).filter(uuid__in=patient_uuids)}
         doctors  = {d.id: d for d in StaffUser.objects.using(db).filter(pk__in=doctor_pks)}
 
         # Per-item dispensed quantity, in one query for the whole page.
@@ -298,13 +298,13 @@ class PrescriptionLookupView(APIView):
     (shown to them in the portal / on the printed slip). This pulls up the
     full prescription — patient details and items — regardless of status
     filter or pagination, same idea as a lab tech searching by report
-    number. Exact match only; rx_number is unique per tenant DB.
+    number. Exact match only; rx_number is unique per hospital DB.
     """
     permission_classes = [IsAuthenticated, IsPharmacist, RequireFeature("feat_pharmacy")]
 
     def get(self, request):
         from apps.opd.models import Prescription
-        from apps.patients.models import Patient
+        from apps.hospital_patients.models import HospitalPatient
         from apps.org.models import StaffUser
         from django.db.models import Sum
 
@@ -312,13 +312,13 @@ class PrescriptionLookupView(APIView):
         if not rx_number:
             return error("rx_number is required.")
 
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             rx = Prescription.objects.using(db).prefetch_related("items").get(rx_number__iexact=rx_number)
         except Prescription.DoesNotExist:
             return not_found("No prescription found for that number.")
 
-        patient = Patient.objects.using(db).filter(uuid=rx.patient_id).first()
+        patient = HospitalPatient.objects.using(db).filter(uuid=rx.patient_id).first()
         doctor_pk = rx.doctor_user_id.int if hasattr(rx.doctor_user_id, "int") else rx.doctor_user_id
         doctor = StaffUser.objects.using(db).filter(pk=doctor_pk).first()
 

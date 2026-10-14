@@ -15,7 +15,7 @@ from django.db.utils import OperationalError
 
 def health(request):
     """
-    Liveness/readiness probe. Checks the registry DB connection so a load
+    Liveness/readiness probe. Checks the atomwalk DB connection so a load
     balancer can tell "process is up" apart from "process can actually serve
     requests" — a common gap in bare 200-OK health checks.
     """
@@ -38,31 +38,31 @@ urlpatterns = [
     path("api/v1/platform/",     include("apps.platform_admin.urls")),
     path("api/v1/opd/",          include("apps.opd.urls")),
     path("api/v1/ipd/",          include("apps.ipd.urls")),  # Phase 1 — admission intake only
-    path("api/v1/patients/",     include("apps.patients.urls")),
-    path("api/v1/portal/",       include("apps.patients.portal_urls")),
+    path("api/v1/patients/",     include("apps.hospital_patients.urls")),
+    path("api/v1/portal/",       include("apps.hospital_patients.portal_urls")),
     path("api/v1/records/",      include("apps.records.urls")),
     # Deliberately its own top-level prefix, not nested under /portal/ — that
     # prefix implies patient-JWT auth everywhere else; this is the one
     # intentionally public, unauthenticated endpoint (see
-    # apps/patients/emergency_views.py for why).
-    path("api/v1/emergency/",    include("apps.patients.emergency_urls")),
-    # Also intentionally public (see apps/patients/consult_pad_views.py) —
+    # apps/hospital_patients/emergency_views.py for why).
+    path("api/v1/emergency/",    include("apps.hospital_patients.emergency_urls")),
+    # Also intentionally public (see apps/hospital_patients/consult_pad_views.py) —
     # the phone side of the consultation-scratchpad QR. Same reasoning as
     # /emergency/ above: reached by scanning a QR, no login.
-    path("api/v1/consult-pad/",  include("apps.patients.consult_pad_urls")),
+    path("api/v1/consult-pad/",  include("apps.hospital_patients.consult_pad_urls")),
     # "Records Access" break-glass sharing — the doctor-has-a-laptop flow.
     # Public create/status/records/download endpoints gated by a random
     # token; the approve/end endpoints are patient-authenticated. Same
     # "reached without an account here" reasoning as /emergency/ above.
-    path("api/v1/records-share/", include("apps.patients.records_share_urls")),
-    # Also intentionally public (see apps/patients/document_view_views.py) —
+    path("api/v1/records-share/", include("apps.hospital_patients.records_share_urls")),
+    # Also intentionally public (see apps/hospital_patients/document_view_views.py) —
     # what a printed prescription/lab-report QR opens when scanned by
     # anything other than the patient app itself (Google Lens etc). Same
     # "reached without an account here" reasoning as /emergency/ above.
-    path("api/v1/view-report/",   include("apps.patients.document_view_urls")),
+    path("api/v1/view-report/",   include("apps.hospital_patients.document_view_urls")),
     # apps.clinical's Encounter/Vital/Diagnosis/FollowUp/ClinicalDocument were
     # retired (HMS-07c-1, confirmed dead — the live flow writes through
-    # apps.opd, see apps/registry/hie.py::sync_encounter_to_hie for the actual HIE write
+    # apps.opd, see apps/atomwalk/hie.py::sync_encounter_to_hie for the actual HIE write
     # path), so its URL route is gone too. apps.prescriptions stays routed
     # for its still-live Drug/DrugFormType catalog endpoints
     # (Prescription/PrescriptionItem were retired the same way).

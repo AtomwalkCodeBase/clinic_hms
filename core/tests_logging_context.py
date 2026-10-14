@@ -1,4 +1,4 @@
-"""core/tests_logging_context.py — request id / tenant / user on log records."""
+"""core/tests_logging_context.py — request id / hospital / user on log records."""
 
 import logging
 import time
@@ -54,27 +54,27 @@ class FilterTests(SimpleTestCase):
     def setUp(self):
         reset_request_identity()
 
-    def test_records_carry_request_tenant_and_user(self):
+    def test_records_carry_request_hospital_and_user(self):
         handler, log = Capture(), logging.getLogger("core.tests_logging_context.sample")
         log.addHandler(handler)
         self.addCleanup(log.removeHandler, handler)
         log.setLevel(logging.INFO)
 
         def view(request):
-            set_request_identity(tenant_id=7, user_id=42)
+            set_request_identity(hospital_id=7, user_id=42)
             log.info("inside")
             return HttpResponse("ok")
 
         RequestIdMiddleware(view)(RequestFactory().get("/x/", HTTP_X_REQUEST_ID="trace-abc-12345"))
         log.info("outside")
         inside, outside = handler.records
-        self.assertEqual((inside.request_id, inside.tenant_id, inside.user_id), ("trace-abc-12345", "7", "42"))
-        self.assertEqual((outside.request_id, outside.tenant_id, outside.user_id), ("-", "-", "-"))
+        self.assertEqual((inside.request_id, inside.hospital_id, inside.user_id), ("trace-abc-12345", "7", "42"))
+        self.assertEqual((outside.request_id, outside.hospital_id, outside.user_id), ("-", "-", "-"))
 
 
 class JwtMiddlewareIdentityTests(SimpleTestCase):
     def test_a_platform_token_sets_the_user_on_the_log_context(self):
-        from core.middleware import JWTTenantMiddleware
+        from core.middleware import JWTHospitalMiddleware
 
         handler, log = Capture(), logging.getLogger("core.tests_logging_context.jwt")
         log.addHandler(handler)
@@ -87,6 +87,6 @@ class JwtMiddlewareIdentityTests(SimpleTestCase):
 
         token = jwt.encode({"user_id": 5, "is_platform": True, "role": "platform_admin", "token_type": "access",
                             "exp": int(time.time()) + 60}, settings.JWT_SIGNING_KEY, algorithm="HS256")
-        chain = RequestIdMiddleware(JWTTenantMiddleware(view))
+        chain = RequestIdMiddleware(JWTHospitalMiddleware(view))
         chain(RequestFactory().get("/api/v1/platform/stats/", HTTP_AUTHORIZATION=f"Bearer {token}"))
         self.assertEqual(handler.records[0].user_id, "5")

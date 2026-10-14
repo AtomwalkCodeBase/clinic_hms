@@ -24,13 +24,13 @@ def recompute_invoice_totals(invoice, db):
     invoice.save(using=db, update_fields=["subtotal", "tax_amount", "total_amount"])
 
 
-def tenant_default_tax_rate(tenant_id):
+def hospital_default_tax_rate(hospital_id):
     """The hospital's configured default tax rate (percent); 0 when unknown."""
-    from apps.tenants.models import Tenant
+    from apps.hospitals.models import Hospital
 
-    if not tenant_id:
+    if not hospital_id:
         return Decimal("0")
     try:
-        return Tenant.objects.using("default").get(pk=tenant_id).default_tax_rate
-    except Tenant.DoesNotExist:
+        return Hospital.objects.using("default").get(pk=hospital_id).default_tax_rate
+    except Hospital.DoesNotExist:
         return Decimal("0")

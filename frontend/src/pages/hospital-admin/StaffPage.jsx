@@ -345,7 +345,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
   }
 
   // Per-invite fee toggle: true = admin sets fee now, false = doctor sets it themselves.
-  // Defaults to whatever the tenant's global setting is, but admin can flip it per invite.
+  // Defaults to whatever the hospital's global setting is, but admin can flip it per invite.
   const [adminSetsFee, setAdminSetsFee] = useState(false);
   useEffect(() => {
     orgApi.getSettings()

@@ -1,12 +1,12 @@
 from apps.org.models import Branch, NextNumber
-from core.testing import TenantDBTestCase, requires_tenant_db
+from core.testing import HospitalDBTestCase, requires_hospital_db
 from core.utils.nntm import get_next_number
 
 
-@requires_tenant_db
-class BranchNumberingTests(TenantDBTestCase):
+@requires_hospital_db
+class BranchNumberingTests(HospitalDBTestCase):
     def test_branches_never_produce_the_same_number(self):
-        db = self.tenant_alias
+        db = self.hospital_alias
         first = Branch.objects.using(db).create(name="Main")
         second = Branch.objects.using(db).create(name="East")
         for b in (first, second):

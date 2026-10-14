@@ -108,7 +108,7 @@ class IsHospitalStaff(BasePermission):
             return False
         role = getattr(request.user, "role", None)
         # role="custom" is always hospital staff by definition — a custom
-        # Role only ever exists inside a tenant DB and only ever gets
+        # Role only ever exists inside a hospital DB and only ever gets
         # assigned to a StaffUser there, so there's no acts_as-emptiness
         # case where this should be False the way there is for the more
         # specific Is* checks above.
@@ -127,7 +127,7 @@ class IsDoctorOrFrontDesk(BasePermission):
     Doctor + front desk share write access to pediatric Birth History —
     front desk can capture it at registration (parent often has the details
     on hand right then), and the pediatrician can add/correct it later at
-    consultation. See apps.patients.models.BirthHistory.
+    consultation. See apps.hospital_patients.models.BirthHistory.
     """
     message = "Access restricted to front desk staff and doctors."
     def has_permission(self, request, view):
@@ -145,8 +145,8 @@ def RequireTier(minimum_tier: str):
         permission_classes = [IsAuthenticated, IsDoctor, RequireTier('pro')]
 
     Prefer RequireFeature() below for gating an actual module (lab, pharmacy,
-    etc.) — feat_* flags are the real per-tenant source of truth (see
-    tenants.Subscription docstring) and can be overridden per hospital
+    etc.) — feat_* flags are the real per-hospital source of truth (see
+    hospitals.Subscription docstring) and can be overridden per hospital
     independent of tier, which a tier-name comparison can't express. This is
     kept for the rarer case of gating on tier itself.
     """
@@ -173,9 +173,9 @@ def RequireTier(minimum_tier: str):
 def RequireFeature(flag_name: str):
     """
     Factory — returns a DRF permission class enforcing a boolean feature gate
-    on the tenant's Subscription (e.g. 'feat_lab', 'feat_pharmacy').
+    on the hospital's Subscription (e.g. 'feat_lab', 'feat_pharmacy').
 
-    request.user.subscription is populated by JWTTenantAuthentication for any
+    request.user.subscription is populated by JWTHospitalAuthentication for any
     hospital-staff request (see core/authentication.py) — None for platform
     admin or patient requests, which this permission always denies (those
     endpoints should be using role-based permissions instead, not this one).

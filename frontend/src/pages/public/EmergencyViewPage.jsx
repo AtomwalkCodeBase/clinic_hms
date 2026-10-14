@@ -4,7 +4,7 @@
  * What opens when a doctor scans a patient's Emergency QR (see
  * pages/patient/EmergencyQRPage.jsx for where the code is generated — and
  * where the patient explicitly confirms sharing this — and
- * apps/patients/emergency_views.py for the backend design reasoning).
+ * apps/hospital_patients/emergency_views.py for the backend design reasoning).
  *
  * Deliberately outside AppShell/ProtectedRoute — the person opening this
  * has no Atomwalk login at all, possibly at a hospital that isn't even on

@@ -6,7 +6,7 @@ a PDF (with the "scan to save in My Reports" QR, apps/opd/pdf.py) and store it
 as a MedicalDocument(document_type=prescription). Idempotent by
 source_ref = "encounter:<id>".
 
-All tenant-DB reads are explicit .using(db) with pk filters — no relation
+All hospital-DB reads are explicit .using(db) with pk filters — no relation
 traversal, which this project's multi-DB router mis-routes to "default".
 """
 
@@ -17,13 +17,13 @@ import uuid as _uuid
 logger = logging.getLogger(__name__)
 
 
-def store_prescription_document(rx, db, tenant_id):
+def store_prescription_document(rx, db, hospital_id):
     from apps.opd.models import OPDEncounter, Appointment, PrescriptionItem
     from apps.opd.pdf import generate_prescription_pdf
     from apps.org.models import StaffUser, Branch
-    from apps.tenants.models import Tenant
-    from apps.patients.models import Patient
-    from apps.records.models import MedicalDocument
+    from apps.hospitals.models import Hospital
+    from apps.hospital_patients.models import HospitalPatient
+    from apps.atomwalk.models import MedicalDocument
     from apps.records.services import create_issued_document
     from core import storage as blob_storage
 
@@ -35,14 +35,14 @@ def store_prescription_document(rx, db, tenant_id):
     appt = (Appointment.objects.using(db).filter(pk=enc.appointment_id).first()
             if enc and enc.appointment_id else None)
     patient_uuid = (enc.patient_id if enc else None) or getattr(rx, "patient_id", None)
-    patient = Patient.objects.using(db).filter(uuid=patient_uuid).first() if patient_uuid else None
+    patient = HospitalPatient.objects.using(db).filter(uuid=patient_uuid).first() if patient_uuid else None
     if not patient or not getattr(patient, "awpid", ""):
         return None
 
     branch = (Branch.objects.using(db).filter(pk=appt.branch_id).first()
               if appt and appt.branch_id else None)
-    tenant = Tenant.objects.using("default").filter(pk=tenant_id).first()
-    hospital_name = tenant.name if tenant else "Hospital"
+    hospital = Hospital.objects.using("default").filter(pk=hospital_id).first()
+    hospital_name = hospital.name if hospital else "Hospital"
 
     doctor_name = None
     try:
@@ -70,6 +70,6 @@ def store_prescription_document(rx, db, tenant_id):
     )
     return create_issued_document(
         awpid=patient.awpid, file_path=file_path, name=f"{title}.pdf", doc_type="prescription",
-        source_tenant_id=tenant_id, source_ref=src_ref, public_document_id=rx.rx_number or "",
+        source_hospital_id=hospital_id, source_ref=src_ref, public_document_id=rx.rx_number or "",
         document_date=visit_date,
     )

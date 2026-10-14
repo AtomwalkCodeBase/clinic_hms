@@ -1,7 +1,7 @@
 /**
  * Platform admin: manage the system-level schedule templates every hospital admin can clone from. One page for both kinds
- * (scheduleKinds.js); the API is apps/patients/pediatrics/schedule_views.py:
- *   GET    endpoints.templates       -> [ {id, name, description, active, rule_count, tenants_using, ...} ]
+ * (scheduleKinds.js); the API is apps/hospital_patients/pediatrics/schedule_views.py:
+ *   GET    endpoints.templates       -> [ {id, name, description, active, rule_count, hospitals_using, ...} ]
  *   POST   endpoints.templates       -> create {name, description?, active?, rules?}
  *   GET    endpoints.template(id)    -> template + rules[]
  *   PATCH  endpoints.template(id)    -> {name?, description?, active?, rules?: [{id?, ..., _delete?}]}
@@ -71,8 +71,8 @@ function TemplateEditor({ kind, template, onSaved, onDeleted, onBack }) {
           ← All templates
         </button>
         {active ? <Badge tone="primary">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}
-        {typeof template.tenants_using === "number" && template.tenants_using > 0 && (
-          <Badge tone="warning">{template.tenants_using} hospital{template.tenants_using === 1 ? "" : "s"} using this</Badge>
+        {typeof template.hospitals_using === "number" && template.hospitals_using > 0 && (
+          <Badge tone="warning">{template.hospitals_using} hospital{template.hospitals_using === 1 ? "" : "s"} using this</Badge>
         )}
         <div style={{ flex: 1 }} />
         <button type="button" onClick={handleDelete} disabled={deleting}
@@ -166,9 +166,9 @@ function TemplateCard({ kind, template, onSelect }) {
       )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Badge tone="muted">{template.rule_count} {kind.text.rule}{template.rule_count === 1 ? "" : "s"}</Badge>
-        {typeof template.tenants_using === "number" && (
-          <Badge tone={template.tenants_using > 0 ? "warning" : "muted"}>
-            {template.tenants_using} hospital{template.tenants_using === 1 ? "" : "s"} using
+        {typeof template.hospitals_using === "number" && (
+          <Badge tone={template.hospitals_using > 0 ? "warning" : "muted"}>
+            {template.hospitals_using} hospital{template.hospitals_using === 1 ? "" : "s"} using
           </Badge>
         )}
       </div>

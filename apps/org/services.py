@@ -1,7 +1,7 @@
 """
 apps/org/services.py
 --------------------
-Per-hospital numbering setup shared by org, platform_admin and the tenant provisioning
+Per-hospital numbering setup shared by org, platform_admin and the hospital provisioning
 commands. Moved out of org/views.py, where other apps imported underscore-prefixed view
 functions to reach it.
 """
@@ -37,7 +37,7 @@ def next_employee_id(db_name: str) -> str:
     branch the way a UHID is), so it uses the sentinel branch_id=0 rather
     than being seeded per-branch in seed_next_numbers above. Lazily
     get_or_create's its counter row on first use so this self-heals for
-    tenants provisioned before this feature existed, with no migration or
+    hospitals provisioned before this feature existed, with no migration or
     provisioning-script change required.
 
     Never manually editable — see StaffInviteSerializer / StaffDetailView.

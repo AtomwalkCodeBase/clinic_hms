@@ -14,7 +14,7 @@
  * while a doctor is actively viewing; otherwise a plain confirm. Hiding is
  * always instant, with Undo.
  *
- * Backend: apps/patients/records_share_views.py
+ * Backend: apps/hospital_patients/records_share_views.py
  *   GET/PUT /portal/records-privacy/            config + annotated vault
  *   POST    /portal/records-privacy/toggle/     one-record lock
  *   POST    /portal/records-share/<token>/reveal/  per-visit reveal (scope: visit|always|conceal)

@@ -1,6 +1,6 @@
 /**
  * Hospital admin: configure the vaccination or milestone roadmap this hospital's staff and patient portal build against.
- * One page for both kinds (scheduleKinds.js); the API is apps/patients/pediatrics/schedule_views.py:
+ * One page for both kinds (scheduleKinds.js); the API is apps/hospital_patients/pediatrics/schedule_views.py:
  *   GET   endpoints.schedules       -> { own_schedules, templates, active_schedule_id }
  *   POST  endpoints.schedules       -> clone {template_id, name?} into an owned schedule, which becomes the active one
  *   GET   endpoints.schedule(id)    -> schedule + rules[]

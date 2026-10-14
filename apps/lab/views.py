@@ -30,14 +30,14 @@ class LabCatalogView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff, RequireFeature("feat_lab")]
 
     def get(self, request):
-        tests = LabTest.objects.using(request.tenant_db)
+        tests = LabTest.objects.using(request.hospital_db)
         if request.query_params.get("include_inactive") != "1":
             tests = tests.filter(is_active=True)
         return success(data=LabTestSerializer(tests, many=True).data)
 
     def post(self, request):
-        db = request.tenant_db
-        s = LabTestSerializer(data=request.data, context={"tenant_db": db})
+        db = request.hospital_db
+        s = LabTestSerializer(data=request.data, context={"hospital_db": db})
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
 
@@ -61,7 +61,7 @@ class LabCatalogView(APIView):
             return ""
 
         # Idempotent — covers branches created before "lab_test" existed as
-        # an NNTM entity, so older tenants don't hit a missing-row DoesNotExist.
+        # an NNTM entity, so older hospitals don't hit a missing-row DoesNotExist.
         NextNumber.objects.using(db).get_or_create(
             branch_id=branch_id, entity="lab_test",
             defaults={"prefix": "LT-", "pad_length": 4, "last_number": 0},
@@ -75,12 +75,12 @@ class LabTestDetailView(APIView):
     permission_classes = [IsAuthenticated, IsLabTech, RequireFeature("feat_lab")]
 
     def patch(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             test = LabTest.objects.using(db).get(pk=pk)
         except LabTest.DoesNotExist:
             return not_found("Test not found.")
-        s = LabTestSerializer(test, data=request.data, partial=True, context={"tenant_db": db})
+        s = LabTestSerializer(test, data=request.data, partial=True, context={"hospital_db": db})
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         s.save()
@@ -112,7 +112,7 @@ class SampleTypeListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalStaff(), RequireFeature("feat_lab")()]
 
     def get(self, request):
-        types = OptionList.objects.using(request.tenant_db).filter(list_type=OptionList.LIST_SAMPLE_TYPE)
+        types = OptionList.objects.using(request.hospital_db).filter(list_type=OptionList.LIST_SAMPLE_TYPE)
         if request.query_params.get("include_inactive") != "1":
             types = types.filter(is_active=True)
         return success(data=SampleTypeSerializer(types, many=True).data)
@@ -123,7 +123,7 @@ class SampleTypeListCreateView(APIView):
             return error("Validation error.", errors=s.errors)
         data = dict(s.validated_data)
         data["value"] = data.get("label", "")
-        obj = OptionList.objects.using(request.tenant_db).create(
+        obj = OptionList.objects.using(request.hospital_db).create(
             list_type=OptionList.LIST_SAMPLE_TYPE, is_system=False, **data
         )
         return created(data=SampleTypeSerializer(obj).data, message="Sample type added.")
@@ -134,7 +134,7 @@ class SampleTypeDetailView(APIView):
     permission_classes = [IsAuthenticated, IsLabTech, RequireFeature("feat_lab")]
 
     def patch(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             obj = OptionList.objects.using(db).get(pk=pk, list_type=OptionList.LIST_SAMPLE_TYPE)
         except OptionList.DoesNotExist:
@@ -168,7 +168,7 @@ class LabRequestListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff, RequireFeature("feat_lab")]
 
     def get(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         qs = LabRequest.objects.using(db).select_related("test", "patient").order_by("-ordered_at")
         if encounter_id := request.query_params.get("encounter_id"):
             qs = qs.filter(encounter_id=encounter_id)
@@ -187,7 +187,7 @@ class LabRequestListCreateView(APIView):
     def post(self, request):
         from apps.opd.models import OPDEncounter
 
-        db = request.tenant_db
+        db = request.hospital_db
         encounter_id = request.data.get("encounter_id")
         if not encounter_id:
             return error("encounter_id is required.", errors={"encounter_id": "Required."})
@@ -196,10 +196,10 @@ class LabRequestListCreateView(APIView):
         except OPDEncounter.DoesNotExist:
             return not_found("Encounter not found.")
 
-        from apps.patients.models import Patient
+        from apps.hospital_patients.models import HospitalPatient
         try:
-            patient = Patient.objects.using(db).get(uuid=enc.patient_id)
-        except Patient.DoesNotExist:
+            patient = HospitalPatient.objects.using(db).get(uuid=enc.patient_id)
+        except HospitalPatient.DoesNotExist:
             return error("Patient record not found for this encounter.")
 
         test_ids = request.data.get("tests")
@@ -214,7 +214,7 @@ class LabRequestListCreateView(APIView):
 
         # appointment.branch_id predates some rows (see Appointment model
         # comment) and patient.branch_id can be unset too — fall back to the
-        # tenant's first active branch rather than trying to INSERT with a
+        # hospital's first active branch rather than trying to INSERT with a
         # NULL branch (LabRequest.branch is required, so that would 500).
         branch_id = enc.appointment.branch_id or patient.branch_id
         if not branch_id:
@@ -235,7 +235,7 @@ class LabRequestListCreateView(APIView):
             # request_number: a real, sequential, quotable-at-the-counter
             # token — NNTM entity="lab_request" (prefix "LR-"). This is a
             # new entity (unlike "prescription", which already existed in
-            # the seed list before it was ever used), so existing tenants'
+            # the seed list before it was ever used), so existing hospitals'
             # branches won't have a counter row yet — self-heal the same
             # defensive way _next_test_code() does for "lab_test" above.
             # Never blocks ordering if it fails; the rare row left with
@@ -289,7 +289,7 @@ class LabRequestLookupView(APIView):
         if not request_number:
             return error("request_number is required.")
 
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             req = (LabRequest.objects.using(db)
                    .select_related("test", "patient")
@@ -306,12 +306,12 @@ class LabRequestChoiceView(APIView):
     Staff-side override — a nurse sets in-house/outside on the patient's
     behalf when the patient can't decide via the portal themselves.
     (The patient's own version of this lives in the portal app, since
-    patients authenticate with a different JWT and have no tenant context.)
+    patients authenticate with a different JWT and have no hospital context.)
     """
     permission_classes = [IsAuthenticated, IsHospitalStaff, RequireFeature("feat_lab")]
 
     def patch(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             req = LabRequest.objects.using(db).get(pk=pk)
         except LabRequest.DoesNotExist:
@@ -336,7 +336,7 @@ class LabRequestChoiceView(APIView):
 
 
 # Same ceiling as the patient portal's own upload — see
-# apps.patients.portal_views.PortalDocumentListCreateView._MAX_DOC_BASE64_CHARS.
+# apps.hospital_patients.portal_views.PortalDocumentListCreateView._MAX_DOC_BASE64_CHARS.
 _MAX_DOC_BASE64_CHARS = 7_000_000  # ≈5MB raw file
 
 
@@ -345,12 +345,12 @@ class LabRequestAttachDocumentView(APIView):
     POST /api/v1/lab/requests/{id}/attach-document/
 
     Staff-side counterpart to the patient portal's own outside-report upload
-    (apps.patients.portal_views.PortalDocumentListCreateView). That endpoint
+    (apps.hospital_patients.portal_views.PortalDocumentListCreateView). That endpoint
     is IsPatient-only, so a nurse had no way to attach a report for a patient
     who walks in with a physical copy, or who has no portal account at all —
     LabRequestChoiceView already lets a nurse mark a request "outside" on the
     patient's behalf, but nothing let them finish the job. Writes to the same
-    registry MedicalDocument table, tagged with the same
+    atomwalk MedicalDocument table, tagged with the same
     "labreq:<db>:<request_id>" source_ref the patient's own upload would use,
     so LabRequestSerializer.attached_document and the patient's own
     PortalLabOrderListView pick it up identically regardless of who
@@ -361,7 +361,7 @@ class LabRequestAttachDocumentView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff, RequireFeature("feat_lab")]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             req = LabRequest.objects.using(db).select_related("test", "patient").get(pk=pk)
         except LabRequest.DoesNotExist:
@@ -403,11 +403,11 @@ class LabRequestAttachDocumentView(APIView):
             detail=title, name=patient.full_name, identifier=patient.awpid,
         )
 
-        source_tenant_id = request.tenant_id
+        source_hospital_id = request.hospital_id
 
         doc = create_issued_document(
             awpid=patient.awpid, file_path=file_key, name=file_name, mime_type=mime_type,
-            doc_type=doc_type, source_tenant_id=source_tenant_id, source_ref=f"labreq:{db}:{req.id}",
+            doc_type=doc_type, source_hospital_id=source_hospital_id, source_ref=f"labreq:{db}:{req.id}",
         )
 
         # Attaching an outside report only makes sense once the request is
@@ -434,7 +434,7 @@ class LabRequestStatusView(APIView):
     permission_classes = [IsAuthenticated, IsLabTech, RequireFeature("feat_lab")]
 
     def patch(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             req = LabRequest.objects.using(db).get(pk=pk)
         except LabRequest.DoesNotExist:
@@ -453,7 +453,7 @@ class LabRequestStatusView(APIView):
         return success(data=LabRequestSerializer(req, context={"db": db}).data, message="Status updated.")
 
 
-def _bill_lab_request(req, db, user, tenant_id):
+def _bill_lab_request(req, db, user, hospital_id):
     """
     Create a real Invoice for this lab request, priced from LabTest.price —
     mirrors apps.pharmacy.views.DispenseView's billing block, closing the
@@ -475,10 +475,10 @@ def _bill_lab_request(req, db, user, tenant_id):
     try:
         from decimal import Decimal
         from apps.billing.models import Invoice, InvoiceItem
-        from apps.billing.services import recompute_invoice_totals, tenant_default_tax_rate
+        from apps.billing.services import recompute_invoice_totals, hospital_default_tax_rate
 
         price = req.test.price if req.test.price is not None else Decimal("0")
-        tax_rate = tenant_default_tax_rate(tenant_id)
+        tax_rate = hospital_default_tax_rate(hospital_id)
         invoice_number, _ = get_next_number(branch_id=req.branch_id, entity="invoice", using=db)
         invoice = Invoice.objects.using(db).create(
             patient=req.patient, branch_id=req.branch_id, invoice_number=invoice_number,
@@ -511,7 +511,7 @@ class LabReportUploadView(APIView):
     permission_classes = [IsAuthenticated, IsLabTech, RequireFeature("feat_lab")]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             req = LabRequest.objects.using(db).get(pk=pk)
         except LabRequest.DoesNotExist:
@@ -533,9 +533,9 @@ class LabReportUploadView(APIView):
                 verified_mime = validate_data_uri(file_data)
             except FileValidationError as exc:
                 return error(str(exc), errors={"file_data": str(exc)})
-            from apps.tenants.models import Tenant as _Tenant
-            _tenant = _Tenant.objects.using("default").filter(pk=request.tenant_id).first()
-            folder = blob_storage.tenant_folder(_tenant) if _tenant else db
+            from apps.hospitals.models import Hospital as _Hospital
+            _hospital = _Hospital.objects.using("default").filter(pk=request.hospital_id).first()
+            folder = blob_storage.hospital_folder(_hospital) if _hospital else db
             identity = blob_storage.identity_slug(name=req.patient.full_name, identifier=req.patient.awpid)
             old_file_key = report.file_url
             try:
@@ -583,7 +583,7 @@ class LabReportUploadView(APIView):
         if deliver:
             req.status = "completed"
             req.save(using=db, update_fields=["status"])
-            _bill_lab_request(req, db, request.user, request.tenant_id)
+            _bill_lab_request(req, db, request.user, request.hospital_id)
 
         return created(data=LabReportSerializer(report).data,
                        message="Report delivered." if deliver else "Report saved as draft.")

@@ -36,7 +36,7 @@ class DropdownListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        qs = OptionList.objects.using(request.tenant_db).filter(list_type=self.list_type)
+        qs = OptionList.objects.using(request.hospital_db).filter(list_type=self.list_type)
         # ?all=1 — used by the hospital-admin Billing Setup screen so it can
         # render a toggle for entries that are currently switched off (the
         # normal is_active=True filter below is what every other caller,
@@ -61,10 +61,10 @@ class DropdownListCreateView(APIView):
         if "value" not in data:
             data["value"] = data.get("label", "")
         lookup = {self.model_field: data.get(self.model_field), "list_type": self.list_type}
-        if OptionList.objects.using(request.tenant_db).filter(**lookup).exists():
+        if OptionList.objects.using(request.hospital_db).filter(**lookup).exists():
             return error("This value already exists.", errors={self.identity_field: "Already in use."})
         obj = OptionList(is_system=False, list_type=self.list_type, **data)
-        obj.save(using=request.tenant_db)
+        obj.save(using=request.hospital_db)
         return created(data=self.serializer_class(obj).data, message="Added.")
 
 
@@ -84,7 +84,7 @@ class DropdownDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return OptionList.objects.using(request.tenant_db).get(pk=pk, list_type=self.list_type)
+            return OptionList.objects.using(request.hospital_db).get(pk=pk, list_type=self.list_type)
         except OptionList.DoesNotExist:
             return None
 
@@ -108,7 +108,7 @@ class DropdownDetailView(APIView):
         # above via the is_system check when model_field == "value").
         if self.model_field == "label" and "label" in s.validated_data:
             obj.value = s.validated_data["label"]
-        obj.save(using=request.tenant_db)
+        obj.save(using=request.hospital_db)
         return success(data=self.serializer_class(obj).data, message="Updated.")
 
     def delete(self, request, pk):
@@ -117,5 +117,5 @@ class DropdownDetailView(APIView):
             return not_found("Not found.")
         if obj.is_system:
             return error("System values can't be removed — deactivate a custom one you added instead.")
-        obj.delete(using=request.tenant_db)
+        obj.delete(using=request.hospital_db)
         return success(message="Removed.")

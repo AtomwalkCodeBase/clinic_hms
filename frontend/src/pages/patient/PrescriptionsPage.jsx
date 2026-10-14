@@ -43,7 +43,7 @@ function PrescriptionOrderCard({ rx, onChanged, patientAwpid }) {
   async function downloadPdf() {
     setDownloading(true);
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PORTAL.PRESCRIPTION_RECEIPT(rx.tenant_db, rx.id));
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.PRESCRIPTION_RECEIPT(rx.hospital_db, rx.id));
       const data = res.data?.data || res.data;
       if (data?.file_data) downloadFile(data.file_data, `Prescription ${rx.rx_number || rx.id}.pdf`);
       else toastApiError(null, "Could not generate the PDF.");
@@ -74,7 +74,7 @@ function PrescriptionOrderCard({ rx, onChanged, patientAwpid }) {
     setSaving(true);
     try {
       await apiClient.post(API_ENDPOINTS.PORTAL.PRESCRIPTION_CHOICE, {
-        tenant_db: rx.tenant_db, prescription_id: rx.id,
+        hospital_db: rx.hospital_db, prescription_id: rx.id,
         patient_choice: choice, payment_preference: paymentPreference || "",
       });
       toastSuccess(choice === "in_house" ? "Got it — quote your Rx number at the pharmacy counter." : "Okay — no action needed here.");
@@ -232,7 +232,7 @@ function ConsultRecordCard({ r }) {
   async function downloadPdf() {
     setDownloading(true);
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PORTAL.PRESCRIPTION_RECEIPT(r.tenant_db, r.prescription_id));
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.PRESCRIPTION_RECEIPT(r.hospital_db, r.prescription_id));
       const data = res.data?.data || res.data;
       if (data?.file_data) downloadFile(data.file_data, `Prescription ${r.rx_number || r.prescription_id}.pdf`);
       else toastApiError(null, "Could not generate the PDF.");
@@ -487,7 +487,7 @@ export default function PatientPrescriptionsPage() {
         {!rxLoading && rxOrders.length > 0 && (
           <div style={{ display: "grid", gap: 14, marginBottom: 24 }}>
             {rxOrders.map(rx => (
-              <PrescriptionOrderCard key={`${rx.tenant_db}-${rx.id}`} rx={rx} onChanged={refetchRxOrders} patientAwpid={patientAwpid} />
+              <PrescriptionOrderCard key={`${rx.hospital_db}-${rx.id}`} rx={rx} onChanged={refetchRxOrders} patientAwpid={patientAwpid} />
             ))}
           </div>
         )}

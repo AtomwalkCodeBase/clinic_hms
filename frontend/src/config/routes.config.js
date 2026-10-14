@@ -17,19 +17,19 @@ export const ROUTES = {
   // Emergency QR scan target — deliberately outside every ProtectedRoute/
   // PatientRoute guard below, since a doctor scanning this at a hospital
   // that isn't even on this platform has no Atomwalk login at all. See
-  // apps/patients/emergency_views.py for the backend half.
+  // apps/hospital_patients/emergency_views.py for the backend half.
   EMERGENCY_VIEW: (token) => `/emergency/${token}`,
   // Consultation scratchpad — opened by scanning a patient's permanent
   // handwriting-pad QR on a phone. Also outside every route guard: the
   // doctor's phone browser has no Atomwalk session. See
-  // pages/public/ConsultPadPage.jsx + apps/patients/consult_pad_views.py.
+  // pages/public/ConsultPadPage.jsx + apps/hospital_patients/consult_pad_views.py.
   CONSULT_PAD: (token) => `/consult-pad/${token}`,
   // What the QR printed on a prescription/lab report opens when scanned by
   // anything other than the patient app itself (Google Lens, any camera
   // app). The app's own capture flow never routes here — it decodes the
   // same QR and posts straight to the My Reports upload pipeline instead.
   // Outside every route guard: no Atomwalk login. See
-  // pages/public/ViewReportPage.jsx + apps/patients/document_view_views.py.
+  // pages/public/ViewReportPage.jsx + apps/hospital_patients/document_view_views.py.
   VIEW_REPORT: (token) => `/view-report/${token}`,
   // "Share Records" break-glass — the doctor-has-a-laptop flow. The
   // clinician opens the base path on their laptop (or a shared /:token
@@ -37,7 +37,7 @@ export const ROUTES = {
   // /:token path with their patient session), and the clinician's page then
   // renders the records read-only for 2 hours. Outside every route guard —
   // a clinician here has no Atomwalk login. See
-  // pages/public/ShareRecordsPage.jsx + apps/patients/records_share_views.py.
+  // pages/public/ShareRecordsPage.jsx + apps/hospital_patients/records_share_views.py.
   SHARE_RECORDS:          "/share-records",
   SHARE_RECORDS_TOKEN: (token) => `/share-records/${token}`,
   // Front door the patient reads out: the doctor opens this and types the
@@ -156,8 +156,8 @@ export const ROUTES = {
     DASHBOARD:          "/patient/dashboard",
     APPOINTMENTS:       "/patient/appointments",
     HOSPITALS:          "/patient/hospitals",
-    HOSPITAL_DOCTORS:   (tenantId) => `/patient/hospitals/${tenantId}/doctors`,
-    DOCTOR_PROFILE:     (tenantId, doctorId) => `/patient/hospitals/${tenantId}/doctors/${doctorId}`,
+    HOSPITAL_DOCTORS:   (hospitalId) => `/patient/hospitals/${hospitalId}/doctors`,
+    DOCTOR_PROFILE:     (hospitalId, doctorId) => `/patient/hospitals/${hospitalId}/doctors/${doctorId}`,
     RECORDS:            "/patient/records",
     PRESCRIPTIONS:      "/patient/prescriptions",
     LAB_REPORTS:        "/patient/lab-reports",

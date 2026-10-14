@@ -2,7 +2,7 @@
 Management command: generate_reminders
 
 Generates in-app reminder notifications (appointment + follow-up — see
-apps/notifications/services.py) across every active tenant. There is no
+apps/notifications/services.py) across every active hospital. There is no
 Celery/cron runner built into this stack, so this has to be invoked on a
 schedule by something outside Django:
 
@@ -24,48 +24,48 @@ Usage:
 
 from django.core.management.base import BaseCommand
 
-from apps.tenants.models import Tenant
-from apps.tenants.utils import ensure_tenant_db
-from apps.notifications.services import run_for_tenant
+from apps.hospitals.models import Hospital
+from apps.hospitals.utils import ensure_hospital_db
+from apps.notifications.services import run_for_hospital
 
 
 class Command(BaseCommand):
-    help = "Generate in-app appointment/follow-up reminders for all active tenants"
+    help = "Generate in-app appointment/follow-up reminders for all active hospitals"
 
     def add_arguments(self, parser):
         parser.add_argument(
             "--db",
             dest="db_name",
             default=None,
-            help="Specific tenant db_name to run (default: all active tenants)",
+            help="Specific hospital db_name to run (default: all active hospitals)",
         )
 
     def handle(self, *args, **options):
         db_name = options.get("db_name")
 
         if db_name:
-            tenants = Tenant.objects.filter(db_name=db_name)
-            if not tenants.exists():
-                self.stderr.write(self.style.ERROR(f"No tenant found with db_name='{db_name}'"))
+            hospitals = Hospital.objects.filter(db_name=db_name)
+            if not hospitals.exists():
+                self.stderr.write(self.style.ERROR(f"No hospital found with db_name='{db_name}'"))
                 return
         else:
-            tenants = Tenant.objects.filter(is_active=True)
+            hospitals = Hospital.objects.filter(is_active=True)
 
-        self.stdout.write(f"Generating reminders for {tenants.count()} tenant(s)...\n")
+        self.stdout.write(f"Generating reminders for {hospitals.count()} hospital(s)...\n")
 
         total_appt, total_followup = 0, 0
-        for tenant in tenants:
-            ensure_tenant_db(tenant.db_name)
+        for hospital in hospitals:
+            ensure_hospital_db(hospital.db_name)
             try:
-                counts = run_for_tenant(tenant.db_name)
+                counts = run_for_hospital(hospital.db_name)
                 total_appt += counts["appointment_reminders"]
                 total_followup += counts["followup_reminders"]
                 self.stdout.write(self.style.SUCCESS(
-                    f"  ✓ {tenant.name} ({tenant.db_name}) — "
+                    f"  ✓ {hospital.name} ({hospital.db_name}) — "
                     f"{counts['appointment_reminders']} appointment, {counts['followup_reminders']} follow-up"
                 ))
             except Exception as exc:
-                self.stdout.write(self.style.ERROR(f"  ✗ {tenant.name} ({tenant.db_name}) — {exc}"))
+                self.stdout.write(self.style.ERROR(f"  ✗ {hospital.name} ({hospital.db_name}) — {exc}"))
 
         self.stdout.write(
             f"\nDone — {total_appt} appointment reminder(s), {total_followup} follow-up reminder(s) created."

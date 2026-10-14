@@ -7,7 +7,7 @@ patient's My Reports. Idempotent by source_ref = "labreport:<id>".
 
 The file is the PDF/image the lab uploaded (normalised to PDF, QR-stamped),
 or else a PDF generated from the released result (apps/lab/pdf.py).
-All tenant-DB reads are explicit .using(db) with pk filters.
+All hospital-DB reads are explicit .using(db) with pk filters.
 """
 
 import base64
@@ -18,19 +18,19 @@ logger = logging.getLogger(__name__)
 _MIMES = ("application/pdf", "image/jpeg", "image/png")
 
 
-def store_lab_report_document(report, db, tenant_id):
+def store_lab_report_document(report, db, hospital_id):
     from apps.lab.models import LabRequest, LabTest, LabReportItem
     from apps.org.models import Branch
-    from apps.tenants.models import Tenant
-    from apps.patients.models import Patient
-    from apps.records.models import MedicalDocument
+    from apps.hospitals.models import Hospital
+    from apps.hospital_patients.models import HospitalPatient
+    from apps.atomwalk.models import MedicalDocument
     from apps.records.services import create_issued_document
     from core import storage as blob_storage
     from core import normalise
     from core.qr_token import issue_url as qr_issue
     from core.pdf_qr import stamp_qr
 
-    patient = Patient.objects.using(db).filter(pk=report.patient_id).first() if report.patient_id else None
+    patient = HospitalPatient.objects.using(db).filter(pk=report.patient_id).first() if report.patient_id else None
     awpid = getattr(patient, "awpid", "") or ""
     if not awpid:
         return None
@@ -44,8 +44,8 @@ def store_lab_report_document(report, db, tenant_id):
     test = LabTest.objects.using(db).filter(pk=req.test_id).first() if req and req.test_id else None
     test_name = test.name if test else "Lab Report"
     branch = Branch.objects.using(db).filter(pk=req.branch_id).first() if req and req.branch_id else None
-    tenant = Tenant.objects.using("default").filter(pk=tenant_id).first()
-    hospital_name = tenant.name if tenant else "Hospital"
+    hospital = Hospital.objects.using("default").filter(pk=hospital_id).first()
+    hospital_name = hospital.name if hospital else "Hospital"
     when = report.delivered_at.date() if report.delivered_at else None
 
     token = ""
@@ -88,6 +88,6 @@ def store_lab_report_document(report, db, tenant_id):
     )
     return create_issued_document(
         awpid=awpid, file_path=file_path, name=f"{title}.pdf", doc_type="lab_report",
-        source_tenant_id=tenant_id, source_ref=src_ref, public_document_id=report.report_number or "",
+        source_hospital_id=hospital_id, source_ref=src_ref, public_document_id=report.report_number or "",
         document_date=when,
     )

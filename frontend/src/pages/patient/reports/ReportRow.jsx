@@ -40,7 +40,7 @@ export default function ReportRow({ doc, active, selectMode, selected, onClick, 
   const chips = chipsFor(doc);
   const line = statusLine(doc);
   const Icon = kind === "image" ? ImageIcon : FileText;
-  const hospital = !!doc.source_tenant_id || doc.uploaded_by === "staff";
+  const hospital = !!doc.source_hospital_id || doc.uploaded_by === "staff";
 
   const items = [
     { label: "Open", onClick: onOpen },

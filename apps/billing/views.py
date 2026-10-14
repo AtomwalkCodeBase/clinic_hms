@@ -37,7 +37,7 @@ class BillingServiceListView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        services = BillingService.objects.using(request.tenant_db).filter(is_active=True)
+        services = BillingService.objects.using(request.hospital_db).filter(is_active=True)
         return success(data=BillingServiceSerializer(services, many=True).data)
 
     def post(self, request):
@@ -45,7 +45,7 @@ class BillingServiceListView(APIView):
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         svc = BillingService(**s.validated_data)
-        svc.save(using=request.tenant_db)
+        svc.save(using=request.hospital_db)
         return created(data=BillingServiceSerializer(svc).data, message="Service added.")
 
 
@@ -58,7 +58,7 @@ class BillingServiceDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return BillingService.objects.using(request.tenant_db).get(pk=pk)
+            return BillingService.objects.using(request.hospital_db).get(pk=pk)
         except BillingService.DoesNotExist:
             return None
 
@@ -71,7 +71,7 @@ class BillingServiceDetailView(APIView):
             return error("Validation error.", errors=s.errors)
         for attr, val in s.validated_data.items():
             setattr(svc, attr, val)
-        svc.save(using=request.tenant_db)
+        svc.save(using=request.hospital_db)
         return success(data=BillingServiceSerializer(svc).data, message="Service updated.")
 
     def delete(self, request, pk):
@@ -79,7 +79,7 @@ class BillingServiceDetailView(APIView):
         if not svc:
             return not_found("Service not found.")
         svc.is_active = False
-        svc.save(using=request.tenant_db, update_fields=["is_active"])
+        svc.save(using=request.hospital_db, update_fields=["is_active"])
         return success(message="Service deactivated.")
 
 
@@ -171,7 +171,7 @@ class InvoiceListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
-        qs = Invoice.objects.using(request.tenant_db).select_related("patient").order_by("-created_at")
+        qs = Invoice.objects.using(request.hospital_db).select_related("patient").order_by("-created_at")
         if pid := request.query_params.get("patient_id"):
             qs = qs.filter(patient_id=pid)
         if status_filter := request.query_params.get("status"):
@@ -183,7 +183,7 @@ class InvoiceListCreateView(APIView):
         })
 
     def post(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         patient_pk = request.data.get("patient")
         branch_id = request.data.get("branch")
 
@@ -193,14 +193,14 @@ class InvoiceListCreateView(APIView):
         appointment_id = request.data.get("appointment_id")
         if appointment_id:
             from apps.opd.models import Appointment
-            from apps.patients.models import Patient
+            from apps.hospital_patients.models import HospitalPatient
             try:
                 appt = Appointment.objects.using(db).get(pk=appointment_id)
             except Appointment.DoesNotExist:
                 return error("Appointment not found.")
             try:
-                patient = Patient.objects.using(db).get(uuid=appt.patient_id)
-            except Patient.DoesNotExist:
+                patient = HospitalPatient.objects.using(db).get(uuid=appt.patient_id)
+            except HospitalPatient.DoesNotExist:
                 return error("Patient record not found for this appointment.")
             patient_pk = patient.id
             branch_id = branch_id or appt.branch_id or patient.branch_id
@@ -218,8 +218,8 @@ class InvoiceListCreateView(APIView):
         if not branch_id:
             branch_id = getattr(request.user, "branch_id", None)
         if not branch_id:
-            from apps.patients.models import Patient
-            branch_id = Patient.objects.using(db).filter(pk=patient_pk).values_list("branch_id", flat=True).first()
+            from apps.hospital_patients.models import HospitalPatient
+            branch_id = HospitalPatient.objects.using(db).filter(pk=patient_pk).values_list("branch_id", flat=True).first()
         if not branch_id:
             return error(
                 "Could not determine which branch to bill this invoice to — pass branch explicitly.",
@@ -264,7 +264,7 @@ class InvoiceDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return Invoice.objects.using(request.tenant_db).get(pk=pk)
+            return Invoice.objects.using(request.hospital_db).get(pk=pk)
         except Invoice.DoesNotExist:
             return None
 
@@ -278,7 +278,7 @@ class InvoiceDetailView(APIView):
         inv = self._get(request, pk)
         if not inv:
             return not_found("Invoice not found.")
-        db = request.tenant_db
+        db = request.hospital_db
 
         if "discount_amount" in request.data:
             inv.discount_amount = Decimal(str(request.data["discount_amount"]))
@@ -325,21 +325,21 @@ class InvoicePDFView(APIView):
 
     def get(self, request, pk):
         import base64
-        from apps.patients.models import Patient
+        from apps.hospital_patients.models import HospitalPatient
         from apps.org.models import Branch
-        from apps.tenants.models import Tenant
+        from apps.hospitals.models import Hospital
         from .pdf import generate_invoice_pdf
 
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             inv = Invoice.objects.using(db).prefetch_related("items", "payments").get(pk=pk)
         except Invoice.DoesNotExist:
             return not_found("Invoice not found.")
 
-        patient = Patient.objects.using(db).filter(pk=inv.patient_id).first()
+        patient = HospitalPatient.objects.using(db).filter(pk=inv.patient_id).first()
         branch = Branch.objects.using(db).filter(pk=inv.branch_id).first()
-        tenant = Tenant.objects.using("default").filter(pk=request.tenant_id).first()
-        hospital_name = tenant.name if tenant else "Hospital"
+        hospital = Hospital.objects.using("default").filter(pk=request.hospital_id).first()
+        hospital_name = hospital.name if hospital else "Hospital"
 
         pdf_bytes = generate_invoice_pdf(
             invoice=inv,
@@ -362,7 +362,7 @@ class InvoiceItemCreateView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             inv = Invoice.objects.using(db).get(pk=pk)
         except Invoice.DoesNotExist:
@@ -403,10 +403,10 @@ class PaymentCreateView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
-        from apps.patients.models import Patient
+        from apps.hospital_patients.models import HospitalPatient
         from apps.org.models import StaffUser
 
-        db = request.tenant_db
+        db = request.hospital_db
         qs = Payment.objects.using(db).select_related("invoice").order_by("-paid_at")
 
         if date_from := request.query_params.get("date_from"):
@@ -422,7 +422,7 @@ class PaymentCreateView(APIView):
         page_items, meta = paginate_queryset(request, qs)
 
         patient_ids = {p.invoice.patient_id for p in page_items}
-        patients = {p.id: p for p in Patient.objects.using(db).filter(pk__in=patient_ids)}
+        patients = {p.id: p for p in HospitalPatient.objects.using(db).filter(pk__in=patient_ids)}
         recorder_ids = {p.recorded_by_id for p in page_items if p.recorded_by_id}
         recorders = {s.id: s for s in StaffUser.objects.using(db).filter(pk__in=recorder_ids)}
 
@@ -454,7 +454,7 @@ class PaymentCreateView(APIView):
         s = PaymentSerializer(data=request.data)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
-        db = request.tenant_db
+        db = request.hospital_db
         # Payment + the invoice's running total in one transaction, with the invoice row
         # locked: two payments posted at once used to both read the same paid_amount and one
         # of them was lost.
@@ -487,7 +487,7 @@ class RevenueReportView(APIView):
     def get(self, request):
         from django.db.models.functions import TruncDate
 
-        db = request.tenant_db
+        db = request.hospital_db
         date_to = request.query_params.get("date_to") or timezone.localdate().isoformat()
         date_from = request.query_params.get("date_from") or (
             timezone.localdate() - timedelta(days=29)
@@ -569,16 +569,16 @@ class BillingSummaryView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         patient_id = request.query_params.get("patient_id")
 
         if not patient_id and request.query_params.get("appointment_id"):
             from apps.opd.models import Appointment
-            from apps.patients.models import Patient
+            from apps.hospital_patients.models import HospitalPatient
             try:
                 appt = Appointment.objects.using(db).get(pk=request.query_params["appointment_id"])
-                patient_id = Patient.objects.using(db).get(uuid=appt.patient_id).id
-            except (Appointment.DoesNotExist, Patient.DoesNotExist):
+                patient_id = HospitalPatient.objects.using(db).get(uuid=appt.patient_id).id
+            except (Appointment.DoesNotExist, HospitalPatient.DoesNotExist):
                 return error("Appointment/patient not found.")
 
         if not patient_id:

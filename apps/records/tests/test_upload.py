@@ -5,7 +5,7 @@ from django.test import TestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.records import services
-from apps.records.models import DocumentBatch, MedicalDocument
+from apps.atomwalk.models import DocumentBatch, MedicalDocument
 from apps.records.tests.helpers import PDF, identity, make_doc
 from apps.records.views import BatchDetailView, UploadView
 from core.authentication import MockUser
@@ -198,7 +198,7 @@ class UploadForWhomTests(TestCase):
     databases = {"default"}
 
     def setUp(self):
-        from apps.registry.models import PatientAccount, PatientRelationship
+        from apps.atomwalk.models import PatientAccount, PatientRelationship
         self.acct = PatientAccount.objects.using("default").create(awpid="AWP-ME", full_name="Me", mobile="9333333331", password="x")
         identity("AWP-ME")
         identity("AWP-KID")

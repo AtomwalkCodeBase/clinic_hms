@@ -11,7 +11,7 @@
  * re-scanned, until the doctor signs the encounter on the web.
  *
  * Outside AppShell/ProtectedRoute — the phone has no Atomwalk session.
- * Fetched with publicClient. Backend: apps/patients/consult_pad_views.py.
+ * Fetched with publicClient. Backend: apps/hospital_patients/consult_pad_views.py.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";

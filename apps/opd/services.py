@@ -7,7 +7,7 @@ commands had to import underscore-prefixed functions from.
 
 import logging
 
-from apps.billing.services import recompute_invoice_totals, tenant_default_tax_rate
+from apps.billing.services import recompute_invoice_totals, hospital_default_tax_rate
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +42,12 @@ def resolve_doctor_consultation_fee(db, doctor_user_id, appointment_type=None):
         return None
 
 
-def auto_generate_invoice(encounter, db, user, patient=None, tenant_id=None):
+def auto_generate_invoice(encounter, db, user, patient=None, hospital_id=None):
     """
     Create a draft invoice after encounter sign-off. Never blocks sign-off.
 
     Uses the doctor's actual DoctorProfile fee (falls back to ₹0 — not a
-    guessed flat amount — if the doctor never set one) and the tenant's
+    guessed flat amount — if the doctor never set one) and the hospital's
     configured default_tax_rate, instead of the old hardcoded ₹500.
 
     Picks consultation_fee vs followup_fee based on the appointment's
@@ -57,19 +57,19 @@ def auto_generate_invoice(encounter, db, user, patient=None, tenant_id=None):
     """
     from decimal import Decimal
     from apps.billing.models import Invoice, InvoiceItem
-    from apps.patients.models import Patient
+    from apps.hospital_patients.models import HospitalPatient
     from apps.opd.models import Appointment
     from core.utils.nntm import get_next_number
 
     try:
         if patient is None:
-            patient = Patient.objects.using(db).get(uuid=encounter.patient_id)
+            patient = HospitalPatient.objects.using(db).get(uuid=encounter.patient_id)
 
         appointment_type = getattr(encounter.appointment, "appointment_type", None)
         fee = resolve_doctor_consultation_fee(db, encounter.doctor_user_id, appointment_type)
         if fee is None:
             fee = Decimal("0")
-        tax_rate = tenant_default_tax_rate(tenant_id)
+        tax_rate = hospital_default_tax_rate(hospital_id)
         description = (
             "Follow-up Consultation" if appointment_type == Appointment.TYPE_FOLLOWUP
             else "OPD Consultation"

@@ -71,7 +71,7 @@ def paginate_queryset(request, queryset, default_page_size=DEFAULT_PAGE_SIZE, ma
 def paginate_list(request, items, default_page_size=DEFAULT_PAGE_SIZE, max_page_size=MAX_PAGE_SIZE):
     """
     Slice an already-materialized Python list (e.g. aggregated across
-    multiple tenant databases) according to ?page=&page_size=.
+    multiple hospital databases) according to ?page=&page_size=.
 
     Returns:
         (page_items, meta) — same shape as paginate_queryset.

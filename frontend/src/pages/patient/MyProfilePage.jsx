@@ -7,7 +7,7 @@
  * linked hospitals, and change-password.
  *
  * Everything shown is real data already tracked elsewhere in the system —
- * blood group comes from PatientIdentity, allergies/diagnoses from the same
+ * blood group comes from Patient, allergies/diagnoses from the same
  * shared HIE tables doctors see, linked hospitals from actual booking
  * history. Nothing here is fabricated (no invented "primary doctor",
  * "chronic conditions" classifier, login-device list, or notification
@@ -123,7 +123,7 @@ export default function MyProfilePage() {
 
   // Changing the mobile number requires OTP re-verification, sent to the
   // EMAIL on file (email-based for now — see PortalMobileChangeRequestOTPView
-  // / PortalProfileView.patch in apps/patients/portal_views.py). Every other
+  // / PortalProfileView.patch in apps/hospital_patients/portal_views.py). Every other
   // field saves immediately; only a real mobile-number change routes
   // through this extra step.
   const [mobileOtp, setMobileOtp] = useState({ awaitingCode: false, code: "", actionToken: "", sending: false });
@@ -814,7 +814,7 @@ export default function MyProfilePage() {
             ) : health.linked_hospitals?.length > 0 ? (
               <div style={{ display: "grid", gap: 8 }}>
                 {health.linked_hospitals.map(h => (
-                  <div key={h.tenant_id} style={{
+                  <div key={h.hospital_id} style={{
                     display: "flex", alignItems: "center", gap: 12,
                     background: "var(--color-surface-secondary, #f6f4ee)", borderRadius: 10, padding: "10px 14px",
                   }}>

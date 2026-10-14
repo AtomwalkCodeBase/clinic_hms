@@ -63,7 +63,7 @@ export default function CorrectionRequestsPage() {
   const requests = data?.results || [];
 
   const [form, setForm] = useState({
-    tenant_id: "", resource_type: "Patient", field_name: "",
+    hospital_id: "", resource_type: "Patient", field_name: "",
     current_value: "", requested_value: "", reason: "",
   });
   const [submitting, setSubmitting] = useState(false);
@@ -72,14 +72,14 @@ export default function CorrectionRequestsPage() {
 
   async function submit(e) {
     e.preventDefault();
-    if (!form.tenant_id) return toastError("Choose which hospital this request is for.");
+    if (!form.hospital_id) return toastError("Choose which hospital this request is for.");
     if (!form.field_name.trim()) return toastError("Tell us which field needs correcting.");
     if (!form.requested_value.trim()) return toastError("Enter what it should say instead.");
 
     setSubmitting(true);
     try {
       await apiClient.post(API_ENDPOINTS.COMPLIANCE.PORTAL_AMENDMENTS, {
-        tenant_id: form.tenant_id,
+        hospital_id: form.hospital_id,
         patient_awpid: selectedPatient?.awpid || undefined,
         resource_type: form.resource_type,
         field_name: form.field_name.trim(),
@@ -88,7 +88,7 @@ export default function CorrectionRequestsPage() {
         reason: form.reason.trim(),
       });
       toastSuccess("Correction request submitted.");
-      setForm({ tenant_id: "", resource_type: "Patient", field_name: "", current_value: "", requested_value: "", reason: "" });
+      setForm({ hospital_id: "", resource_type: "Patient", field_name: "", current_value: "", requested_value: "", reason: "" });
       refetch();
     } catch (err) {
       toastApiError(err, "Could not submit this request.");
@@ -108,9 +108,9 @@ export default function CorrectionRequestsPage() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div>
               <label style={{ fontSize: 12, fontWeight: 600, marginBottom: 4, display: "block" }}>Hospital</label>
-              <select className="form-input" style={{ appearance: "auto" }} value={form.tenant_id} onChange={set("tenant_id")} required>
+              <select className="form-input" style={{ appearance: "auto" }} value={form.hospital_id} onChange={set("hospital_id")} required>
                 <option value="">Select hospital…</option>
-                {hospitals.map(h => <option key={h.tenant_id} value={h.tenant_id}>{h.name}</option>)}
+                {hospitals.map(h => <option key={h.hospital_id} value={h.hospital_id}>{h.name}</option>)}
               </select>
             </div>
             <div>

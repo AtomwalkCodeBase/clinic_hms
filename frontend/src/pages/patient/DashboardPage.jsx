@@ -362,9 +362,9 @@ export default function PatientDashboardPage() {
                     </div>
                     <div style={{ display: "grid", gap: 14 }}>
                       {results.doctors.map(d => (
-                        <DoctorCard key={`${d.tenant_id}-${d.id}`} d={d}
-                          onBook={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.tenant_id, d.id))}
-                          onViewProfile={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.tenant_id, d.id))} />
+                        <DoctorCard key={`${d.hospital_id}-${d.id}`} d={d}
+                          onBook={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.hospital_id, d.id))}
+                          onViewProfile={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.hospital_id, d.id))} />
                       ))}
                     </div>
                   </div>
@@ -376,8 +376,8 @@ export default function PatientDashboardPage() {
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
                       {results.hospitals.map(h => (
-                        <HospitalResultCard key={h.tenant_id} h={h}
-                          onClick={() => navigate(ROUTES.PATIENT.HOSPITAL_DOCTORS(h.tenant_id))} />
+                        <HospitalResultCard key={h.hospital_id} h={h}
+                          onClick={() => navigate(ROUTES.PATIENT.HOSPITAL_DOCTORS(h.hospital_id))} />
                       ))}
                     </div>
                   </div>

@@ -34,7 +34,7 @@ function approximateDobFromAge(age) {
 }
 
 // prefill.gender arrives as the single normalized character the backend
-// stores ("M"/"F"/"O" — see apps/patients/services.py::_normalize_gender)
+// stores ("M"/"F"/"O" — see apps/hospital_patients/services.py::_normalize_gender)
 // rather than the lowercase word this form's <select> options use, so it
 // never matched an option and silently showed as unselected. Map it back.
 const GENDER_CODE_TO_OPTION = { M: "male", F: "female", O: "other" };

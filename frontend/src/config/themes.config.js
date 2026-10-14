@@ -1,7 +1,7 @@
 /**
  * config/themes.config.js
  * ------------------------
- * Registry of selectable color themes. Each entry only defines the
+ * Atomwalk of selectable color themes. Each entry only defines the
  * hand-picked "source" colors (primary, sidebar/hero, text, border,
  * accent, ...) — everything else (light tints, hero gradient stop, muted
  * variants, hero-text contrast, etc.) is derived at apply-time in

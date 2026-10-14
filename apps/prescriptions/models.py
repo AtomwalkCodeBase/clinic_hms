@@ -25,7 +25,7 @@ from django.db import models
 
 class Drug(models.Model):
     """
-    Hospital drug catalog. Tenant-managed.
+    Hospital drug catalog. Hospital-managed.
     drug_code is the internal code (not a standard code — optional).
 
     form is free text (validated against apps.billing.OptionList's

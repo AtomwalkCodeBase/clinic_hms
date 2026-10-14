@@ -15,17 +15,17 @@ pip install -r requirements.txt
 cp .env.example .env
 echo "  → Edit .env with your PostgreSQL credentials before proceeding"
 
-# 4. Create Registry DB (run once)
-# psql -U postgres -c "CREATE DATABASE atomwalk_registry;"
+# 4. Create Atomwalk DB (run once)
+# psql -U postgres -c "CREATE DATABASE atomwalk;"
 
-# 5. Run Registry migrations
+# 5. Run Atomwalk migrations
 python manage.py migrate --database=default
 
 # 6. Create Django superuser (for /django-admin/)
 python manage.py createsuperuser
 
-# 7. Provision your first tenant
-python manage.py provision_tenant \
+# 7. Provision your first hospital
+python manage.py provision_hospital \
   --name "Demo Hospital" \
   --subdomain demo-hospital \
   --city Mumbai \

@@ -109,7 +109,7 @@ export default function SettingsPage() {
             <InfoRow label="Email"     value={user?.email} />
             <InfoRow label="Role"      value="Hospital Admin" />
             <InfoRow label="Hospital Code" value={settings?.subdomain} mono />
-            <InfoRow label="Tenant ID" value={user?.tenant_id} />
+            <InfoRow label="Hospital ID" value={user?.hospital_id} />
             <InfoRow label="Database"  value={user?.db_name} mono />
             <InfoRow label="Plan"      value={user?.license_tier} />
           </div>

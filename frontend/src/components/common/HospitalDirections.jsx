@@ -2,7 +2,7 @@
  * components/common/HospitalDirections.jsx
  * ------------------------------------------
  * "Get Directions" + an optional map preview for a hospital, given its
- * lat/lng (see Tenant.latitude/longitude, returned by _hospital_card /
+ * lat/lng (see Hospital.latitude/longitude, returned by _hospital_card /
  * PortalDoctorDetailView / PortalBookView / PortalMyBookingsView).
  *
  * Deliberately no maps SDK / API key: "Get Directions" opens Google Maps'

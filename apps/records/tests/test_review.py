@@ -8,19 +8,19 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from apps.patients.portal_views import PortalDocumentCountsView, PortalDocumentDetailView, PortalDocumentListCreateView
+from apps.hospital_patients.portal_views import PortalDocumentCountsView, PortalDocumentDetailView, PortalDocumentListCreateView
 from apps.platform_admin.classification_rule_views import DocumentCorrectView
 from apps.records import classification as cls, services
-from apps.records.models import DocumentBatch, MedicalDocument
+from apps.atomwalk.models import DocumentBatch, MedicalDocument
 from apps.records.tests.helpers import PDF, identity, make_doc, reload
 from apps.records.views import BatchDetailView, SubmitView, TypesView, UploadView
-from apps.registry.models import PatientAccount
+from apps.atomwalk.models import PatientAccount
 from core.authentication import MockUser
 
 S = MedicalDocument.Status
 LONG_AGO = "2000-01-01T00:00:00+00:00"
 RESOLVE_RECORDS = mock.patch("apps.records.views.resolve_target_awpid_and_dob", return_value=("AWP-T1", None, None))
-RESOLVE_PORTAL = mock.patch("apps.patients.portal_views.resolve_target_awpid_and_dob", return_value=("AWP-T1", None, None))
+RESOLVE_PORTAL = mock.patch("apps.hospital_patients.portal_views.resolve_target_awpid_and_dob", return_value=("AWP-T1", None, None))
 
 
 def patient_user():
@@ -134,7 +134,7 @@ class SubmitTests(TestCase):
         queued = make_doc("AWP-T1", status="queued")
         failed = make_doc("AWP-T1", status="failed", error_message="boom")
         theirs = make_doc("AWP-OTHER", status="completed", document_type="lab_report", by="rules")
-        issued = make_doc("AWP-T1", status="completed", document_type="lab_report", by="issued", uploaded_by="staff", source_tenant_id="7")
+        issued = make_doc("AWP-T1", status="completed", document_type="lab_report", by="issued", uploaded_by="staff", source_hospital_id="7")
         data = self.submit((good.id, "prescription"), (queued.id, "lab_report"), (failed.id, "lab_report"), (theirs.id, "lab_report"),
                            (issued.id, "lab_report"), (good.id + 9999, "lab_report"), (reviewable().id, "made_up")).data["data"]
         self.assertEqual(data["submitted"], [good.id])
@@ -228,7 +228,7 @@ class AwaitingReviewTests(TestCase):
         self.assertFalse(cls.is_confirmed(legacy))              # they keep working as before, just not locked
 
     def test_hospital_issued_and_staff_documents_never_need_review(self, _r):
-        issued = make_doc("AWP-T1", status="completed", document_type="prescription", by="issued", uploaded_by="staff", source_tenant_id="7")
+        issued = make_doc("AWP-T1", status="completed", document_type="prescription", by="issued", uploaded_by="staff", source_hospital_id="7")
         self.assertEqual(self.listing(), [issued.id])
         self.assertEqual(self.listing(review="pending"), [])
 

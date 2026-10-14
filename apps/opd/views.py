@@ -32,13 +32,13 @@ from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-from core.permissions import IsHospitalStaff as IsTenantStaff, IsDoctor, IsDoctorOrNurse, RequireFeature
+from core.permissions import IsHospitalStaff as IsHospitalStaff, IsDoctor, IsDoctorOrNurse, RequireFeature
 from core.pagination import paginate_queryset
 from core.response import error as api_error, not_found as api_not_found, forbidden as api_forbidden, success
 
 from apps.billing.models import OptionList
 from apps.billing.option_list_views import DropdownListCreateView, DropdownDetailView
-from apps.registry.hie import sync_encounter_to_hie
+from apps.atomwalk.hie import sync_encounter_to_hie
 from .services import auto_generate_invoice
 
 from .models import Appointment, OPDEncounter, Prescription, PrescriptionItem, PrescriptionFavourite, Vitals
@@ -105,10 +105,10 @@ class AppointmentListCreateView(APIView):
     GET  — Today's OPD queue. Doctors see their own; admin sees all.
     POST — Book a new appointment (assigns next token number).
     """
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     def get(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         qs = Appointment.objects.using(db)
 
         # Filter by date
@@ -176,9 +176,9 @@ class AppointmentListCreateView(APIView):
         # itself so no extra join is needed for those.
         patient_q = (request.query_params.get("patient") or "").strip()
         if patient_q:
-            from apps.patients.models import Patient
+            from apps.hospital_patients.models import HospitalPatient
             matching_awpids = list(
-                Patient.objects.using(db).filter(
+                HospitalPatient.objects.using(db).filter(
                     Q(full_name__icontains=patient_q) |
                     Q(uhid__icontains=patient_q) |
                     Q(awpid__icontains=patient_q) |
@@ -218,7 +218,7 @@ class AppointmentListCreateView(APIView):
         qs = qs.select_related("vitals").annotate(
             _prio=status_priority
         ).order_by("_prio", "token_number")
-        db = request.tenant_db
+        db = request.hospital_db
         page_items, meta = paginate_queryset(request, qs)
         serializer = AppointmentSerializer(page_items, many=True, context={"db": db})
         return Response({
@@ -229,8 +229,8 @@ class AppointmentListCreateView(APIView):
         })
 
     def post(self, request):
-        db = request.tenant_db
-        serializer = AppointmentCreateSerializer(data=request.data, context={"tenant_db": db})
+        db = request.hospital_db
+        serializer = AppointmentCreateSerializer(data=request.data, context={"hospital_db": db})
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
@@ -263,8 +263,8 @@ class AppointmentListCreateView(APIView):
         # registered patient silently never shows up in anyone's queue.
         # Falls back to the query param (explicit override) then the
         # booking user's branch only if the patient itself has none on file.
-        from apps.patients.models import Patient
-        patient = Patient.objects.using(db).filter(uuid=data["patient_id"]).first()
+        from apps.hospital_patients.models import HospitalPatient
+        patient = HospitalPatient.objects.using(db).filter(uuid=data["patient_id"]).first()
         branch_id = (
             (patient.branch_id if patient else None)
             or request.query_params.get("branch_id")
@@ -316,10 +316,10 @@ class AppointmentListCreateView(APIView):
         # Make this visible in the patient's own portal login, if they (or
         # their guardian, for a dependent) have one — front-desk/nurse
         # bookings used to never appear there at all, since only the portal's
-        # own booking flow wrote the registry-side PortalBooking row that
-        # "My Bookings" actually reads from. See apps.registry.portal_sync.
-        from apps.registry.portal_sync import sync_portal_booking
-        sync_portal_booking(appointment, db)
+        # own booking flow wrote the atomwalk-side PatientBooking row that
+        # "My Bookings" actually reads from. See apps.atomwalk.portal_sync.
+        from apps.atomwalk.portal_sync import sync_patient_booking
+        sync_patient_booking(appointment, db)
 
         return Response(AppointmentSerializer(appointment, context={"db": db}).data, status=status.HTTP_201_CREATED)
 
@@ -334,12 +334,12 @@ class AppointmentHistoryView(APIView):
     live queue); nurse sees only their assigned doctor(s)' past patients
     (see NurseDoctorAssignment); front desk sees the whole hospital.
     """
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     def get(self, request):
-        from apps.patients.models import Patient
+        from apps.hospital_patients.models import HospitalPatient
 
-        db = request.tenant_db
+        db = request.hospital_db
         qs = Appointment.objects.using(db).select_related("vitals")
 
         if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
@@ -352,7 +352,7 @@ class AppointmentHistoryView(APIView):
         patient_q = (request.query_params.get("patient") or "").strip()
         if patient_q:
             matching_awpids = list(
-                Patient.objects.using(db).filter(
+                HospitalPatient.objects.using(db).filter(
                     Q(full_name__icontains=patient_q) |
                     Q(uhid__icontains=patient_q) |
                     Q(awpid__icontains=patient_q) |
@@ -383,7 +383,7 @@ class AppointmentHistoryView(APIView):
         # recorded" instead of just an empty space.
         enc_ids = [row["encounter"]["id"] for row in data if row.get("encounter")]
         if enc_ids:
-            from apps.records.models import MedicalDocument
+            from apps.atomwalk.models import MedicalDocument
             encs = {
                 str(e.id): e for e in OPDEncounter.objects.using(db)
                 .filter(id__in=enc_ids)
@@ -400,7 +400,7 @@ class AppointmentHistoryView(APIView):
             #   encounter:<id>:handwritten:rx   -> handwritten Rx        [pt + dr]
             # They are patient documents (MedicalDocument). The handwritten Internal Note is not: it is the
             # doctor's own record, kept on the consult session (ConsultSession.note_pdf), never a patient document.
-            from apps.registry.models import ConsultSession
+            from apps.atomwalk.models import ConsultSession
             typeset_rx_docs, hw_rx_docs = {}, {}
             wanted_refs = []
             for i in enc_ids:
@@ -415,7 +415,7 @@ class AppointmentHistoryView(APIView):
                 elif d["document_type"] == "prescription":
                     typeset_rx_docs[eid] = d["id"]
             noted = {str(e) for e in ConsultSession.objects.using("default")
-                     .filter(encounter_id__in=enc_ids, tenant_id=request.tenant_id)
+                     .filter(encounter_id__in=enc_ids, hospital_id=request.hospital_id)
                      .exclude(note_pdf="").values_list("encounter_id", flat=True)}
             for row in data:
                 eid = row["encounter"]["id"] if row.get("encounter") else None
@@ -461,12 +461,12 @@ class AppointmentUpcomingView(APIView):
     without this endpoint needing to know the caller's "today" separately
     from scheduled_date's.
     """
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     def get(self, request):
-        from apps.patients.models import Patient
+        from apps.hospital_patients.models import HospitalPatient
 
-        db = request.tenant_db
+        db = request.hospital_db
         qs = Appointment.objects.using(db).select_related("vitals")
 
         acts_as = getattr(request.user, "acts_as", [])
@@ -510,7 +510,7 @@ class AppointmentUpcomingView(APIView):
         patient_q = (request.query_params.get("patient") or "").strip()
         if patient_q:
             matching_awpids = list(
-                Patient.objects.using(db).filter(
+                HospitalPatient.objects.using(db).filter(
                     Q(full_name__icontains=patient_q) |
                     Q(uhid__icontains=patient_q) |
                     Q(awpid__icontains=patient_q) |
@@ -605,10 +605,10 @@ class OPDStatsView(APIView):
     Doctors see only their own; other staff see the whole clinic.
     Response: {"results": [{"date": "2026-08-03", "day": "Mon", "total": 5, "done": 2}, ...]}
     """
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     def get(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             days = min(max(int(request.query_params.get("days", 7)), 1), 30)
         except ValueError:
@@ -650,12 +650,12 @@ class MonitoringListView(APIView):
     A nurse only sees encounters for their assigned doctor(s) (see
     NurseDoctorAssignment) — same scoping as their live queue.
     """
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     def get(self, request):
-        from apps.patients.models import Patient
+        from apps.hospital_patients.models import HospitalPatient
 
-        db = request.tenant_db
+        db = request.hospital_db
         mon_date = request.query_params.get("date", str(date.today()))
 
         encounters = (OPDEncounter.objects.using(db)
@@ -693,7 +693,7 @@ class MonitoringListView(APIView):
         patient_uuids = [enc.patient_id for enc in page_items if enc.patient_id]
 
         patients_by_uuid = {
-            p.uuid: p for p in Patient.objects.using(db).filter(uuid__in=patient_uuids)
+            p.uuid: p for p in HospitalPatient.objects.using(db).filter(uuid__in=patient_uuids)
         }
         rx_by_encounter = {
             rx.encounter_id: rx
@@ -752,10 +752,10 @@ class MonitoringListView(APIView):
 
 
 class AppointmentDetailView(APIView):
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     def get(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             appt = Appointment.objects.using(db).select_related("vitals").get(pk=pk)
         except Appointment.DoesNotExist:
@@ -765,7 +765,7 @@ class AppointmentDetailView(APIView):
 
 class AppointmentStatusView(APIView):
     """POST /api/v1/opd/appointments/<id>/status/"""
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     VALID_TRANSITIONS = {
         Appointment.STATUS_SCHEDULED:   [Appointment.STATUS_WAITING, Appointment.STATUS_CANCELLED],
@@ -775,7 +775,7 @@ class AppointmentStatusView(APIView):
     }
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             appt = Appointment.objects.using(db).get(pk=pk)
         except Appointment.DoesNotExist:
@@ -812,10 +812,10 @@ class AppointmentRescheduleView(APIView):
     slot-conflict check, token-number assignment, and room resolution used at
     booking time (see AppointmentListCreateView.post).
     """
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             appt = Appointment.objects.using(db).get(pk=pk)
         except Appointment.DoesNotExist:
@@ -874,7 +874,7 @@ class VitalsView(APIView):
     permission_classes = [IsDoctorOrNurse]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             appt = Appointment.objects.using(db).get(pk=pk)
         except Appointment.DoesNotExist:
@@ -916,10 +916,10 @@ class VitalsView(APIView):
 
 class EncounterCreateView(APIView):
     """GET/POST /api/v1/opd/encounters/"""
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     def get(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         qs = OPDEncounter.objects.using(db).select_related("appointment")
         appointment_id = request.query_params.get("appointment")
         if appointment_id:
@@ -941,7 +941,7 @@ class EncounterCreateView(APIView):
         # encounters" wall here even when invited specifically to act as one.
         if request.user.role != "doctor" and "doctor" not in getattr(request.user, "acts_as", []):
             return api_forbidden("Only doctors can create encounters.")
-        db = request.tenant_db
+        db = request.hospital_db
         serializer = OPDEncounterCreateSerializer(data=request.data, context={"db": db})
         serializer.is_valid(raise_exception=True)
         encounter = serializer.save()
@@ -959,10 +959,10 @@ class EncounterCreateView(APIView):
 
 
 class EncounterDetailView(APIView):
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     def get(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             enc = OPDEncounter.objects.using(db).select_related("appointment").get(pk=pk)
         except OPDEncounter.DoesNotExist:
@@ -970,7 +970,7 @@ class EncounterDetailView(APIView):
         return Response(OPDEncounterSerializer(enc, context={"db": db}).data)
 
     def patch(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             enc = OPDEncounter.objects.using(db).select_related("appointment").get(pk=pk)
         except OPDEncounter.DoesNotExist:
@@ -1004,10 +1004,10 @@ class EncounterDetailView(APIView):
         return Response(OPDEncounterSerializer(enc, context={"db": db}).data)
 
 
-def _open_consult_session(encounter_id, tenant_id):
-    from apps.registry.models import ConsultSession
+def _open_consult_session(encounter_id, hospital_id):
+    from apps.atomwalk.models import ConsultSession
     return (ConsultSession.objects.using("default")
-            .filter(encounter_id=encounter_id, tenant_id=tenant_id, status=ConsultSession.STATUS_OPEN)
+            .filter(encounter_id=encounter_id, hospital_id=hospital_id, status=ConsultSession.STATUS_OPEN)
             .order_by("-created_at").first())
 
 
@@ -1090,10 +1090,10 @@ def _fold_session_into_encounter(sess, enc, db):
 
 def _create_prescription_for(enc, db):
     from core.utils.nntm import get_next_number
-    from apps.patients.models import Patient
+    from apps.hospital_patients.models import HospitalPatient
     rx_number = None
     try:
-        patient = Patient.objects.using(db).get(uuid=enc.patient_id)
+        patient = HospitalPatient.objects.using(db).get(uuid=enc.patient_id)
         rx_number, _ = get_next_number(branch_id=patient.branch_id or 1, entity="prescription", using=db)
     except Exception:
         pass
@@ -1102,8 +1102,8 @@ def _create_prescription_for(enc, db):
     )
 
 
-def _store_prescription_pdf(enc, db, tenant_id):
-    """After sign: mirror the prescription to a registry
+def _store_prescription_pdf(enc, db, hospital_id):
+    """After sign: mirror the prescription to a atomwalk
     MedicalDocument(document_type=prescription) so it shows in the doctor's
     history and the patient's My Reports. Delegates to
     apps.opd.archive.store_prescription_document."""
@@ -1112,12 +1112,12 @@ def _store_prescription_pdf(enc, db, tenant_id):
         return
     try:
         from apps.opd.archive import store_prescription_document
-        store_prescription_document(rx, db, tenant_id)
+        store_prescription_document(rx, db, hospital_id)
     except Exception:
         logger.exception("prescription PDF store failed for encounter=%s", enc.id)
 
 
-def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
+def _store_handwriting_pdfs(enc, db, hospital_id, session_id):
     """
     After sign: archive the consult pad's RAW HANDWRITING as permanent PDFs
     in object storage — the original-source record behind the typeset
@@ -1136,21 +1136,21 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
     try:
         import base64
         from apps.opd.pdf import images_to_pdf
-        from apps.patients.models import Patient
-        from apps.tenants.models import Tenant
-        from apps.registry.models import ConsultSession
-        from apps.records.models import MedicalDocument
+        from apps.hospital_patients.models import HospitalPatient
+        from apps.hospitals.models import Hospital
+        from apps.atomwalk.models import ConsultSession
+        from apps.atomwalk.models import MedicalDocument
         from apps.records.services import create_issued_document
         from core import storage as blob_storage
 
         sess = ConsultSession.objects.using("default").filter(id=session_id).first()
         if not sess:
             return
-        patient = Patient.objects.using(db).filter(uuid=enc.patient_id).first()
+        patient = HospitalPatient.objects.using(db).filter(uuid=enc.patient_id).first()
         if not patient:
             return
-        tenant = Tenant.objects.using("default").filter(pk=tenant_id).first()
-        hospital = tenant.name if tenant else "Hospital"
+        owner = Hospital.objects.using("default").filter(pk=hospital_id).first()
+        hospital_name = owner.name if owner else "Hospital"
         appt = enc.appointment if enc.appointment_id else None
         visit_date = appt.scheduled_date if appt else timezone.now().date()
         rx = Prescription.objects.using(db).filter(encounter_id=enc.id).first()
@@ -1176,7 +1176,7 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
             if already:
                 cleared[tab] = True  # already archived on a prior attempt
                 continue
-            pdf_bytes = images_to_pdf(pages, header=f"{title}  ·  {hospital}")
+            pdf_bytes = images_to_pdf(pages, header=f"{title}  ·  {hospital_name}")
             if not pdf_bytes:
                 continue
             pdf_uri = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
@@ -1190,7 +1190,7 @@ def _store_handwriting_pdfs(enc, db, tenant_id, session_id):
             else:
                 create_issued_document(
                     awpid=awpid, file_path=file_path, name=f"{title}.pdf", doc_type=doc_type,
-                    source_tenant_id=tenant_id, source_ref=ref, document_date=visit_date,
+                    source_hospital_id=hospital_id, source_ref=ref, document_date=visit_date,
                 )
             cleared[tab] = True
 
@@ -1216,11 +1216,11 @@ class EncounterInternalNoteView(APIView):
     permission_classes = [IsDoctor]
 
     def get(self, request, pk):
-        from apps.registry.models import ConsultSession
+        from apps.atomwalk.models import ConsultSession
         from core import storage as blob_storage
 
         sess = (ConsultSession.objects.using("default")
-                .filter(encounter_id=pk, tenant_id=request.tenant_id).exclude(note_pdf="").first())
+                .filter(encounter_id=pk, hospital_id=request.hospital_id).exclude(note_pdf="").first())
         if not sess:
             return api_not_found("No internal note was archived for this visit.")
         want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
@@ -1246,14 +1246,14 @@ class EncounterConsultSessionView(APIView):
     permission_classes = [IsDoctor]
 
     def _enc(self, request, pk):
-        return OPDEncounter.objects.using(request.tenant_db).get(pk=pk)
+        return OPDEncounter.objects.using(request.hospital_db).get(pk=pk)
 
     def post(self, request, pk):
         if (request.data or {}).get("action") == "recognise":
             return self._recognise(request, pk)
         from django.conf import settings
-        from apps.registry.models import PatientIdentity, ConsultSession
-        from apps.patients.models import Patient
+        from apps.atomwalk.models import Patient, ConsultSession
+        from apps.hospital_patients.models import HospitalPatient
         from core.qr import render_qr_data_uri
 
         try:
@@ -1261,17 +1261,17 @@ class EncounterConsultSessionView(APIView):
         except OPDEncounter.DoesNotExist:
             return api_not_found("Encounter not found.")
 
-        patient = Patient.objects.using(request.tenant_db).filter(uuid=enc.patient_id).first()
+        patient = HospitalPatient.objects.using(request.hospital_db).filter(uuid=enc.patient_id).first()
         if not patient:
             return api_not_found("Patient not found.")
-        identity = PatientIdentity.objects.using("default").filter(awpid=patient.awpid).first()
+        identity = Patient.objects.using("default").filter(awpid=patient.awpid).first()
         if not identity:
-            return api_not_found("This patient has no registry identity yet.")
+            return api_not_found("This patient has no atomwalk identity yet.")
 
-        sess = _open_consult_session(enc.id, request.tenant_id)
+        sess = _open_consult_session(enc.id, request.hospital_id)
         if not sess:
             sess = ConsultSession.objects.using("default").create(
-                awpid=patient.awpid, tenant_id=request.tenant_id, encounter_id=enc.id,
+                awpid=patient.awpid, hospital_id=request.hospital_id, encounter_id=enc.id,
                 doctor_user_id=request.user.id,
                 expires_at=timezone.now() + timedelta(hours=12),
             )
@@ -1288,15 +1288,15 @@ class EncounterConsultSessionView(APIView):
         are already in the tab's page-text cache is re-used for free. The
         client then polls GET until status is done/empty/failed."""
         import threading
-        from apps.registry.models import ConsultSession
-        from apps.patients.consult_pad_views import _run_tab_recognition, _decode_pages
-        from apps.patients.consult_pad_recognition import _page_key
+        from apps.atomwalk.models import ConsultSession
+        from apps.hospital_patients.consult_pad_views import _run_tab_recognition, _decode_pages
+        from apps.hospital_patients.consult_pad_recognition import _page_key
 
         try:
             enc = self._enc(request, pk)
         except OPDEncounter.DoesNotExist:
             return api_not_found("Encounter not found.")
-        sess = _open_consult_session(enc.id, request.tenant_id)
+        sess = _open_consult_session(enc.id, request.hospital_id)
         if not sess:
             return success(data={"active": False})
 
@@ -1336,7 +1336,7 @@ class EncounterConsultSessionView(APIView):
             enc = self._enc(request, pk)
         except OPDEncounter.DoesNotExist:
             return api_not_found("Encounter not found.")
-        sess = _open_consult_session(enc.id, request.tenant_id)
+        sess = _open_consult_session(enc.id, request.hospital_id)
         if not sess:
             return success(data={"active": False})
 
@@ -1363,7 +1363,7 @@ class EncounterSignView(APIView):
     permission_classes = [IsDoctor]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             enc = OPDEncounter.objects.using(db).select_related("appointment").get(pk=pk)
         except OPDEncounter.DoesNotExist:
@@ -1374,7 +1374,7 @@ class EncounterSignView(APIView):
 
         # Fold in any handwriting-session content the doctor didn't explicitly
         # "Load" — so signing never silently drops what was written on the phone.
-        sess = _open_consult_session(enc.id, request.tenant_id)
+        sess = _open_consult_session(enc.id, request.hospital_id)
         if sess:
             try:
                 _fold_session_into_encounter(sess, enc, db)
@@ -1388,29 +1388,29 @@ class EncounterSignView(APIView):
         enc.sign(using=db)
 
         # Fetch patient once, share across the two post-sign side effects below.
-        from apps.patients.models import Patient
+        from apps.hospital_patients.models import HospitalPatient
         try:
-            patient = Patient.objects.using(db).get(uuid=enc.patient_id)
-        except Patient.DoesNotExist:
+            patient = HospitalPatient.objects.using(db).get(uuid=enc.patient_id)
+        except HospitalPatient.DoesNotExist:
             patient = None
 
         # Auto-generate invoice for this encounter
-        auto_generate_invoice(enc, db, request.user, patient, tenant_id=request.tenant_id)
+        auto_generate_invoice(enc, db, request.user, patient, hospital_id=request.hospital_id)
 
-        # Write-through to the cross-hospital HIE shared tables (registry DB).
+        # Write-through to the cross-hospital HIE shared tables (atomwalk DB).
         # This is the platform's single write-through path for shared history
         # (apps.clinical and the old apps.prescriptions models were retired and
-        # own no tables). It writes straight to the registry Shared* tables and
-        # never blocks sign-off — see apps/registry/hie.py.
-        sync_encounter_to_hie(enc, db, patient, tenant_id=request.tenant_id)
+        # own no tables). It writes straight to the atomwalk Shared* tables and
+        # never blocks sign-off — see apps/atomwalk/hie.py.
+        sync_encounter_to_hie(enc, db, patient, hospital_id=request.hospital_id)
 
         # Store the prescription as a PDF (doctor history + patient portal),
         # archive the consult-pad's raw handwriting as PDFs, then close the
         # handwriting session for this consultation.
-        _store_prescription_pdf(enc, db, request.tenant_id)
+        _store_prescription_pdf(enc, db, request.hospital_id)
         if sess:
-            _store_handwriting_pdfs(enc, db, request.tenant_id, sess.id)
-            from apps.registry.models import ConsultSession
+            _store_handwriting_pdfs(enc, db, request.hospital_id, sess.id)
+            from apps.atomwalk.models import ConsultSession
             ConsultSession.objects.using("default").filter(id=sess.id).update(
                 status=ConsultSession.STATUS_SIGNED, signed_at=timezone.now(),
             )
@@ -1444,7 +1444,7 @@ class FollowUpActionView(APIView):
     permission_classes = [IsDoctor]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             enc = OPDEncounter.objects.using(db).get(pk=pk)
         except OPDEncounter.DoesNotExist:
@@ -1485,12 +1485,12 @@ def _reconstruct_shared_reference(enc, db):
     encounter for the patient at all. Only used as a fallback by
     PreviousEncounterView — see its docstring.
     """
-    from apps.patients.models import Patient
-    from apps.patients.services import PatientService
+    from apps.hospital_patients.models import HospitalPatient
+    from apps.hospital_patients.services import PatientService
 
     try:
-        patient = Patient.objects.using(db).get(uuid=enc.patient_id)
-    except Patient.DoesNotExist:
+        patient = HospitalPatient.objects.using(db).get(uuid=enc.patient_id)
+    except HospitalPatient.DoesNotExist:
         return None
     if not patient.hie_consent_given:
         return None
@@ -1586,7 +1586,7 @@ class PreviousEncounterView(APIView):
     permission_classes = [IsDoctorOrNurse]
 
     def get(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             enc = OPDEncounter.objects.using(db).select_related("appointment").get(pk=pk)
         except OPDEncounter.DoesNotExist:
@@ -1627,12 +1627,12 @@ class PreviousEncounterView(APIView):
 
         # TEMPORARY diagnostic — this "not found" result has been wrong
         # before despite the query logic looking correct, so rather than
-        # patch blind again, surface exactly what's actually in this tenant
+        # patch blind again, surface exactly what's actually in this hospital
         # db to compare against. NOT filtered by `match` — deliberately
         # broader than the query above — so a genuine mismatch between two
         # encounters' patient_id/awpid is directly visible side by side,
         # instead of silently vanishing from a filtered debug list too.
-        from apps.patients.models import Patient as _DebugPatient
+        from apps.hospital_patients.models import HospitalPatient as _DebugPatient
 
         recent = list(
             OPDEncounter.objects.using(db)
@@ -1669,16 +1669,16 @@ class PreviousEncounterView(APIView):
             for p in _DebugPatient.objects.using(db).filter(uuid__in=id_pool)
         }
         for row in recent:
-            row["patient_identity"] = patients_by_id.get(row["patient_id"])
-            row["appointment_patient_identity"] = patients_by_id.get(row["appointment__patient_id"])
+            row["patient"] = patients_by_id.get(row["patient_id"])
+            row["appointment_patient"] = patients_by_id.get(row["appointment__patient_id"])
 
         debug = {
             "this_encounter_id": str(enc.pk),
             "this_patient_id": str(enc.patient_id),
-            "this_patient_identity": patients_by_id.get(str(enc.patient_id)),
+            "this_patient": patients_by_id.get(str(enc.patient_id)),
             "this_appointment_patient_id": str(getattr(enc.appointment, "patient_id", "")),
             "this_appointment_awpid": awpid,
-            "recent_encounters_this_tenant": recent,
+            "recent_encounters_this_hospital": recent,
         }
 
         return Response({
@@ -1694,13 +1694,13 @@ class FollowupNurseWorklistView(APIView):
     visit and it hasn't been marked booked yet. Same nurse-to-doctor
     assignment scoping as MonitoringListView.
     """
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     def get(self, request):
-        from apps.patients.models import Patient
+        from apps.hospital_patients.models import HospitalPatient
         from apps.org.models import StaffUser
 
-        db = request.tenant_db
+        db = request.hospital_db
         encounters = (OPDEncounter.objects.using(db)
                       .filter(followup_ask_nurse=True, followup_nurse_booked=False)
                       .order_by("-followup_nurse_requested_at"))
@@ -1710,7 +1710,7 @@ class FollowupNurseWorklistView(APIView):
             encounters = encounters.filter(doctor_user_id__in=nurse_doctor_ids)
 
         patients_by_uuid = {
-            p.uuid: p for p in Patient.objects.using(db).filter(
+            p.uuid: p for p in HospitalPatient.objects.using(db).filter(
                 uuid__in=[e.patient_id for e in encounters]
             )
         }
@@ -1738,10 +1738,10 @@ class FollowupNurseWorklistView(APIView):
 class FollowupMarkBookedView(APIView):
     """POST /api/v1/opd/followups/<id>/mark-booked/ — nurse confirms they've
     coordinated the patient's next appointment; drops it off the worklist."""
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             enc = OPDEncounter.objects.using(db).get(pk=pk)
         except OPDEncounter.DoesNotExist:
@@ -1769,16 +1769,16 @@ class EncounterSummaryPDFView(APIView):
     sitting in the browser's own state). Same reportlab-generated,
     base64-data-URI pattern as InvoicePDFView/PortalPrescriptionReceiptPDFView.
     """
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     def get(self, request, pk):
         import base64
         import uuid as _uuid
         from apps.opd.pdf import generate_encounter_summary_pdf
-        from apps.patients.models import Patient
+        from apps.hospital_patients.models import HospitalPatient
         from apps.org.models import StaffUser, Branch
 
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             enc = OPDEncounter.objects.using(db).select_related("appointment").get(pk=pk)
         except OPDEncounter.DoesNotExist:
@@ -1786,8 +1786,8 @@ class EncounterSummaryPDFView(APIView):
 
         appointment = enc.appointment
         try:
-            patient = Patient.objects.using(db).get(uuid=enc.patient_id)
-        except Patient.DoesNotExist:
+            patient = HospitalPatient.objects.using(db).get(uuid=enc.patient_id)
+        except HospitalPatient.DoesNotExist:
             patient = None
 
         doctor_name = None
@@ -1805,9 +1805,9 @@ class EncounterSummaryPDFView(APIView):
             pass
 
         branch = Branch.objects.using(db).filter(pk=appointment.branch_id).first() if appointment and appointment.branch_id else None
-        from apps.tenants.models import Tenant
-        tenant = Tenant.objects.using("default").filter(pk=request.tenant_id).first()
-        hospital_name = tenant.name if tenant else "Hospital"
+        from apps.hospitals.models import Hospital
+        hospital = Hospital.objects.using("default").filter(pk=request.hospital_id).first()
+        hospital_name = hospital.name if hospital else "Hospital"
 
         pdf_bytes = generate_encounter_summary_pdf(
             encounter=enc, appointment=appointment, diagnoses=enc.diagnoses or [],
@@ -1832,7 +1832,7 @@ class PrescriptionCreateView(APIView):
     permission_classes = [IsDoctor]
 
     def post(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         encounter_id = request.data.get("encounter_id")
         if not encounter_id:
             return api_error("encounter_id required.")
@@ -1861,10 +1861,10 @@ class PrescriptionCreateView(APIView):
         # rare row left with rx_number=None just isn't quotable/searchable
         # by token, same as it wasn't before this field existed.
         from core.utils.nntm import get_next_number
-        from apps.patients.models import Patient
+        from apps.hospital_patients.models import HospitalPatient
         rx_number = None
         try:
-            patient = Patient.objects.using(db).get(uuid=enc.patient_id)
+            patient = HospitalPatient.objects.using(db).get(uuid=enc.patient_id)
             rx_number, _ = get_next_number(branch_id=patient.branch_id or 1, entity="prescription", using=db)
         except Exception as e:
             logger.warning("Could not generate rx_number for encounter %s: %s", enc.id, e)
@@ -1880,10 +1880,10 @@ class PrescriptionCreateView(APIView):
 
 
 class PrescriptionDetailView(APIView):
-    permission_classes = [IsTenantStaff]
+    permission_classes = [IsHospitalStaff]
 
     def get(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             rx = Prescription.objects.using(db).prefetch_related("items").get(pk=pk)
         except Prescription.DoesNotExist:
@@ -1899,16 +1899,16 @@ class PrescriptionItemView(APIView):
     permission_classes = [IsDoctor]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             rx = Prescription.objects.using(db).get(pk=pk)
         except Prescription.DoesNotExist:
             return api_not_found("Prescription not found.")
 
-        # `drug` is looked up manually against the tenant DB rather than left
+        # `drug` is looked up manually against the hospital DB rather than left
         # to the serializer's auto-generated PrimaryKeyRelatedField, which
         # would validate against the default connection — wrong database
-        # entirely under per-tenant physical DBs. Same pattern as LabRequest's
+        # entirely under per-hospital physical DBs. Same pattern as LabRequest's
         # `test` FK in apps/lab/views.py. A missing/invalid id is treated as
         # "no catalog match" rather than a hard error, so a doctor can still
         # save a free-text drug the pharmacist hasn't catalogued yet.
@@ -1927,7 +1927,7 @@ class PrescriptionItemView(APIView):
         return Response(PrescriptionItemSerializer(item).data, status=201)
 
     def delete(self, request, pk, item_id):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             item = PrescriptionItem.objects.using(db).get(pk=item_id, prescription_id=pk)
         except PrescriptionItem.DoesNotExist:
@@ -1940,14 +1940,14 @@ class FavouriteListCreateView(APIView):
     permission_classes = [IsDoctor]
 
     def get(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         favs = PrescriptionFavourite.objects.using(db).filter(
             doctor_user_id=request.user.id
         ).order_by("name")
         return Response(PrescriptionFavouriteSerializer(favs, many=True).data)
 
     def post(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         serializer = PrescriptionFavouriteSerializer(data={
             **request.data, "doctor_user_id": str(request.user.id)
         })
@@ -1960,7 +1960,7 @@ class FavouriteDeleteView(APIView):
     permission_classes = [IsDoctor]
 
     def delete(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             fav = PrescriptionFavourite.objects.using(db).get(pk=pk, doctor_user_id=request.user.id)
         except PrescriptionFavourite.DoesNotExist:

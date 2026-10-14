@@ -4,7 +4,7 @@
  * My Appointments — leads with the next upcoming visit (the thing the
  * patient actually came here to check), splits the rest into Upcoming /
  * Past, and shows real queue position (people ahead, who's currently being
- * seen) computed live from Appointment.status in the same tenant DB rather
+ * seen) computed live from Appointment.status in the same hospital DB rather
  * than an invented "estimated wait" — we don't track per-consult timing,
  * so a minutes estimate would just be a guess dressed up as data.
  */
@@ -256,14 +256,14 @@ function RescheduleModal({ booking, onClose, onDone }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!date || !booking.tenant_id || !booking.doctor_id) return;
+    if (!date || !booking.hospital_id || !booking.doctor_id) return;
     setSlotsLoading(true);
     setSelectedSlot(null);
-    apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(booking.tenant_id, booking.doctor_id), { params: { date } })
+    apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(booking.hospital_id, booking.doctor_id), { params: { date } })
       .then(res => setSlots(res.data?.results || []))
       .catch(() => setSlots([]))
       .finally(() => setSlotsLoading(false));
-  }, [date, booking.tenant_id, booking.doctor_id]);
+  }, [date, booking.hospital_id, booking.doctor_id]);
 
   async function confirm() {
     if (!selectedSlot) return;
@@ -282,7 +282,7 @@ function RescheduleModal({ booking, onClose, onDone }) {
     }
   }
 
-  const canPickHospitalDoctor = booking.tenant_id && booking.doctor_id;
+  const canPickHospitalDoctor = booking.hospital_id && booking.doctor_id;
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
@@ -671,11 +671,11 @@ function AppointmentRow({ b, onOpenPrescriptions, ownAwpid, onCancel, onReschedu
             <FileText size={12} /> Prescription
           </button>
         )}
-        {isPast && b.tenant_id && (
+        {isPast && b.hospital_id && (
           <Link
             to={b.doctor_id
-              ? ROUTES.PATIENT.DOCTOR_PROFILE(b.tenant_id, b.doctor_id)
-              : ROUTES.PATIENT.HOSPITAL_DOCTORS(b.tenant_id)}
+              ? ROUTES.PATIENT.DOCTOR_PROFILE(b.hospital_id, b.doctor_id)
+              : ROUTES.PATIENT.HOSPITAL_DOCTORS(b.hospital_id)}
             style={{
               display: "flex", alignItems: "center", gap: 4,
               fontSize: 11.5, fontWeight: 700, color: "var(--color-primary)",
@@ -756,7 +756,7 @@ function BillRow({ inv }) {
     const win = window.open("", "_blank");
     setDownloading(true);
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PORTAL.INVOICE_RECEIPT(inv.tenant_db, inv.id));
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.INVOICE_RECEIPT(inv.hospital_db, inv.id));
       const data = res.data?.data || res.data;
       if (data?.file_data) {
         openDataUrlInNewTab(win, data.file_data);
@@ -854,7 +854,7 @@ function BillsSection() {
         <div style={{ fontSize: 12, color: "var(--color-text-muted)", fontStyle: "italic" }}>No bills on file.</div>
       ) : (
       <div style={{ display: "grid", gap: 10 }}>
-        {invoices.map(inv => <BillRow key={`${inv.tenant_db}-${inv.id}`} inv={inv} />)}
+        {invoices.map(inv => <BillRow key={`${inv.hospital_db}-${inv.id}`} inv={inv} />)}
       </div>
       )}
       {hasMore && (

@@ -5,12 +5,12 @@ from rest_framework import serializers
 class StaffLoginSerializer(serializers.Serializer):
     """
     Staff login — two supported shapes:
-      1. {mobile, password} — tenant resolved via the registry-wide
+      1. {mobile, password} — hospital resolved via the atomwalk-wide
          StaffMobileIndex, no hospital selection needed (mobile numbers are
          globally unique across every hospital on the platform).
       2. {subdomain, employee_id, password} — for hospitals that use
-         employee IDs. Employee IDs are only unique WITHIN a tenant (two
-         hospitals can both have "EMP-001"), so this path needs a tenant
+         employee IDs. Employee IDs are only unique WITHIN a hospital (two
+         hospitals can both have "EMP-001"), so this path needs a hospital
          hint the mobile path doesn't — see StaffLoginView.
     Exactly one of the two shapes must be provided.
     """

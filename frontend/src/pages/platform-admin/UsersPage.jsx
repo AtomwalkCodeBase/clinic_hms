@@ -1,9 +1,9 @@
 /**
  * pages/platform-admin/UsersPage.jsx
  * --------------------------------------
- * Global cross-tenant staff directory — every staff member at every
+ * Global cross-hospital staff directory — every staff member at every
  * hospital, searchable/filterable, with disable-account and reset-password
- * actions. Backed by PlatformUserListView, which loops each tenant DB.
+ * actions. Backed by PlatformUserListView, which loops each hospital DB.
  */
 import { useState, useEffect, useCallback } from "react";
 import { Ban, CheckCircle2, KeyRound } from "lucide-react";
@@ -32,7 +32,7 @@ export default function UsersPage() {
   const [page, setPage] = useState(1);
 
   useEffect(() => {
-    api.get(`${API_ENDPOINTS.PLATFORM.TENANTS}?page=1&page_size=100`)
+    api.get(`${API_ENDPOINTS.PLATFORM.HOSPITALS}?page=1&page_size=100`)
       .then(({ data: res }) => setHospitals(res.data?.results || []))
       .catch(() => setHospitals([]));
   }, [api]);
@@ -71,7 +71,7 @@ export default function UsersPage() {
     const key = `${u.hospital_id}:${u.id}`;
     setBusyKey(key);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.TENANT_STAFF_DETAIL(u.hospital_id, u.id), { is_active: !u.is_active });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_DETAIL(u.hospital_id, u.id), { is_active: !u.is_active });
       toastSuccess(`${u.full_name} ${u.is_active ? "deactivated" : "reactivated"}.`);
       fetchUsers(page);
     } catch (err) {
@@ -85,7 +85,7 @@ export default function UsersPage() {
     const key = `${u.hospital_id}:${u.id}`;
     setBusyKey(key);
     try {
-      const { data: res } = await api.post(API_ENDPOINTS.PLATFORM.TENANT_STAFF_RESET_PASSWORD(u.hospital_id, u.id));
+      const { data: res } = await api.post(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_RESET_PASSWORD(u.hospital_id, u.id));
       navigator.clipboard?.writeText(res.data.temp_password).catch(() => {});
       toastSuccess(`Temp password for ${u.email || u.full_name}: ${res.data.temp_password} (copied to clipboard)`, { duration: 15000 });
     } catch (err) {
@@ -100,7 +100,7 @@ export default function UsersPage() {
     const key = `${u.hospital_id}:${u.id}`;
     setBusyKey(key);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.TENANT_STAFF_DETAIL(u.hospital_id, u.id), { role: newRole });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_DETAIL(u.hospital_id, u.id), { role: newRole });
       toastSuccess(`${u.full_name}'s role changed to ${ROLE_LABELS[newRole] || newRole}.`);
       fetchUsers(page);
     } catch (err) {

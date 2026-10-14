@@ -16,7 +16,7 @@ Two design decisions worth understanding before touching this file:
    they arrive" (OPD Consultation/External Referral/Walk-in/Direct Order/
    Transfer-in/Ambulance/TPA-coordinated/Medical Tourism/Telemedicine/
    Involuntary-MLC). Both are free-text values validated against
-   billing.OptionList — the same tenant-configurable-dropdown mechanism
+   billing.OptionList — the same hospital-configurable-dropdown mechanism
    already backing Drug.form / Invoice.status / Payment.payment_mode — so
    a hospital can add or retire values without a code deploy. See
    apps/billing/models.py's OptionList docstring, and this app's
@@ -49,7 +49,7 @@ import uuid
 from django.db import models
 
 from apps.org.models import StaffUser, Department, Branch
-from apps.patients.models import Patient
+from apps.hospital_patients.models import HospitalPatient
 from apps.opd.models import OPDEncounter, Appointment
 
 
@@ -77,7 +77,7 @@ class AdmissionReferral(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    patient    = models.ForeignKey(Patient, on_delete=models.PROTECT, related_name="admission_referrals")
+    patient    = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT, related_name="admission_referrals")
     department = models.ForeignKey(Department, on_delete=models.PROTECT, related_name="admission_referrals")
 
     # Validated against billing.OptionList(list_type="admission_type" /
@@ -203,7 +203,7 @@ class Admission(models.Model):
     branch           = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="admissions")
 
     referral   = models.OneToOneField(AdmissionReferral, on_delete=models.PROTECT, related_name="admission")
-    patient    = models.ForeignKey(Patient, on_delete=models.PROTECT, related_name="admissions")
+    patient    = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT, related_name="admissions")
     department = models.ForeignKey(Department, on_delete=models.PROTECT, related_name="admissions")
 
     # Denormalized off the referral at creation (same rationale as

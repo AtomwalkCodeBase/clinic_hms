@@ -45,7 +45,7 @@ export function PermissionProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  /** Returns true if the given feature flag is enabled for this tenant. */
+  /** Returns true if the given feature flag is enabled for this hospital. */
   const can = useCallback(
     (feature) => Boolean(permissions[feature]),
     [permissions]

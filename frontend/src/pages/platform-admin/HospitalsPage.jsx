@@ -2,7 +2,7 @@
  * pages/platform-admin/HospitalsPage.jsx
  * -----------------------------------------
  * Full sortable/filterable hospital directory — the "spreadsheet" view of
- * every tenant on the platform, complementary to DashboardPage's card list.
+ * every hospital on the platform, complementary to DashboardPage's card list.
  * Click a row to open that hospital's full detail page (Overview / Users &
  * Roles / Subscription / Audit Log tabs).
  */
@@ -34,7 +34,7 @@ export default function HospitalsPage() {
   // Supports being deep-linked from Subscriptions' plan table, e.g.
   // /platform/hospitals?tier=growth — filter pre-set from the URL on load.
   const [searchParams, setSearchParams] = useSearchParams();
-  const [tenants, setTenants] = useState([]);
+  const [hospitals, setHospitals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [tierFilter, setTierFilter] = useState(searchParams.get("tier") || "");
@@ -51,11 +51,11 @@ export default function HospitalsPage() {
       if (searchTerm) params.set("search", searchTerm);
       if (tier) params.set("tier", tier);
       if (status) params.set("status", status);
-      const { data: res } = await api.get(`${API_ENDPOINTS.PLATFORM.TENANTS}?${params.toString()}`);
-      setTenants(res.data?.results || []);
+      const { data: res } = await api.get(`${API_ENDPOINTS.PLATFORM.HOSPITALS}?${params.toString()}`);
+      setHospitals(res.data?.results || []);
       setPagination(res.data?.pagination || null);
     } catch {
-      setTenants([]);
+      setHospitals([]);
       setPagination(null);
     } finally {
       setLoading(false);
@@ -82,7 +82,7 @@ export default function HospitalsPage() {
   }
 
   const sorted = useMemo(() => {
-    const arr = [...tenants];
+    const arr = [...hospitals];
     const dir = sortDir === "asc" ? 1 : -1;
     arr.sort((a, b) => {
       let av, bv;
@@ -99,7 +99,7 @@ export default function HospitalsPage() {
       return 0;
     });
     return arr;
-  }, [tenants, sortKey, sortDir]);
+  }, [hospitals, sortKey, sortDir]);
 
   const thStyle = {
     textAlign: "left", padding: "10px 14px", fontSize: 11, fontWeight: 700,

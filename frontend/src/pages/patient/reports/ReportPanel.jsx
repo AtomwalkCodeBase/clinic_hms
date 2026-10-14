@@ -45,7 +45,7 @@ export default function ReportPanel({ doc, original, patientAwpid, priv, onLock,
   const state = stateOf(doc);
   const kind = fileKind(doc);
   const chips = chipsFor(doc);
-  const hospital = !!doc.source_tenant_id || doc.uploaded_by === "staff";
+  const hospital = !!doc.source_hospital_id || doc.uploaded_by === "staff";
   const canRetype = !hospital && !doc.confirmed && state !== "duplicate" && state !== "processing";
   const note = explain(doc, original);
   const params = patientAwpid ? { patient_awpid: patientAwpid } : {};

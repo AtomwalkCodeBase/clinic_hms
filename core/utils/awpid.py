@@ -38,7 +38,7 @@ def generate_awpid() -> str:
 
     Note:
         Does NOT guarantee DB-level uniqueness by itself.
-        The caller must check for uniqueness in patient_identity before saving.
+        The caller must check for uniqueness in patient before saving.
         Use generate_unique_awpid() for safe creation.
     """
     date_part = date.today().strftime("%Y%m%d")
@@ -48,7 +48,7 @@ def generate_awpid() -> str:
 
 def generate_unique_awpid() -> str:
     """
-    Generate an AWPID that is guaranteed to be unique in the registry DB.
+    Generate an AWPID that is guaranteed to be unique in the atomwalk DB.
 
     Retries up to _MAX_RETRIES times if a collision is found.
 
@@ -58,11 +58,11 @@ def generate_unique_awpid() -> str:
     Raises:
         RuntimeError if unable to generate a unique ID after max retries (extremely unlikely).
     """
-    from apps.registry.models import PatientIdentity
+    from apps.atomwalk.models import Patient
 
     for attempt in range(1, _MAX_RETRIES + 1):
         candidate = generate_awpid()
-        if not PatientIdentity.objects.filter(awpid=candidate).exists():
+        if not Patient.objects.filter(awpid=candidate).exists():
             logger.debug("AWPID generated in %d attempt(s): %s", attempt, candidate)
             return candidate
 

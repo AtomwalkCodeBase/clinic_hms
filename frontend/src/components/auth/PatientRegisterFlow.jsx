@@ -5,7 +5,7 @@
  * old single-step inline form (which created an account with no proof any
  * contact detail was reachable). The EMAIL address is verified via OTP
  * before the account is ever created — see
- * apps/patients/portal_views.py::PortalRegisterView, which takes the email
+ * apps/hospital_patients/portal_views.py::PortalRegisterView, which takes the email
  * from the verified action_token, not from this form's own input, so a
  * verified-then-swapped address can't slip through. Email-based for now —
  * verifying via mobile requires a paid SMS gateway that isn't wired up yet

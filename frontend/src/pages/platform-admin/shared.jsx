@@ -74,7 +74,7 @@ export function TierBadge({ tier }) {
 }
 
 // Thin usage-vs-limit bar — e.g. "7 / 10 doctors". max=0 means unlimited.
-// used=null means the tenant DB couldn't be reached (usage unknown).
+// used=null means the hospital DB couldn't be reached (usage unknown).
 export function UsageBar({ label, used, max }) {
   if (used === null || used === undefined) {
     return (
@@ -106,35 +106,35 @@ export function UsageBar({ label, used, max }) {
   );
 }
 
-export async function fetchAuditLog(tenantId) {
-  const { data: res } = await apiClient.get(API_ENDPOINTS.PLATFORM.TENANT_AUDIT_LOG(tenantId));
+export async function fetchAuditLog(hospitalId) {
+  const { data: res } = await apiClient.get(API_ENDPOINTS.PLATFORM.HOSPITAL_AUDIT_LOG(hospitalId));
   return res.data || [];
 }
 
-// Slide-over drawer for viewing/editing one tenant's tier, subscription
+// Slide-over drawer for viewing/editing one hospital's tier, subscription
 // status, and audit trail — shared by HospitalsPage and SubscriptionsPage
 // so both can offer the same controls DashboardPage's inline card has,
 // without duplicating the patch/audit-log wiring in three places.
-export function TenantDetailDrawer({ tenant, onClose, onChanged }) {
-  const [tierPick, setTierPick] = useState(tenant.subscription?.license_tier || "starter");
-  const [statusPick, setStatusPick] = useState(tenant.subscription?.status || "trial");
+export function HospitalDetailDrawer({ hospital, onClose, onChanged }) {
+  const [tierPick, setTierPick] = useState(hospital.subscription?.license_tier || "starter");
+  const [statusPick, setStatusPick] = useState(hospital.subscription?.status || "trial");
   const [savingTier, setSavingTier] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
   const [auditLog, setAuditLog] = useState(null);
   const { toastSuccess, toastApiError } = useToast();
 
   useEffect(() => {
-    fetchAuditLog(tenant.id).then(setAuditLog).catch(() => setAuditLog([]));
+    fetchAuditLog(hospital.id).then(setAuditLog).catch(() => setAuditLog([]));
      
-  }, [tenant.id]);
+  }, [hospital.id]);
 
   async function applyTier() {
-    if (tierPick === tenant.subscription?.license_tier) return;
+    if (tierPick === hospital.subscription?.license_tier) return;
     setSavingTier(true);
     try {
-      await apiClient.patch(API_ENDPOINTS.PLATFORM.TENANT(tenant.id), { tier: tierPick });
+      await apiClient.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { tier: tierPick });
       toastSuccess(`Tier changed to ${TIER_LABEL[tierPick]?.label || tierPick}.`);
-      fetchAuditLog(tenant.id).then(setAuditLog);
+      fetchAuditLog(hospital.id).then(setAuditLog);
       onChanged();
     } catch (err) {
       toastApiError(err, "Failed to change tier.");
@@ -144,12 +144,12 @@ export function TenantDetailDrawer({ tenant, onClose, onChanged }) {
   }
 
   async function applyStatus() {
-    if (statusPick === tenant.subscription?.status) return;
+    if (statusPick === hospital.subscription?.status) return;
     setSavingStatus(true);
     try {
-      await apiClient.patch(API_ENDPOINTS.PLATFORM.TENANT(tenant.id), { status: statusPick });
+      await apiClient.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { status: statusPick });
       toastSuccess(`Status changed to ${SUB_STATUS_META[statusPick]?.label || statusPick}.`);
-      fetchAuditLog(tenant.id).then(setAuditLog);
+      fetchAuditLog(hospital.id).then(setAuditLog);
       onChanged();
     } catch (err) {
       toastApiError(err, "Failed to change status.");
@@ -163,7 +163,7 @@ export function TenantDetailDrawer({ tenant, onClose, onChanged }) {
     border: "1.5px solid var(--color-border)", background: "var(--color-surface)",
     color: "var(--color-text)", outline: "none",
   };
-  const usage = tenant.usage || {};
+  const usage = hospital.usage || {};
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", justifyContent: "flex-end" }}>
@@ -175,21 +175,21 @@ export function TenantDetailDrawer({ tenant, onClose, onChanged }) {
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
           <div>
-            <div style={{ fontFamily: "var(--font-display)", fontSize: 19, fontWeight: 600 }}>{tenant.name}</div>
-            <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>{tenant.city}{tenant.state ? `, ${tenant.state}` : ""}</div>
+            <div style={{ fontFamily: "var(--font-display)", fontSize: 19, fontWeight: 600 }}>{hospital.name}</div>
+            <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>{hospital.city}{hospital.state ? `, ${hospital.state}` : ""}</div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "var(--color-text-muted)" }}>✕</button>
         </div>
 
         <div style={{ display: "flex", gap: 8, margin: "12px 0 20px" }}>
-          <StatusBadge isActive={tenant.is_active} />
-          <TierBadge tier={tenant.subscription?.license_tier} />
-          <SubStatusBadge status={tenant.subscription?.status} />
+          <StatusBadge isActive={hospital.is_active} />
+          <TierBadge tier={hospital.subscription?.license_tier} />
+          <SubStatusBadge status={hospital.subscription?.status} />
         </div>
 
         <div style={{ display: "flex", gap: 24, marginBottom: 20 }}>
-          <UsageBar label="Doctors" used={usage.doctors} max={tenant.subscription?.max_doctors} />
-          <UsageBar label="Branches" used={usage.branches} max={tenant.subscription?.max_branches} />
+          <UsageBar label="Doctors" used={usage.doctors} max={hospital.subscription?.max_doctors} />
+          <UsageBar label="Branches" used={usage.branches} max={hospital.subscription?.max_branches} />
         </div>
 
         <div style={{ display: "grid", gap: 18, marginBottom: 20 }}>
@@ -199,7 +199,7 @@ export function TenantDetailDrawer({ tenant, onClose, onChanged }) {
               <select value={tierPick} onChange={e => setTierPick(e.target.value)} style={selectStyle}>
                 {TIERS.map(t => <option key={t} value={t}>{TIER_LABEL[t].label}</option>)}
               </select>
-              <button onClick={applyTier} disabled={savingTier || tierPick === tenant.subscription?.license_tier}
+              <button onClick={applyTier} disabled={savingTier || tierPick === hospital.subscription?.license_tier}
                 className="btn-outline" style={{ fontSize: 12, padding: "6px 14px" }}>
                 {savingTier ? "…" : "Apply"}
               </button>
@@ -211,7 +211,7 @@ export function TenantDetailDrawer({ tenant, onClose, onChanged }) {
               <select value={statusPick} onChange={e => setStatusPick(e.target.value)} style={selectStyle}>
                 {Object.keys(SUB_STATUS_META).map(s => <option key={s} value={s}>{SUB_STATUS_META[s].label}</option>)}
               </select>
-              <button onClick={applyStatus} disabled={savingStatus || statusPick === tenant.subscription?.status}
+              <button onClick={applyStatus} disabled={savingStatus || statusPick === hospital.subscription?.status}
                 className="btn-outline" style={{ fontSize: 12, padding: "6px 14px" }}>
                 {savingStatus ? "…" : "Apply"}
               </button>

@@ -12,13 +12,13 @@ Two things live here:
                                the same reality, not a replacement for them).
 
 Both are consumed by the 0013 migration's data-seeding step (to populate the
-`permission` and `role`/`role_permission` tables in every tenant DB) and by
+`permission` and `role`/`role_permission` tables in every hospital DB) and by
 get_effective_permissions() below, which a view can call when it wants to
 check something finer-grained than "is this a doctor" — e.g. whether THIS
 particular staff member (who might hold an extra custom role on top of their
 primary one) can do X. Most endpoints don't need this and should keep using
 the existing Is* fast-path classes; reach for this only for genuinely
-per-tenant-configurable checks.
+per-hospital-configurable checks.
 """
 
 import logging
@@ -93,7 +93,7 @@ def resolve_acts_as(staff):
     """
     Which system-role identities this staff member should be treated as,
     for every "is this person a doctor/nurse/..." check throughout the app
-    (core.permissions Is* classes, DoctorListView, tenants.limits doctor
+    (core.permissions Is* classes, DoctorListView, hospitals.limits doctor
     counting, patient-facing doctor search, etc.) — not just permission
     codes, but actual identity/discoverability.
 
@@ -126,11 +126,11 @@ def get_effective_permissions(staff, db_name):
         acts_as, so a custom role can grant a permission without claiming
         the matching identity, or vice versa)
       - permissions granted by any extra Role rows assigned via UserRole
-        (only meaningful for tenants using custom RBAC)
+        (only meaningful for hospitals using custom RBAC)
 
     Best-effort: never raises. A lookup failure just means "no extra
     permissions beyond the system default" — the caller falls back to the
-    hardcoded role, so nothing breaks for the 95%+ of tenants that never
+    hardcoded role, so nothing breaks for the 95%+ of hospitals that never
     touch custom roles.
     """
     if staff.role == "custom":
@@ -161,7 +161,7 @@ def get_effective_permissions(staff, db_name):
     except Exception:
         # Degrades to system-default permissions on any lookup failure — by
         # design, since custom roles are an enterprise add-on and most
-        # tenants never touch this path. But a real bug here (e.g. a schema
+        # hospitals never touch this path. But a real bug here (e.g. a schema
         # drift breaking UserRole/Role joins) would otherwise be completely
         # silent, surfacing only as "my custom permissions aren't working"
         # support tickets with nothing in the logs to go on.

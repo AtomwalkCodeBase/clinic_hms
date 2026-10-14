@@ -6,11 +6,11 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from apps.patients.portal_access import resolve_target_awpid_and_dob
+from apps.hospital_patients.portal_access import resolve_target_awpid_and_dob
 from core.permissions import IsDoctorOrNurse, IsPatient
 from core.response import error, not_found, success
 from . import classification as rules
-from .models import DocumentBatch
+from apps.atomwalk.models import DocumentBatch
 from .serializers import SubmitSerializer, UploadSerializer
 from .timeline_insights.extract import build_timeline
 from .services import (BULK_QUEUE, INSTANT_QUEUE, awaiting_review_q, batch_summary, save_upload, start_processing,
@@ -108,7 +108,7 @@ class SubmitView(APIView):
         if not serializer.is_valid():
             return error("Nothing was submitted - check the list and try again.", errors=serializer.errors)
         result = submit_decisions(awpid, serializer.validated_data["decisions"])
-        from .models import MedicalDocument
+        from apps.atomwalk.models import MedicalDocument
         result["counts"] = {"awaiting_review": MedicalDocument.objects.using("default")
                             .filter(awaiting_review_q(), patient__awpid=awpid,
                                     status__in=(MedicalDocument.Status.COMPLETED, MedicalDocument.Status.REVIEW_REQUIRED)).count()}
@@ -162,15 +162,15 @@ class StaffTimelineView(APIView):
     permission_classes = [IsAuthenticated, IsDoctorOrNurse]
 
     def get(self, request, pk):
-        from apps.patients.models import Patient
+        from apps.hospital_patients.models import HospitalPatient
         from core.audit import log_action
-        patient = Patient.objects.using(request.tenant_db).filter(pk=pk).first()
+        patient = HospitalPatient.objects.using(request.hospital_db).filter(pk=pk).first()
         if not patient:
             return not_found("Patient not found.")
         filters, err = _timeline_filters(request)
         if err:
             return err
         consent = patient.hie_consent_given
-        data = build_timeline(patient.awpid, audience="staff", tenant_id=None if consent else request.tenant_id, **filters)
-        log_action(request, request.tenant_db, action="patient.timeline.view", resource_type="Patient", resource_id=patient.pk)
+        data = build_timeline(patient.awpid, audience="staff", hospital_id=None if consent else request.hospital_id, **filters)
+        log_action(request, request.hospital_db, action="patient.timeline.view", resource_type="Patient", resource_id=patient.pk)
         return success(data={**data, "consent_given": consent})

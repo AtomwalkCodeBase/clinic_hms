@@ -31,7 +31,7 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
     items:        list of opd.PrescriptionItem
     doctor_name:  str (already resolved — Prescription only stores a raw
                   doctor_user_id, resolving the display name is the view's job)
-    patient:      patients.Patient instance
+    patient:      hospital_patients.HospitalPatient instance
     branch:       org.Branch instance (may be None)
     hospital_name: str
     visit_date:   date the encounter happened (may be None) — distinct from
@@ -68,7 +68,7 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
     # whatever it scans straight to the verify() path and files it under
     # Prescriptions automatically; any other scanner (Google Lens etc.) just
     # opens the link as a normal webpage with a view-consent prompt
-    # (apps/patients/document_view_views.py). Best-effort: a missing
+    # (apps/hospital_patients/document_view_views.py). Best-effort: a missing
     # rx_number / awpid, or any error, just omits the QR.
     header_right = right
     try:
@@ -211,7 +211,7 @@ def generate_encounter_summary_pdf(encounter, appointment, diagnoses, rx_items, 
     diagnoses:   encounter.diagnoses (list of {"code","description","is_primary"})
     rx_items:    list of opd.PrescriptionItem, or [] if nothing prescribed
     doctor_name: str (already resolved by the caller)
-    patient:     patients.Patient instance
+    patient:     hospital_patients.HospitalPatient instance
     branch:      org.Branch instance (may be None)
     hospital_name: str
     """

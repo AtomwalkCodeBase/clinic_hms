@@ -27,11 +27,11 @@ CURRENT_POLICY_VERSION = "v1"
 def record_consent(db, patient, consent_type, source, request=None,
                     recorded_by=None, granted=True, notes=""):
     """
-    Write one ConsentRecord row to the given tenant db.
+    Write one ConsentRecord row to the given hospital db.
 
     Args:
-        db:            tenant db alias (request.tenant_db).
-        patient:       apps.patients.models.Patient instance (or patient_id int).
+        db:            hospital db alias (request.hospital_db).
+        patient:       apps.hospital_patients.models.Patient instance (or patient_id int).
         consent_type:  ConsentRecord.CONSENT_DPDP_PROCESSING or CONSENT_HIE_SHARING.
         source:        ConsentRecord.SOURCE_FRONT_DESK or SOURCE_PORTAL.
         request:       optional — used to pull client IP/user agent when available.

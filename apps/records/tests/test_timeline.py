@@ -7,8 +7,8 @@ from unittest import mock
 from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from apps.patients.models import Patient
-from apps.records.models import DocumentText
+from apps.hospital_patients.models import HospitalPatient
+from apps.atomwalk.models import DocumentText
 from apps.records.tests.helpers import make_doc
 from apps.records.tests.test_review import RESOLVE_RECORDS, call
 from apps.records.timeline_insights import extract
@@ -165,7 +165,7 @@ class TimelineEndpointTests(TestCase):
 
     def test_a_hospital_document_is_read_from_its_file_and_dated_by_the_hospital(self):
         doc = make_doc("AWP-T1", status="completed", document_type="prescription", by="issued", uploaded_by="staff",
-                       source_tenant_id="3", document_date=datetime.date(2025, 5, 1))
+                       source_hospital_id="3", document_date=datetime.date(2025, 5, 1))
         with mock.patch.object(extract, "_read_file", return_value=b"%PDF"), \
                 mock.patch.object(extract, "extract_text", return_value=("Date: 01/01/2020" + chr(10) + "Fever, cough.", "pdf_text")):
             extract.run_insights(doc.id)
@@ -187,21 +187,21 @@ class TimelineEndpointTests(TestCase):
         self.assertEqual(("medication", "500 mg BD"), (metformin["kind"], metformin["dose"]))
 
     def test_without_the_patients_consent_a_doctor_gets_only_this_hospitals_documents(self):
-        make_doc("AWP-T1", status="completed", document_type="prescription", by="issued", uploaded_by="staff", source_tenant_id="3",
+        make_doc("AWP-T1", status="completed", document_type="prescription", by="issued", uploaded_by="staff", source_hospital_id="3",
                  document_date=datetime.date(2025, 5, 1), text="Tab Metformin 500 mg BD.")
         extract.run_all(redo=True)
         names = lambda **kw: {e["name"] for d in extract.build_timeline("AWP-T1", audience="staff", **kw)["days"] for e in d["entries"]}
         self.assertIn("diabetes mellitus", names())                          # the patient's own uploads, with consent
-        self.assertEqual({"metformin"}, names(tenant_id=3))                  # only what hospital 3 issued
-        self.assertEqual(set(), names(tenant_id=4))
+        self.assertEqual({"metformin"}, names(hospital_id=3))                  # only what hospital 3 issued
+        self.assertEqual(set(), names(hospital_id=4))
 
     def staff_get(self, role="doctor", consent=True):
-        """The doctor's endpoint for a patient of hospital 3 (the tenant lookup is faked: there is no hospital database here)."""
+        """The doctor's endpoint for a patient of hospital 3 (the hospital lookup is faked: there is no hospital database here)."""
         request = APIRequestFactory().get("/x/", {"include_hidden": "1"})
-        request.tenant_db, request.tenant_id = "default", 3
+        request.hospital_db, request.hospital_id = "default", 3
         force_authenticate(request, user=MockUser({"user_id": 2, "role": role}))
         patient = SimpleNamespace(pk=1, awpid="AWP-T1", hie_consent_given=consent)
-        with mock.patch.object(Patient, "objects") as objects, mock.patch("core.audit.log_action") as audit:
+        with mock.patch.object(HospitalPatient, "objects") as objects, mock.patch("core.audit.log_action") as audit:
             objects.using.return_value.filter.return_value.first.return_value = patient
             return StaffTimelineView.as_view()(request, pk=1), audit
 

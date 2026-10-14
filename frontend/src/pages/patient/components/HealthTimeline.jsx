@@ -82,8 +82,8 @@ function entryAction(entry) {
   if (entry.type === "vaccination" && entry.detail?.has_certificate && entry.detail?.record_id) {
     return <ViewFileButton label="View Certificate" fetchUrl={API_ENDPOINTS.PORTAL.VACCINATION_FILE(entry.detail.record_id)} />;
   }
-  if (entry.type === "lab" && entry.detail?.has_file && entry.detail?.tenant_db && entry.detail?.request_id) {
-    return <ViewFileButton label="View Report" fetchUrl={API_ENDPOINTS.PORTAL.LAB_REPORT_FILE(entry.detail.tenant_db, entry.detail.request_id)} />;
+  if (entry.type === "lab" && entry.detail?.has_file && entry.detail?.hospital_db && entry.detail?.request_id) {
+    return <ViewFileButton label="View Report" fetchUrl={API_ENDPOINTS.PORTAL.LAB_REPORT_FILE(entry.detail.hospital_db, entry.detail.request_id)} />;
   }
   return null;
 }

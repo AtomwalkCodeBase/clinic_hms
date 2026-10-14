@@ -30,7 +30,7 @@ def get_next_number(branch_id: int, entity: str, using: str = "default") -> tupl
                    which is a hospital-wide (not per-branch) sequence, pass 0
                    — see apps.org.services.next_employee_id.
         entity:    One of: 'uhid', 'invoice', 'lab_report', 'lab_test', 'lab_request', 'prescription', 'queue', 'employee_id', 'drug', 'admission'.
-        using:     The database alias to use (tenant DB name).
+        using:     The database alias to use (hospital DB name).
 
     Returns:
         Tuple of (formatted_id: str, number: int)
@@ -52,7 +52,7 @@ def get_next_number(branch_id: int, entity: str, using: str = "default") -> tupl
     # 'admission' added for apps.ipd (Phase 1 — admission intake). Every
     # existing branch is seeded a NextNumber(entity="admission") row by
     # apps/ipd/migrations/0002_seed_admission_catalogs.py — if that
-    # migration hasn't been run on a given tenant DB yet, this will raise
+    # migration hasn't been run on a given hospital DB yet, this will raise
     # NextNumber.DoesNotExist the same way a missing 'drug' row used to.
     VALID_ENTITIES = {"uhid", "invoice", "lab_report", "lab_test", "lab_request", "prescription", "queue", "employee_id", "drug", "admission"}
     if entity not in VALID_ENTITIES:

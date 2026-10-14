@@ -26,10 +26,10 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.throttling import ScopedRateThrottle
 
 from core.response import success, error
-from apps.tenants.models import Tenant, Subscription
-from apps.tenants.constants import TIER_FEATURE_DEFAULTS
+from apps.hospitals.models import Hospital, Subscription
+from apps.hospitals.constants import TIER_FEATURE_DEFAULTS
 from apps.org.models import StaffUser
-from apps.registry.models import StaffMobileIndex
+from apps.atomwalk.models import StaffMobileIndex
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +70,13 @@ class StaffLoginView(APIView):
       1. {mobile, password} — profile-based routing, no subdomain needed.
          The "mobile" field also accepts an email address (detected by the
          presence of "@") — either way it's resolved via StaffMobileIndex
-         (registry DB) → tenant db_name → StaffUser → verify password → JWT.
+         (atomwalk DB) → hospital db_name → StaffUser → verify password → JWT.
          This matches the design spec:
-         Request → Authenticated User → Profile → Hospital → DB Name → Tenant DB
+         Request → Authenticated User → Profile → Hospital → DB Name → Hospital DB
       2. {subdomain, employee_id, password} — for hospitals using employee
          IDs. Employee IDs aren't globally unique (two hospitals can both
-         have "EMP-001"), so this path resolves the tenant DIRECTLY from
-         the given subdomain instead of a registry-wide index lookup.
+         have "EMP-001"), so this path resolves the hospital DIRECTLY from
+         the given subdomain instead of a atomwalk-wide index lookup.
     """
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
@@ -91,14 +91,14 @@ class StaffLoginView(APIView):
         login_by_employee_id = bool(d.get("subdomain")) and bool(d.get("employee_id"))
 
         if login_by_employee_id:
-            # ── Step 1 (employee-ID path): resolve tenant directly by subdomain ──
+            # ── Step 1 (employee-ID path): resolve hospital directly by subdomain ──
             try:
-                tenant = Tenant.objects.get(subdomain__iexact=d["subdomain"], is_active=True)
-            except Tenant.DoesNotExist:
+                hospital = Hospital.objects.get(subdomain__iexact=d["subdomain"], is_active=True)
+            except Hospital.DoesNotExist:
                 return error("Invalid credentials.")
-            db_name, tenant_id = tenant.db_name, tenant.id
+            db_name, hospital_id = hospital.db_name, hospital.id
         else:
-            # ── Step 1 (mobile/email path): look up which tenant DB this
+            # ── Step 1 (mobile/email path): look up which hospital DB this
             # identifier belongs to. The "mobile" field also accepts an
             # email address — detected by the presence of "@" — since staff
             # may not know which identifier a given colleague registered with.
@@ -110,19 +110,19 @@ class StaffLoginView(APIView):
                     index = StaffMobileIndex.objects.using("default").get(mobile=identifier)
             except StaffMobileIndex.DoesNotExist:
                 return error("Invalid credentials.")
-            db_name, tenant_id = index.db_name, index.tenant_id
+            db_name, hospital_id = index.db_name, index.hospital_id
 
-            # ── Step 2: Verify tenant is active ───────────────────────────────
+            # ── Step 2: Verify hospital is active ───────────────────────────────
             try:
-                tenant = Tenant.objects.get(pk=tenant_id, is_active=True)
-            except Tenant.DoesNotExist:
+                hospital = Hospital.objects.get(pk=hospital_id, is_active=True)
+            except Hospital.DoesNotExist:
                 return error("This hospital account is inactive. Contact Atomwalk support.")
 
-        # ── Step 3: Ensure tenant DB is registered ────────────────────────────
-        from apps.tenants.utils import ensure_tenant_db
-        ensure_tenant_db(db_name)
+        # ── Step 3: Ensure hospital DB is registered ────────────────────────────
+        from apps.hospitals.utils import ensure_hospital_db
+        ensure_hospital_db(db_name)
 
-        # ── Step 4: Fetch StaffUser from tenant DB ────────────────────────────
+        # ── Step 4: Fetch StaffUser from hospital DB ────────────────────────────
         try:
             if login_by_employee_id:
                 staff = StaffUser.objects.using(db_name).select_related("custom_role").get(
@@ -147,7 +147,7 @@ class StaffLoginView(APIView):
 
         # ── Step 6: Get subscription ───────────────────────────────────────────
         try:
-            subscription = Subscription.objects.get(tenant=tenant)
+            subscription = Subscription.objects.get(hospital=hospital)
         except Subscription.DoesNotExist:
             return error("Subscription not found.")
 
@@ -168,8 +168,8 @@ class StaffLoginView(APIView):
             # system roles (their own label is already known client-side).
             "custom_role_name": staff.custom_role.name if staff.role == "custom" and staff.custom_role else None,
             "db_name":      db_name,
-            "tenant_id":    tenant_id,
-            "hospital_name": tenant.name,
+            "hospital_id":    hospital_id,
+            "hospital_name": hospital.name,
             "license_tier": subscription.license_tier,
             "is_platform":  False,
             "branch_id":    staff.branch_id,
@@ -192,7 +192,7 @@ class PlatformLoginView(APIView):
     POST /api/v1/auth/login/platform/
     Authenticates against Django's built-in auth.User (the superuser created
     via DJANGO_SUPERUSER_* env vars + --noinput at startup).
-    No subdomain required — platform admin has no tenant context.
+    No subdomain required — platform admin has no hospital context.
     """
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
@@ -230,7 +230,7 @@ class PlatformLoginView(APIView):
             "role":        "platform_admin",
             "is_platform": True,
             "db_name":     None,
-            "tenant_id":   None,
+            "hospital_id":   None,
             "license_tier": "enterprise",
         }
 
@@ -249,7 +249,7 @@ class PatientLoginView(APIView):
     throttle_scope = "login"
 
     def post(self, request):
-        from apps.registry.models import PatientAccount
+        from apps.atomwalk.models import PatientAccount
 
         login_id = (request.data.get("mobile") or request.data.get("awpid") or "").strip()
         password = request.data.get("password") or ""
@@ -279,7 +279,7 @@ class PatientLoginView(APIView):
             "awpid":       acct.awpid,
             "role":        "patient",
             "db_name":     None,
-            "tenant_id":   None,
+            "hospital_id":   None,
             "is_platform": False,
         }
         return success(data=_make_tokens(payload), message="Login successful.")
@@ -318,19 +318,19 @@ class SetupPasswordView(APIView):
             return error("Invalid token type.")
 
         staff_id  = payload["staff_id"]
-        tenant_db = payload["tenant_db"]
+        hospital_db = payload["hospital_db"]
 
         # Validate DB exists
-        if tenant_db not in settings.DATABASES:
-            return error("Invalid invite token — tenant not found.")
+        if hospital_db not in settings.DATABASES:
+            return error("Invalid invite token — hospital not found.")
 
         try:
-            staff = StaffUser.objects.using(tenant_db).get(pk=staff_id, is_active=True)
+            staff = StaffUser.objects.using(hospital_db).get(pk=staff_id, is_active=True)
         except StaffUser.DoesNotExist:
             return error("Staff account not found or deactivated.")
 
         staff.set_password(d["new_password"])
-        staff.save(using=tenant_db, update_fields=["password"])
+        staff.save(using=hospital_db, update_fields=["password"])
 
         return success(message="Password set successfully. You can now log in.")
 
@@ -355,7 +355,7 @@ class ChangePasswordView(APIView):
         if request.is_platform:
             return error("Platform admins change passwords via Django admin.")
 
-        db_name = request.tenant_db
+        db_name = request.hospital_db
         try:
             staff = StaffUser.objects.using(db_name).get(
                 pk=request.user.id, is_active=True
@@ -405,7 +405,7 @@ class MeView(APIView):
             "email":      p.get("email"),
             "full_name":  p.get("full_name", ""),
             "role":       p.get("role"),
-            "tenant_id":  p.get("tenant_id"),
+            "hospital_id":  p.get("hospital_id"),
             "db_name":    p.get("db_name"),
             "hospital_name": p.get("hospital_name", ""),
             "is_platform": p.get("is_platform", False),
@@ -419,7 +419,7 @@ class MeView(APIView):
         try:
             from core import storage as blob_storage
             if p.get("role") == "patient":
-                from apps.registry.models import PatientAccount
+                from apps.atomwalk.models import PatientAccount
                 acct = PatientAccount.objects.using("default").get(pk=p.get("user_id"))
                 data["photo"] = blob_storage.signed_url(acct.photo)
             elif not p.get("is_platform") and p.get("db_name"):
@@ -433,19 +433,19 @@ class MeView(APIView):
             # broken (e.g. a schema change on photo).
             logger.debug("MeView: could not resolve photo for user_id=%s role=%s", p.get("user_id"), p.get("role"), exc_info=True)
 
-        # Hospital's own logo (Tenant.logo, uploaded via /org/settings/) —
+        # Hospital's own logo (Hospital.logo, uploaded via /org/settings/) —
         # same reasoning as photo above: too big for the JWT, fetched fresh
         # here so the AppShell topbar picks up a newly-uploaded logo without
         # requiring every logged-in staff member to log out and back in.
         # Only meaningful for hospital staff, not platform admin or patient.
         data["logo"] = ""
-        if not p.get("is_platform") and p.get("role") != "patient" and p.get("tenant_id"):
+        if not p.get("is_platform") and p.get("role") != "patient" and p.get("hospital_id"):
             try:
                 from core import storage as blob_storage
-                tenant = Tenant.objects.using("default").get(pk=p["tenant_id"])
-                data["logo"] = blob_storage.signed_url(tenant.logo)
+                hospital = Hospital.objects.using("default").get(pk=p["hospital_id"])
+                data["logo"] = blob_storage.signed_url(hospital.logo)
             except Exception:
-                logger.debug("MeView: could not resolve hospital logo for tenant_id=%s", p.get("tenant_id"), exc_info=True)
+                logger.debug("MeView: could not resolve hospital logo for hospital_id=%s", p.get("hospital_id"), exc_info=True)
 
         return success(data=data)
 
@@ -469,20 +469,20 @@ class PermissionsView(APIView):
             })
 
         try:
-            tenant = Tenant.objects.get(pk=request.tenant_id)
-            sub    = Subscription.objects.get(tenant=tenant)
-        except (Tenant.DoesNotExist, Subscription.DoesNotExist):
+            hospital = Hospital.objects.get(pk=request.hospital_id)
+            sub    = Subscription.objects.get(hospital=hospital)
+        except (Hospital.DoesNotExist, Subscription.DoesNotExist):
             return error("Subscription not found.")
 
         # Live usage against the tier's limits — lets the frontend disable
         # "+ Add Branch" / "+ Invite Staff" and show "X of Y used" before the
         # admin fills out a whole form only to hit a 403 at the end. Kept
-        # best-effort here (unlike the write-time check in apps.tenants.limits,
+        # best-effort here (unlike the write-time check in apps.hospitals.limits,
         # which fails closed) since this is read-only display data, not a
         # gate — worst case the buttons just don't show a live count.
-        from apps.tenants.limits import get_usage_counts
+        from apps.hospitals.limits import get_usage_counts
         try:
-            usage = get_usage_counts(request.tenant_db)
+            usage = get_usage_counts(request.hospital_db)
         except Exception:
             usage = {"doctors": None, "branches": None, "staff": None}
 
@@ -527,7 +527,7 @@ class TokenRefreshView(APIView):
         except jwt.InvalidTokenError:
             return error("Invalid refresh token.", status=401)
 
-        from apps.registry.models import BlacklistedToken
+        from apps.atomwalk.models import BlacklistedToken
         if payload.get("jti") and BlacklistedToken.objects.using("default").filter(jti=payload["jti"]).exists():
             return error("Refresh token has been revoked. Please log in again.", status=401)
 
@@ -548,7 +548,7 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        from apps.registry.models import BlacklistedToken
+        from apps.atomwalk.models import BlacklistedToken
 
         auth_header = request.headers.get("Authorization", "")
         token = auth_header.split(" ", 1)[1] if auth_header.startswith("Bearer ") else None

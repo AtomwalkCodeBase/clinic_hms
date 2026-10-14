@@ -22,7 +22,7 @@ from pathlib import Path
 
 from django.db.models import Q
 
-from ..models import DocumentText, MedicalDocument
+from apps.atomwalk.models import DocumentText, MedicalDocument
 from ..services import awaiting_review_q, extract_text
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ def _text_of(doc):
 def run_insights(document_id):
     """Read one document (extracting its text first if it has none) and save its insights."""
     doc = MedicalDocument.objects.get(pk=document_id)
-    hospital_date = (doc.document_date or doc.created_at.date()) if doc.source_tenant_id else None
+    hospital_date = (doc.document_date or doc.created_at.date()) if doc.source_hospital_id else None
     insights = build_insights(_text_of(doc), hospital_date)
     DocumentText.objects.filter(document=doc).update(insights=insights)
 
@@ -164,7 +164,7 @@ def run_all(redo=False):
     return done
 
 
-def build_timeline(awpid, *, audience="patient", tenant_id=None, start=None, end=None, kind=None, name=None, nature=None, when=None, include_hidden=False):
+def build_timeline(awpid, *, audience="patient", hospital_id=None, start=None, end=None, kind=None, name=None, nature=None, when=None, include_hidden=False):
     """{"days": [{"date", "entries"}], "undated": [entries]} for a patient's confirmed documents, newest day first.
 
     Each stored word is looked up in vocabulary.csv for its name, kind and acute / chronic (a word no longer in the
@@ -174,16 +174,16 @@ def build_timeline(awpid, *, audience="patient", tenant_id=None, start=None, end
 
     `audience`: "patient" leaves medications out (a list of past drugs does nothing for the patient, and the
     Prescriptions page has them); "staff" (a doctor or nurse) includes them, with their dose and frequency.
-    `tenant_id`: only the documents that hospital issued, for staff when the patient has not agreed to
+    `hospital_id`: only the documents that hospital issued, for staff when the patient has not agreed to
     cross-hospital sharing."""
-    from apps.tenants.models import Tenant
+    from apps.hospitals.models import Hospital
     vocab = _vocabulary()
     docs = list(MedicalDocument.objects.filter(patient__awpid=awpid, text__insights__isnull=False,
                                                status__in=(MedicalDocument.Status.COMPLETED, MedicalDocument.Status.REVIEW_REQUIRED))
                 .exclude(awaiting_review_q()).select_related("text"))
-    if tenant_id is not None:
-        docs = [d for d in docs if d.source_tenant_id == str(tenant_id)]
-    hospitals = dict(Tenant.objects.using("default").filter(id__in={int(d.source_tenant_id) for d in docs if str(d.source_tenant_id or "").isdigit()})
+    if hospital_id is not None:
+        docs = [d for d in docs if d.source_hospital_id == str(hospital_id)]
+    hospitals = dict(Hospital.objects.using("default").filter(id__in={int(d.source_hospital_id) for d in docs if str(d.source_hospital_id or "").isdigit()})
                      .values_list("id", "name"))             # the hospital behind a hospital-issued document
     merged = {}
     for d in docs:
@@ -203,7 +203,7 @@ def build_timeline(awpid, *, audience="patient", tenant_id=None, start=None, end
             if e["when"] == "resolved":
                 m["evidence"] = e["evidence"]            # "… resolved" says more than the heading before it
             m["sources"].setdefault(d.id, {"document_id": d.id, "file_name": d.file_name, "document_type": d.document_type, "evidence": e["evidence"],
-                                           "hospital": hospitals.get(int(d.source_tenant_id), "") if str(d.source_tenant_id or "").isdigit() else ""})
+                                           "hospital": hospitals.get(int(d.source_hospital_id), "") if str(d.source_hospital_id or "").isdigit() else ""})
     for m in merged.values():
         whens = m.pop("whens")
         m["when"] = "resolved" if "resolved" in whens else "current" if "current" in whens else sorted(whens)[0]

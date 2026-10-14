@@ -2,7 +2,7 @@
  * pages/hospital-admin/BillingSetupPage.jsx
  * ------------------------------------------
  * Hospital admin: everything about billing that used to be hardcoded.
- *   - Registration fee (on/off + amount) and default tax rate — tenant-wide.
+ *   - Registration fee (on/off + amount) and default tax rate — hospital-wide.
  *   - Service catalog (price list) — full CRUD, was previously DB-only.
  *   - Three configurable dropdown lists (service categories, payment modes,
  *     invoice statuses) that replace what used to be fixed choices= lists
@@ -37,7 +37,7 @@ function SectionCard({ icon: Icon, title, subtitle, children }) {
   );
 }
 
-// ── Tenant-wide billing settings (registration fee, default tax rate) ──────
+// ── Hospital-wide billing settings (registration fee, default tax rate) ──────
 // Both amount fields used to be uncontrolled (defaultValue + onBlur) — that
 // meant a failed save (e.g. clearing the field to blank, or a stray value
 // outside 0-100 for tax) left the input showing whatever the admin typed
@@ -48,7 +48,7 @@ function SectionCard({ icon: Icon, title, subtitle, children }) {
 // validation runs before the request goes out, and on any failure — client
 // or server-side — the field snaps back to the last known-good saved value
 // instead of sitting there silently wrong.
-function TenantBillingSettings() {
+function HospitalBillingSettings() {
   const { toastSuccess, toastApiError, toastError } = useToast();
   const [settings, setSettings] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -310,7 +310,7 @@ export default function BillingSetupPage() {
       <PageShell title="Billing Setup">
         <SectionCard icon={Receipt} title="Registration Fee & Tax"
           subtitle="Off/zero by default — nothing changes for a hospital that doesn't touch this.">
-          <TenantBillingSettings />
+          <HospitalBillingSettings />
         </SectionCard>
 
         <SectionCard icon={Tag} title="Service Price Catalog"

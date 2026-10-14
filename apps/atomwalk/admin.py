@@ -1,0 +1,48 @@
+from django.contrib import admin
+from .models import (
+    Patient,
+    SharedDiagnosis,
+    SharedPrescription,
+    SharedLabResult,
+    SharedAllergy,
+    SharedVital,
+    VaccinationSchedule,
+    VaccinationScheduleRule,
+)
+
+
+@admin.register(Patient)
+class PatientAdmin(admin.ModelAdmin):
+    list_display    = ["awpid", "full_name", "date_of_birth", "gender", "created_at"]
+    search_fields   = ["awpid", "full_name", "email"]
+    readonly_fields = ["awpid", "mobile_hash", "created_at", "updated_at"]
+
+
+@admin.register(SharedDiagnosis)
+class SharedDiagnosisAdmin(admin.ModelAdmin):
+    list_display  = ["awpid", "icd10_code", "clinical_status", "created_at"]
+    search_fields = ["awpid", "icd10_code"]
+
+
+@admin.register(SharedLabResult)
+class SharedLabResultAdmin(admin.ModelAdmin):
+    list_display  = ["awpid", "test_name", "delivered_at"]
+    search_fields = ["awpid", "test_name"]
+
+
+admin.site.register(SharedPrescription)
+admin.site.register(SharedAllergy)
+admin.site.register(SharedVital)
+
+
+class VaccinationScheduleRuleInline(admin.TabularInline):
+    model = VaccinationScheduleRule
+    extra = 1
+
+
+@admin.register(VaccinationSchedule)
+class VaccinationScheduleAdmin(admin.ModelAdmin):
+    list_display  = ["name", "owner_hospital_id", "is_template", "active", "updated_at"]
+    search_fields = ["name"]
+    list_filter   = ["is_template", "active"]
+    inlines       = [VaccinationScheduleRuleInline]

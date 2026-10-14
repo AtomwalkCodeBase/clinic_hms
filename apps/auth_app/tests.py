@@ -2,7 +2,7 @@
 apps/auth_app/tests.py
 ------------------------
 DB-independent tests for token issuance/shape. Full login-flow tests (staff/
-platform/patient) need a live registry DB + a provisioned tenant DB, so
+platform/patient) need a live atomwalk DB + a provisioned hospital DB, so
 they're intentionally not attempted here — see the module docstring in
 core/tests.py for the DB-independent vs DB-backed test split.
 """

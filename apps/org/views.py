@@ -32,7 +32,7 @@ from core.response import success, created, error, not_found
 from core.pagination import paginate_queryset
 from core.file_validation import validate_data_uri, FileValidationError
 from core import storage as blob_storage
-from apps.registry.models import StaffMobileIndex
+from apps.atomwalk.models import StaffMobileIndex
 
 from .models import Branch, Department, StaffUser, DoctorProfile, StaffProfile, Role, Permission, UserRole, Floor, Room, RoomAssignment, Bed, DoctorSchedule
 
@@ -71,14 +71,14 @@ def _gen_temp_password(length=12) -> str:
     return "".join(secrets.choice(chars) for _ in range(length))
 
 
-def _email_collision(email, tenant_db, exclude_staff_id=None):
+def _email_collision(email, hospital_db, exclude_staff_id=None):
     """
     Returns an error message if `email` is already in use somewhere it
     would collide at the database level, or "" if it's free to use.
 
     Two separate unique constraints can be hit here — StaffUser.email is
-    unique WITHIN a tenant DB, and StaffMobileIndex.email is unique ACROSS
-    every tenant on the platform (it's the registry-wide login-routing
+    unique WITHIN a hospital DB, and StaffMobileIndex.email is unique ACROSS
+    every hospital on the platform (it's the atomwalk-wide login-routing
     index). Neither was checked before writing, so inviting/reactivating a
     staff member with an email already used by anyone else — even a
     deactivated account at the SAME hospital, or any account at a
@@ -87,8 +87,8 @@ def _email_collision(email, tenant_db, exclude_staff_id=None):
     """
     if not email:
         return ""
-    from apps.registry.models import StaffMobileIndex
-    qs = StaffUser.objects.using(tenant_db).filter(email__iexact=email)
+    from apps.atomwalk.models import StaffMobileIndex
+    qs = StaffUser.objects.using(hospital_db).filter(email__iexact=email)
     if exclude_staff_id:
         qs = qs.exclude(pk=exclude_staff_id)
     if qs.exists():
@@ -99,7 +99,7 @@ def _email_collision(email, tenant_db, exclude_staff_id=None):
         # The reactivation path's own index row (same mobile) is allowed to
         # keep this same email — only a DIFFERENT mobile's index row using
         # it is a real collision.
-        existing_mobile = StaffUser.objects.using(tenant_db).filter(pk=exclude_staff_id).values_list("phone", flat=True).first()
+        existing_mobile = StaffUser.objects.using(hospital_db).filter(pk=exclude_staff_id).values_list("phone", flat=True).first()
         if existing_mobile:
             idx_qs = idx_qs.exclude(mobile=existing_mobile)
     if idx_qs.exists():
@@ -131,17 +131,17 @@ class BranchListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        branches = Branch.objects.using(request.tenant_db).filter(is_active=True)
+        branches = Branch.objects.using(request.hospital_db).filter(is_active=True)
         return success(data=BranchSerializer(branches, many=True).data)
 
     def post(self, request):
-        # ── Subscription limit check (fails CLOSED — see apps.tenants.limits) ──
-        from apps.tenants.models import Tenant
-        from apps.tenants.limits import check_limit, LimitCheckFailed
+        # ── Subscription limit check (fails CLOSED — see apps.hospitals.limits) ──
+        from apps.hospitals.models import Hospital
+        from apps.hospitals.limits import check_limit, LimitCheckFailed
         try:
-            tenant = Tenant.objects.using("default").get(pk=request.tenant_id)
-            check_limit(tenant, request.tenant_db, "branches")
-        except Tenant.DoesNotExist:
+            hospital = Hospital.objects.using("default").get(pk=request.hospital_id)
+            check_limit(hospital, request.hospital_db, "branches")
+        except Hospital.DoesNotExist:
             return error("Unable to verify your plan limits right now. Please try again shortly.", status=503)
         except LimitCheckFailed as exc:
             return error(exc.message, status=exc.status)
@@ -151,10 +151,10 @@ class BranchListCreateView(APIView):
             return error("Validation error.", errors=s.errors)
         # Instantiate without save, then save with explicit `using=`
         branch = Branch(**s.validated_data)
-        branch.save(using=request.tenant_db)
+        branch.save(using=request.hospital_db)
 
         # Seed NNTM rows so UHID / invoice / lab / Rx / queue numbers work immediately
-        seed_next_numbers(branch.id, request.tenant_db)
+        seed_next_numbers(branch.id, request.hospital_db)
 
         return created(data=BranchSerializer(branch).data, message="Branch created.")
 
@@ -169,7 +169,7 @@ class BranchDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return Branch.objects.using(request.tenant_db).get(pk=pk)
+            return Branch.objects.using(request.hospital_db).get(pk=pk)
         except Branch.DoesNotExist:
             return None
 
@@ -188,7 +188,7 @@ class BranchDetailView(APIView):
             return error("Validation error.", errors=s.errors)
         for attr, val in s.validated_data.items():
             setattr(branch, attr, val)
-        branch.save(using=request.tenant_db)
+        branch.save(using=request.hospital_db)
         return success(data=BranchSerializer(branch).data, message="Branch updated.")
 
     def delete(self, request, pk):
@@ -196,7 +196,7 @@ class BranchDetailView(APIView):
         if not branch:
             return not_found("Branch not found.")
         branch.is_active = False
-        branch.save(using=request.tenant_db, update_fields=["is_active"])
+        branch.save(using=request.hospital_db, update_fields=["is_active"])
         return success(message="Branch deactivated.")
 
 
@@ -213,7 +213,7 @@ class DepartmentListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        qs = Department.objects.using(request.tenant_db).filter(is_active=True)
+        qs = Department.objects.using(request.hospital_db).filter(is_active=True)
         branch_id = request.query_params.get("branch_id")
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
@@ -223,15 +223,15 @@ class DepartmentListCreateView(APIView):
         s = DepartmentSerializer(data=request.data)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
-        # Verify branch belongs to this tenant
+        # Verify branch belongs to this hospital
         branch_id = s.validated_data["branch"].id
         try:
-            branch = Branch.objects.using(request.tenant_db).get(pk=branch_id, is_active=True)
+            branch = Branch.objects.using(request.hospital_db).get(pk=branch_id, is_active=True)
         except Branch.DoesNotExist:
             return error("Branch not found.", errors={"branch": "Invalid branch."})
 
         dept = Department(branch=branch, name=s.validated_data["name"])
-        dept.save(using=request.tenant_db)
+        dept.save(using=request.hospital_db)
         return created(data=DepartmentSerializer(dept).data, message="Department created.")
 
 
@@ -241,7 +241,7 @@ class DepartmentDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return Department.objects.using(request.tenant_db).get(pk=pk)
+            return Department.objects.using(request.hospital_db).get(pk=pk)
         except Department.DoesNotExist:
             return None
 
@@ -254,7 +254,7 @@ class DepartmentDetailView(APIView):
             return error("Validation error.", errors=s.errors)
         for attr, val in s.validated_data.items():
             setattr(dept, attr, val)
-        dept.save(using=request.tenant_db)
+        dept.save(using=request.hospital_db)
         return success(data=DepartmentSerializer(dept).data, message="Department updated.")
 
     def delete(self, request, pk):
@@ -262,7 +262,7 @@ class DepartmentDetailView(APIView):
         if not dept:
             return not_found("Department not found.")
         dept.is_active = False
-        dept.save(using=request.tenant_db, update_fields=["is_active"])
+        dept.save(using=request.hospital_db, update_fields=["is_active"])
         return success(message="Department deactivated.")
 
 
@@ -273,7 +273,7 @@ class StaffListView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def get(self, request):
-        qs = StaffUser.objects.using(request.tenant_db).select_related(
+        qs = StaffUser.objects.using(request.hospital_db).select_related(
             "branch", "department"
         ).prefetch_related("doctor_profile")
         role_filter = request.query_params.get("role")
@@ -327,7 +327,7 @@ class StaffInviteView(APIView):
                 return error("Select a custom role.", errors={"custom_role_id": "Required."})
             from .models import Role
             try:
-                custom_role_obj = Role.objects.using(request.tenant_db).get(
+                custom_role_obj = Role.objects.using(request.hospital_db).get(
                     pk=d["custom_role_id"], is_system_role=False,
                 )
             except Role.DoesNotExist:
@@ -335,19 +335,19 @@ class StaffInviteView(APIView):
             acts_as = set(custom_role_obj.acts_as or [])
         is_doctor_equivalent = d["role"] == "doctor" or "doctor" in acts_as
 
-        # ── Subscription limit check (fails CLOSED — see apps.tenants.limits) ──
+        # ── Subscription limit check (fails CLOSED — see apps.hospitals.limits) ──
         # Applies whether this ends up creating a brand-new StaffUser or
         # reactivating a previously-deactivated one below — either way the
         # active headcount for this role goes up by one, and a deactivated
         # account isn't counted in current usage, so the same check (with its
         # default increment=1) is correct for both paths.
-        from apps.tenants.models import Tenant
-        from apps.tenants.limits import check_limit, LimitCheckFailed
+        from apps.hospitals.models import Hospital
+        from apps.hospitals.limits import check_limit, LimitCheckFailed
         resource = "doctors" if is_doctor_equivalent else "staff"
         try:
-            tenant = Tenant.objects.using("default").get(pk=request.tenant_id)
-            check_limit(tenant, request.tenant_db, resource)
-        except Tenant.DoesNotExist:
+            hospital = Hospital.objects.using("default").get(pk=request.hospital_id)
+            check_limit(hospital, request.hospital_db, resource)
+        except Hospital.DoesNotExist:
             return error("Unable to verify your plan limits right now. Please try again shortly.", status=503)
         except LimitCheckFailed as exc:
             return error(exc.message, status=exc.status)
@@ -355,20 +355,20 @@ class StaffInviteView(APIView):
         # A mobile number already routed to a *different* hospital must not be
         # silently reassigned here — that would hijack that person's login at
         # their existing hospital. Only proceed if it's unused, or already
-        # points at this same tenant (the reactivation path below).
+        # points at this same hospital (the reactivation path below).
         existing_index = StaffMobileIndex.objects.using("default").filter(mobile=d["phone"]).first()
-        if existing_index and existing_index.db_name != request.tenant_db:
+        if existing_index and existing_index.db_name != request.hospital_db:
             return error(
                 f"Mobile number {d['phone']} is already registered at another hospital.",
                 errors={"phone": "Already in use."},
             )
 
-        existing = StaffUser.objects.using(request.tenant_db).filter(phone=d["phone"]).first()
+        existing = StaffUser.objects.using(request.hospital_db).filter(phone=d["phone"]).first()
         if existing:
             if existing.is_active:
                 return error(f"Staff with mobile number {d['phone']} already exists.")
             # Reactivate a previously deactivated staff member
-            email_error = _email_collision(d.get("email"), request.tenant_db, exclude_staff_id=existing.id)
+            email_error = _email_collision(d.get("email"), request.hospital_db, exclude_staff_id=existing.id)
             if email_error:
                 return error(email_error, errors={"email": "Already in use."})
             temp_password = _gen_temp_password()
@@ -383,22 +383,22 @@ class StaffInviteView(APIView):
             # before it) may not have one yet; assign it now rather than
             # leaving it permanently blank. Once set it never changes.
             if not existing.employee_id:
-                existing.employee_id = next_employee_id(request.tenant_db)
+                existing.employee_id = next_employee_id(request.hospital_db)
             existing.must_change_password = True
             existing.set_password(temp_password)
-            existing.save(using=request.tenant_db)
+            existing.save(using=request.hospital_db)
             StaffMobileIndex.objects.using("default").update_or_create(
                 mobile=d["phone"],
                 defaults={
-                    "tenant_id": request.tenant_id,
-                    "db_name": request.tenant_db,
+                    "hospital_id": request.hospital_id,
+                    "db_name": request.hospital_db,
                     "email": existing.email or None,
                 },
             )
             if "branch_ids" in d:
                 from .branch_utils import set_staff_branches
-                set_staff_branches(existing, d.get("branch_ids") or [], d.get("branch_id"), request.tenant_db)
-                existing.save(using=request.tenant_db, update_fields=["branch"])
+                set_staff_branches(existing, d.get("branch_ids") or [], d.get("branch_id"), request.hospital_db)
+                existing.save(using=request.hospital_db, update_fields=["branch"])
             _send_new_account_email(existing, temp_password)
             return created(data={
                 **StaffSerializer(existing).data,
@@ -411,7 +411,7 @@ class StaffInviteView(APIView):
         branch = None
         if d.get("branch_id"):
             try:
-                branch = Branch.objects.using(request.tenant_db).get(
+                branch = Branch.objects.using(request.hospital_db).get(
                     pk=d["branch_id"], is_active=True
                 )
             except Branch.DoesNotExist:
@@ -421,13 +421,13 @@ class StaffInviteView(APIView):
         department = None
         if d.get("department_id"):
             try:
-                department = Department.objects.using(request.tenant_db).get(
+                department = Department.objects.using(request.hospital_db).get(
                     pk=d["department_id"], is_active=True
                 )
             except Department.DoesNotExist:
                 return error("Department not found.", errors={"department_id": "Invalid."})
 
-        email_error = _email_collision(d.get("email"), request.tenant_db)
+        email_error = _email_collision(d.get("email"), request.hospital_db)
         if email_error:
             return error(email_error, errors={"email": "Already in use."})
 
@@ -435,7 +435,7 @@ class StaffInviteView(APIView):
         staff = StaffUser(
             phone=d["phone"],
             email=d.get("email") or None,
-            employee_id=next_employee_id(request.tenant_db),
+            employee_id=next_employee_id(request.hospital_db),
             first_name=d["first_name"],
             last_name=d.get("last_name", ""),
             role=d["role"],
@@ -445,7 +445,7 @@ class StaffInviteView(APIView):
             must_change_password=True,
         )
         staff.set_password(temp_password)
-        staff.save(using=request.tenant_db)
+        staff.save(using=request.hospital_db)
 
         # Extra branches beyond the primary — meaningful for doctors who
         # work more than one location; harmless single-row equivalent to
@@ -453,8 +453,8 @@ class StaffInviteView(APIView):
         # caller actually sent branch_ids (most invites won't).
         if d.get("branch_ids"):
             from .branch_utils import set_staff_branches
-            set_staff_branches(staff, d["branch_ids"], branch.id if branch else None, request.tenant_db)
-            staff.save(using=request.tenant_db, update_fields=["branch"])
+            set_staff_branches(staff, d["branch_ids"], branch.id if branch else None, request.hospital_db)
+            staff.save(using=request.hospital_db, update_fields=["branch"])
 
         # Doctor basics — admin enters these now so patient-facing cards are
         # never blank; the doctor fills in the rest themselves after login.
@@ -466,17 +466,17 @@ class StaffInviteView(APIView):
             # hospital controls fees; when fee_ownership == "doctor" both
             # fields belong to the doctor's self-service profile and are
             # intentionally left null here.
-            from apps.tenants.models import Tenant as _Tenant
+            from apps.hospitals.models import Hospital as _Hospital
             try:
-                _tenant = _Tenant.objects.using("default").get(pk=request.tenant_id)
-                hospital_owns_fee = _tenant.fee_ownership == "hospital"
+                _hospital = _Hospital.objects.using("default").get(pk=request.hospital_id)
+                hospital_owns_fee = _hospital.fee_ownership == "hospital"
                 fee_value = d.get("consultation_fee") if hospital_owns_fee else None
                 followup_fee_value = d.get("followup_fee") if hospital_owns_fee else None
-            except _Tenant.DoesNotExist:
+            except _Hospital.DoesNotExist:
                 fee_value = None
                 followup_fee_value = None
 
-            DoctorProfile.objects.using(request.tenant_db).create(
+            DoctorProfile.objects.using(request.hospital_db).create(
                 staff=staff,
                 registration_no=d.get("registration_no", ""),
                 specialisation=d.get("specialisation", ""),
@@ -493,14 +493,14 @@ class StaffInviteView(APIView):
             from .serializers import DoctorScheduleSerializer as _SchedSer
             sched_ser = _SchedSer(data=d["schedule"])
             if sched_ser.is_valid():
-                sched_ser._db = request.tenant_db
+                sched_ser._db = request.hospital_db
                 sched_data = sched_ser.validated_data
                 days_data  = sched_data.pop("days", [])
-                sched = DoctorSchedule.objects.using(request.tenant_db).create(
+                sched = DoctorSchedule.objects.using(request.hospital_db).create(
                     doctor=staff, **sched_data
                 )
                 for day in days_data:
-                    DoctorAvailabilitySlot.objects.using(request.tenant_db).create(
+                    DoctorAvailabilitySlot.objects.using(request.hospital_db).create(
                         schedule=sched, **day
                     )
         # Same basics for every other role — nursing/pharmacy council
@@ -510,7 +510,7 @@ class StaffInviteView(APIView):
             d.get(f) for f in ("registration_no", "council_name", "registration_expiry",
                                "qualification", "experience_years")
         ):
-            StaffProfile.objects.using(request.tenant_db).create(
+            StaffProfile.objects.using(request.hospital_db).create(
                 staff=staff,
                 registration_no=d.get("registration_no", ""),
                 council_name=d.get("council_name", ""),
@@ -519,12 +519,12 @@ class StaffInviteView(APIView):
                 experience_years=d.get("experience_years"),
             )
 
-        # Write to registry index so login can route by mobile (no subdomain needed)
+        # Write to atomwalk index so login can route by mobile (no subdomain needed)
         StaffMobileIndex.objects.using("default").update_or_create(
             mobile=d["phone"],
             defaults={
-                "tenant_id": request.tenant_id,
-                "db_name": request.tenant_db,
+                "hospital_id": request.hospital_id,
+                "db_name": request.hospital_db,
                 "email": staff.email or None,
             },
         )
@@ -548,7 +548,7 @@ class StaffDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return StaffUser.objects.using(request.tenant_db).get(pk=pk)
+            return StaffUser.objects.using(request.hospital_db).get(pk=pk)
         except StaffUser.DoesNotExist:
             return None
 
@@ -568,13 +568,13 @@ class StaffDetailView(APIView):
         if "phone" in d and d["phone"] and not re.match(r"^\d{10}$", d["phone"]):
             return error("Enter a valid 10-digit mobile number.", errors={"phone": "Invalid format."})
 
-        # Changing the login mobile number needs the registry-wide index kept
+        # Changing the login mobile number needs the atomwalk-wide index kept
         # in sync — otherwise the old number stays routed here and the new
         # one isn't routed anywhere, breaking this person's login either way.
         # Reject up front if it's already claimed by someone else.
         if "phone" in d and d["phone"] != staff.phone:
             clash = StaffMobileIndex.objects.using("default").filter(mobile=d["phone"]).exclude(
-                tenant_id=request.tenant_id
+                hospital_id=request.hospital_id
             ).exists()
             if clash:
                 return error(
@@ -594,7 +594,7 @@ class StaffDetailView(APIView):
         staff_is_admin = staff.role == "hospital_admin" or "hospital_admin" in staff_old_acts_as
         if "role" in d and d["role"] != "hospital_admin" and staff_is_admin and staff.is_active:
             ADMIN_Q = Q(role="hospital_admin") | Q(role="custom", custom_role__acts_as__contains=["hospital_admin"])
-            other_admins = StaffUser.objects.using(request.tenant_db).filter(
+            other_admins = StaffUser.objects.using(request.hospital_db).filter(
                 ADMIN_Q, is_active=True
             ).exclude(pk=staff.id).exists()
             if not other_admins:
@@ -614,7 +614,7 @@ class StaffDetailView(APIView):
                 return error("Select a custom role.", errors={"custom_role_id": "Required."})
             from .models import Role
             try:
-                new_custom_role_obj = Role.objects.using(request.tenant_db).get(
+                new_custom_role_obj = Role.objects.using(request.hospital_db).get(
                     pk=d["custom_role_id"], is_system_role=False,
                 )
             except Role.DoesNotExist:
@@ -634,12 +634,12 @@ class StaffDetailView(APIView):
             old_resource = "doctors" if old_is_doctor else "staff"
             new_resource = "doctors" if new_is_doctor else "staff"
             if new_resource != old_resource:
-                from apps.tenants.models import Tenant
-                from apps.tenants.limits import check_limit, LimitCheckFailed
+                from apps.hospitals.models import Hospital
+                from apps.hospitals.limits import check_limit, LimitCheckFailed
                 try:
-                    tenant = Tenant.objects.using("default").get(pk=request.tenant_id)
-                    check_limit(tenant, request.tenant_db, new_resource)
-                except Tenant.DoesNotExist:
+                    hospital = Hospital.objects.using("default").get(pk=request.hospital_id)
+                    check_limit(hospital, request.hospital_db, new_resource)
+                except Hospital.DoesNotExist:
                     return error("Unable to verify your plan limits right now. Please try again shortly.", status=503)
                 except LimitCheckFailed as exc:
                     return error(exc.message, status=exc.status)
@@ -649,19 +649,19 @@ class StaffDetailView(APIView):
         # how UHID/invoice numbers work). Assign one now if this record
         # predates the feature and somehow still doesn't have one.
         if not staff.employee_id:
-            staff.employee_id = next_employee_id(request.tenant_db)
+            staff.employee_id = next_employee_id(request.hospital_db)
 
         allowed = ["first_name", "last_name", "role", "phone", "date_of_birth", "branch_id", "department_id"]
         for field in allowed:
             if field in d:
                 if field == "branch_id":
                     try:
-                        staff.branch = Branch.objects.using(request.tenant_db).get(pk=d[field])
+                        staff.branch = Branch.objects.using(request.hospital_db).get(pk=d[field])
                     except Branch.DoesNotExist:
                         return error("Branch not found.")
                 elif field == "department_id":
                     try:
-                        staff.department = Department.objects.using(request.tenant_db).get(pk=d[field])
+                        staff.department = Department.objects.using(request.hospital_db).get(pk=d[field])
                     except Department.DoesNotExist:
                         return error("Department not found.")
                 elif field == "date_of_birth":
@@ -682,7 +682,7 @@ class StaffDetailView(APIView):
                 else:
                     setattr(staff, field, d[field])
 
-        staff.save(using=request.tenant_db)
+        staff.save(using=request.hospital_db)
 
         if "phone" in d:
             # NOTE: "email" is deliberately not in `allowed` above (no endpoint
@@ -692,8 +692,8 @@ class StaffDetailView(APIView):
             StaffMobileIndex.objects.using("default").update_or_create(
                 mobile=staff.phone,
                 defaults={
-                    "tenant_id": request.tenant_id,
-                    "db_name": request.tenant_db,
+                    "hospital_id": request.hospital_id,
+                    "db_name": request.hospital_db,
                     "email": staff.email or None,
                 },
             )
@@ -704,7 +704,7 @@ class StaffDetailView(APIView):
             # (non-primary) branches, if any, are managed separately via
             # StaffBranchesView, not through this plain field.
             from .branch_utils import sync_primary_branch
-            sync_primary_branch(staff, request.tenant_db)
+            sync_primary_branch(staff, request.hospital_db)
 
         return success(data=StaffSerializer(staff).data, message="Staff updated.")
 
@@ -717,7 +717,7 @@ class StaffDetailView(APIView):
         staff_is_admin = staff.role == "hospital_admin" or "hospital_admin" in staff_acts_as
         if staff_is_admin and staff.is_active:
             ADMIN_Q = Q(role="hospital_admin") | Q(role="custom", custom_role__acts_as__contains=["hospital_admin"])
-            other_admins = StaffUser.objects.using(request.tenant_db).filter(
+            other_admins = StaffUser.objects.using(request.hospital_db).filter(
                 ADMIN_Q, is_active=True
             ).exclude(pk=staff.id).exists()
             if not other_admins:
@@ -728,7 +728,7 @@ class StaffDetailView(APIView):
                 )
 
         staff.is_active = False
-        staff.save(using=request.tenant_db, update_fields=["is_active"])
+        staff.save(using=request.hospital_db, update_fields=["is_active"])
         return success(message="Staff member deactivated.")
 
 
@@ -746,7 +746,7 @@ class StaffBranchesView(APIView):
 
     def _get_staff(self, request, pk):
         try:
-            return StaffUser.objects.using(request.tenant_db).get(pk=pk)
+            return StaffUser.objects.using(request.hospital_db).get(pk=pk)
         except StaffUser.DoesNotExist:
             return None
 
@@ -768,7 +768,7 @@ class StaffBranchesView(APIView):
 
         if branch_ids:
             valid_ids = set(
-                Branch.objects.using(request.tenant_db)
+                Branch.objects.using(request.hospital_db)
                 .filter(pk__in=branch_ids, is_active=True)
                 .values_list("id", flat=True)
             )
@@ -779,8 +779,8 @@ class StaffBranchesView(APIView):
                 return error("primary_branch_id must be one of branch_ids.", errors={"primary_branch_id": "Invalid."})
 
         from .branch_utils import set_staff_branches
-        set_staff_branches(staff, branch_ids, primary_branch_id, request.tenant_db)
-        staff.save(using=request.tenant_db, update_fields=["branch"])
+        set_staff_branches(staff, branch_ids, primary_branch_id, request.hospital_db)
+        staff.save(using=request.hospital_db, update_fields=["branch"])
 
         return success(data=StaffSerializer(staff).data["branches"], message="Branch assignment updated.")
 
@@ -803,7 +803,7 @@ class StaffDoctorsView(APIView):
 
     def _get_staff(self, request, pk):
         try:
-            return StaffUser.objects.using(request.tenant_db).get(pk=pk)
+            return StaffUser.objects.using(request.hospital_db).get(pk=pk)
         except StaffUser.DoesNotExist:
             return None
 
@@ -826,7 +826,7 @@ class StaffDoctorsView(APIView):
 
         if doctor_ids:
             valid_ids = set(
-                StaffUser.objects.using(request.tenant_db)
+                StaffUser.objects.using(request.hospital_db)
                 .filter(pk__in=doctor_ids, role="doctor", is_active=True)
                 .values_list("id", flat=True)
             )
@@ -835,7 +835,7 @@ class StaffDoctorsView(APIView):
                 return error(f"Unknown or inactive doctor id(s): {sorted(invalid)}", errors={"doctor_ids": "Invalid."})
 
         from .nurse_doctor_utils import set_nurse_doctors
-        set_nurse_doctors(staff, doctor_ids, request.tenant_db)
+        set_nurse_doctors(staff, doctor_ids, request.hospital_db)
 
         return success(data=StaffSerializer(staff).data["assigned_doctors"], message="Doctor assignment updated.")
 
@@ -852,7 +852,7 @@ class MyBranchesView(APIView):
 
     def get(self, request):
         try:
-            staff = StaffUser.objects.using(request.tenant_db).get(pk=request.user.id)
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=request.user.id)
         except StaffUser.DoesNotExist:
             return not_found("Staff account not found.")
         return success(data=StaffSerializer(staff).data["branches"])
@@ -864,14 +864,14 @@ class StaffResendInviteView(APIView):
 
     def post(self, request, pk):
         try:
-            staff = StaffUser.objects.using(request.tenant_db).get(pk=pk, is_active=True)
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=pk, is_active=True)
         except StaffUser.DoesNotExist:
             return not_found("Staff member not found.")
 
         temp_password = _gen_temp_password()
         staff.set_password(temp_password)
         staff.must_change_password = True
-        staff.save(using=request.tenant_db, update_fields=["password", "must_change_password"])
+        staff.save(using=request.hospital_db, update_fields=["password", "must_change_password"])
 
         _send_new_account_email(staff, temp_password)
         return success(data={
@@ -883,7 +883,7 @@ class StaffResendInviteView(APIView):
 
 # ── Table-driven RBAC ──────────────────────────────────────────────────────────
 # See apps.org.rbac / docs/onboarding_auth_rbac_architecture.md 4.3. Every
-# tenant DB is seeded (migration 0013) with the 6 system roles and the fixed
+# hospital DB is seeded (migration 0013) with the 6 system roles and the fixed
 # permission catalog. Viewing is available to any hospital admin regardless
 # of tier — creating/editing a CUSTOM role requires feat_custom_roles
 # (enterprise). System roles are always read-only via this API; they exist
@@ -894,7 +894,7 @@ class PermissionListView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def get(self, request):
-        perms = Permission.objects.using(request.tenant_db).all()
+        perms = Permission.objects.using(request.hospital_db).all()
         return success(data=PermissionSerializer(perms, many=True).data)
 
 
@@ -910,7 +910,7 @@ class RoleListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        roles = Role.objects.using(request.tenant_db).prefetch_related("permissions").all()
+        roles = Role.objects.using(request.hospital_db).prefetch_related("permissions").all()
         return success(data=RoleSerializer(roles, many=True).data)
 
     def post(self, request):
@@ -918,11 +918,11 @@ class RoleListCreateView(APIView):
         s.is_valid(raise_exception=True)
         d = s.validated_data
 
-        if Role.objects.using(request.tenant_db).filter(name__iexact=d["name"]).exists():
+        if Role.objects.using(request.hospital_db).filter(name__iexact=d["name"]).exists():
             return error("A role with this name already exists.", errors={"name": "Already in use."})
 
         valid_codes = set(
-            Permission.objects.using(request.tenant_db).values_list("code", flat=True)
+            Permission.objects.using(request.hospital_db).values_list("code", flat=True)
         )
         requested_codes = set(d.get("permission_codes") or [])
         unknown = requested_codes - valid_codes
@@ -930,12 +930,12 @@ class RoleListCreateView(APIView):
             return error(f"Unknown permission code(s): {', '.join(sorted(unknown))}.",
                          errors={"permission_codes": "Contains unknown code(s)."})
 
-        role = Role.objects.using(request.tenant_db).create(
+        role = Role.objects.using(request.hospital_db).create(
             name=d["name"], description=d.get("description", ""), is_system_role=False,
             acts_as=d.get("acts_as") or [],
         )
         if requested_codes:
-            perms = Permission.objects.using(request.tenant_db).filter(code__in=requested_codes)
+            perms = Permission.objects.using(request.hospital_db).filter(code__in=requested_codes)
             role.permissions.set(perms)
 
         return created(data=RoleSerializer(role).data, message="Role created.")
@@ -956,7 +956,7 @@ class RoleDetailView(APIView):
 
     def _get_role(self, request, pk):
         try:
-            return Role.objects.using(request.tenant_db).get(pk=pk)
+            return Role.objects.using(request.hospital_db).get(pk=pk)
         except Role.DoesNotExist:
             return None
 
@@ -972,25 +972,25 @@ class RoleDetailView(APIView):
         d = s.validated_data
 
         if "name" in d:
-            if Role.objects.using(request.tenant_db).filter(name__iexact=d["name"]).exclude(pk=role.pk).exists():
+            if Role.objects.using(request.hospital_db).filter(name__iexact=d["name"]).exclude(pk=role.pk).exists():
                 return error("A role with this name already exists.", errors={"name": "Already in use."})
             role.name = d["name"]
         if "description" in d:
             role.description = d["description"]
         if "acts_as" in d:
             role.acts_as = d["acts_as"] or []
-        role.save(using=request.tenant_db)
+        role.save(using=request.hospital_db)
 
         if "permission_codes" in d:
             valid_codes = set(
-                Permission.objects.using(request.tenant_db).values_list("code", flat=True)
+                Permission.objects.using(request.hospital_db).values_list("code", flat=True)
             )
             requested_codes = set(d.get("permission_codes") or [])
             unknown = requested_codes - valid_codes
             if unknown:
                 return error(f"Unknown permission code(s): {', '.join(sorted(unknown))}.",
                              errors={"permission_codes": "Contains unknown code(s)."})
-            perms = Permission.objects.using(request.tenant_db).filter(code__in=requested_codes)
+            perms = Permission.objects.using(request.hospital_db).filter(code__in=requested_codes)
             role.permissions.set(perms)
 
         return success(data=RoleSerializer(role).data, message="Role updated.")
@@ -1007,7 +1007,7 @@ class RoleDetailView(APIView):
         # "custom" and no way to resolve permissions/identity at all if the
         # role vanished under them. Check explicitly for a clear, actionable
         # error instead of surfacing Django's raw ProtectedError as a 500.
-        holders = StaffUser.objects.using(request.tenant_db).filter(
+        holders = StaffUser.objects.using(request.hospital_db).filter(
             custom_role=role, is_active=True
         ).count()
         if holders:
@@ -1038,11 +1038,11 @@ class StaffRolesView(APIView):
 
     def get(self, request, pk):
         try:
-            staff = StaffUser.objects.using(request.tenant_db).get(pk=pk)
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=pk)
         except StaffUser.DoesNotExist:
             return not_found("Staff member not found.")
         extra = (
-            UserRole.objects.using(request.tenant_db)
+            UserRole.objects.using(request.hospital_db)
             .filter(staff_id=staff.id).select_related("role")
         )
         return success(data={
@@ -1052,7 +1052,7 @@ class StaffRolesView(APIView):
 
     def put(self, request, pk):
         try:
-            staff = StaffUser.objects.using(request.tenant_db).get(pk=pk)
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=pk)
         except StaffUser.DoesNotExist:
             return not_found("Staff member not found.")
 
@@ -1060,14 +1060,14 @@ class StaffRolesView(APIView):
         if role_ids is None or not isinstance(role_ids, list):
             return error("role_ids (a list) is required.", errors={"role_ids": "Required."})
 
-        valid_roles = Role.objects.using(request.tenant_db).filter(pk__in=role_ids)
+        valid_roles = Role.objects.using(request.hospital_db).filter(pk__in=role_ids)
         valid_ids = set(valid_roles.values_list("id", flat=True))
         invalid = set(int(r) for r in role_ids) - valid_ids
         if invalid:
             return error(f"Unknown role id(s): {sorted(invalid)}.", errors={"role_ids": "Contains unknown id(s)."})
 
-        UserRole.objects.using(request.tenant_db).filter(staff_id=staff.id).delete()
-        UserRole.objects.using(request.tenant_db).bulk_create([
+        UserRole.objects.using(request.hospital_db).filter(staff_id=staff.id).delete()
+        UserRole.objects.using(request.hospital_db).bulk_create([
             UserRole(staff_id=staff.id, role_id=rid) for rid in valid_ids
         ])
         return success(message="Roles updated.")
@@ -1085,7 +1085,7 @@ class DoctorProfileView(APIView):
 
     def _get_staff(self, request, pk):
         try:
-            return StaffUser.objects.using(request.tenant_db).get(pk=pk, is_active=True)
+            return StaffUser.objects.using(request.hospital_db).get(pk=pk, is_active=True)
         except StaffUser.DoesNotExist:
             return None
 
@@ -1094,7 +1094,7 @@ class DoctorProfileView(APIView):
         if not staff:
             return not_found("Staff member not found.")
         try:
-            profile = DoctorProfile.objects.using(request.tenant_db).get(staff=staff)
+            profile = DoctorProfile.objects.using(request.hospital_db).get(staff=staff)
             return success(data=DoctorProfileSerializer(profile).data)
         except DoctorProfile.DoesNotExist:
             return not_found("Doctor profile not found.")
@@ -1105,7 +1105,7 @@ class DoctorProfileView(APIView):
             return not_found("Staff member not found.")
         if staff.role != "doctor":
             return error("Doctor profile can only be created for staff with role 'doctor'.")
-        if DoctorProfile.objects.using(request.tenant_db).filter(staff=staff).exists():
+        if DoctorProfile.objects.using(request.hospital_db).filter(staff=staff).exists():
             return error("Doctor profile already exists. Use PATCH to update.")
 
         s = DoctorProfileSerializer(data=request.data)
@@ -1113,7 +1113,7 @@ class DoctorProfileView(APIView):
             return error("Validation error.", errors=s.errors)
 
         profile = DoctorProfile(staff=staff, **s.validated_data)
-        profile.save(using=request.tenant_db)
+        profile.save(using=request.hospital_db)
         return created(data=DoctorProfileSerializer(profile).data, message="Doctor profile created.")
 
     def patch(self, request, pk):
@@ -1121,7 +1121,7 @@ class DoctorProfileView(APIView):
         if not staff:
             return not_found("Staff member not found.")
         try:
-            profile = DoctorProfile.objects.using(request.tenant_db).get(staff=staff)
+            profile = DoctorProfile.objects.using(request.hospital_db).get(staff=staff)
         except DoctorProfile.DoesNotExist:
             return not_found("Doctor profile not found. Create it first with POST.")
 
@@ -1130,7 +1130,7 @@ class DoctorProfileView(APIView):
             return error("Validation error.", errors=s.errors)
         for attr, val in s.validated_data.items():
             setattr(profile, attr, val)
-        profile.save(using=request.tenant_db)
+        profile.save(using=request.hospital_db)
         return success(data=DoctorProfileSerializer(profile).data, message="Doctor profile updated.")
 
 
@@ -1150,22 +1150,22 @@ class MyDoctorProfileView(APIView):
 
     def _fee_editable(self, request):
         """Returns True when this hospital delegates fee-setting to the doctor."""
-        from apps.tenants.models import Tenant as _Tenant
+        from apps.hospitals.models import Hospital as _Hospital
         try:
-            t = _Tenant.objects.using("default").get(pk=request.tenant_id)
+            t = _Hospital.objects.using("default").get(pk=request.hospital_id)
             return t.fee_ownership == "doctor"
-        except _Tenant.DoesNotExist:
+        except _Hospital.DoesNotExist:
             return False
 
     def get(self, request):
-        profile, _ = DoctorProfile.objects.using(request.tenant_db).get_or_create(
+        profile, _ = DoctorProfile.objects.using(request.hospital_db).get_or_create(
             staff_id=request.user.id
         )
         ctx = {"fee_editable": self._fee_editable(request)}
         return success(data=DoctorSelfProfileSerializer(profile, context=ctx).data)
 
     def patch(self, request):
-        profile, _ = DoctorProfile.objects.using(request.tenant_db).get_or_create(
+        profile, _ = DoctorProfile.objects.using(request.hospital_db).get_or_create(
             staff_id=request.user.id
         )
         ctx = {"fee_editable": self._fee_editable(request)}
@@ -1185,10 +1185,10 @@ class MyDoctorProfileView(APIView):
                     mime_type = validate_data_uri(sig)
                 except FileValidationError as exc:
                     return error(str(exc), errors={"digital_signature": str(exc)})
-                from apps.tenants.models import Tenant as _Tenant
-                _tenant = _Tenant.objects.using("default").filter(pk=request.tenant_id).first()
-                folder = blob_storage.tenant_folder(_tenant) if _tenant else request.tenant_db
-                _staff = StaffUser.objects.using(request.tenant_db).filter(pk=request.user.id).first()
+                from apps.hospitals.models import Hospital as _Hospital
+                _hospital = _Hospital.objects.using("default").filter(pk=request.hospital_id).first()
+                folder = blob_storage.hospital_folder(_hospital) if _hospital else request.hospital_db
+                _staff = StaffUser.objects.using(request.hospital_db).filter(pk=request.user.id).first()
                 identity = blob_storage.identity_slug(
                     name=_staff.get_full_name() if _staff else "", identifier=request.user.email,
                 )
@@ -1205,7 +1205,7 @@ class MyDoctorProfileView(APIView):
             return error("Validation error.", errors=s.errors)
         for attr, val in s.validated_data.items():
             setattr(profile, attr, val)
-        profile.save(using=request.tenant_db)
+        profile.save(using=request.hospital_db)
         if "digital_signature" in request.data and old_sig_key and old_sig_key != profile.digital_signature:
             blob_storage.delete(old_sig_key)
         return success(data=DoctorSelfProfileSerializer(profile, context=ctx).data, message="Profile updated.")
@@ -1226,7 +1226,7 @@ class StaffProfileView(APIView):
 
     def _get_staff(self, request, pk):
         try:
-            return StaffUser.objects.using(request.tenant_db).get(pk=pk, is_active=True)
+            return StaffUser.objects.using(request.hospital_db).get(pk=pk, is_active=True)
         except StaffUser.DoesNotExist:
             return None
 
@@ -1235,7 +1235,7 @@ class StaffProfileView(APIView):
         if not staff:
             return not_found("Staff member not found.")
         try:
-            profile = StaffProfile.objects.using(request.tenant_db).get(staff=staff)
+            profile = StaffProfile.objects.using(request.hospital_db).get(staff=staff)
             return success(data=StaffProfileSerializer(profile).data)
         except StaffProfile.DoesNotExist:
             return not_found("Profile not found.")
@@ -1247,7 +1247,7 @@ class StaffProfileView(APIView):
         from .rbac import resolve_acts_as
         if "doctor" in resolve_acts_as(staff):
             return error("Doctors use /doctor-profile/, not /profile/.")
-        if StaffProfile.objects.using(request.tenant_db).filter(staff=staff).exists():
+        if StaffProfile.objects.using(request.hospital_db).filter(staff=staff).exists():
             return error("Profile already exists. Use PATCH to update.")
 
         s = StaffProfileSerializer(data=request.data)
@@ -1255,7 +1255,7 @@ class StaffProfileView(APIView):
             return error("Validation error.", errors=s.errors)
 
         profile = StaffProfile(staff=staff, **s.validated_data)
-        profile.save(using=request.tenant_db)
+        profile.save(using=request.hospital_db)
         return created(data=StaffProfileSerializer(profile).data, message="Profile created.")
 
     def patch(self, request, pk):
@@ -1263,7 +1263,7 @@ class StaffProfileView(APIView):
         if not staff:
             return not_found("Staff member not found.")
         try:
-            profile = StaffProfile.objects.using(request.tenant_db).get(staff=staff)
+            profile = StaffProfile.objects.using(request.hospital_db).get(staff=staff)
         except StaffProfile.DoesNotExist:
             return not_found("Profile not found. Create it first with POST.")
 
@@ -1272,7 +1272,7 @@ class StaffProfileView(APIView):
             return error("Validation error.", errors=s.errors)
         for attr, val in s.validated_data.items():
             setattr(profile, attr, val)
-        profile.save(using=request.tenant_db)
+        profile.save(using=request.hospital_db)
         return success(data=StaffProfileSerializer(profile).data, message="Profile updated.")
 
 
@@ -1290,7 +1290,7 @@ class MyStaffProfileDetailsView(APIView):
     def get(self, request):
         if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
             return error("Doctors use /me/doctor-profile/, not /me/staff-profile/.")
-        profile, _ = StaffProfile.objects.using(request.tenant_db).get_or_create(
+        profile, _ = StaffProfile.objects.using(request.hospital_db).get_or_create(
             staff_id=request.user.id
         )
         return success(data=StaffProfileSelfSerializer(profile).data)
@@ -1298,7 +1298,7 @@ class MyStaffProfileDetailsView(APIView):
     def patch(self, request):
         if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
             return error("Doctors use /me/doctor-profile/, not /me/staff-profile/.")
-        profile, _ = StaffProfile.objects.using(request.tenant_db).get_or_create(
+        profile, _ = StaffProfile.objects.using(request.hospital_db).get_or_create(
             staff_id=request.user.id
         )
         s = StaffProfileSelfSerializer(profile, data=request.data, partial=True)
@@ -1306,7 +1306,7 @@ class MyStaffProfileDetailsView(APIView):
             return error("Validation error.", errors=s.errors)
         for attr, val in s.validated_data.items():
             setattr(profile, attr, val)
-        profile.save(using=request.tenant_db)
+        profile.save(using=request.hospital_db)
         return success(data=StaffProfileSelfSerializer(profile).data, message="Profile updated.")
 
 
@@ -1324,14 +1324,14 @@ class MyStaffProfileView(APIView):
 
     def get(self, request):
         try:
-            staff = StaffUser.objects.using(request.tenant_db).get(pk=request.user.id)
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=request.user.id)
         except StaffUser.DoesNotExist:
             return not_found("Staff member not found.")
         return success(data=StaffMeSerializer(staff).data)
 
     def patch(self, request):
         try:
-            staff = StaffUser.objects.using(request.tenant_db).get(pk=request.user.id)
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=request.user.id)
         except StaffUser.DoesNotExist:
             return not_found("Staff member not found.")
 
@@ -1354,9 +1354,9 @@ class MyStaffProfileView(APIView):
                     mime_type = validate_data_uri(photo)
                 except FileValidationError as exc:
                     return error(str(exc), errors={"photo": str(exc)})
-                from apps.tenants.models import Tenant as _Tenant
-                _tenant = _Tenant.objects.using("default").filter(pk=request.tenant_id).first()
-                folder = blob_storage.tenant_folder(_tenant) if _tenant else request.tenant_db
+                from apps.hospitals.models import Hospital as _Hospital
+                _hospital = _Hospital.objects.using("default").filter(pk=request.hospital_id).first()
+                folder = blob_storage.hospital_folder(_hospital) if _hospital else request.hospital_db
                 identity = blob_storage.identity_slug(name=staff.get_full_name(), identifier=staff.email)
                 try:
                     staff.photo = blob_storage.upload_data_uri(
@@ -1371,7 +1371,7 @@ class MyStaffProfileView(APIView):
             return error("Validation error.", errors=s.errors)
         for attr, val in s.validated_data.items():
             setattr(staff, attr, val)
-        staff.save(using=request.tenant_db)
+        staff.save(using=request.hospital_db)
         if "photo" in request.data and old_photo_key and old_photo_key != staff.photo:
             blob_storage.delete(old_photo_key)
         return success(data=StaffMeSerializer(staff).data, message="Profile updated.")
@@ -1400,7 +1400,7 @@ class DoctorListView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
-        qs = StaffUser.objects.using(request.tenant_db).filter(
+        qs = StaffUser.objects.using(request.hospital_db).filter(
             Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"]),
             is_active=True,
         ).prefetch_related("doctor_profile")
@@ -1420,7 +1420,7 @@ class DoctorListView(APIView):
         branch_id = request.query_params.get("branch_id")
         if branch_id:
             from apps.org.branch_utils import get_staff_ids_in_branch
-            qs = qs.filter(pk__in=get_staff_ids_in_branch(branch_id, request.tenant_db))
+            qs = qs.filter(pk__in=get_staff_ids_in_branch(branch_id, request.hospital_db))
 
         return success(data=StaffSerializer(qs.distinct(), many=True).data)
 
@@ -1435,7 +1435,7 @@ class DoctorSpecialisationListView(APIView):
 
     def get(self, request):
         values = (
-            StaffUser.objects.using(request.tenant_db)
+            StaffUser.objects.using(request.hospital_db)
             .filter(
                 Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"]),
                 is_active=True,
@@ -1448,14 +1448,14 @@ class DoctorSpecialisationListView(APIView):
         return success(data=[v for v in values if v])
 
 
-# ── Tenant-level clinical settings ───────────────────────────────────────────
+# ── Hospital-level clinical settings ───────────────────────────────────────────
 
-class TenantSettingsView(APIView):
+class HospitalSettingsView(APIView):
     """
-    GET   /api/v1/org/settings/  — read tenant-level clinical config
+    GET   /api/v1/org/settings/  — read hospital-level clinical config
     PATCH /api/v1/org/settings/  — update (hospital admin only)
 
-    Currently exposes fee_ownership.  Add other per-tenant knobs here rather
+    Currently exposes fee_ownership.  Add other per-hospital knobs here rather
     than scattering them across unrelated endpoints.
     """
     def get_permissions(self):
@@ -1464,58 +1464,58 @@ class TenantSettingsView(APIView):
         perm = IsHospitalStaff if self.request.method == "GET" else IsHospitalAdmin
         return [IsAuthenticated(), perm()]
 
-    def _get_tenant(self, request):
-        from apps.tenants.models import Tenant as _Tenant
+    def _get_hospital(self, request):
+        from apps.hospitals.models import Hospital as _Hospital
         try:
-            return _Tenant.objects.using("default").get(pk=request.tenant_id)
-        except _Tenant.DoesNotExist:
+            return _Hospital.objects.using("default").get(pk=request.hospital_id)
+        except _Hospital.DoesNotExist:
             return None
 
     def get(self, request):
-        tenant = self._get_tenant(request)
-        if not tenant:
-            return not_found("Tenant not found.")
+        hospital = self._get_hospital(request)
+        if not hospital:
+            return not_found("Hospital not found.")
         if not IsHospitalAdmin().has_permission(request, self):
-            return success(data={"fee_ownership": tenant.fee_ownership})
+            return success(data={"fee_ownership": hospital.fee_ownership})
         return success(data={
-            "fee_ownership": tenant.fee_ownership,
+            "fee_ownership": hospital.fee_ownership,
             # Read-only here — staff need this to log in with Employee ID
             # instead of mobile (see auth_app.views.StaffLoginView), but it's
             # not exposed for editing on this endpoint; see
-            # platform_admin.views.TenantDetailView for that.
-            "subdomain": tenant.subdomain,
+            # platform_admin.views.HospitalDetailView for that.
+            "subdomain": hospital.subdomain,
             # ── Billing config ──────────────────────────────────────────
-            "registration_fee_enabled": tenant.registration_fee_enabled,
-            "registration_fee_amount": str(tenant.registration_fee_amount),
-            "default_tax_rate": str(tenant.default_tax_rate),
+            "registration_fee_enabled": hospital.registration_fee_enabled,
+            "registration_fee_amount": str(hospital.registration_fee_amount),
+            "default_tax_rate": str(hospital.default_tax_rate),
             # ── Branding ───────────────────────────────────────────────
-            # tenant.logo stores an S3 object key, not a usable URL — sign
+            # hospital.logo stores an S3 object key, not a usable URL — sign
             # it fresh on every read (see core/storage.py).
-            "logo": blob_storage.signed_url(tenant.logo),
-            # Empty means "using the auto-generated default" (tenant.db_name)
-            # — see core.storage.tenant_folder(). Frontend shows the
+            "logo": blob_storage.signed_url(hospital.logo),
+            # Empty means "using the auto-generated default" (hospital.db_name)
+            # — see core.storage.hospital_folder(). Frontend shows the
             # effective folder name as a placeholder when this is blank.
-            "storage_folder": tenant.storage_folder,
-            "storage_folder_default": tenant.db_name,
+            "storage_folder": hospital.storage_folder,
+            "storage_folder_default": hospital.db_name,
         })
 
     def patch(self, request):
-        tenant = self._get_tenant(request)
-        if not tenant:
-            return not_found("Tenant not found.")
+        hospital = self._get_hospital(request)
+        if not hospital:
+            return not_found("Hospital not found.")
         allowed = {"fee_ownership", "registration_fee_enabled", "registration_fee_amount", "default_tax_rate", "logo", "storage_folder"}
         for key, val in request.data.items():
             if key not in allowed:
                 return error(f"Field '{key}' is not configurable here.")
         if "fee_ownership" in request.data:
             fo = request.data["fee_ownership"]
-            from apps.tenants.models import Tenant as _Tenant
-            valid = [c[0] for c in _Tenant.FEE_OWNERSHIP_CHOICES]
+            from apps.hospitals.models import Hospital as _Hospital
+            valid = [c[0] for c in _Hospital.FEE_OWNERSHIP_CHOICES]
             if fo not in valid:
                 return error(f"fee_ownership must be one of: {valid}.")
-            tenant.fee_ownership = fo
+            hospital.fee_ownership = fo
         if "registration_fee_enabled" in request.data:
-            tenant.registration_fee_enabled = bool(request.data["registration_fee_enabled"])
+            hospital.registration_fee_enabled = bool(request.data["registration_fee_enabled"])
         if "registration_fee_amount" in request.data:
             try:
                 amt = Decimal(str(request.data["registration_fee_amount"]))
@@ -1523,7 +1523,7 @@ class TenantSettingsView(APIView):
                 return error("registration_fee_amount must be a number.")
             if amt < 0:
                 return error("registration_fee_amount can't be negative.")
-            tenant.registration_fee_amount = amt
+            hospital.registration_fee_amount = amt
         if "default_tax_rate" in request.data:
             try:
                 rate = Decimal(str(request.data["default_tax_rate"]))
@@ -1531,18 +1531,18 @@ class TenantSettingsView(APIView):
                 return error("default_tax_rate must be a number.")
             if rate < 0 or rate > 100:
                 return error("default_tax_rate must be between 0 and 100.")
-            tenant.default_tax_rate = rate
+            hospital.default_tax_rate = rate
         if "storage_folder" in request.data:
             raw = (request.data.get("storage_folder") or "").strip()
             if not raw:
-                tenant.storage_folder = ""
+                hospital.storage_folder = ""
             else:
                 slug = blob_storage.sanitize_folder_name(raw)
                 if not slug:
                     return error("Storage folder name must contain at least one letter or number.",
                                  errors={"storage_folder": "Invalid."})
-                tenant.storage_folder = slug
-        old_logo_key = tenant.logo
+                hospital.storage_folder = slug
+        old_logo_key = hospital.logo
         if "logo" in request.data:
             logo = request.data["logo"] or ""
             # Client resizes before upload (see HospitalLogoUpload.jsx), but
@@ -1551,30 +1551,30 @@ class TenantSettingsView(APIView):
             if len(logo) > 1_500_000:
                 return error("Logo image is too large. Please upload a smaller file.")
             if not logo:
-                tenant.logo = ""
+                hospital.logo = ""
             else:
                 try:
                     mime_type = validate_data_uri(logo)
                 except FileValidationError as exc:
                     return error(str(exc), errors={"logo": str(exc)})
                 try:
-                    tenant.logo = blob_storage.upload_data_uri(
-                        logo, prefix=f"hospital-logos/{blob_storage.tenant_folder(tenant)}", mime_type=mime_type,
+                    hospital.logo = blob_storage.upload_data_uri(
+                        logo, prefix=f"hospital-logos/{blob_storage.hospital_folder(hospital)}", mime_type=mime_type,
                         category="hospital-logo",
                     )
                 except blob_storage.StorageError as exc:
                     return error(str(exc), errors={"logo": str(exc)})
-        tenant.save(using="default")
-        if "logo" in request.data and old_logo_key and old_logo_key != tenant.logo:
+        hospital.save(using="default")
+        if "logo" in request.data and old_logo_key and old_logo_key != hospital.logo:
             blob_storage.delete(old_logo_key)
         return success(data={
-            "fee_ownership": tenant.fee_ownership,
-            "registration_fee_enabled": tenant.registration_fee_enabled,
-            "registration_fee_amount": str(tenant.registration_fee_amount),
-            "default_tax_rate": str(tenant.default_tax_rate),
-            "logo": blob_storage.signed_url(tenant.logo),
-            "storage_folder": tenant.storage_folder,
-            "storage_folder_default": tenant.db_name,
+            "fee_ownership": hospital.fee_ownership,
+            "registration_fee_enabled": hospital.registration_fee_enabled,
+            "registration_fee_amount": str(hospital.registration_fee_amount),
+            "default_tax_rate": str(hospital.default_tax_rate),
+            "logo": blob_storage.signed_url(hospital.logo),
+            "storage_folder": hospital.storage_folder,
+            "storage_folder_default": hospital.db_name,
         }, message="Settings updated.")
 
 
@@ -1592,7 +1592,7 @@ class DoctorScheduleView(APIView):
 
     def _get_doctor(self, request, pk):
         try:
-            staff = StaffUser.objects.using(request.tenant_db).get(pk=pk, is_active=True)
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=pk, is_active=True)
             if staff.role != "doctor":
                 return None, error("Schedule is only supported for doctors.")
             return staff, None
@@ -1615,7 +1615,7 @@ class DoctorScheduleView(APIView):
         if err:
             return err
         try:
-            sched = _DS.objects.using(request.tenant_db).prefetch_related("days").get(doctor=staff)
+            sched = _DS.objects.using(request.hospital_db).prefetch_related("days").get(doctor=staff)
         except _DS.DoesNotExist:
             return success(data=None)   # no schedule configured yet
         return success(data=_SS(sched).data)
@@ -1636,16 +1636,16 @@ class DoctorScheduleView(APIView):
         vd        = s.validated_data
         days_data = vd.pop("days", [])
 
-        sched, _ = _DS.objects.using(request.tenant_db).get_or_create(doctor=staff)
+        sched, _ = _DS.objects.using(request.hospital_db).get_or_create(doctor=staff)
         sched.slot_duration_minutes = vd.get("slot_duration_minutes", sched.slot_duration_minutes)
-        sched.save(using=request.tenant_db)
+        sched.save(using=request.hospital_db)
 
         # Full replace of day rows
-        sched.days.using(request.tenant_db).all().delete()
+        sched.days.using(request.hospital_db).all().delete()
         for day in days_data:
-            _DAS.objects.using(request.tenant_db).create(schedule=sched, **day)
+            _DAS.objects.using(request.hospital_db).create(schedule=sched, **day)
 
-        sched.refresh_from_db(using=request.tenant_db)
+        sched.refresh_from_db(using=request.hospital_db)
         return success(data=_SS(sched).data, message="Schedule updated.")
 
 
@@ -1665,7 +1665,7 @@ class FloorListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        qs = Floor.objects.using(request.tenant_db).filter(is_active=True).select_related("branch")
+        qs = Floor.objects.using(request.hospital_db).filter(is_active=True).select_related("branch")
         branch_id = request.query_params.get("branch_id")
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
@@ -1677,18 +1677,18 @@ class FloorListCreateView(APIView):
             return error("Validation error.", errors=s.errors)
         branch_id = s.validated_data["branch"].id
         try:
-            branch = Branch.objects.using(request.tenant_db).get(pk=branch_id, is_active=True)
+            branch = Branch.objects.using(request.hospital_db).get(pk=branch_id, is_active=True)
         except Branch.DoesNotExist:
             return error("Branch not found.", errors={"branch": "Invalid branch."})
 
-        if Floor.objects.using(request.tenant_db).filter(
+        if Floor.objects.using(request.hospital_db).filter(
             branch=branch, name__iexact=s.validated_data["name"], is_active=True
         ).exists():
             return error("A floor with this name already exists at this branch.",
                          errors={"name": "Already in use."})
 
         floor = Floor(branch=branch, name=s.validated_data["name"], level=s.validated_data.get("level", 0))
-        floor.save(using=request.tenant_db)
+        floor.save(using=request.hospital_db)
         return created(data=FloorSerializer(floor).data, message="Floor created.")
 
 
@@ -1701,7 +1701,7 @@ class FloorDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return Floor.objects.using(request.tenant_db).get(pk=pk)
+            return Floor.objects.using(request.hospital_db).get(pk=pk)
         except Floor.DoesNotExist:
             return None
 
@@ -1714,13 +1714,13 @@ class FloorDetailView(APIView):
             return error("Validation error.", errors=s.errors)
         for attr, val in s.validated_data.items():
             setattr(floor, attr, val)
-        floor.save(using=request.tenant_db)
+        floor.save(using=request.hospital_db)
         # Keep every room's legacy free-text `floor` mirror in sync with a
         # rename, the same way RoomDetailView/RoomListCreateView keep it in
         # sync going forward — otherwise a renamed floor would silently
         # desync from rooms that already point at it.
         if "name" in s.validated_data:
-            Room.objects.using(request.tenant_db).filter(floor_obj=floor).update(floor=floor.name)
+            Room.objects.using(request.hospital_db).filter(floor_obj=floor).update(floor=floor.name)
         return success(data=FloorSerializer(floor).data, message="Floor updated.")
 
     def delete(self, request, pk):
@@ -1728,7 +1728,7 @@ class FloorDetailView(APIView):
         if not floor:
             return not_found("Floor not found.")
         floor.is_active = False
-        floor.save(using=request.tenant_db, update_fields=["is_active"])
+        floor.save(using=request.hospital_db, update_fields=["is_active"])
         return success(message="Floor deactivated.")
 
 
@@ -1766,7 +1766,7 @@ class RoomListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        qs = Room.objects.using(request.tenant_db).filter(is_active=True).select_related("branch", "department", "floor_obj")
+        qs = Room.objects.using(request.hospital_db).filter(is_active=True).select_related("branch", "department", "floor_obj")
         branch_id = request.query_params.get("branch_id")
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
@@ -1778,18 +1778,18 @@ class RoomListCreateView(APIView):
             return error("Validation error.", errors=s.errors)
         branch_id = s.validated_data["branch"].id
         try:
-            branch = Branch.objects.using(request.tenant_db).get(pk=branch_id, is_active=True)
+            branch = Branch.objects.using(request.hospital_db).get(pk=branch_id, is_active=True)
         except Branch.DoesNotExist:
             return error("Branch not found.", errors={"branch": "Invalid branch."})
 
-        if Room.objects.using(request.tenant_db).filter(
+        if Room.objects.using(request.hospital_db).filter(
             branch=branch, name__iexact=s.validated_data["name"], is_active=True
         ).exists():
             return error("A room with this name already exists at this branch.",
                          errors={"name": "Already in use."})
 
         room_type = s.validated_data.get("room_type", "consultation")
-        type_option = _room_type_option(request.tenant_db, room_type)
+        type_option = _room_type_option(request.hospital_db, room_type)
         if not type_option:
             return error("Not a configured room type for this hospital.", errors={"room_type": "Invalid choice."})
 
@@ -1810,7 +1810,7 @@ class RoomListCreateView(APIView):
         room = Room(branch=branch, floor=(floor_obj.name if floor_obj else ""), floor_obj=floor_obj,
                     department=s.validated_data.get("department"),
                     name=s.validated_data["name"], room_type=room_type, capacity=capacity)
-        room.save(using=request.tenant_db)
+        room.save(using=request.hospital_db)
         return created(data=RoomSerializer(room).data, message="Room created.")
 
 
@@ -1825,7 +1825,7 @@ class RoomDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return Room.objects.using(request.tenant_db).get(pk=pk)
+            return Room.objects.using(request.hospital_db).get(pk=pk)
         except Room.DoesNotExist:
             return None
 
@@ -1838,11 +1838,11 @@ class RoomDetailView(APIView):
             return error("Validation error.", errors=s.errors)
         effective_room_type = s.validated_data.get("room_type", room.room_type)
         if "room_type" in s.validated_data:
-            if not _room_type_option(request.tenant_db, s.validated_data["room_type"]):
+            if not _room_type_option(request.hospital_db, s.validated_data["room_type"]):
                 return error("Not a configured room type for this hospital.", errors={"room_type": "Invalid choice."})
         if "capacity" in s.validated_data:
             new_capacity = s.validated_data["capacity"]
-            type_option = _room_type_option(request.tenant_db, effective_room_type)
+            type_option = _room_type_option(request.hospital_db, effective_room_type)
             if type_option and type_option.is_bed_based:
                 if new_capacity is None or new_capacity < 1:
                     return error("Bed capacity is required for this room type.",
@@ -1862,7 +1862,7 @@ class RoomDetailView(APIView):
         # RoomAssignmentSerializer's source="room.floor") don't desync.
         if "floor_obj" in s.validated_data:
             room.floor = room.floor_obj.name if room.floor_obj else ""
-        room.save(using=request.tenant_db)
+        room.save(using=request.hospital_db)
         return success(data=RoomSerializer(room).data, message="Room updated.")
 
     def delete(self, request, pk):
@@ -1870,11 +1870,11 @@ class RoomDetailView(APIView):
         if not room:
             return not_found("Room not found.")
         room.is_active = False
-        room.save(using=request.tenant_db, update_fields=["is_active"])
+        room.save(using=request.hospital_db, update_fields=["is_active"])
         # Assignments for a deactivated room are pointless to keep active —
         # switch them off too so they stop showing up as "booked" if the
         # room name is ever reused later.
-        RoomAssignment.objects.using(request.tenant_db).filter(room=room, is_active=True).update(is_active=False)
+        RoomAssignment.objects.using(request.hospital_db).filter(room=room, is_active=True).update(is_active=False)
         return success(message="Room deactivated.")
 
 
@@ -1891,7 +1891,7 @@ class RoomAssignmentListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        qs = RoomAssignment.objects.using(request.tenant_db).filter(
+        qs = RoomAssignment.objects.using(request.hospital_db).filter(
             is_active=True
         ).select_related("room", "doctor")
         room_id = request.query_params.get("room_id")
@@ -1915,20 +1915,20 @@ class RoomAssignmentListCreateView(APIView):
         d = s.validated_data
 
         try:
-            room = Room.objects.using(request.tenant_db).get(pk=d["room"].id, is_active=True)
+            room = Room.objects.using(request.hospital_db).get(pk=d["room"].id, is_active=True)
         except Room.DoesNotExist:
             return error("Room not found.", errors={"room": "Invalid room."})
         try:
-            doctor = StaffUser.objects.using(request.tenant_db).get(
+            doctor = StaffUser.objects.using(request.hospital_db).get(
                 Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"]),
                 pk=d["doctor"].id, is_active=True,
             )
         except StaffUser.DoesNotExist:
             return error("Doctor not found.", errors={"doctor": "Invalid doctor."})
 
-        with transaction.atomic(using=request.tenant_db):
+        with transaction.atomic(using=request.hospital_db):
             clash = find_overlapping_assignment(
-                request.tenant_db, room.id, d["day_of_week"], d["start_time"], d["end_time"],
+                request.hospital_db, room.id, d["day_of_week"], d["start_time"], d["end_time"],
             )
             if clash:
                 return error(
@@ -1942,7 +1942,7 @@ class RoomAssignmentListCreateView(APIView):
                 room=room, doctor=doctor, day_of_week=d["day_of_week"],
                 start_time=d["start_time"], end_time=d["end_time"],
             )
-            assignment.save(using=request.tenant_db)
+            assignment.save(using=request.hospital_db)
 
         return created(data=RoomAssignmentSerializer(assignment).data, message="Room assignment created.")
 
@@ -1956,7 +1956,7 @@ class RoomAssignmentDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return RoomAssignment.objects.using(request.tenant_db).select_related("room", "doctor").get(pk=pk)
+            return RoomAssignment.objects.using(request.hospital_db).select_related("room", "doctor").get(pk=pk)
         except RoomAssignment.DoesNotExist:
             return None
 
@@ -1978,9 +1978,9 @@ class RoomAssignmentDetailView(APIView):
         start_time  = d.get("start_time", assignment.start_time)
         end_time    = d.get("end_time", assignment.end_time)
 
-        with transaction.atomic(using=request.tenant_db):
+        with transaction.atomic(using=request.hospital_db):
             clash = find_overlapping_assignment(
-                request.tenant_db, room_id, day_of_week, start_time, end_time,
+                request.hospital_db, room_id, day_of_week, start_time, end_time,
                 exclude_pk=assignment.pk,
             )
             if clash:
@@ -1993,7 +1993,7 @@ class RoomAssignmentDetailView(APIView):
                 )
             for attr, val in d.items():
                 setattr(assignment, attr, val)
-            assignment.save(using=request.tenant_db)
+            assignment.save(using=request.hospital_db)
 
         return success(data=RoomAssignmentSerializer(assignment).data, message="Room assignment updated.")
 
@@ -2002,7 +2002,7 @@ class RoomAssignmentDetailView(APIView):
         if not assignment:
             return not_found("Room assignment not found.")
         assignment.is_active = False
-        assignment.save(using=request.tenant_db, update_fields=["is_active"])
+        assignment.save(using=request.hospital_db, update_fields=["is_active"])
         return success(message="Room assignment removed.")
 
 
@@ -2031,7 +2031,7 @@ class BedListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        qs = Bed.objects.using(request.tenant_db).filter(is_active=True).select_related("room", "room__branch")
+        qs = Bed.objects.using(request.hospital_db).filter(is_active=True).select_related("room", "room__branch")
         room_id = request.query_params.get("room_id")
         if room_id:
             qs = qs.filter(room_id=room_id)
@@ -2049,16 +2049,16 @@ class BedListCreateView(APIView):
             return error("Validation error.", errors=s.errors)
         room_id = s.validated_data["room"].id
         try:
-            room = Room.objects.using(request.tenant_db).get(pk=room_id, is_active=True)
+            room = Room.objects.using(request.hospital_db).get(pk=room_id, is_active=True)
         except Room.DoesNotExist:
             return error("Room not found.", errors={"room": "Invalid room."})
 
-        type_option = _room_type_option(request.tenant_db, room.room_type)
+        type_option = _room_type_option(request.hospital_db, room.room_type)
         if not type_option or not type_option.is_bed_based:
             return error(f"{room.name} isn't a bed-based room type — beds can't be added to it.",
                          errors={"room": "Not a bed-based room type."})
 
-        if Bed.objects.using(request.tenant_db).filter(
+        if Bed.objects.using(request.hospital_db).filter(
             room=room, bed_number__iexact=s.validated_data["bed_number"], is_active=True
         ).exists():
             return error("A bed with this number already exists in this room.",
@@ -2068,7 +2068,7 @@ class BedListCreateView(APIView):
         # ("uncapped") — every other bed-based room enforces the limit set
         # at setup.
         if room.capacity is not None:
-            current_beds = Bed.objects.using(request.tenant_db).filter(room=room, is_active=True).count()
+            current_beds = Bed.objects.using(request.hospital_db).filter(room=room, is_active=True).count()
             if current_beds >= room.capacity:
                 return error(
                     f"{room.name} is at full capacity ({current_beds}/{room.capacity} beds) — "
@@ -2078,7 +2078,7 @@ class BedListCreateView(APIView):
 
         bed = Bed(room=room, bed_number=s.validated_data["bed_number"],
                   status=s.validated_data.get("status", Bed.STATUS_AVAILABLE))
-        bed.save(using=request.tenant_db)
+        bed.save(using=request.hospital_db)
         return created(data=BedSerializer(bed).data, message="Bed created.")
 
 
@@ -2099,7 +2099,7 @@ class BedDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return Bed.objects.using(request.tenant_db).select_related("room").get(pk=pk)
+            return Bed.objects.using(request.hospital_db).select_related("room").get(pk=pk)
         except Bed.DoesNotExist:
             return None
 
@@ -2117,12 +2117,12 @@ class BedDetailView(APIView):
         # adding a bed to an under-capacity room and then moving it.
         new_room = s.validated_data.get("room")
         if new_room is not None and new_room.id != bed.room_id:
-            type_option = _room_type_option(request.tenant_db, new_room.room_type)
+            type_option = _room_type_option(request.hospital_db, new_room.room_type)
             if not type_option or not type_option.is_bed_based:
                 return error(f"{new_room.name} isn't a bed-based room type — a bed can't be moved into it.",
                              errors={"room": "Not a bed-based room type."})
             if new_room.capacity is not None:
-                current_beds = Bed.objects.using(request.tenant_db).filter(room=new_room, is_active=True).count()
+                current_beds = Bed.objects.using(request.hospital_db).filter(room=new_room, is_active=True).count()
                 if current_beds >= new_room.capacity:
                     return error(
                         f"{new_room.name} is at full capacity ({current_beds}/{new_room.capacity} beds) — "
@@ -2131,7 +2131,7 @@ class BedDetailView(APIView):
                     )
         for attr, val in s.validated_data.items():
             setattr(bed, attr, val)
-        bed.save(using=request.tenant_db)
+        bed.save(using=request.hospital_db)
         return success(data=BedSerializer(bed).data, message="Bed updated.")
 
     def delete(self, request, pk):
@@ -2141,7 +2141,7 @@ class BedDetailView(APIView):
         if bed.status == Bed.STATUS_OCCUPIED:
             return error("This bed is occupied — release it (or discharge the admission) before deactivating.")
         bed.is_active = False
-        bed.save(using=request.tenant_db, update_fields=["is_active"])
+        bed.save(using=request.hospital_db, update_fields=["is_active"])
         return success(message="Bed deactivated.")
 
 
@@ -2165,7 +2165,7 @@ class BedMarkCleanView(APIView):
     permission_classes = [IsAuthenticated, IsFrontDesk]
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         with transaction.atomic(using=db):
             try:
                 bed = Bed.objects.using(db).select_for_update().get(pk=pk, is_active=True)
@@ -2197,7 +2197,7 @@ class BedMaintenanceView(APIView):
     }
 
     def post(self, request, pk):
-        db = request.tenant_db
+        db = request.hospital_db
         action = request.data.get("action")
         if action not in self.ACTION_TO_STATUS:
             return error("Invalid action.", errors={"action": "Must be one of: block, out_of_service, unblock."})
@@ -2241,7 +2241,7 @@ class BedBoardView(APIView):
     def get(self, request):
         from apps.billing.models import OptionList
 
-        db = request.tenant_db
+        db = request.hospital_db
         branch_id = request.query_params.get("branch_id") or request.user.branch_id
         if not branch_id:
             return error("branch_id is required.", errors={"branch_id": "Required."})
@@ -2306,7 +2306,7 @@ class DepartmentAvailabilityView(APIView):
     def get(self, request):
         from datetime import date as _date, timedelta as _timedelta, datetime as _datetime
 
-        db = request.tenant_db
+        db = request.hospital_db
         branch_id = request.query_params.get("branch_id") or request.user.branch_id
         date_param = request.query_params.get("date")
         try:

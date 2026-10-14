@@ -13,7 +13,7 @@ from rest_framework.views import APIView
 
 from apps.records import classification as rules
 from apps.records import services
-from apps.records.models import MedicalDocument
+from apps.atomwalk.models import MedicalDocument
 from core.pagination import paginate_queryset
 from core.permissions import IsPlatformAdmin
 from core.response import error, not_found, success

@@ -2,12 +2,12 @@
 apps/opd/tests.py
 -------------------
 DB-backed tests for the OPD encounter sign-off flow — the highest-risk path
-in the app, since it fans out into billing (auto-invoice) and the registry
+in the app, since it fans out into billing (auto-invoice) and the atomwalk
 (HIE write-through) as side effects that must never block the sign-off
 itself even if they fail.
 
-These require a real Postgres reachable via the DATABASES config (registry +
-at least one tenant DB) — they were written and reviewed in an environment
+These require a real Postgres reachable via the DATABASES config (atomwalk +
+at least one hospital DB) — they were written and reviewed in an environment
 without a live Postgres available, so they have NOT been executed here.
 Run `python manage.py test apps.opd` against a real dev DB before trusting
 this file; treat it as a first draft of coverage, not a verified pass.
@@ -19,22 +19,22 @@ from django.test import TestCase
 
 class EncounterSignSideEffectsTests(TestCase):
     """
-    NOTE: uses the 'default' (registry) DB via TestCase's automatic
-    transactional wrapping. A full run also needs a tenant DB fixture —
-    see apps/tenants/utils.py::create_tenant_database for how one is
-    provisioned in this project; wire that into setUp() once a test tenant
+    NOTE: uses the 'default' (atomwalk) DB via TestCase's automatic
+    transactional wrapping. A full run also needs a hospital DB fixture —
+    see apps/hospitals/utils.py::create_hospital_database for how one is
+    provisioned in this project; wire that into setUp() once a test hospital
     DB alias is available in CI (see .github/workflows/ci.yml).
     """
 
     def test_sign_never_raises_even_if_hie_write_fails(self):
         """
         sync_encounter_to_hie must swallow failures — signing an encounter must
-        succeed even if the registry DB is unreachable or a shared table
+        succeed even if the atomwalk DB is unreachable or a shared table
         write fails. This directly exercises that contract without needing
-        a full tenant DB fixture, by calling the helper with a patient that
+        a full hospital DB fixture, by calling the helper with a patient that
         has no awpid (the guaranteed-skip path).
         """
-        from apps.registry.hie import sync_encounter_to_hie
+        from apps.atomwalk.hie import sync_encounter_to_hie
 
         class FakeEncounter:
             id = "test-encounter-id"
@@ -56,7 +56,7 @@ class EncounterSignSideEffectsTests(TestCase):
         Encounters commonly have no vitals recorded yet or no prescription
         (e.g. advice-only visit) — sync_encounter_to_hie must not assume either exists.
         """
-        from apps.registry.hie import sync_encounter_to_hie
+        from apps.atomwalk.hie import sync_encounter_to_hie
 
         class FakeAppointment:
             @property
@@ -78,9 +78,9 @@ class EncounterSignSideEffectsTests(TestCase):
         sync_encounter_to_hie(FakeEncounter(), "default", FakePatient())
 
 
-# ── Sign-off characterization (tenant DB) ────────────────────────────────────
+# ── Sign-off characterization (hospital DB) ────────────────────────────────────
 # Pins what EncounterSignView does today so the billing / HIE code it calls can be
-# moved and changed safely. Needs the tenant_test alias:
+# moved and changed safely. Needs the hospital_test alias:
 #   python manage.py test apps.opd --settings=atomwalk.settings.test   (skipped otherwise)
 
 import datetime as _dt
@@ -88,21 +88,21 @@ import uuid as _uuid
 from decimal import Decimal as _Decimal
 from unittest import mock as _mock
 
-from core.testing import TenantDBTestCase, requires_tenant_db
+from core.testing import HospitalDBTestCase, requires_hospital_db
 
 
-@requires_tenant_db
-class EncounterSignWorkflowTests(TenantDBTestCase):
+@requires_hospital_db
+class EncounterSignWorkflowTests(HospitalDBTestCase):
     def setUp(self):
         super().setUp()
         from apps.billing.models import Invoice  # noqa: F401
         from apps.opd.models import Appointment, OPDEncounter
         from apps.org.models import Branch, DoctorProfile, NextNumber, StaffUser
-        from apps.patients.models import Patient
-        from apps.tenants.models import Tenant
+        from apps.hospital_patients.models import HospitalPatient
+        from apps.hospitals.models import Hospital
 
-        db = self.tenant_alias
-        self.tenant = Tenant.objects.using("default").create(
+        db = self.hospital_alias
+        self.hospital = Hospital.objects.using("default").create(
             name="Sign Hospital", subdomain="sign-h", db_name=db, default_tax_rate=_Decimal("10"),
         )
         self.branch = Branch.objects.using(db).create(name="Main")
@@ -110,7 +110,7 @@ class EncounterSignWorkflowTests(TenantDBTestCase):
             email="dr.sign@example.test", role="doctor", phone="9000000020", branch=self.branch,
         )
         DoctorProfile.objects.using(db).create(staff=self.doctor, consultation_fee=_Decimal("500.00"))
-        self.patient = Patient.objects.using(db).create(
+        self.patient = HospitalPatient.objects.using(db).create(
             awpid="AW-SIGN-1", uhid="UHID-S1", branch=self.branch, full_name="Sign Patient",
         )
         NextNumber.objects.using(db).create(branch_id=self.branch.id, entity="invoice", prefix="INV-")
@@ -129,19 +129,19 @@ class EncounterSignWorkflowTests(TenantDBTestCase):
         with _mock.patch("apps.opd.views._store_prescription_pdf"):     # S3 + PDF rendering
             return self.call_view(
                 EncounterSignView.as_view(), "post", "/api/v1/opd/encounters/x/sign/",
-                user_id=self.doctor.id, role="doctor", tenant_id=self.tenant.id,
+                user_id=self.doctor.id, role="doctor", hospital_id=self.hospital.id,
                 view_kwargs={"pk": self.enc.pk},
             )
 
-    def test_sign_closes_the_encounter_bills_and_mirrors_to_the_registry(self):
+    def test_sign_closes_the_encounter_bills_and_mirrors_to_the_atomwalk(self):
         from apps.billing.models import Invoice, InvoiceItem
         from apps.opd.models import OPDEncounter
         from apps.org.models import AuditLog
-        from apps.registry.models import SharedDiagnosis
+        from apps.atomwalk.models import SharedDiagnosis
 
         resp = self.sign()
         self.assertEqual(resp.status_code, 200, getattr(resp, "data", None))
-        db = self.tenant_alias
+        db = self.hospital_alias
 
         self.assertEqual(OPDEncounter.objects.using(db).get().status, OPDEncounter.STATUS_SIGNED)
 
@@ -153,7 +153,7 @@ class EncounterSignWorkflowTests(TenantDBTestCase):
                          (_Decimal("500.00"), _Decimal("50.00"), _Decimal("550.00")))
 
         dx = SharedDiagnosis.objects.using("default").get()          # HIE mirror, stamped with the hospital
-        self.assertEqual((dx.awpid, dx.icd10_code, dx.source_tenant_id), ("AW-SIGN-1", "B34.9", self.tenant.id))
+        self.assertEqual((dx.awpid, dx.icd10_code, dx.source_hospital_id), ("AW-SIGN-1", "B34.9", self.hospital.id))
 
         self.assertTrue(AuditLog.objects.using(db).filter(action="encounter.sign").exists())
 
@@ -162,11 +162,11 @@ class EncounterSignWorkflowTests(TenantDBTestCase):
         self.assertEqual(self.sign().status_code, 200)
         again = self.sign()
         self.assertEqual(again.status_code, 400)
-        self.assertEqual(Invoice.objects.using(self.tenant_alias).count(), 1)
+        self.assertEqual(Invoice.objects.using(self.hospital_alias).count(), 1)
 
     def test_an_encounter_with_no_assessment_or_diagnosis_cannot_be_signed(self):
         self.enc.assessment, self.enc.diagnoses = "", []
-        self.enc.save(using=self.tenant_alias)
+        self.enc.save(using=self.hospital_alias)
         resp = self.sign()
         self.assertEqual(resp.status_code, 400)
 
@@ -176,4 +176,4 @@ class EncounterSignWorkflowTests(TenantDBTestCase):
         with _mock.patch("core.utils.nntm.get_next_number", side_effect=RuntimeError("no counter")):
             resp = self.sign()
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(OPDEncounter.objects.using(self.tenant_alias).get().status, OPDEncounter.STATUS_SIGNED)
+        self.assertEqual(OPDEncounter.objects.using(self.hospital_alias).get().status, OPDEncounter.STATUS_SIGNED)

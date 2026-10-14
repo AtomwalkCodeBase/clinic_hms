@@ -6,7 +6,7 @@
  *   ThemeProvider      — selected color theme (applies before auth so the
  *                        login screen itself picks up the chosen theme)
  *   AuthProvider       — JWT user state
- *   TenantProvider     — tenant metadata
+ *   HospitalProvider     — hospital metadata
  *   PermissionProvider — feature-flag permissions
  *   ToastContainer     — toast notifications (react-toastify)
  *   App                — router and route tree
@@ -18,7 +18,7 @@ import { ToastContainer }   from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
 import { AuthProvider }       from "./context/AuthContext";
-import { TenantProvider }     from "./context/TenantContext";
+import { HospitalProvider }     from "./context/HospitalContext";
 import { PermissionProvider } from "./context/PermissionContext";
 import { ThemeProvider }      from "./context/ThemeContext";
 
@@ -33,7 +33,7 @@ createRoot(document.getElementById("root")).render(
   <StrictMode>
     <ThemeProvider>
       <AuthProvider>
-        <TenantProvider>
+        <HospitalProvider>
           <PermissionProvider>
             <App />
             <ToastContainer
@@ -46,7 +46,7 @@ createRoot(document.getElementById("root")).render(
               theme="light"
             />
           </PermissionProvider>
-        </TenantProvider>
+        </HospitalProvider>
       </AuthProvider>
     </ThemeProvider>
   </StrictMode>

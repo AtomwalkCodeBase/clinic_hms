@@ -200,7 +200,7 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   // RegisterPatientPage.jsx) — the doctor's job here is to review and, if
   // needed, add or correct it during consultation. POST creates the record
   // (first capture), PATCH edits an existing one — same create-vs-edit split
-  // as apps/patients/pediatrics/pediatric_views.py BirthHistoryView.
+  // as apps/hospital_patients/pediatrics/pediatric_views.py BirthHistoryView.
   const [bhFormOpen, setBhFormOpen] = useState(false);
   const [bhForm, setBhForm] = useState(null); // populated on open, from birthHistoryData or blank
   const [bhSaving, setBhSaving] = useState(false);
@@ -285,7 +285,7 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
     unassessed: { bg: "var(--color-bg)", color: "var(--color-text-muted)", label: "Not Assessed" },
   };
 
-  // Status values from build_roadmap() (apps/patients/pediatrics/vaccine_schedule.py):
+  // Status values from build_roadmap() (apps/hospital_patients/pediatrics/vaccine_schedule.py):
   // "completed"/"pending_review"/"rejected"/"ordered"/"declined" when a real
   // record matches the slot, or "unknown" when none does — "unknown" is
   // never shown as "due"/"overdue"/"not yet due"; the backend genuinely

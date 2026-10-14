@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 def log_action(request, db, action, resource_type="", resource_id="", patient_id=None, metadata=None):
     """
-    Write one AuditLog row to the given tenant db. `request` is used to pull
-    the actor identity (request.user, set by JWTTenantAuthentication) and
+    Write one AuditLog row to the given hospital db. `request` is used to pull
+    the actor identity (request.user, set by JWTHospitalAuthentication) and
     client IP — both optional, so this degrades gracefully outside a request
     (e.g. management commands can pass request=None).
     """

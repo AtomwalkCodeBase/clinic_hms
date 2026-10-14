@@ -1,11 +1,11 @@
 from django.urls import path
 from .views import (
-    TenantListCreateView, TenantDetailView, TenantAuditLogView,
-    PlatformStatsView, TenantOverviewView, TenantStaffListView,
-    TenantStaffDetailView, TenantStaffResetPasswordView,
+    HospitalListCreateView, HospitalDetailView, HospitalAuditLogView,
+    PlatformStatsView, HospitalOverviewView, HospitalStaffListView,
+    HospitalStaffDetailView, HospitalStaffResetPasswordView,
     PlatformUserListView, PlanListView,
 )
-from apps.patients.pediatrics.schedule_views import (
+from apps.hospital_patients.pediatrics.schedule_views import (
     VaccinationTemplateListCreateView, VaccinationTemplateDetailView,
     MilestoneTemplateListCreateView, MilestoneTemplateDetailView,
 )
@@ -19,18 +19,18 @@ urlpatterns = [
     path("plans/",          PlanListView.as_view(), name="platform-plans"),
     path("users/",          PlatformUserListView.as_view(), name="platform-users"),
 
-    path("tenants/",        TenantListCreateView.as_view(), name="platform-tenant-list"),
-    path("tenants/<int:pk>/", TenantDetailView.as_view(), name="platform-tenant-detail"),
-    path("tenants/<int:pk>/audit-log/", TenantAuditLogView.as_view(), name="platform-tenant-audit-log"),
-    path("tenants/<int:pk>/overview/",  TenantOverviewView.as_view(), name="platform-tenant-overview"),
-    path("tenants/<int:pk>/staff/",     TenantStaffListView.as_view(), name="platform-tenant-staff-list"),
-    path("tenants/<int:pk>/staff/<int:staff_id>/", TenantStaffDetailView.as_view(), name="platform-tenant-staff-detail"),
-    path("tenants/<int:pk>/staff/<int:staff_id>/reset-password/",
-         TenantStaffResetPasswordView.as_view(), name="platform-tenant-staff-reset-password"),
+    path("hospitals/",        HospitalListCreateView.as_view(), name="platform-hospital-list"),
+    path("hospitals/<int:pk>/", HospitalDetailView.as_view(), name="platform-hospital-detail"),
+    path("hospitals/<int:pk>/audit-log/", HospitalAuditLogView.as_view(), name="platform-hospital-audit-log"),
+    path("hospitals/<int:pk>/overview/",  HospitalOverviewView.as_view(), name="platform-hospital-overview"),
+    path("hospitals/<int:pk>/staff/",     HospitalStaffListView.as_view(), name="platform-hospital-staff-list"),
+    path("hospitals/<int:pk>/staff/<int:staff_id>/", HospitalStaffDetailView.as_view(), name="platform-hospital-staff-detail"),
+    path("hospitals/<int:pk>/staff/<int:staff_id>/reset-password/",
+         HospitalStaffResetPasswordView.as_view(), name="platform-hospital-staff-reset-password"),
 
-    # System-level vaccination schedule templates (owner_tenant_id=None,
+    # System-level vaccination schedule templates (owner_hospital_id=None,
     # is_template=True) — cloned by hospital admins via
-    # apps.patients.pediatrics.schedule_views (VaccinationScheduleListCreateView).
+    # apps.hospital_patients.pediatrics.schedule_views (VaccinationScheduleListCreateView).
     path("vaccination-templates/", VaccinationTemplateListCreateView.as_view(), name="platform-vaccination-template-list-create"),
     path("vaccination-templates/<int:pk>/", VaccinationTemplateDetailView.as_view(), name="platform-vaccination-template-detail"),
 

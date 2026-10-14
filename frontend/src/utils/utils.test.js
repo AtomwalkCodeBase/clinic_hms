@@ -106,7 +106,7 @@ test("the chips on a row say what it is and who decided, never the score", () =>
   const done = (extra) => ({ processing_status: "completed", doc_type: "lab_report", score: 32.4, method: "rule", ...extra });
   assert.deepEqual(chipsFor(done()), { type: { text: "Lab report", tone: "type" }, extra: null });
   assert.equal(chipsFor(done({ method: "staff" })).extra.text, "Verified by you");
-  assert.equal(chipsFor(done({ source_tenant_id: 3 })).extra.text, "Issued by hospital");
+  assert.equal(chipsFor(done({ source_hospital_id: 3 })).extra.text, "Issued by hospital");
   assert.equal(chipsFor({ processing_status: "completed", doc_type: "", score: 20 }).type.text, "Unable to classify");
   assert.equal(chipsFor({ processing_status: "completed", doc_type: "", score: 20 }).extra, null);
   assert.equal(chipsFor({ processing_status: "rejected" }).type.text, "Duplicate");

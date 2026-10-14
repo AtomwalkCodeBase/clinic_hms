@@ -24,8 +24,8 @@ class MockUser:
     Allows DRF's IsAuthenticated and role-permission classes to work
     without any database round-trips.
 
-    `subscription` is populated (one extra DB query, registry DB only) for
-    hospital-staff requests — see JWTTenantAuthentication.authenticate().
+    `subscription` is populated (one extra DB query, atomwalk DB only) for
+    hospital-staff requests — see JWTHospitalAuthentication.authenticate().
     It's looked up fresh on every request rather than cached in the JWT so a
     tier change or suspension takes effect immediately, not on next login.
     """
@@ -53,12 +53,12 @@ class MockUser:
         # how a role change for anyone else already works today.
         self.acts_as     = payload.get("acts_as", [])
         self.is_platform = payload.get("is_platform", False)
-        self.tenant_id   = payload.get("tenant_id")
+        self.hospital_id   = payload.get("hospital_id")
         self.db_name     = payload.get("db_name", "default")
         self.branch_id   = payload.get("branch_id")
         self.subscription = None
         # Baked in at login time (see PatientLoginView / PatientOTPLoginView).
-        # Kept alongside .id purely so JWTTenantAuthentication can detect a
+        # Kept alongside .id purely so JWTHospitalAuthentication can detect a
         # stale token below — every patient-portal view still re-fetches
         # PatientAccount by .id fresh on every request, never trusts this
         # value for anything else.
@@ -68,7 +68,7 @@ class MockUser:
         return self.email
 
 
-class JWTTenantAuthentication(BaseAuthentication):
+class JWTHospitalAuthentication(BaseAuthentication):
     """
     DRF authentication class for Atomwalk's custom JWT format.
 
@@ -105,21 +105,21 @@ class JWTTenantAuthentication(BaseAuthentication):
         # token instead of relying purely on natural expiry.
         jti = payload.get("jti")
         if jti:
-            from apps.registry.models import BlacklistedToken
+            from apps.atomwalk.models import BlacklistedToken
             if BlacklistedToken.objects.using("default").filter(jti=jti).exists():
                 raise AuthenticationFailed("Token has been revoked. Please log in again.")
 
         user = MockUser(payload)
 
         # ── Subscription lifecycle enforcement ──────────────────────────────
-        # Only hospital staff carry a tenant_id (platform admins and patients
+        # Only hospital staff carry a hospital_id (platform admins and patients
         # don't — see auth_app/views.py's three login payloads), so this only
         # ever runs for staff requests. Checked fresh every request, not
         # cached in the JWT, so a platform-admin suspension or a tier change
         # takes effect on the staff member's very next request.
-        if user.tenant_id:
-            from apps.tenants.models import Subscription
-            sub = Subscription.objects.using("default").filter(tenant_id=user.tenant_id).first()
+        if user.hospital_id:
+            from apps.hospitals.models import Subscription
+            sub = Subscription.objects.using("default").filter(hospital_id=user.hospital_id).first()
             user.subscription = sub
             if sub:
                 if sub.status in ("frozen", "suspended"):
@@ -141,7 +141,7 @@ class JWTTenantAuthentication(BaseAuthentication):
             # otherwise — a "Deactivate" click on the platform-admin or
             # hospital-admin side wouldn't actually cut off a session already
             # in progress. Checked fresh every request (one extra indexed
-            # lookup on the tenant DB, same cost as the subscription check
+            # lookup on the hospital DB, same cost as the subscription check
             # above) so deactivation takes effect on the very next call.
             from apps.org.models import StaffUser
             still_active = StaffUser.objects.using(user.db_name).filter(
@@ -157,7 +157,7 @@ class JWTTenantAuthentication(BaseAuthentication):
         # re-fetching PatientAccount fresh with .get(pk=request.user.id) —
         # deliberately, so profile edits etc. take effect without a re-login.
         # That's only safe if a given numeric PK still belongs to the same
-        # patient it did when this token was issued. If the registry
+        # patient it did when this token was issued. If the atomwalk
         # (`default`) DB is ever wiped and reseeded — e.g. test accounts
         # recreated during a go-live — Postgres restarts its autoincrement
         # sequence and an old, still-unexpired token's user_id can silently
@@ -169,7 +169,7 @@ class JWTTenantAuthentication(BaseAuthentication):
         # reused/orphaned ID is caught immediately instead of silently
         # leaking another patient's records.
         if user.role == "patient":
-            from apps.registry.models import PatientAccount
+            from apps.atomwalk.models import PatientAccount
             current_awpid = PatientAccount.objects.using("default").filter(
                 pk=user.id, is_active=True
             ).values_list("awpid", flat=True).first()

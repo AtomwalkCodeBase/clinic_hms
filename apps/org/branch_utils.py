@@ -11,7 +11,7 @@ from .models import StaffBranchMapping
 
 
 def get_staff_branch_ids(staff_id, db_name):
-    """All branch IDs a staff member is mapped to, in this tenant DB."""
+    """All branch IDs a staff member is mapped to, in this hospital DB."""
     return set(
         StaffBranchMapping.objects.using(db_name)
         .filter(staff_id=staff_id)

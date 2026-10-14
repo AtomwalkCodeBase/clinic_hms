@@ -15,7 +15,7 @@ class AuditLogSerializer(serializers.Serializer):
     """
     Read-only — mirrors apps.org.models.AuditLog. A plain Serializer (not
     ModelSerializer) because this app doesn't own that model; it just reads
-    it from the tenant DB (see views.py).
+    it from the hospital DB (see views.py).
     """
     id             = serializers.IntegerField()
     actor_user_id  = serializers.IntegerField(allow_null=True)

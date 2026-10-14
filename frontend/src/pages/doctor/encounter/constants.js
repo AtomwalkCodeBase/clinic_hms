@@ -195,8 +195,8 @@ export const SYMPTOM_SYNONYMS = {
 // Fixed to the right edge, drag the left border to resize, scrolls entirely
 // within itself — the SOAP/vitals workspace behind it is untouched.
 // `doc` can either carry file_data/mime_type directly (e.g. a lab report
-// already fetched as part of this tenant's own lab-order list — no extra
-// round trip needed) or a `fetchUrl` to load full content from (cross-tenant
+// already fetched as part of this hospital's own lab-order list — no extra
+// round trip needed) or a `fetchUrl` to load full content from (cross-hospital
 // HIE attachments / lab results, kept out of the summary payload for size).
 export const DRAWER_DEFAULT_WIDTH = 520;
 

@@ -7,7 +7,7 @@ QR code that, when scanned by literally any phone's camera, opens a
 read-only emergency-summary page — no login, no app install, works at any
 hospital whether or not it's part of this network. This is for the
 "unregistered/nearby/emergency hospital" scenario, distinct from the
-HIE cross-hospital sharing model (apps.registry's Shared* tables + the
+HIE cross-hospital sharing model (apps.atomwalk's Shared* tables + the
 Patient.hie_consent_given gate) — that gate protects passive/ambient
 cross-hospital staff access; this is an explicit, patient-initiated,
 time-boxed disclosure to whichever doctor is physically in front of her.

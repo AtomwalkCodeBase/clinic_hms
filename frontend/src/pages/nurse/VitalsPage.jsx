@@ -25,7 +25,7 @@ const MILESTONE_STATUS_STYLE = {
 
 // Read-only Birth History (nurses can view, per IsHospitalStaff on
 // BirthHistoryView.get — recording it is doctor/front-desk only, see
-// apps/patients/pediatrics/pediatric_views.py's own docstring) + Developmental
+// apps/hospital_patients/pediatrics/pediatric_views.py's own docstring) + Developmental
 // Milestones, which nurses CAN record (IsDoctorOrNurse on
 // PatientMilestoneListCreateView) — same roadmap/assess pattern as the
 // doctor's EncounterPage "Developmental Milestones" panel, just standalone

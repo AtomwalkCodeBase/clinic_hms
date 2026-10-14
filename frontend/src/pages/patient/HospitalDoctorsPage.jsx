@@ -19,13 +19,13 @@ import API_ENDPOINTS from "../../config/api.config";
 import ROUTES        from "../../config/routes.config";
 
 export default function PatientHospitalDoctorsPage() {
-  const { tenantId } = useParams();
+  const { hospitalId } = useParams();
   const navigate = useNavigate();
 
   const { data: hospData } = useApi(API_ENDPOINTS.PORTAL.HOSPITALS);
-  const hospital = (hospData?.results || []).find(h => String(h.tenant_id) === String(tenantId));
+  const hospital = (hospData?.results || []).find(h => String(h.hospital_id) === String(hospitalId));
 
-  const { data, isLoading, error, refetch } = useApi(API_ENDPOINTS.PORTAL.DOCTORS(tenantId));
+  const { data, isLoading, error, refetch } = useApi(API_ENDPOINTS.PORTAL.DOCTORS(hospitalId));
   const allDoctors = useMemo(() => data?.results || [], [data]);
 
   const specialties = useMemo(() => {
@@ -220,8 +220,8 @@ export default function PatientHospitalDoctorsPage() {
                 d={d}
                 hospitalName={hospital?.name}
                 hospitalCity={hospital?.city}
-                onBook={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(tenantId, d.id))}
-                onViewProfile={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(tenantId, d.id))}
+                onBook={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(hospitalId, d.id))}
+                onViewProfile={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(hospitalId, d.id))}
               />
             ))}
           </div>

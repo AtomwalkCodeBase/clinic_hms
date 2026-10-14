@@ -1,14 +1,14 @@
 """The generic OptionList views moved to billing.option_list_views; every consumer must still list."""
 
-from core.testing import TenantDBTestCase, requires_tenant_db
+from core.testing import HospitalDBTestCase, requires_hospital_db
 
 from apps.billing.views import ServiceCategoryListCreateView
 from apps.ipd.views import AdmissionTypeListCreateView
 from apps.opd.views import AppointmentTypeListCreateView
 
 
-@requires_tenant_db
-class OptionListViewTests(TenantDBTestCase):
+@requires_hospital_db
+class OptionListViewTests(HospitalDBTestCase):
     def get(self, view, role="front_desk"):
         return self.call_view(view.as_view(), "get", "/x/", user_id=1, role=role)
 

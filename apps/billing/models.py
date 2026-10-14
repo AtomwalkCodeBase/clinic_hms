@@ -8,7 +8,7 @@ OptionList (v7 redesign) replaces what used to be three near-identical
 tables — ServiceCategory, PaymentModeOption, InvoiceStatusOption — plus
 apps.prescriptions.DrugFormType, merged in via a `list_type` discriminator.
 All four existed purely to replace hardcoded `choices=` lists with
-tenant-managed, editable-via-UI lookup tables; none of them were DB-FK
+hospital-managed, editable-via-UI lookup tables; none of them were DB-FK
 enforced (BillingService.category / Payment.payment_mode / Invoice.status /
 Drug.form are all plain CharFields, validated at the view/serializer layer
 against these rows, not real foreign keys) — so collapsing them into one
@@ -29,11 +29,11 @@ can cover every list_type uniformly.
 
 from django.db import models
 from apps.org.models import StaffUser, Branch
-from apps.patients.models import Patient
+from apps.hospital_patients.models import HospitalPatient
 
 
 class OptionList(models.Model):
-    """Tenant-managed dropdown lists, merged across billing + pharmacy setup screens."""
+    """Hospital-managed dropdown lists, merged across billing + pharmacy setup screens."""
     LIST_SERVICE_CATEGORY = "service_category"
     LIST_PAYMENT_MODE     = "payment_mode"
     LIST_INVOICE_STATUS   = "invoice_status"
@@ -132,12 +132,12 @@ class OptionList(models.Model):
 
 
 class BillingService(models.Model):
-    """Tenant-configured price list for services, procedures, etc."""
+    """Hospital-configured price list for services, procedures, etc."""
     name        = models.CharField(max_length=200)
     code        = models.CharField(max_length=50, blank=True)
     category    = models.CharField(max_length=50, default="Other")  # validated against OptionList(list_type="service_category"), not a DB choices= constraint
     unit_price  = models.DecimalField(max_digits=10, decimal_places=2)
-    tax_rate    = models.DecimalField(max_digits=5, decimal_places=2, default=0)  # % — falls back to the tenant's default_tax_rate when omitted
+    tax_rate    = models.DecimalField(max_digits=5, decimal_places=2, default=0)  # % — falls back to the hospital's default_tax_rate when omitted
     is_active   = models.BooleanField(default=True)
     created_at  = models.DateTimeField(auto_now_add=True)
 
@@ -161,7 +161,7 @@ class Invoice(models.Model):
     STATUS_PARTIALLY_PAID = "partially_paid"
     STATUS_CANCELLED      = "cancelled"
 
-    patient         = models.ForeignKey(Patient, on_delete=models.PROTECT,
+    patient         = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT,
                                         related_name="invoices")
     # `encounter` (FK to apps.clinical.Encounter) was removed (HMS-07c-1) —
     # it was always left null in practice: the live OPD flow's

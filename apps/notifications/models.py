@@ -11,7 +11,7 @@ either, anywhere outside this file (no urls.py mount for this app at all,
 and grep across the repo turns up nothing but their own class definitions).
 NotificationLog is NOT dead scaffolding, despite living in the same app —
 it's written by generate_reminders (see services.py) and read/written by
-apps.patients.portal_views.PortalNotificationsView /
+apps.hospital_patients.portal_views.PortalNotificationsView /
 PortalNotificationMarkReadView, a real endpoint mounted at
 /api/v1/portal/notifications/. Kept as-is, minus the `template` FK (which
 only ever pointed at the now-removed NotificationTemplate and was never
@@ -19,7 +19,7 @@ actually set by any real write path).
 """
 
 from django.db import models
-from apps.patients.models import Patient
+from apps.hospital_patients.models import HospitalPatient
 
 
 class NotificationLog(models.Model):
@@ -34,7 +34,7 @@ class NotificationLog(models.Model):
         ("failed",    "Failed"),
     ]
 
-    patient     = models.ForeignKey(Patient, on_delete=models.SET_NULL,
+    patient     = models.ForeignKey(HospitalPatient, on_delete=models.SET_NULL,
                                     null=True, blank=True, related_name="notifications")
     recipient   = models.CharField(max_length=200)  # phone or email
     channel     = models.CharField(max_length=20)

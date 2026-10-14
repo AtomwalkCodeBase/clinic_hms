@@ -3,16 +3,16 @@ apps/compliance/views.py
 --------------------------
 Two audiences:
 
-  Hospital staff (tenant-scoped, request.tenant_db already resolved by
-  JWTTenantAuthentication):
+  Hospital staff (hospital-scoped, request.hospital_db already resolved by
+  JWTHospitalAuthentication):
     AuditLogListView             — read apps.org.AuditLog (PHI access trail)
     RecordAmendmentStaffListView — list correction requests for this hospital
     RecordAmendmentResolveView   — approve/reject a request
     ConsentRecordListView        — a patient's consent history
 
-  Patients (portal JWT has no fixed tenant — request.tenant_db is None; a
+  Patients (portal JWT has no fixed hospital — request.hospital_db is None; a
   hospital must be picked explicitly, same pattern as
-  apps.patients.portal_views.PortalBookView):
+  apps.hospital_patients.portal_views.PortalBookView):
     PortalRecordAmendmentView    — GET: my requests across every hospital
                                     POST: submit a new request against one
 """
@@ -52,7 +52,7 @@ class AuditLogListView(APIView):
     def get(self, request):
         from apps.org.models import AuditLog
 
-        qs = AuditLog.objects.using(request.tenant_db).all()
+        qs = AuditLog.objects.using(request.hospital_db).all()
 
         patient_id = request.query_params.get("patient_id")
         if patient_id:
@@ -83,7 +83,7 @@ class RecordAmendmentStaffListView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def get(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         qs = RecordAmendment.objects.using(db).select_related("patient", "reviewed_by").all()
 
         status_filter = request.query_params.get("status")
@@ -115,7 +115,7 @@ class RecordAmendmentResolveView(APIView):
     def post(self, request, pk):
         from django.utils import timezone
 
-        db = request.tenant_db
+        db = request.hospital_db
         try:
             amendment = RecordAmendment.objects.using(db).get(pk=pk)
         except RecordAmendment.DoesNotExist:
@@ -149,7 +149,7 @@ class ConsentRecordListView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
-        db = request.tenant_db
+        db = request.hospital_db
         qs = ConsentRecord.objects.using(db).select_related("patient", "recorded_by").all()
 
         patient_id = request.query_params.get("patient_id")
@@ -169,16 +169,16 @@ class PortalRecordAmendmentView(APIView):
     """
     GET  /api/v1/compliance/portal/amendments/            — my requests, every hospital
     POST /api/v1/compliance/portal/amendments/             — submit a new request
-      Body: {tenant_id, patient_awpid? (defaults to self),
+      Body: {hospital_id, patient_awpid? (defaults to self),
              resource_type, resource_id, field_name, current_value?,
              requested_value, reason?}
     """
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.tenants.models import Tenant
-        from apps.patients.models import Patient
-        from apps.registry.models import PatientAccount, PatientRelationship
+        from apps.hospitals.models import Hospital
+        from apps.hospital_patients.models import HospitalPatient
+        from apps.atomwalk.models import PatientAccount, PatientRelationship
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
         target_awpid = (request.query_params.get("patient_awpid") or "").strip() or acct.awpid
@@ -190,20 +190,20 @@ class PortalRecordAmendmentView(APIView):
                 return error("That patient isn't linked to your account.", status=403)
 
         results = []
-        for tenant in Tenant.objects.using("default").filter(is_active=True):
-            db = tenant.db_name
+        for hospital in Hospital.objects.using("default").filter(is_active=True):
+            db = hospital.db_name
             try:
-                from apps.tenants.utils import ensure_tenant_db
-                ensure_tenant_db(db)
+                from apps.hospitals.utils import ensure_hospital_db
+                ensure_hospital_db(db)
 
-                patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
+                patient = HospitalPatient.objects.using(db).filter(awpid=target_awpid).first()
                 if not patient:
                     continue
                 rows = RecordAmendment.objects.using(db).filter(patient=patient).select_related("reviewed_by")
                 for row in rows:
                     data = RecordAmendmentSerializer(row).data
-                    data["hospital"] = tenant.name
-                    data["tenant_id"] = tenant.id
+                    data["hospital"] = hospital.name
+                    data["hospital_id"] = hospital.id
                     results.append(data)
             except Exception as exc:
                 logger.warning("portal amendments: skipped %s (%s)", db, exc)
@@ -213,19 +213,19 @@ class PortalRecordAmendmentView(APIView):
         return success(data={"results": page_items, "pagination": meta})
 
     def post(self, request):
-        from apps.tenants.models import Tenant
-        from apps.tenants.utils import ensure_tenant_db
-        from apps.patients.models import Patient
-        from apps.registry.models import PatientAccount, PatientRelationship
+        from apps.hospitals.models import Hospital
+        from apps.hospitals.utils import ensure_hospital_db
+        from apps.hospital_patients.models import HospitalPatient
+        from apps.atomwalk.models import PatientAccount, PatientRelationship
 
         d = request.data
-        tenant_id = d.get("tenant_id")
-        if not tenant_id:
-            return error("tenant_id is required.", errors={"tenant_id": "Required."})
+        hospital_id = d.get("hospital_id")
+        if not hospital_id:
+            return error("hospital_id is required.", errors={"hospital_id": "Required."})
 
         try:
-            tenant = Tenant.objects.using("default").get(pk=tenant_id, is_active=True)
-        except Tenant.DoesNotExist:
+            hospital = Hospital.objects.using("default").get(pk=hospital_id, is_active=True)
+        except Hospital.DoesNotExist:
             return error("Hospital not found.")
 
         acct = PatientAccount.objects.using("default").get(pk=request.user.id)
@@ -237,10 +237,10 @@ class PortalRecordAmendmentView(APIView):
             if not is_family:
                 return error("That patient isn't linked to your account.", status=403)
 
-        db = tenant.db_name
-        ensure_tenant_db(db)
+        db = hospital.db_name
+        ensure_hospital_db(db)
 
-        patient = Patient.objects.using(db).filter(awpid=target_awpid).first()
+        patient = HospitalPatient.objects.using(db).filter(awpid=target_awpid).first()
         if not patient:
             return error("No record found for this patient at that hospital.")
 
@@ -250,6 +250,6 @@ class PortalRecordAmendmentView(APIView):
 
         row = RecordAmendment.objects.using(db).create(patient=patient, **serializer.validated_data)
         data = RecordAmendmentSerializer(row).data
-        data["hospital"] = tenant.name
-        data["tenant_id"] = tenant.id
+        data["hospital"] = hospital.name
+        data["hospital_id"] = hospital.id
         return created(data=data, message="Correction request submitted.")

@@ -3,7 +3,7 @@ apps/billing/pdf.py
 --------------------
 Renders a real, printable PDF for an Invoice — reportlab is already a
 project dependency (used by the demo-seed script for synthetic lab report
-PDFs; see apps/registry/management/commands/seed_full_demo.py) but this is
+PDFs; see apps/atomwalk/management/commands/seed_full_demo.py) but this is
 the first place it's used for an actual production document.
 
 Returns raw PDF bytes; the view layer wraps them as a base64 data URI so the
@@ -45,7 +45,7 @@ def generate_invoice_pdf(invoice, items, payments, patient, branch, hospital_nam
     invoice: billing.Invoice instance
     items:   list of billing.InvoiceItem
     payments: list of billing.Payment
-    patient: patients.Patient instance
+    patient: hospital_patients.HospitalPatient instance
     branch:  org.Branch instance (may be None)
     hospital_name: str
     """

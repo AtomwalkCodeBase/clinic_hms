@@ -121,7 +121,7 @@ export default function DashboardPage() {
   // Live branch/doctor/staff counts + tier limits — same source of truth as
   // the capacity banners on StaffPage/BranchesPage/RolesPage (backend
   // computes these from a live DB count each time, see
-  // apps.tenants.limits.get_usage_counts). Previously this page re-fetched
+  // apps.hospitals.limits.get_usage_counts). Previously this page re-fetched
   // /org/branches/ + /org/staff/ itself and hand-rolled the counts, but
   // /org/staff/ returns a *paginated* {results, pagination} object (not a
   // flat array) — the old code did staff.filter(...) directly on that

@@ -59,7 +59,7 @@ export function chipsFor(doc) {
       return { type: { text: "Unable to classify", tone: "warn" }, extra: null };
     default: {
       const type = { text: typeLabel(doc.doc_type), tone: "type" };
-      if (doc.source_tenant_id || doc.uploaded_by === "staff") return { type, extra: { text: "Issued by hospital", tone: "neutral" } };
+      if (doc.source_hospital_id || doc.uploaded_by === "staff") return { type, extra: { text: "Issued by hospital", tone: "neutral" } };
       if (doc.method === "staff") return { type, extra: { text: "Verified by you", tone: "neutral" } };
       return { type, extra: null };
     }

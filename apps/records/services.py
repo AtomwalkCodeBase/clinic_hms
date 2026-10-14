@@ -27,9 +27,9 @@ from django.utils.dateparse import parse_datetime
 
 from core import ocr, storage
 from core.file_validation import FileValidationError, validate_bytes
-from apps.registry.models import PatientIdentity
+from apps.atomwalk.models import Patient
 from . import classification as rules
-from .models import DocumentBatch, DocumentText, MedicalDocument
+from apps.atomwalk.models import DocumentBatch, DocumentText, MedicalDocument
 from .serializers import MAX_FILE_BYTES
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ def save_upload(awpid, files):
     """`files` = [(uploaded_file, raw_bytes)]. One batch per upload, however many files. The files go to S3
     UPLOAD_THREADS at a time (one after another made a big upload wait for the sum of every transfer); if any
     transfer fails, everything already sent is deleted and nothing is saved."""
-    patient = PatientIdentity.objects.using("default").get(awpid=awpid)
+    patient = Patient.objects.using("default").get(awpid=awpid)
     batch = DocumentBatch.objects.create(patient=patient, total_files=len(files))
     docs = [MedicalDocument(patient=patient, batch=batch, file_name=(f.name or "")[:100], size=len(raw),
                             uploaded_by="patient", status=Status.QUEUED)
@@ -233,7 +233,7 @@ def reclassify_existing(limit=5000):
     Returns {"checked", "changed", "classified", "unclassified"}."""
     counts = {"checked": 0, "changed": 0, "classified": 0, "unclassified": 0}
     docs = (MedicalDocument.objects
-            .filter(status__in=(Status.COMPLETED, Status.REVIEW_REQUIRED), source_tenant_id__isnull=True,
+            .filter(status__in=(Status.COMPLETED, Status.REVIEW_REQUIRED), source_hospital_id__isnull=True,
                     classification__status__in=(rules.RULE_CLASSIFIED, rules.REVIEW_REQUIRED),
                     text__isnull=False)
             .order_by("id")[:limit])
@@ -280,7 +280,7 @@ def awaiting_review_q():
     start = review_starts_at()
     if start is None:
         return Q(pk__in=[])
-    return (Q(uploaded_by="patient", source_tenant_id__isnull=True, created_at__gte=start)
+    return (Q(uploaded_by="patient", source_hospital_id__isnull=True, created_at__gte=start)
             & ~Q(classification__status__in=(rules.HUMAN_CLASSIFIED, rules.ISSUED)))
 
 
@@ -321,7 +321,7 @@ def submit_decisions(awpid, decisions):
         if doc_id in seen:
             continue
         seen.add(doc_id)
-        if doc is None or doc.source_tenant_id or doc.uploaded_by == "staff":
+        if doc is None or doc.source_hospital_id or doc.uploaded_by == "staff":
             reject(doc_id, "not_found")
         elif doc_type not in rules.CHOOSABLE_TYPES:
             reject(doc_id, "invalid_type")
@@ -392,14 +392,14 @@ def _queue_insights(document_id):
     transaction.on_commit(queue, using="default")
 
 
-def create_issued_document(*, awpid, file_path, name, doc_type, source_tenant_id, source_ref, mime_type="application/pdf",
+def create_issued_document(*, awpid, file_path, name, doc_type, source_hospital_id, source_ref, mime_type="application/pdf",
                            public_document_id="", document_date=None):
     """A document a hospital made for the patient (signed prescription, lab report, handwriting): it is already in
     the bucket at `file_path` and already has its type, from its source, so it skips the upload pipeline (no
     classification) and is stored as completed. Its text and timeline insights are read in the background."""
     doc = MedicalDocument(
-        patient=PatientIdentity.objects.using("default").get(awpid=awpid), file_name=(name or "")[:100],
-        mime_type=mime_type, uploaded_by="staff", source_tenant_id=source_tenant_id, source_ref=source_ref,
+        patient=Patient.objects.using("default").get(awpid=awpid), file_name=(name or "")[:100],
+        mime_type=mime_type, uploaded_by="staff", source_hospital_id=source_hospital_id, source_ref=source_ref,
         document_ref=public_document_id, document_date=document_date, status=Status.COMPLETED)
     doc.file = file_path
     doc.save(using="default")

@@ -1,7 +1,7 @@
 /**
  * components/common/HospitalLogoUpload.jsx
  * -------------------------------------------
- * Rectangular logo uploader for a hospital's own branding (Tenant.logo) —
+ * Rectangular logo uploader for a hospital's own branding (Hospital.logo) —
  * companion to ProfilePhotoUpload.jsx, but deliberately NOT circular (logos
  * are usually wide wordmarks, not square headshots) and kept as PNG rather
  * than re-encoded to JPEG, so a logo with a transparent background stays
@@ -9,7 +9,7 @@
  *
  * Downsizes client-side (max 480x200) before uploading via PATCH
  * /org/settings/ — same base64-in-a-TextField storage convention as
- * StaffUser.photo (see apps.tenants.Tenant.logo), no object storage wired
+ * StaffUser.photo (see apps.hospitals.Hospital.logo), no object storage wired
  * up yet.
  */
 import { useRef, useState } from "react";

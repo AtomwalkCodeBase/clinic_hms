@@ -6,9 +6,9 @@ from django.test import TestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.opd.views import EncounterInternalNoteView
-from apps.records.models import MedicalDocument
+from apps.atomwalk.models import MedicalDocument
 from apps.records.tests.helpers import identity
-from apps.registry.models import ConsultSession
+from apps.atomwalk.models import ConsultSession
 from core.authentication import MockUser
 
 
@@ -18,13 +18,13 @@ class InternalNoteViewTests(TestCase):
     def setUp(self):
         identity("AWP-T1")
         self.enc = uuid.uuid4()
-        self.sess = ConsultSession.objects.create(awpid="AWP-T1", tenant_id=3, encounter_id=self.enc,
+        self.sess = ConsultSession.objects.create(awpid="AWP-T1", hospital_id=3, encounter_id=self.enc,
                                                   note_pdf="patients/AWP-T1/consult-notes/n.pdf")
 
-    def get(self, role="doctor", tenant_id=3, enc=None, **params):
+    def get(self, role="doctor", hospital_id=3, enc=None, **params):
         request = APIRequestFactory().get("/x/", params)
         force_authenticate(request, user=MockUser({"user_id": 1, "role": role}))
-        request.tenant_id = tenant_id
+        request.hospital_id = hospital_id
         return EncounterInternalNoteView.as_view()(request, pk=enc or self.enc)
 
     @mock.patch("core.storage.signed_url", return_value="https://s3/signed")
@@ -40,7 +40,7 @@ class InternalNoteViewTests(TestCase):
         self.assertEqual(signed.call_args.kwargs["download_name"], "Handwritten Consultation Note.pdf")
 
     def test_another_hospital_cannot_open_it(self):
-        self.assertEqual(self.get(tenant_id=99).status_code, 404)
+        self.assertEqual(self.get(hospital_id=99).status_code, 404)
 
     def test_only_a_doctor_can(self):
         for role in ("patient", "nurse", "front_desk"):

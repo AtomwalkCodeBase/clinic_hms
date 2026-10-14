@@ -390,9 +390,9 @@ export default function App() {
             element={<PatientRoute><PatientAppointments /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.HOSPITALS}
             element={<PatientRoute><PatientHospitals /></PatientRoute>} />
-          <Route path="/patient/hospitals/:tenantId/doctors"
+          <Route path="/patient/hospitals/:hospitalId/doctors"
             element={<PatientRoute><PatientHospitalDoctors /></PatientRoute>} />
-          <Route path="/patient/hospitals/:tenantId/doctors/:doctorId"
+          <Route path="/patient/hospitals/:hospitalId/doctors/:doctorId"
             element={<PatientRoute><PatientDoctorProfile /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.RECORDS}
             element={<PatientRoute><PatientRecords /></PatientRoute>} />

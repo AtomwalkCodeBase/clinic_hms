@@ -1,13 +1,13 @@
 """
 core/middleware.py
 ------------------
-JWTTenantMiddleware — runs on every request before the view.
+JWTHospitalMiddleware — runs on every request before the view.
 
 What it does:
   1. Reads the Authorization: Bearer <token> header.
   2. Decodes and validates the JWT (using the same secret as SimpleJWT).
-  3. Pulls db_name, tenant_id, role, license_tier, is_platform from claims.
-  4. Calls set_tenant_db(db_name) to point the ORM router at the right DB.
+  3. Pulls db_name, hospital_id, role, license_tier, is_platform from claims.
+  4. Calls set_hospital_db(db_name) to point the ORM router at the right DB.
   5. Attaches decoded claims directly to request so views and permissions
      can read them without touching the token again.
 
@@ -26,7 +26,7 @@ from django.conf import settings
 from django.http  import JsonResponse
 import jwt
 
-from .db_router import set_tenant_db
+from .db_router import set_hospital_db
 from .logging_context import set_request_identity
 
 logger = logging.getLogger(__name__)
@@ -39,10 +39,10 @@ EXEMPT_PREFIXES = (
     "/api/v1/auth/otp/",             # OTP request/verify — pre-auth by definition (apps/auth_app/otp_views.py)
     "/api/v1/auth/forgot-password/", # staff+patient OTP reset (action_token in body, not Bearer)
     "/api/v1/portal/register/",      # patient self-signup + registration OTP (request/verify use /auth/otp/ above)
-    "/api/v1/emergency/",            # Emergency QR summary (apps/patients/emergency_views.py) — scanned by a
+    "/api/v1/emergency/",            # Emergency QR summary (apps/hospital_patients/emergency_views.py) — scanned by a
                                       # doctor's phone with no Atomwalk login at all; auth is the signed token
                                       # in the URL itself (core/emergency_access.py), not a Bearer header.
-    "/api/v1/consult-pad/",          # Consultation-scratchpad pad (apps/patients/consult_pad_views.py) —
+    "/api/v1/consult-pad/",          # Consultation-scratchpad pad (apps/hospital_patients/consult_pad_views.py) —
                                       # same story as /emergency/ above: scanned on a phone with no session;
                                       # the 43-char random token in the URL is the credential.
     "/api/v1/records-share/",        # "Records Access" break-glass — the doctor's laptop half. Public
@@ -50,7 +50,7 @@ EXEMPT_PREFIXES = (
                                       # token in the URL. The patient half is at /api/v1/portal/records-share/
                                       # and is NOT exempt (normal patient-JWT).
     "/api/v1/view-report/",          # Printed prescription/lab-report QR, opened by a non-app scanner
-                                      # (apps/patients/document_view_views.py) — no Atomwalk login at all;
+                                      # (apps/hospital_patients/document_view_views.py) — no Atomwalk login at all;
                                       # auth is the signed token in the URL itself (core/qr_token.py).
     "/health/",
     "/django-admin/",                # Django admin (atomwalk/urls.py) — it has its own session login, not a Bearer token
@@ -65,13 +65,13 @@ DEBUG_ONLY_EXEMPT_PREFIXES = (
 )
 
 
-class JWTTenantMiddleware:
+class JWTHospitalMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
         # ── Reset thread-local on every request ───────────────────────────
-        set_tenant_db(None)
+        set_hospital_db(None)
 
         # ── Skip exempt paths ─────────────────────────────────────────────
         exempt = EXEMPT_PREFIXES + DEBUG_ONLY_EXEMPT_PREFIXES if settings.DEBUG else EXEMPT_PREFIXES
@@ -98,34 +98,34 @@ class JWTTenantMiddleware:
             logger.warning("Invalid JWT received: %s", exc)
             return self._unauthorised("Invalid token.")
 
-        # ── Validate tenant DB alias exists in settings ───────────────────
+        # ── Validate hospital DB alias exists in settings ───────────────────
         db_name = payload.get("db_name")
         is_platform = payload.get("is_platform", False)
         is_patient  = payload.get("role") == "patient"
 
         if not is_platform and not is_patient:
             if not db_name:
-                return self._unauthorised("Token missing tenant context.")
-            # Auto-register tenant DB config if not yet in settings.DATABASES.
-            # Tenant DBs are not persisted across restarts — they're registered
+                return self._unauthorised("Token missing hospital context.")
+            # Auto-register hospital DB config if not yet in settings.DATABASES.
+            # Hospital DBs are not persisted across restarts — they're registered
             # lazily on first use (login, or here on subsequent requests).
             if db_name not in settings.DATABASES:
-                from apps.tenants.utils import ensure_tenant_db
-                from apps.tenants.models import Tenant
-                if not Tenant.objects.filter(db_name=db_name, is_active=True).exists():
+                from apps.hospitals.utils import ensure_hospital_db
+                from apps.hospitals.models import Hospital
+                if not Hospital.objects.filter(db_name=db_name, is_active=True).exists():
                     logger.error(
-                        "JWT references unknown db_name=%s — no matching active tenant.",
+                        "JWT references unknown db_name=%s — no matching active hospital.",
                         db_name,
                     )
-                    return self._unauthorised("Invalid tenant context.")
-                ensure_tenant_db(db_name)
-                logger.info("Lazily registered tenant DB config: %s", db_name)
-            set_tenant_db(db_name)
+                    return self._unauthorised("Invalid hospital context.")
+                ensure_hospital_db(db_name)
+                logger.info("Lazily registered hospital DB config: %s", db_name)
+            set_hospital_db(db_name)
 
         # ── Attach claims to request ──────────────────────────────────────
-        set_request_identity(tenant_id=payload.get("tenant_id"), user_id=payload.get("user_id"))
-        request.tenant_db      = db_name
-        request.tenant_id      = payload.get("tenant_id")
+        set_request_identity(hospital_id=payload.get("hospital_id"), user_id=payload.get("user_id"))
+        request.hospital_db      = db_name
+        request.hospital_id      = payload.get("hospital_id")
         request.user_role      = payload.get("role")
         request.license_tier   = payload.get("license_tier", "starter")
         request.is_platform    = is_platform

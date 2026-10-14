@@ -115,8 +115,8 @@ function hospitalInitials(name) {
   return source.slice(0, 2).map(w => w[0]?.toUpperCase() || "").join("") || "H";
 }
 
-function HospitalMonogram({ name, tenantId }) {
-  const seed = tenantId != null ? Number(tenantId) : (name || "").split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+function HospitalMonogram({ name, hospitalId }) {
+  const seed = hospitalId != null ? Number(hospitalId) : (name || "").split("").reduce((a, c) => a + c.charCodeAt(0), 0);
   const color = MONOGRAM_COLORS[Math.abs(seed) % MONOGRAM_COLORS.length];
   return (
     <div style={{
@@ -135,11 +135,11 @@ function HospitalMonogram({ name, tenantId }) {
   );
 }
 
-// Real uploaded hospital logo (Tenant.logo, set via hospital-admin Settings)
+// Real uploaded hospital logo (Hospital.logo, set via hospital-admin Settings)
 // takes over from the monogram the moment one exists — same 38px badge
 // footprint so the topbar layout doesn't shift either way.
-function HospitalBadge({ logo, name, tenantId }) {
-  if (!logo) return <HospitalMonogram name={name} tenantId={tenantId} />;
+function HospitalBadge({ logo, name, hospitalId }) {
+  if (!logo) return <HospitalMonogram name={name} hospitalId={hospitalId} />;
   return (
     <div style={{
       width: 38, height: 38, borderRadius: "50%",
@@ -750,7 +750,7 @@ export function AppShell({ children }) {
             padding: "0 24px", gap: 20, position: "relative", zIndex: 2,
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-              <HospitalBadge logo={user?.logo} name={user?.hospital_name} tenantId={user?.tenant_id} />
+              <HospitalBadge logo={user?.logo} name={user?.hospital_name} hospitalId={user?.hospital_id} />
               <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.25 }}>
                 <span className="fdc-hospital-name">{user?.hospital_name || "Hospital"}</span>
                 <span className="fdc-hospital-sub">{roleLabel}</span>
@@ -815,7 +815,7 @@ export function AppShell({ children }) {
           padding: "0 24px",
           position: "relative", zIndex: 2,
         }}>
-          {/* Left: tenant logo + clinic name — driven by the logged-in staff
+          {/* Left: hospital logo + clinic name — driven by the logged-in staff
               member's own hospital (from user.hospital_name/.logo, fetched
               via /me/), not a fixed hospital. Falls back to a monogram
               derived from the hospital's own name/id until it uploads a
@@ -825,7 +825,7 @@ export function AppShell({ children }) {
             {user?.db_name ? (
               <>
                 <div style={{ boxShadow: "0 0 0 2px color-mix(in srgb, var(--color-accent) 30%, transparent)", borderRadius: "50%" }}>
-                  <HospitalBadge logo={user.logo} name={user.hospital_name} tenantId={user.tenant_id} />
+                  <HospitalBadge logo={user.logo} name={user.hospital_name} hospitalId={user.hospital_id} />
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.25 }}>
                   <span style={{

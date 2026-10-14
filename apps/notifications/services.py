@@ -4,7 +4,7 @@ apps/notifications/services.py
 Reminder generation — appointment reminders and follow-up-visit reminders
 (HMS-10g-1/2). Deliberately scoped to in-app only: this writes
 NotificationLog rows with channel="in_app" so they show up in the patient
-portal's notification list (see apps.patients.portal_views.PortalNotificationsView).
+portal's notification list (see apps.hospital_patients.portal_views.PortalNotificationsView).
 Nothing here sends a real SMS/email/push — that needs a provider account
 (Twilio/SendGrid/FCM-style) the hospital would have to supply; wiring one in
 is a follow-up once credentials exist, not something to fake here.
@@ -14,12 +14,12 @@ on a schedule (there's no Celery/cron runner in this stack yet — see that
 command's docstring for how to actually schedule it).
 
 Vaccination-due reminders are NOT generated here. They're computed live, per
-request, in PortalNotificationsView via apps.patients.pediatrics.vaccine_schedule.build_roadmap()
+request, in PortalNotificationsView via apps.hospital_patients.pediatrics.vaccine_schedule.build_roadmap()
 — vaccination due-ness is inherently always-current (it's just today's date
 vs. the patient's age), so persisting a stale "reminder" row for it would be
 wrong the moment the underlying roadmap changes (e.g. a dose gets logged).
-Also SharedVaccination is a registry (cross-hospital) model, not tenant-owned,
-so there's no single tenant DB to log it against.
+Also SharedVaccination is a atomwalk (cross-hospital) model, not hospital-owned,
+so there's no single hospital DB to log it against.
 """
 import logging
 from datetime import timedelta
@@ -59,7 +59,7 @@ def generate_appointment_reminders(db, lookahead_days=1):
     Returns the count of new reminders created.
     """
     from apps.opd.models import Appointment
-    from apps.patients.models import Patient
+    from apps.hospital_patients.models import HospitalPatient
 
     target_date = timezone.localdate() + timedelta(days=lookahead_days)
     appts = (
@@ -67,7 +67,7 @@ def generate_appointment_reminders(db, lookahead_days=1):
         .filter(scheduled_date=target_date, status__in=[Appointment.STATUS_SCHEDULED, Appointment.STATUS_WAITING])
     )
     patient_uuids = {a.patient_id for a in appts}
-    patients = {p.uuid: p for p in Patient.objects.using(db).filter(uuid__in=patient_uuids)}
+    patients = {p.uuid: p for p in HospitalPatient.objects.using(db).filter(uuid__in=patient_uuids)}
 
     created = 0
     for appt in appts:
@@ -89,7 +89,7 @@ def generate_followup_reminders(db):
     encounter, same idempotency guard as appointment reminders.
     """
     from apps.opd.models import OPDEncounter
-    from apps.patients.models import Patient
+    from apps.hospital_patients.models import HospitalPatient
 
     today = timezone.localdate()
     encounters = (
@@ -97,7 +97,7 @@ def generate_followup_reminders(db):
         .filter(status=OPDEncounter.STATUS_SIGNED, follow_up_in_days__isnull=False, signed_at__isnull=False)
     )
     patient_uuids = {e.patient_id for e in encounters}
-    patients = {p.uuid: p for p in Patient.objects.using(db).filter(uuid__in=patient_uuids)}
+    patients = {p.uuid: p for p in HospitalPatient.objects.using(db).filter(uuid__in=patient_uuids)}
 
     created = 0
     for enc in encounters:
@@ -113,8 +113,8 @@ def generate_followup_reminders(db):
     return created
 
 
-def run_for_tenant(db):
-    """Runs every generator for one tenant DB, returns a {name: count} summary."""
+def run_for_hospital(db):
+    """Runs every generator for one hospital DB, returns a {name: count} summary."""
     return {
         "appointment_reminders": generate_appointment_reminders(db),
         "followup_reminders": generate_followup_reminders(db),

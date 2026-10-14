@@ -2,7 +2,7 @@
  * pages/platform-admin/DashboardPage.jsx
  * ----------------------------------------
  * Platform admin home — hero overview of the whole platform, provision new
- * hospitals, and manage each tenant's tier/subscription/audit trail inline.
+ * hospitals, and manage each hospital's tier/subscription/audit trail inline.
  *
  * Styled with the same premium hero-card / icon-chip language used across
  * the patient and staff portals (see MyProfilePage.jsx) rather than flat
@@ -43,7 +43,7 @@ function ProvisionModal({ onClose, onProvisioned }) {
     setErrors({});
     setLoading(true);
     try {
-      const { data: res } = await api.post(API_ENDPOINTS.PLATFORM.TENANTS, form);
+      const { data: res } = await api.post(API_ENDPOINTS.PLATFORM.HOSPITALS, form);
       setResult(res.data);
       toastSuccess(`${form.name} provisioned!`);
       onProvisioned();
@@ -249,15 +249,15 @@ function ProvisionModal({ onClose, onProvisioned }) {
   );
 }
 
-function TenantCard({ tenant, onTierChange }) {
+function HospitalCard({ hospital, onTierChange }) {
   const api = apiClient;
   const navigate = useNavigate();
   const { toastSuccess, toastApiError } = useToast();
   const [expanded, setExpanded] = useState(false);
   const [toggling, setToggling] = useState(false);
-  const [tierPick, setTierPick] = useState(tenant.subscription?.license_tier || "starter");
-  const [statusPick, setStatusPick] = useState(tenant.subscription?.status || "trial");
-  const [subdomainPick, setSubdomainPick] = useState(tenant.subdomain || "");
+  const [tierPick, setTierPick] = useState(hospital.subscription?.license_tier || "starter");
+  const [statusPick, setStatusPick] = useState(hospital.subscription?.status || "trial");
+  const [subdomainPick, setSubdomainPick] = useState(hospital.subdomain || "");
   const [savingTier, setSavingTier] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
   const [savingSubdomain, setSavingSubdomain] = useState(false);
@@ -267,7 +267,7 @@ function TenantCard({ tenant, onTierChange }) {
   useEffect(() => {
     if (expanded && auditLog === null && !auditLoading) {
       setAuditLoading(true);
-      fetchAuditLog(tenant.id)
+      fetchAuditLog(hospital.id)
         .then(setAuditLog)
         .catch(() => setAuditLog([]))
         .finally(() => setAuditLoading(false));
@@ -278,8 +278,8 @@ function TenantCard({ tenant, onTierChange }) {
   async function toggleActive() {
     setToggling(true);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.TENANT(tenant.id), { is_active: !tenant.is_active });
-      toastSuccess(`Hospital ${tenant.is_active ? "suspended" : "reactivated"}.`);
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { is_active: !hospital.is_active });
+      toastSuccess(`Hospital ${hospital.is_active ? "suspended" : "reactivated"}.`);
       setAuditLog(null);
       onTierChange();
     } catch (err) {
@@ -290,10 +290,10 @@ function TenantCard({ tenant, onTierChange }) {
   }
 
   async function applyTier() {
-    if (tierPick === tenant.subscription?.license_tier) return;
+    if (tierPick === hospital.subscription?.license_tier) return;
     setSavingTier(true);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.TENANT(tenant.id), { tier: tierPick });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { tier: tierPick });
       toastSuccess(`Tier changed to ${TIER_LABEL[tierPick]?.label || tierPick}.`);
       setAuditLog(null);
       onTierChange();
@@ -305,10 +305,10 @@ function TenantCard({ tenant, onTierChange }) {
   }
 
   async function applyStatus() {
-    if (statusPick === tenant.subscription?.status) return;
+    if (statusPick === hospital.subscription?.status) return;
     setSavingStatus(true);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.TENANT(tenant.id), { status: statusPick });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { status: statusPick });
       toastSuccess(`Subscription status changed to ${SUB_STATUS_META[statusPick]?.label || statusPick}.`);
       setAuditLog(null);
       onTierChange();
@@ -321,10 +321,10 @@ function TenantCard({ tenant, onTierChange }) {
 
   async function applySubdomain() {
     const cleaned = subdomainPick.trim().toLowerCase();
-    if (!cleaned || cleaned === tenant.subdomain) return;
+    if (!cleaned || cleaned === hospital.subdomain) return;
     setSavingSubdomain(true);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.TENANT(tenant.id), { subdomain: cleaned });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { subdomain: cleaned });
       toastSuccess(`Hospital Code changed to "${cleaned}".`);
       setAuditLog(null);
       onTierChange();
@@ -341,8 +341,8 @@ function TenantCard({ tenant, onTierChange }) {
     color: "var(--color-text)", outline: "none",
   };
 
-  const tierColor = TIER_LABEL[tenant.subscription?.license_tier]?.color || "#64748b";
-  const usage = tenant.usage || {};
+  const tierColor = TIER_LABEL[hospital.subscription?.license_tier]?.color || "#64748b";
+  const usage = hospital.usage || {};
 
   return (
     <div className="card card--interactive" style={{ overflow: "hidden", padding: 0 }}>
@@ -355,27 +355,27 @@ function TenantCard({ tenant, onTierChange }) {
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span
               style={{ fontWeight: 700, fontSize: 16, fontFamily: "var(--font-display)", cursor: "pointer" }}
-              onClick={e => { e.stopPropagation(); navigate(ROUTES.PLATFORM.HOSPITAL(tenant.id)); }}
+              onClick={e => { e.stopPropagation(); navigate(ROUTES.PLATFORM.HOSPITAL(hospital.id)); }}
               title="Open full profile"
             >
-              {tenant.name}
+              {hospital.name}
             </span>
             <ExternalLink size={13} style={{ color: "var(--color-text-muted)", cursor: "pointer" }}
-              onClick={e => { e.stopPropagation(); navigate(ROUTES.PLATFORM.HOSPITAL(tenant.id)); }} />
-            <StatusBadge isActive={tenant.is_active} />
-            <TierBadge tier={tenant.subscription?.license_tier} />
-            <SubStatusBadge status={tenant.subscription?.status} />
+              onClick={e => { e.stopPropagation(); navigate(ROUTES.PLATFORM.HOSPITAL(hospital.id)); }} />
+            <StatusBadge isActive={hospital.is_active} />
+            <TierBadge tier={hospital.subscription?.license_tier} />
+            <SubStatusBadge status={hospital.subscription?.status} />
           </div>
           <div style={{ color: "var(--color-text-muted)", fontSize: 13, marginTop: 4 }}>
-            {tenant.city}{tenant.state ? `, ${tenant.state}` : ""}
+            {hospital.city}{hospital.state ? `, ${hospital.state}` : ""}
           </div>
         </div>
         <div style={{ display: "flex", gap: 20, flexShrink: 0 }}>
           <div style={{ width: 90 }}>
-            <UsageBar label="Doctors" used={usage.doctors} max={tenant.subscription?.max_doctors} />
+            <UsageBar label="Doctors" used={usage.doctors} max={hospital.subscription?.max_doctors} />
           </div>
           <div style={{ width: 90 }}>
-            <UsageBar label="Branches" used={usage.branches} max={tenant.subscription?.max_branches} />
+            <UsageBar label="Branches" used={usage.branches} max={hospital.subscription?.max_branches} />
           </div>
         </div>
         <ChevronDown size={18} style={{ color: "var(--color-text-muted)", transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
@@ -385,14 +385,14 @@ function TenantCard({ tenant, onTierChange }) {
         <div style={{ borderTop: "1px solid var(--color-border)", padding: "18px 20px", background: "var(--color-surface-secondary, #f9f7f2)" }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginBottom: 18 }}>
             {[
-              { label: "DB Name", value: tenant.db_name },
-              { label: "GSTIN", value: tenant.gstin || "—" },
-              { label: "Lab", value: tenant.subscription?.feat_lab ? "✓" : "✗" },
-              { label: "Pharmacy", value: tenant.subscription?.feat_pharmacy ? "✓" : "✗" },
-              { label: "AI Voice", value: tenant.subscription?.feat_ai_voice ? "✓" : "✗" },
-              { label: "Patient App", value: tenant.subscription?.feat_patient_app ? "✓" : "✗" },
-              { label: "Analytics", value: tenant.subscription?.feat_analytics ? "✓" : "✗" },
-              { label: "Video", value: tenant.subscription?.feat_video ? "✓" : "✗" },
+              { label: "DB Name", value: hospital.db_name },
+              { label: "GSTIN", value: hospital.gstin || "—" },
+              { label: "Lab", value: hospital.subscription?.feat_lab ? "✓" : "✗" },
+              { label: "Pharmacy", value: hospital.subscription?.feat_pharmacy ? "✓" : "✗" },
+              { label: "AI Voice", value: hospital.subscription?.feat_ai_voice ? "✓" : "✗" },
+              { label: "Patient App", value: hospital.subscription?.feat_patient_app ? "✓" : "✗" },
+              { label: "Analytics", value: hospital.subscription?.feat_analytics ? "✓" : "✗" },
+              { label: "Video", value: hospital.subscription?.feat_video ? "✓" : "✗" },
             ].map(({ label, value }) => (
               <div key={label}>
                 <div className="stat-label">{label}</div>
@@ -408,7 +408,7 @@ function TenantCard({ tenant, onTierChange }) {
                 <input value={subdomainPick}
                   onChange={e => setSubdomainPick(e.target.value.toLowerCase())}
                   style={{ ...selectStyle, width: 150, fontFamily: "monospace" }} />
-                <button onClick={applySubdomain} disabled={savingSubdomain || !subdomainPick.trim() || subdomainPick.trim().toLowerCase() === tenant.subdomain}
+                <button onClick={applySubdomain} disabled={savingSubdomain || !subdomainPick.trim() || subdomainPick.trim().toLowerCase() === hospital.subdomain}
                   className="btn-outline" style={{ fontSize: 12, padding: "6px 14px" }}>
                   {savingSubdomain ? "…" : "Apply"}
                 </button>
@@ -424,7 +424,7 @@ function TenantCard({ tenant, onTierChange }) {
                 <select value={tierPick} onChange={e => setTierPick(e.target.value)} style={selectStyle}>
                   {TIERS.map(t => <option key={t} value={t}>{TIER_LABEL[t].label}</option>)}
                 </select>
-                <button onClick={applyTier} disabled={savingTier || tierPick === tenant.subscription?.license_tier}
+                <button onClick={applyTier} disabled={savingTier || tierPick === hospital.subscription?.license_tier}
                   className="btn-outline" style={{ fontSize: 12, padding: "6px 14px" }}>
                   {savingTier ? "…" : "Apply"}
                 </button>
@@ -440,7 +440,7 @@ function TenantCard({ tenant, onTierChange }) {
                 <select value={statusPick} onChange={e => setStatusPick(e.target.value)} style={selectStyle}>
                   {Object.keys(SUB_STATUS_META).map(s => <option key={s} value={s}>{SUB_STATUS_META[s].label}</option>)}
                 </select>
-                <button onClick={applyStatus} disabled={savingStatus || statusPick === tenant.subscription?.status}
+                <button onClick={applyStatus} disabled={savingStatus || statusPick === hospital.subscription?.status}
                   className="btn-outline" style={{ fontSize: 12, padding: "6px 14px" }}>
                   {savingStatus ? "…" : "Apply"}
                 </button>
@@ -456,11 +456,11 @@ function TenantCard({ tenant, onTierChange }) {
                 style={{
                   padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600,
                   cursor: "pointer", border: "1.5px solid",
-                  borderColor: tenant.is_active ? "var(--color-error)" : "var(--color-success)",
-                  color: tenant.is_active ? "var(--color-error)" : "var(--color-success)",
+                  borderColor: hospital.is_active ? "var(--color-error)" : "var(--color-success)",
+                  color: hospital.is_active ? "var(--color-error)" : "var(--color-success)",
                   background: "none",
                 }}>
-                {toggling ? "…" : tenant.is_active ? "Suspend" : "Reactivate"}
+                {toggling ? "…" : hospital.is_active ? "Suspend" : "Reactivate"}
               </button>
             </div>
           </div>
@@ -481,7 +481,7 @@ function TenantCard({ tenant, onTierChange }) {
 
 export default function DashboardPage() {
   const api = apiClient;
-  const [tenants,    setTenants]    = useState([]);
+  const [hospitals,    setHospitals]    = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [showForm,   setShowForm]   = useState(false);
   const [search,     setSearch]     = useState("");
@@ -499,19 +499,19 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const fetchTenants = useCallback(async (targetPage, searchTerm, tier, status) => {
+  const fetchHospitals = useCallback(async (targetPage, searchTerm, tier, status) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ page: String(targetPage), page_size: "20" });
       if (searchTerm) params.set("search", searchTerm);
       if (tier) params.set("tier", tier);
       if (status) params.set("status", status);
-      const { data: res } = await api.get(`${API_ENDPOINTS.PLATFORM.TENANTS}?${params.toString()}`);
-      setTenants(res.data?.results || []);
+      const { data: res } = await api.get(`${API_ENDPOINTS.PLATFORM.HOSPITALS}?${params.toString()}`);
+      setHospitals(res.data?.results || []);
       setPagination(res.data?.pagination || null);
       setStats(res.data?.stats || { total: 0, active: 0, tiers: {}, statuses: {} });
     } catch {
-      setTenants([]);
+      setHospitals([]);
       setPagination(null);
     } finally {
       setLoading(false);
@@ -521,19 +521,19 @@ export default function DashboardPage() {
   useEffect(() => {
     const t = setTimeout(() => {
       setPage(1);
-      fetchTenants(1, search, tierFilter, statusFilter);
+      fetchHospitals(1, search, tierFilter, statusFilter);
     }, 300);
     return () => clearTimeout(t);
-  }, [search, tierFilter, statusFilter, fetchTenants]);
+  }, [search, tierFilter, statusFilter, fetchHospitals]);
 
   useEffect(() => {
-    if (page !== 1) fetchTenants(page, search, tierFilter, statusFilter);
+    if (page !== 1) fetchHospitals(page, search, tierFilter, statusFilter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 
   const refetchCurrentPage = useCallback(
-    () => fetchTenants(page, search, tierFilter, statusFilter),
-    [fetchTenants, page, search, tierFilter, statusFilter]
+    () => fetchHospitals(page, search, tierFilter, statusFilter),
+    [fetchHospitals, page, search, tierFilter, statusFilter]
   );
 
   const attentionCount = ATTENTION_STATUSES.reduce((sum, s) => sum + (stats.statuses?.[s] || 0), 0);
@@ -603,9 +603,9 @@ export default function DashboardPage() {
                   <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginTop: 2 }}>{label}</div>
                 </div>
               ))}
-              {platformStats.unreachable_tenants > 0 && (
+              {platformStats.unreachable_hospitals > 0 && (
                 <div style={{ gridColumn: "1 / -1", fontSize: 11.5, color: "var(--color-text-muted)" }}>
-                  {platformStats.unreachable_tenants} hospital database{platformStats.unreachable_tenants === 1 ? "" : "s"} unreachable — excluded from totals above.
+                  {platformStats.unreachable_hospitals} hospital database{platformStats.unreachable_hospitals === 1 ? "" : "s"} unreachable — excluded from totals above.
                 </div>
               )}
             </div>
@@ -665,15 +665,15 @@ export default function DashboardPage() {
           <div style={{ textAlign: "center", padding: 60, color: "var(--color-text-muted)" }}>
             Loading hospitals…
           </div>
-        ) : tenants.length === 0 ? (
+        ) : hospitals.length === 0 ? (
           <div className="card" style={{ textAlign: "center", padding: 60, color: "var(--color-text-muted)" }}>
             {search || tierFilter || statusFilter ? "No hospitals match your filters." : "No hospitals yet. Add one to get started."}
           </div>
         ) : (
           <>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {tenants.map(t => (
-                <TenantCard key={t.id} tenant={t} onTierChange={refetchCurrentPage} />
+              {hospitals.map(t => (
+                <HospitalCard key={t.id} hospital={t} onTierChange={refetchCurrentPage} />
               ))}
             </div>
 
@@ -712,7 +712,7 @@ export default function DashboardPage() {
         {showForm && (
           <ProvisionModal
             onClose={() => setShowForm(false)}
-            onProvisioned={() => { setPage(1); fetchTenants(1, search, tierFilter, statusFilter); }}
+            onProvisioned={() => { setPage(1); fetchHospitals(1, search, tierFilter, statusFilter); }}
           />
         )}
       </PageShell>

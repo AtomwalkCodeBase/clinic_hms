@@ -17,7 +17,7 @@ import API_ENDPOINTS from "../../config/api.config";
 import ROUTES        from "../../config/routes.config";
 import {
   TIERS, TIER_LABEL, SUB_STATUS_META, ATTENTION_STATUSES,
-  TierBadge, TenantDetailDrawer,
+  TierBadge, HospitalDetailDrawer,
 } from "./shared";
 
 const STATUS_ORDER = ["frozen", "suspended", "read_only", "grace", "trial", "active"];
@@ -84,24 +84,24 @@ function PlanComparisonTable({ plans }) {
   );
 }
 
-function TenantRow({ tenant, onManage }) {
-  const usage = tenant.usage || {};
+function HospitalRow({ hospital, onManage }) {
+  const usage = hospital.usage || {};
   return (
     <div className="card card--interactive" style={{
       display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", cursor: "pointer",
-    }} onClick={() => onManage(tenant)}>
+    }} onClick={() => onManage(hospital)}>
       <div className="icon-chip icon-chip--green" style={{ width: 34, height: 34, flexShrink: 0 }}>
         <Building2 size={16} />
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 14.5 }}>{tenant.name}</div>
+        <div style={{ fontWeight: 700, fontSize: 14.5 }}>{hospital.name}</div>
         <div style={{ fontSize: 12.5, color: "var(--color-text-muted)" }}>
-          {tenant.city}{tenant.state ? `, ${tenant.state}` : ""}
+          {hospital.city}{hospital.state ? `, ${hospital.state}` : ""}
         </div>
       </div>
-      <TierBadge tier={tenant.subscription?.license_tier} />
+      <TierBadge tier={hospital.subscription?.license_tier} />
       <div style={{ fontSize: 12, color: "var(--color-text-muted)", width: 80, textAlign: "right" }}>
-        {usage.doctors ?? "—"}{tenant.subscription?.max_doctors ? ` / ${tenant.subscription.max_doctors}` : ""} docs
+        {usage.doctors ?? "—"}{hospital.subscription?.max_doctors ? ` / ${hospital.subscription.max_doctors}` : ""} docs
       </div>
     </div>
   );
@@ -109,7 +109,7 @@ function TenantRow({ tenant, onManage }) {
 
 export default function SubscriptionsPage() {
   const api = apiClient;
-  const [tenants, setTenants] = useState([]);
+  const [hospitals, setHospitals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [plans, setPlans] = useState(null);
@@ -124,10 +124,10 @@ export default function SubscriptionsPage() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: res } = await api.get(`${API_ENDPOINTS.PLATFORM.TENANTS}?page=1&page_size=100`);
-      setTenants(res.data?.results || []);
+      const { data: res } = await api.get(`${API_ENDPOINTS.PLATFORM.HOSPITALS}?page=1&page_size=100`);
+      setHospitals(res.data?.results || []);
     } catch {
-      setTenants([]);
+      setHospitals([]);
     } finally {
       setLoading(false);
     }
@@ -136,11 +136,11 @@ export default function SubscriptionsPage() {
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   const grouped = STATUS_ORDER.reduce((acc, s) => {
-    acc[s] = tenants.filter(t => t.subscription?.status === s);
+    acc[s] = hospitals.filter(t => t.subscription?.status === s);
     return acc;
   }, {});
   const tierCounts = TIERS.reduce((acc, t) => {
-    acc[t] = tenants.filter(x => x.subscription?.license_tier === t).length;
+    acc[t] = hospitals.filter(x => x.subscription?.license_tier === t).length;
     return acc;
   }, {});
   const attentionTotal = ATTENTION_STATUSES.reduce((sum, s) => sum + grouped[s].length, 0);
@@ -194,14 +194,14 @@ export default function SubscriptionsPage() {
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {list.map(t => (
-                      <TenantRow key={t.id} tenant={t} onManage={setSelected} />
+                      <HospitalRow key={t.id} hospital={t} onManage={setSelected} />
                     ))}
                   </div>
                 </div>
               );
             })}
 
-            {tenants.length === 0 && (
+            {hospitals.length === 0 && (
               <div className="card" style={{ textAlign: "center", padding: 60, color: "var(--color-text-muted)" }}>
                 No hospitals yet.
               </div>
@@ -210,8 +210,8 @@ export default function SubscriptionsPage() {
         )}
 
         {selected && (
-          <TenantDetailDrawer
-            tenant={selected}
+          <HospitalDetailDrawer
+            hospital={selected}
             onClose={() => setSelected(null)}
             onChanged={fetchAll}
           />

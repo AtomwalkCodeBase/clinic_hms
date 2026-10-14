@@ -109,7 +109,7 @@ class DoctorSelfProfileSerializer(serializers.ModelSerializer):
     when the hospital's fee_ownership == "hospital" both fields are locked
     for doctors; when fee_ownership == "doctor" they can edit both freely.
     The view (MyDoctorProfileView) passes fee_editable=True/False as
-    context so this serializer doesn't need to query the Tenant itself.
+    context so this serializer doesn't need to query the Hospital itself.
     followup_fee may be left blank — the invoice generator falls back to
     consultation_fee for follow-up visits when it's unset.
     """
@@ -263,8 +263,8 @@ class StaffSerializer(serializers.ModelSerializer):
             StaffBranchMapping.objects
             # .using() isn't available via this implicit manager call inside
             # a serializer method — the queryset passed to the serializer's
-            # instance list already resolved `obj` from the right tenant DB,
-            # and StaffBranchMapping shares that same tenant DB (both live
+            # instance list already resolved `obj` from the right hospital DB,
+            # and StaffBranchMapping shares that same hospital DB (both live
             # in apps.org, routed together), so plain .filter() here is safe.
             .filter(staff_id=obj.id)
             .select_related("branch")
@@ -312,7 +312,7 @@ class StaffSerializer(serializers.ModelSerializer):
 
 class StaffInviteSerializer(serializers.Serializer):
     """Input for inviting a new staff member. Mobile is the login identifier
-    (see registry.StaffMobileIndex) — email is optional/informational only."""
+    (see atomwalk.StaffMobileIndex) — email is optional/informational only."""
     phone         = serializers.CharField(max_length=20)
     email         = serializers.EmailField(required=False, allow_blank=True)
 
@@ -329,8 +329,8 @@ class StaffInviteSerializer(serializers.Serializer):
     role          = serializers.ChoiceField(choices=[
         "hospital_admin", "doctor", "nurse", "front_desk", "lab_tech", "pharmacist", "custom"
     ])
-    # Required (and validated further in the view, which needs request.tenant_db
-    # to confirm it's a real, non-system Role belonging to this tenant) only
+    # Required (and validated further in the view, which needs request.hospital_db
+    # to confirm it's a real, non-system Role belonging to this hospital) only
     # when role="custom" — which hospital-defined Role this invite is for.
     custom_role_id = serializers.IntegerField(required=False, allow_null=True)
     branch_id     = serializers.IntegerField(required=False, allow_null=True)
@@ -358,7 +358,7 @@ class StaffInviteSerializer(serializers.Serializer):
 
     # ── Doctor-only fields — ignored for non-doctor roles ────────────────────
     # consultation_fee / followup_fee: accepted here when the hospital's
-    # fee_ownership is "hospital" — the view checks the tenant setting and
+    # fee_ownership is "hospital" — the view checks the hospital setting and
     # writes them to DoctorProfile; ignored silently for non-doctor roles.
     # followup_fee is optional even then — left null, the invoice generator
     # falls back to consultation_fee for follow-up visits.

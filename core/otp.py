@@ -7,7 +7,7 @@ patient self-registration, day-to-day patient OTP login, patient
 mobile-number re-verification).
 
 Flow, the same for every purpose:
-  1. request_otp()  — creates an OTPCode row (registry DB), sends the code
+  1. request_otp()  — creates an OTPCode row (atomwalk DB), sends the code
                        via core.email/core.sms, enforces a resend cooldown.
   2. verify_otp()   — checks the submitted code against the OTPCode row,
                        caps failed attempts, marks the row used, and on
@@ -75,7 +75,7 @@ def detect_channel(identifier: str) -> str:
 
 def resend_cooldown_remaining(purpose: str, identifier: str) -> int:
     """Seconds until another OTP may be requested for this purpose+identifier. 0 = allowed now."""
-    from apps.registry.models import OTPCode
+    from apps.atomwalk.models import OTPCode
     last = (
         OTPCode.objects.using("default")
         .filter(purpose=purpose, identifier=identifier)
@@ -95,7 +95,7 @@ def create_otp(purpose, identifier, target_type="", target_id=None, target_db=""
     this with core.email.send_otp_email / core.sms.send_otp_sms.
     Returns (otp_row, raw_code, channel).
     """
-    from apps.registry.models import OTPCode
+    from apps.atomwalk.models import OTPCode
 
     remaining = resend_cooldown_remaining(purpose, identifier)
     if remaining > 0:
@@ -122,7 +122,7 @@ def verify_otp(purpose, identifier, submitted_code):
     this purpose+identifier. Raises OTPError with a user-facing message on
     any failure. On success, marks the row used and returns it.
     """
-    from apps.registry.models import OTPCode
+    from apps.atomwalk.models import OTPCode
 
     otp = (
         OTPCode.objects.using("default")

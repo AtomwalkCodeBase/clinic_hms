@@ -20,7 +20,7 @@
  * There is NO web approve path — approval only ever happens in the app.
  * Deliberately outside AppShell / ProtectedRoute. Every read carries the
  * X-Share-Device token from the claim, so a leaked link/QR reads nothing.
- * Backend: apps/patients/records_share_views.py.
+ * Backend: apps/hospital_patients/records_share_views.py.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";

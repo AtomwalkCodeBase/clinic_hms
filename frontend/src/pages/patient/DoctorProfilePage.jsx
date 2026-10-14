@@ -82,11 +82,11 @@ function StepProgress({ current }) {
 }
 
 export default function PatientDoctorProfilePage() {
-  const { tenantId, doctorId } = useParams();
+  const { hospitalId, doctorId } = useParams();
   const navigate = useNavigate();
   const { toastSuccess, toastApiError } = useToast();
 
-  const { data: doctor, isLoading } = useApi(API_ENDPOINTS.PORTAL.DOCTOR_DETAIL(tenantId, doctorId));
+  const { data: doctor, isLoading } = useApi(API_ENDPOINTS.PORTAL.DOCTOR_DETAIL(hospitalId, doctorId));
 
   const [date,   setDate]   = useState(TODAY);
   const [reason, setReason] = useState("");
@@ -149,11 +149,11 @@ export default function PatientDoctorProfilePage() {
     setSlots([]);
     if (!date) return;
     setSlotsLoading(true);
-    apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(tenantId, doctorId), { params: { date } })
+    apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(hospitalId, doctorId), { params: { date } })
       .then(({ data: d }) => setSlots(d?.results || []))
       .catch(() => setSlots([]))
       .finally(() => setSlotsLoading(false));
-  }, [tenantId, doctorId, date]);
+  }, [hospitalId, doctorId, date]);
 
   // Live slot availability — the exact bug this fixes: if another patient
   // books the slot you're looking at, you'd otherwise only find out (with a
@@ -165,7 +165,7 @@ export default function PatientDoctorProfilePage() {
     if (!date || confirmation) return undefined;
     const id = setInterval(() => {
       if (document.hidden) return;
-      apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(tenantId, doctorId), { params: { date } })
+      apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(hospitalId, doctorId), { params: { date } })
         .then(({ data: d }) => {
           const fresh = d?.results || [];
           setSlots(fresh);
@@ -178,7 +178,7 @@ export default function PatientDoctorProfilePage() {
         .catch(() => {});
     }, 15000);
     return () => clearInterval(id);
-  }, [tenantId, doctorId, date, confirmation]);
+  }, [hospitalId, doctorId, date, confirmation]);
 
   async function book(dataSharingConsent) {
     if (!selectedSlot) return;
@@ -186,7 +186,7 @@ export default function PatientDoctorProfilePage() {
     setConfirmation(null);
     try {
       const { data } = await apiClient.post(API_ENDPOINTS.PORTAL.BOOK, {
-        tenant_id: tenantId,
+        hospital_id: hospitalId,
         doctor_id: doctorId,
         scheduled_date: date,
         scheduled_time: selectedSlot,
@@ -277,7 +277,7 @@ export default function PatientDoctorProfilePage() {
     <AppShell>
       <PageShell title={doctor?.name || "Doctor Profile"}>
         <Link
-          to={ROUTES.PATIENT.HOSPITAL_DOCTORS(tenantId)}
+          to={ROUTES.PATIENT.HOSPITAL_DOCTORS(hospitalId)}
           style={{ fontSize: 12, color: "var(--color-text-muted)", display: "inline-block", marginBottom: 14 }}
         >
           ← All doctors{doctor?.hospital ? ` at ${doctor.hospital.name}` : ""}

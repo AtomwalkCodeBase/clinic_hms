@@ -1,9 +1,9 @@
 """
 core/tests_auth_flow.py
 -----------------------
-JWTTenantAuthentication end to end against real rows: what makes a token unusable (expiry, wrong type,
+JWTHospitalAuthentication end to end against real rows: what makes a token unusable (expiry, wrong type,
 revocation, hospital suspended/read-only, staff deactivated, patient session stale) and what logout does.
-Needs the tenant_test alias:  python manage.py test core.tests_auth_flow --settings=atomwalk.settings.test
+Needs the hospital_test alias:  python manage.py test core.tests_auth_flow --settings=atomwalk.settings.test
 """
 
 import time
@@ -15,35 +15,35 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.auth_app.views import LogoutView, TokenRefreshView, _make_tokens
 from apps.org.models import Branch, StaffUser
-from apps.registry.models import BlacklistedToken, PatientAccount
-from apps.tenants.models import Subscription, Tenant
-from core.authentication import JWTTenantAuthentication
-from core.testing import TenantDBTestCase, requires_tenant_db
+from apps.atomwalk.models import BlacklistedToken, PatientAccount
+from apps.hospitals.models import Subscription, Hospital
+from core.authentication import JWTHospitalAuthentication
+from core.testing import HospitalDBTestCase, requires_hospital_db
 
 FAR_FUTURE = "2099-01-01T00:00:00Z"
 
 
-@requires_tenant_db
-class AuthenticationTests(TenantDBTestCase):
+@requires_hospital_db
+class AuthenticationTests(HospitalDBTestCase):
     def setUp(self):
         super().setUp()
-        db = self.tenant_alias
-        self.tenant = Tenant.objects.using("default").create(name="Auth H", subdomain="auth-h", db_name=db)
+        db = self.hospital_alias
+        self.hospital = Hospital.objects.using("default").create(name="Auth H", subdomain="auth-h", db_name=db)
         self.sub = Subscription.objects.using("default").create(
-            tenant=self.tenant, license_tier="starter", status="active",
+            hospital=self.hospital, license_tier="starter", status="active",
         )
         branch = Branch.objects.using(db).create(name="Main")
         self.staff = StaffUser.objects.using(db).create(
             email="a@x.test", role="doctor", phone="9000000030", branch=branch,
         )
         self.staff_payload = {
-            "user_id": self.staff.id, "role": "doctor", "tenant_id": self.tenant.id,
+            "user_id": self.staff.id, "role": "doctor", "hospital_id": self.hospital.id,
             "db_name": db, "email": "a@x.test",
         }
 
     def authenticate(self, token, method="get"):
         request = getattr(APIRequestFactory(), method)("/x/", HTTP_AUTHORIZATION=f"Bearer {token}")
-        return JWTTenantAuthentication().authenticate(request)
+        return JWTHospitalAuthentication().authenticate(request)
 
     def access(self, **payload):
         return _make_tokens({**self.staff_payload, **payload})["access"]
@@ -51,11 +51,11 @@ class AuthenticationTests(TenantDBTestCase):
     # ── accepted ─────────────────────────────────────────────────────────────
     def test_no_header_is_anonymous(self):
         request = APIRequestFactory().get("/x/")
-        self.assertIsNone(JWTTenantAuthentication().authenticate(request))
+        self.assertIsNone(JWTHospitalAuthentication().authenticate(request))
 
     def test_a_valid_staff_token_yields_a_user_with_the_subscription(self):
         user, _ = self.authenticate(self.access())
-        self.assertEqual((user.id, user.role, user.tenant_id), (self.staff.id, "doctor", self.tenant.id))
+        self.assertEqual((user.id, user.role, user.hospital_id), (self.staff.id, "doctor", self.hospital.id))
         self.assertEqual(user.subscription.pk, self.sub.pk)
 
     # ── rejected token ───────────────────────────────────────────────────────
@@ -117,7 +117,7 @@ class AuthenticationTests(TenantDBTestCase):
     def test_a_deactivated_staff_member_is_cut_off_immediately(self):
         token = self.access()
         self.authenticate(token)                                   # fine today
-        StaffUser.objects.using(self.tenant_alias).filter(pk=self.staff.pk).update(is_active=False)
+        StaffUser.objects.using(self.hospital_alias).filter(pk=self.staff.pk).update(is_active=False)
         with self.assertRaisesMessage(PermissionDenied, "deactivated"):
             self.authenticate(token)                               # the same, still-unexpired token
 
@@ -134,7 +134,7 @@ class AuthenticationTests(TenantDBTestCase):
         self.assertEqual((user.role, user.awpid), ("patient", "AW-AUTH-1"))
 
     def test_a_patient_token_whose_account_id_now_belongs_to_someone_else_is_rejected(self):
-        """Registry wiped and re-seeded: an old token's user_id must not silently become another patient."""
+        """Atomwalk wiped and re-seeded: an old token's user_id must not silently become another patient."""
         acct = self.make_patient(awpid="AW-NEW")
         token = _make_tokens({"user_id": acct.id, "role": "patient", "awpid": "AW-OLD"})["access"]
         with self.assertRaisesMessage(AuthenticationFailed, "no longer valid"):
@@ -148,8 +148,8 @@ class AuthenticationTests(TenantDBTestCase):
             self.authenticate(token)
 
 
-@requires_tenant_db
-class RefreshTests(TenantDBTestCase):
+@requires_hospital_db
+class RefreshTests(HospitalDBTestCase):
     """Documents today's refresh behaviour (a design decision is pending, see REVIEW_NOTES.md)."""
 
     def refresh(self, refresh_token):

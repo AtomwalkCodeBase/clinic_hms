@@ -78,7 +78,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
     payments = PaymentSerializer(many=True, read_only=True)
     # `patient` on its own is just a FK id — front desk's billing list needs
     # a name to search/scan by, same as every other patient-facing list in
-    # this app. `patient` is a real same-DB ForeignKey (not cross-tenant),
+    # this app. `patient` is a real same-DB ForeignKey (not cross-hospital),
     # so `.full_name`/`.uhid` are free reads off the already-fetched row.
     patient_name = serializers.SerializerMethodField()
     patient_uhid = serializers.SerializerMethodField()

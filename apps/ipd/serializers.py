@@ -2,28 +2,28 @@
 apps/ipd/serializers.py
 ------------------------
 admission_type / admission_source are validated against
-billing.OptionList (is_active rows for the tenant DB the request is
-already scoped to — request.tenant_db) rather than a hardcoded choices=
+billing.OptionList (is_active rows for the hospital DB the request is
+already scoped to — request.hospital_db) rather than a hardcoded choices=
 list, matching how Drug.form / Invoice.status / Payment.payment_mode are
 already validated (see apps/billing/views.py's dropdown base classes).
 
-Every serializer here expects `context={"tenant_db": request.tenant_db}`
-from the view — OptionList rows are tenant-scoped and there is no other
-reliable way for a serializer to know which tenant DB to check against.
+Every serializer here expects `context={"hospital_db": request.hospital_db}`
+from the view — OptionList rows are hospital-scoped and there is no other
+reliable way for a serializer to know which hospital DB to check against.
 """
 
 from rest_framework import serializers
 
 from apps.billing.models import OptionList
 from apps.org.models import Department, Bed
-from apps.patients.models import Patient
+from apps.hospital_patients.models import HospitalPatient
 from .models import AdmissionReferral, Admission, AdmissionDeposit, PatientMovement
 
 
-def _option_exists(tenant_db, list_type, value):
+def _option_exists(hospital_db, list_type, value):
     if not value:
         return False
-    return OptionList.objects.using(tenant_db).filter(
+    return OptionList.objects.using(hospital_db).filter(
         list_type=list_type, value=value, is_active=True,
     ).exists()
 
@@ -56,14 +56,14 @@ class RecommendAdmissionSerializer(serializers.Serializer):
     guardian_consent_by     = serializers.CharField(max_length=200, required=False, allow_blank=True)
 
     def validate(self, attrs):
-        tenant_db = self.context["tenant_db"]
-        if not _option_exists(tenant_db, OptionList.LIST_ADMISSION_TYPE, attrs["admission_type"]):
+        hospital_db = self.context["hospital_db"]
+        if not _option_exists(hospital_db, OptionList.LIST_ADMISSION_TYPE, attrs["admission_type"]):
             raise serializers.ValidationError({"admission_type": "Not a configured admission type for this hospital."})
-        if not _option_exists(tenant_db, OptionList.LIST_ADMISSION_SOURCE, attrs["admission_source"]):
+        if not _option_exists(hospital_db, OptionList.LIST_ADMISSION_SOURCE, attrs["admission_source"]):
             raise serializers.ValidationError({"admission_source": "Not a configured admission source for this hospital."})
-        if not Patient.objects.using(tenant_db).filter(pk=attrs["patient_id"]).exists():
+        if not HospitalPatient.objects.using(hospital_db).filter(pk=attrs["patient_id"]).exists():
             raise serializers.ValidationError({"patient_id": "Patient not found."})
-        if not Department.objects.using(tenant_db).filter(pk=attrs["department_id"]).exists():
+        if not Department.objects.using(hospital_db).filter(pk=attrs["department_id"]).exists():
             raise serializers.ValidationError({"department_id": "Department not found."})
         return attrs
 
@@ -141,10 +141,10 @@ class RegisterExternalReferralSerializer(serializers.Serializer):
     guardian_consent_by     = serializers.CharField(max_length=200, required=False, allow_blank=True)
 
     def validate(self, attrs):
-        tenant_db = self.context["tenant_db"]
-        if not _option_exists(tenant_db, OptionList.LIST_ADMISSION_TYPE, attrs["admission_type"]):
+        hospital_db = self.context["hospital_db"]
+        if not _option_exists(hospital_db, OptionList.LIST_ADMISSION_TYPE, attrs["admission_type"]):
             raise serializers.ValidationError({"admission_type": "Not a configured admission type for this hospital."})
-        if not _option_exists(tenant_db, OptionList.LIST_ADMISSION_SOURCE, attrs["admission_source"]):
+        if not _option_exists(hospital_db, OptionList.LIST_ADMISSION_SOURCE, attrs["admission_source"]):
             raise serializers.ValidationError({"admission_source": "Not a configured admission source for this hospital."})
         if attrs["admission_source"] not in AdmissionReferral.SOURCES_REQUIRING_ACCEPTANCE:
             raise serializers.ValidationError({
@@ -156,9 +156,9 @@ class RegisterExternalReferralSerializer(serializers.Serializer):
             })
         if not attrs["external_referring_doctor_name"].strip():
             raise serializers.ValidationError({"external_referring_doctor_name": "Required — this is who the letter is being logged from."})
-        if not Patient.objects.using(tenant_db).filter(pk=attrs["patient_id"]).exists():
+        if not HospitalPatient.objects.using(hospital_db).filter(pk=attrs["patient_id"]).exists():
             raise serializers.ValidationError({"patient_id": "Patient not found."})
-        if not Department.objects.using(tenant_db).filter(pk=attrs["department_id"]).exists():
+        if not Department.objects.using(hospital_db).filter(pk=attrs["department_id"]).exists():
             raise serializers.ValidationError({"department_id": "Department not found."})
         return attrs
 
@@ -263,10 +263,10 @@ class AssignBedSerializer(serializers.Serializer):
     bed_id = serializers.IntegerField()
 
     def validate_bed_id(self, value):
-        tenant_db = self.context["tenant_db"]
+        hospital_db = self.context["hospital_db"]
         admission_id = self.context.get("admission_id")
         try:
-            bed = Bed.objects.using(tenant_db).get(pk=value, is_active=True)
+            bed = Bed.objects.using(hospital_db).get(pk=value, is_active=True)
         except Bed.DoesNotExist:
             raise serializers.ValidationError("Bed not found.")
         if bed.status == Bed.STATUS_RESERVED:
@@ -286,9 +286,9 @@ class ReserveBedSerializer(serializers.Serializer):
     bed_id = serializers.IntegerField()
 
     def validate_bed_id(self, value):
-        tenant_db = self.context["tenant_db"]
+        hospital_db = self.context["hospital_db"]
         try:
-            bed = Bed.objects.using(tenant_db).get(pk=value, is_active=True)
+            bed = Bed.objects.using(hospital_db).get(pk=value, is_active=True)
         except Bed.DoesNotExist:
             raise serializers.ValidationError("Bed not found.")
         if bed.status != Bed.STATUS_AVAILABLE:
@@ -304,9 +304,9 @@ class TransferBedSerializer(serializers.Serializer):
     to_bed_id = serializers.IntegerField()
 
     def validate_to_bed_id(self, value):
-        tenant_db = self.context["tenant_db"]
+        hospital_db = self.context["hospital_db"]
         try:
-            bed = Bed.objects.using(tenant_db).get(pk=value, is_active=True)
+            bed = Bed.objects.using(hospital_db).get(pk=value, is_active=True)
         except Bed.DoesNotExist:
             raise serializers.ValidationError("Bed not found.")
         if bed.status != Bed.STATUS_AVAILABLE:
@@ -342,8 +342,8 @@ class AdmissionDepositSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "admission", "collected_by", "collected_at", "reconciled_invoice"]
 
     def validate_payment_mode(self, value):
-        tenant_db = self.context["tenant_db"]
-        if not _option_exists(tenant_db, OptionList.LIST_PAYMENT_MODE, value):
+        hospital_db = self.context["hospital_db"]
+        if not _option_exists(hospital_db, OptionList.LIST_PAYMENT_MODE, value):
             raise serializers.ValidationError("Not a configured payment mode for this hospital.")
         return value
 
