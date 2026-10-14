@@ -1,15 +1,23 @@
 from django.urls import path
-from .views import (
-    HospitalListCreateView, HospitalDetailView, HospitalAuditLogView,
-    PlatformStatsView, HospitalOverviewView, HospitalStaffListView,
-    HospitalStaffDetailView, HospitalStaffResetPasswordView,
-    PlatformUserListView, PlanListView,
+from apps.platform_admin.views import (
+    HospitalListCreateView,
+    HospitalDetailView,
+    HospitalAuditLogView,
+    PlatformStatsView,
+    HospitalOverviewView,
+    HospitalStaffListView,
+    HospitalStaffDetailView,
+    HospitalStaffResetPasswordView,
+    PlatformUserListView,
+    PlanListView,
 )
-from apps.hospital_patients.pediatrics.schedule_views import (
-    VaccinationTemplateListCreateView, VaccinationTemplateDetailView,
-    MilestoneTemplateListCreateView, MilestoneTemplateDetailView,
+from apps.atomwalk.documents.views import (
+    VaccinationTemplateListCreateView,
+    VaccinationTemplateDetailView,
+    MilestoneTemplateListCreateView,
+    MilestoneTemplateDetailView,
 )
-from .classification_rule_views import DocumentReportView, DocumentCorrectView, ReclassifyView
+from apps.platform_admin.classification_rule_views import DocumentReportView, DocumentCorrectView, ReclassifyView
 
 urlpatterns = [
     path("records/report/",         DocumentReportView.as_view(), name="platform-records-report"),
@@ -30,7 +38,7 @@ urlpatterns = [
 
     # System-level vaccination schedule templates (owner_hospital_id=None,
     # is_template=True) — cloned by hospital admins via
-    # apps.hospital_patients.pediatrics.schedule_views (VaccinationScheduleListCreateView).
+    # apps.atomwalk.documents.views (VaccinationScheduleListCreateView).
     path("vaccination-templates/", VaccinationTemplateListCreateView.as_view(), name="platform-vaccination-template-list-create"),
     path("vaccination-templates/<int:pk>/", VaccinationTemplateDetailView.as_view(), name="platform-vaccination-template-detail"),
 

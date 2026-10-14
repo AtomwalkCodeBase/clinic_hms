@@ -93,27 +93,24 @@ THIRD_PARTY_APPS = [
 ]
 
 LOCAL_APPS = [
-    # Atomwalk DB apps (live in 'default' DB)
-    "apps.hospitals",
-    "apps.atomwalk",
-    "apps.records",
-    # Per-hospital apps
+    # apps whose tables live in the Atomwalk database
+    "apps.atomwalk.patients",
+    "apps.atomwalk.documents",
+    "apps.atomwalk.hospital_master",
+    # apps whose tables live in each hospital's own database
+    "apps.hospital_master.staff",
+    "apps.hospital_master.facility",
+    "apps.hospital_master.patients",
+    "apps.hospital_master.opd",
+    "apps.hospital_master.ipd",
+    "apps.hospital_master.lab",
+    "apps.hospital_master.pharmacy",
+    "apps.hospital_master.billing",
+    "apps.hospital_master.compliance",
+    "apps.hospital_master.notifications",
+    # API-only apps (no tables)
     "apps.auth_app",
-    "apps.org",
-    "apps.hospital_patients",
-    "apps.opd",
-    "apps.ipd",  # Phase 1 — admission intake only. See apps/ipd/models.py module docstring.
-    # apps.scheduling removed — duplicate of apps.opd's Appointment/queue models,
-    # confirmed zero external references before deletion.
-    "apps.clinical",
-    "apps.prescriptions",
-    "apps.lab",
-    "apps.billing",
-    "apps.pharmacy",
-    "apps.ai_pipeline",
-    "apps.notifications",
-    "apps.compliance",
-    "apps.tasks",
+    "apps.platform_admin",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -230,7 +227,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ── Custom User Model ────────────────────────────────────────────────────────
 # Using Django's built-in User for platform admin (Django admin panel).
-# Per-hospital staff use apps.org.StaffUser, which extends AbstractUser separately.
+# Per-hospital staff use apps.hospital_master.staff.StaffUser, which extends AbstractUser separately.
 # AUTH_USER_MODEL is intentionally NOT overridden — StaffUser is a standalone model.
 
 # ── DRF ─────────────────────────────────────────────────────────────────────

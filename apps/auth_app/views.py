@@ -26,14 +26,14 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.throttling import ScopedRateThrottle
 
 from core.response import success, error
-from apps.hospitals.models import Hospital, Subscription
-from apps.hospitals.constants import TIER_FEATURE_DEFAULTS
-from apps.org.models import StaffUser
-from apps.atomwalk.models import StaffMobileIndex
+from apps.atomwalk.hospital_master.models import Hospital, Subscription
+from apps.atomwalk.hospital_master.services import TIER_FEATURE_DEFAULTS
+from apps.hospital_master.staff.models import StaffUser
+from apps.atomwalk.patients.models import StaffMobileIndex
 
 logger = logging.getLogger(__name__)
 
-from .serializers import (
+from apps.auth_app.serializers import (
     StaffLoginSerializer,
     PlatformLoginSerializer,
     SetupPasswordSerializer,
@@ -119,7 +119,7 @@ class StaffLoginView(APIView):
                 return error("This hospital account is inactive. Contact Atomwalk support.")
 
         # ── Step 3: Ensure hospital DB is registered ────────────────────────────
-        from apps.hospitals.utils import ensure_hospital_db
+        from apps.atomwalk.hospital_master.services import ensure_hospital_db
         ensure_hospital_db(db_name)
 
         # ── Step 4: Fetch StaffUser from hospital DB ────────────────────────────
@@ -151,7 +151,7 @@ class StaffLoginView(APIView):
         except Subscription.DoesNotExist:
             return error("Subscription not found.")
 
-        from apps.org.rbac import resolve_acts_as
+        from apps.hospital_master.staff.rbac import resolve_acts_as
         payload = {
             "user_id":      staff.id,
             "email":        staff.email,
@@ -249,7 +249,7 @@ class PatientLoginView(APIView):
     throttle_scope = "login"
 
     def post(self, request):
-        from apps.atomwalk.models import PatientAccount
+        from apps.atomwalk.patients.models import PatientAccount
 
         login_id = (request.data.get("mobile") or request.data.get("awpid") or "").strip()
         password = request.data.get("password") or ""
@@ -419,7 +419,7 @@ class MeView(APIView):
         try:
             from core import storage as blob_storage
             if p.get("role") == "patient":
-                from apps.atomwalk.models import PatientAccount
+                from apps.atomwalk.patients.models import PatientAccount
                 acct = PatientAccount.objects.using("default").get(pk=p.get("user_id"))
                 data["photo"] = blob_storage.signed_url(acct.photo)
             elif not p.get("is_platform") and p.get("db_name"):
@@ -477,10 +477,10 @@ class PermissionsView(APIView):
         # Live usage against the tier's limits — lets the frontend disable
         # "+ Add Branch" / "+ Invite Staff" and show "X of Y used" before the
         # admin fills out a whole form only to hit a 403 at the end. Kept
-        # best-effort here (unlike the write-time check in apps.hospitals.limits,
+        # best-effort here (unlike the write-time check in apps.atomwalk.hospital_master.services,
         # which fails closed) since this is read-only display data, not a
         # gate — worst case the buttons just don't show a live count.
-        from apps.hospitals.limits import get_usage_counts
+        from apps.atomwalk.hospital_master.services import get_usage_counts
         try:
             usage = get_usage_counts(request.hospital_db)
         except Exception:
@@ -527,7 +527,7 @@ class TokenRefreshView(APIView):
         except jwt.InvalidTokenError:
             return error("Invalid refresh token.", status=401)
 
-        from apps.atomwalk.models import BlacklistedToken
+        from apps.atomwalk.patients.models import BlacklistedToken
         if payload.get("jti") and BlacklistedToken.objects.using("default").filter(jti=payload["jti"]).exists():
             return error("Refresh token has been revoked. Please log in again.", status=401)
 
@@ -548,7 +548,7 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        from apps.atomwalk.models import BlacklistedToken
+        from apps.atomwalk.patients.models import BlacklistedToken
 
         auth_header = request.headers.get("Authorization", "")
         token = auth_header.split(" ", 1)[1] if auth_header.startswith("Bearer ") else None

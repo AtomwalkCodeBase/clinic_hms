@@ -11,7 +11,7 @@ import jwt
 from django.conf import settings
 from django.test import TestCase
 
-from .views import _make_tokens, StaffLoginView, PlatformLoginView, PatientLoginView, LogoutView
+from apps.auth_app.views import _make_tokens, StaffLoginView, PlatformLoginView, PatientLoginView, LogoutView
 
 
 class TokenIssuanceTests(TestCase):

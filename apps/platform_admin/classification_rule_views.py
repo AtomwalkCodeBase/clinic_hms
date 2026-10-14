@@ -1,5 +1,5 @@
 """
-Platform Admin → the records report (apps.records).
+Platform Admin → the records report (apps.atomwalk.documents).
 
   GET    /api/v1/platform/records/report/            MedicalDocument rows: type, who classified, score, status
   PATCH  /api/v1/platform/records/report/<id>/       a person overwrites one document's type
@@ -11,9 +11,9 @@ so changing one is a code change, not a screen.
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from apps.records import classification as rules
-from apps.records import services
-from apps.atomwalk.models import MedicalDocument
+from apps.atomwalk.documents import services as rules
+from apps.atomwalk.documents import services
+from apps.atomwalk.documents.models import MedicalDocument
 from core.pagination import paginate_queryset
 from core.permissions import IsPlatformAdmin
 from core.response import error, not_found, success

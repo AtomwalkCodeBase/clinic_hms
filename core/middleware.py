@@ -110,8 +110,8 @@ class JWTHospitalMiddleware:
             # Hospital DBs are not persisted across restarts — they're registered
             # lazily on first use (login, or here on subsequent requests).
             if db_name not in settings.DATABASES:
-                from apps.hospitals.utils import ensure_hospital_db
-                from apps.hospitals.models import Hospital
+                from apps.atomwalk.hospital_master.services import ensure_hospital_db
+                from apps.atomwalk.hospital_master.models import Hospital
                 if not Hospital.objects.filter(db_name=db_name, is_active=True).exists():
                     logger.error(
                         "JWT references unknown db_name=%s — no matching active hospital.",

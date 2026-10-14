@@ -14,7 +14,7 @@ Rules:
   1. Atomwalk models → always "default"
   2. All other models → thread-local hospital alias or "default" as fallback
 
-Atomwalk apps are listed in ATOMWALK_APPS. Any model belonging to those apps
+Each app declares its database in its AppConfig. Any model belonging to an Atomwalk app
 goes to "default". Everything else goes to the current hospital DB.
 """
 
@@ -22,18 +22,14 @@ import threading
 
 _thread_local = threading.local()
 
-# Apps whose models live in the shared Atomwalk DB.
-ATOMWALK_APPS = frozenset(
-    [
-        "hospitals",         # Hospital, Subscription, NextNumber (atomwalk-side)
-        "atomwalk",        # patient, documents, shared clinical tables, schedules, access control
-        "auth",            # Django's built-in auth (atomwalk-side users)
-        "contenttypes",    # Django framework
-        "sessions",        # Django sessions
-        "admin",           # Django admin
-        "django_celery_beat",  # Celery Beat's schedule tables (PeriodicTask/IntervalSchedule)
-    ]
-)
+def is_atomwalk_app(app_label: str) -> bool:
+    """
+    True when the app's tables live in the shared Atomwalk database. Every app of ours says so itself, in its AppConfig
+    (`database = "atomwalk"` or `"hospital"`); an app that says nothing (Django's own auth, sessions, admin, content types and
+    the Celery beat tables) lives in Atomwalk.
+    """
+    from django.apps import apps
+    return getattr(apps.get_app_config(app_label), "database", "atomwalk") == "atomwalk"
 
 
 def set_hospital_db(db_alias: str | None) -> None:
@@ -61,7 +57,7 @@ class HospitalDatabaseRouter:
     _DEFAULT_ONLY_TABLES = frozenset({"doc_classify_cache"})
 
     def _is_atomwalk_model(self, model) -> bool:
-        if model._meta.app_label in ATOMWALK_APPS:
+        if is_atomwalk_app(model._meta.app_label):
             return True
         return getattr(model._meta, "db_table", "") in self._DEFAULT_ONLY_TABLES
 
@@ -81,8 +77,8 @@ class HospitalDatabaseRouter:
         Cross-DB relations (atomwalk ↔ hospital) are intentionally prohibited
         at the ORM level — use IDs and separate queries instead.
         """
-        db1 = "default" if obj1._meta.app_label in ATOMWALK_APPS else get_hospital_db()
-        db2 = "default" if obj2._meta.app_label in ATOMWALK_APPS else get_hospital_db()
+        db1 = "default" if is_atomwalk_app(obj1._meta.app_label) else get_hospital_db()
+        db2 = "default" if is_atomwalk_app(obj2._meta.app_label) else get_hospital_db()
         return db1 == db2
 
     def allow_migrate(self, db, app_label, model_name=None, **hints):
@@ -96,6 +92,6 @@ class HospitalDatabaseRouter:
                 or (model is not None
                     and getattr(model._meta, "db_table", "") in self._DEFAULT_ONLY_TABLES)):
             return db == "default"
-        if app_label in ATOMWALK_APPS:
+        if is_atomwalk_app(app_label):
             return db == "default"
         return db != "default"

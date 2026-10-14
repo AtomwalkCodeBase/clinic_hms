@@ -1,12 +1,20 @@
 from django.urls import path
-from .views import (
-    StaffLoginView, PlatformLoginView, PatientLoginView,
-    MeView, PermissionsView, TokenRefreshView, LogoutView,
-    SetupPasswordView, ChangePasswordView,
+from apps.auth_app.views import (
+    StaffLoginView,
+    PlatformLoginView,
+    PatientLoginView,
+    MeView,
+    PermissionsView,
+    TokenRefreshView,
+    LogoutView,
+    SetupPasswordView,
+    ChangePasswordView,
 )
-from .otp_views import (
-    OTPRequestView, OTPVerifyView,
-    StaffForgotPasswordResetView, PatientForgotPasswordResetView,
+from apps.auth_app.otp_views import (
+    OTPRequestView,
+    OTPVerifyView,
+    StaffForgotPasswordResetView,
+    PatientForgotPasswordResetView,
     PatientOTPLoginView,
 )
 

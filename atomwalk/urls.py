@@ -36,46 +36,30 @@ urlpatterns = [
     path("django-admin/",        admin.site.urls),
     path("api/v1/auth/",         include("apps.auth_app.urls")),
     path("api/v1/platform/",     include("apps.platform_admin.urls")),
-    path("api/v1/opd/",          include("apps.opd.urls")),
-    path("api/v1/ipd/",          include("apps.ipd.urls")),  # Phase 1 — admission intake only
-    path("api/v1/patients/",     include("apps.hospital_patients.urls")),
-    path("api/v1/portal/",       include("apps.hospital_patients.portal_urls")),
-    path("api/v1/records/",      include("apps.records.urls")),
-    # Deliberately its own top-level prefix, not nested under /portal/ — that
-    # prefix implies patient-JWT auth everywhere else; this is the one
-    # intentionally public, unauthenticated endpoint (see
-    # apps/hospital_patients/emergency_views.py for why).
-    path("api/v1/emergency/",    include("apps.hospital_patients.emergency_urls")),
-    # Also intentionally public (see apps/hospital_patients/consult_pad_views.py) —
-    # the phone side of the consultation-scratchpad QR. Same reasoning as
-    # /emergency/ above: reached by scanning a QR, no login.
-    path("api/v1/consult-pad/",  include("apps.hospital_patients.consult_pad_urls")),
-    # "Records Access" break-glass sharing — the doctor-has-a-laptop flow.
-    # Public create/status/records/download endpoints gated by a random
-    # token; the approve/end endpoints are patient-authenticated. Same
-    # "reached without an account here" reasoning as /emergency/ above.
-    path("api/v1/records-share/", include("apps.hospital_patients.records_share_urls")),
-    # Also intentionally public (see apps/hospital_patients/document_view_views.py) —
-    # what a printed prescription/lab-report QR opens when scanned by
-    # anything other than the patient app itself (Google Lens etc). Same
-    # "reached without an account here" reasoning as /emergency/ above.
-    path("api/v1/view-report/",   include("apps.hospital_patients.document_view_urls")),
+    path("api/v1/opd/",          include("apps.hospital_master.opd.urls")),
+    path("api/v1/ipd/",          include("apps.hospital_master.ipd.urls")),  # Phase 1 — admission intake only
+    path("api/v1/patients/",     include("apps.hospital_master.patients.urls")),
+    # portal/, emergency/, consult-pad/ and records-share/ (several of them deliberately public) are set up in apps/atomwalk/patients/urls.py;
+    # records/, view-report/ (public) and the org/ schedule routes in apps/atomwalk/documents/urls.py
+    path("api/v1/",              include("apps.atomwalk.patients.urls")),
+    path("api/v1/",              include("apps.atomwalk.documents.urls")),
     # apps.clinical's Encounter/Vital/Diagnosis/FollowUp/ClinicalDocument were
     # retired (HMS-07c-1, confirmed dead — the live flow writes through
-    # apps.opd, see apps/atomwalk/hie.py::sync_encounter_to_hie for the actual HIE write
-    # path), so its URL route is gone too. apps.prescriptions stays routed
+    # apps.hospital_master.opd, see apps/atomwalk/hie.py::sync_encounter_to_hie for the actual HIE write
+    # path), so its URL route is gone too. apps.hospital_master.pharmacy stays routed
     # for its still-live Drug/DrugFormType catalog endpoints
     # (Prescription/PrescriptionItem were retired the same way).
-    path("api/v1/prescriptions/",include("apps.prescriptions.urls")),
-    path("api/v1/lab/",          include("apps.lab.urls")),
-    path("api/v1/billing/",      include("apps.billing.urls")),
-    path("api/v1/pharmacy/",     include("apps.pharmacy.urls")),
-    path("api/v1/org/",          include("apps.org.urls")),
+    path("api/v1/prescriptions/",include("apps.hospital_master.pharmacy.drug_urls")),
+    path("api/v1/lab/",          include("apps.hospital_master.lab.urls")),
+    path("api/v1/billing/",      include("apps.hospital_master.billing.urls")),
+    path("api/v1/pharmacy/",     include("apps.hospital_master.pharmacy.urls")),
+    path("api/v1/org/",          include("apps.hospital_master.staff.urls")),
+    path("api/v1/org/",          include("apps.hospital_master.facility.urls")),
     # apps.tasks (Task/TaskAssignment) was retired (v7 table-count
     # redesign) — a complete, working API with zero frontend consumer
     # anywhere (confirmed by grep), so its URL route is gone too. See
     # apps/tasks/models.py for the full removal note.
-    path("api/v1/compliance/",   include("apps.compliance.urls")),
+    path("api/v1/compliance/",   include("apps.hospital_master.compliance.urls")),
 ]
 
 # ── API docs (drf-spectacular) ──────────────────────────────────────────────

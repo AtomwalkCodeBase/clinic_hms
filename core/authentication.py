@@ -46,7 +46,7 @@ class MockUser:
         # every Is*/doctor-listing check — [] for the 6 system roles (they
         # don't need it, .role already says everything) and non-empty only
         # for role="custom" staff, e.g. ["doctor", "nurse", "front_desk"].
-        # Set once at login time (see apps.org.rbac.resolve_acts_as +
+        # Set once at login time (see apps.hospital_master.staff.rbac.resolve_acts_as +
         # StaffLoginView) and baked into the JWT rather than looked up per
         # request — same tradeoff as .role itself: a custom role's acts_as
         # changing takes effect on next login, not instantly, which matches
@@ -105,7 +105,7 @@ class JWTHospitalAuthentication(BaseAuthentication):
         # token instead of relying purely on natural expiry.
         jti = payload.get("jti")
         if jti:
-            from apps.atomwalk.models import BlacklistedToken
+            from apps.atomwalk.patients.models import BlacklistedToken
             if BlacklistedToken.objects.using("default").filter(jti=jti).exists():
                 raise AuthenticationFailed("Token has been revoked. Please log in again.")
 
@@ -118,7 +118,7 @@ class JWTHospitalAuthentication(BaseAuthentication):
         # cached in the JWT, so a platform-admin suspension or a tier change
         # takes effect on the staff member's very next request.
         if user.hospital_id:
-            from apps.hospitals.models import Subscription
+            from apps.atomwalk.hospital_master.models import Subscription
             sub = Subscription.objects.using("default").filter(hospital_id=user.hospital_id).first()
             user.subscription = sub
             if sub:
@@ -143,7 +143,7 @@ class JWTHospitalAuthentication(BaseAuthentication):
             # in progress. Checked fresh every request (one extra indexed
             # lookup on the hospital DB, same cost as the subscription check
             # above) so deactivation takes effect on the very next call.
-            from apps.org.models import StaffUser
+            from apps.hospital_master.staff.models import StaffUser
             still_active = StaffUser.objects.using(user.db_name).filter(
                 pk=user.id
             ).values_list("is_active", flat=True).first()
@@ -169,7 +169,7 @@ class JWTHospitalAuthentication(BaseAuthentication):
         # reused/orphaned ID is caught immediately instead of silently
         # leaking another patient's records.
         if user.role == "patient":
-            from apps.atomwalk.models import PatientAccount
+            from apps.atomwalk.patients.models import PatientAccount
             current_awpid = PatientAccount.objects.using("default").filter(
                 pk=user.id, is_active=True
             ).values_list("awpid", flat=True).first()

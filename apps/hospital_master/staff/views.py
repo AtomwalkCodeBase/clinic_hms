@@ -1,0 +1,1621 @@
+"""
+apps/org/views.py
+-----------------
+Org management APIs for hospital admin setup.
+
+Hospital admin flow:
+  1. Create branches (physical locations)
+  2. Create departments within branches
+  3. Invite staff (generates invite token → staff sets own password)
+  4. Create/update doctor profiles
+
+All views require IsAuthenticated + IsHospitalAdmin unless noted.
+IsHospitalStaff allows read-only access where indicated.
+"""
+
+import re
+import secrets
+import string
+import logging
+from datetime import datetime
+from decimal import Decimal
+
+from django.db.models import Q
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+
+
+from core.permissions import IsHospitalAdmin, IsHospitalStaff, IsDoctor, RequireFeature
+from core.response import success, created, error, not_found
+from core.pagination import paginate_queryset
+from core.file_validation import validate_data_uri, FileValidationError
+from core import storage as blob_storage
+from apps.atomwalk.patients.models import StaffMobileIndex
+
+from apps.hospital_master.facility.models import Branch, Department, Room
+from apps.hospital_master.staff.models import StaffUser, DoctorProfile, StaffProfile, Role, Permission, UserRole, RoomAssignment
+
+logger = logging.getLogger(__name__)
+
+
+from apps.hospital_master.staff.services import next_employee_id
+
+from apps.hospital_master.staff.serializers import (
+    StaffSerializer,
+    StaffInviteSerializer,
+    DoctorProfileSerializer,
+    DoctorSelfProfileSerializer,
+    StaffMeSerializer,
+    StaffProfileSerializer,
+    StaffProfileSelfSerializer,
+    PermissionSerializer,
+    RoleSerializer,
+    RoleWriteSerializer,
+    RoomAssignmentSerializer,
+)
+
+# Rough cap on the base64 photo payload — keeps us comfortably under DRF's
+# default 2.5MB request-body limit (DATA_UPLOAD_MAX_MEMORY_SIZE) while still
+# allowing a reasonably sized profile photo. ~1.4MB of actual image data.
+_MAX_PHOTO_BASE64_CHARS = 1_900_000
+
+
+def _gen_temp_password(length=12) -> str:
+    """Generate a readable temporary password."""
+    chars = string.ascii_letters + string.digits + "!@#$"
+    return "".join(secrets.choice(chars) for _ in range(length))
+
+
+def _email_collision(email, hospital_db, exclude_staff_id=None):
+    """
+    Returns an error message if `email` is already in use somewhere it
+    would collide at the database level, or "" if it's free to use.
+
+    Two separate unique constraints can be hit here — StaffUser.email is
+    unique WITHIN a hospital DB, and StaffMobileIndex.email is unique ACROSS
+    every hospital on the platform (it's the atomwalk-wide login-routing
+    index). Neither was checked before writing, so inviting/reactivating a
+    staff member with an email already used by anyone else — even a
+    deactivated account at the SAME hospital, or any account at a
+    DIFFERENT one — hit an unhandled IntegrityError and surfaced as a raw
+    500 instead of a clean validation error.
+    """
+    if not email:
+        return ""
+    from apps.atomwalk.patients.models import StaffMobileIndex
+    qs = StaffUser.objects.using(hospital_db).filter(email__iexact=email)
+    if exclude_staff_id:
+        qs = qs.exclude(pk=exclude_staff_id)
+    if qs.exists():
+        return f"Email {email} is already used by another staff member at this hospital."
+
+    idx_qs = StaffMobileIndex.objects.using("default").filter(email__iexact=email)
+    if exclude_staff_id:
+        # The reactivation path's own index row (same mobile) is allowed to
+        # keep this same email — only a DIFFERENT mobile's index row using
+        # it is a real collision.
+        existing_mobile = StaffUser.objects.using(hospital_db).filter(pk=exclude_staff_id).values_list("phone", flat=True).first()
+        if existing_mobile:
+            idx_qs = idx_qs.exclude(mobile=existing_mobile)
+    if idx_qs.exists():
+        return f"Email {email} is already registered to a staff account at another hospital."
+    return ""
+
+
+def _send_new_account_email(staff, temp_password):
+    """Best-effort — a delivery failure must not fail the invite/reset itself."""
+    if not staff.email:
+        return
+    from core.email import send_temp_password_email
+    send_temp_password_email(
+        to=staff.email, full_name=staff.get_full_name() or staff.phone,
+        temp_password=temp_password, login_hint=staff.phone,
+    )
+
+
+# ── Staff ─────────────────────────────────────────────────────────────────────
+
+class StaffListView(APIView):
+    """GET /api/v1/org/staff/ — list all staff members."""
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def get(self, request):
+        qs = StaffUser.objects.using(request.hospital_db).select_related(
+            "branch", "department"
+        ).prefetch_related("doctor_profile")
+        role_filter = request.query_params.get("role")
+        if role_filter:
+            qs = qs.filter(role=role_filter)
+        active_only = request.query_params.get("active", "true")
+        if active_only.lower() != "false":
+            qs = qs.filter(is_active=True)
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            qs = qs.filter(
+                Q(first_name__icontains=search) |
+                Q(last_name__icontains=search) |
+                Q(phone__icontains=search) |
+                Q(email__icontains=search)
+            )
+        qs = qs.order_by("first_name", "last_name")
+        page_items, meta = paginate_queryset(request, qs)
+        return success(data={
+            "results": StaffSerializer(page_items, many=True).data,
+            "pagination": meta,
+        })
+
+
+class StaffInviteView(APIView):
+    """
+    POST /api/v1/org/staff/invite/
+    Creates a staff user with unusable password.
+    Returns an invite_token for the staff member to set their own password via
+    POST /api/v1/auth/setup-password/.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def post(self, request):
+        s = StaffInviteSerializer(data=request.data)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        d = s.validated_data
+
+        # ── Resolve custom role (role="custom" only) ────────────────────────
+        # Everything below that used to branch on the literal string
+        # d["role"] == "doctor" now branches on is_doctor_equivalent instead,
+        # so a custom role that acts_as doctor gets exactly the same
+        # DoctorProfile / schedule / resource-limit treatment a real doctor
+        # invite gets — see apps.hospital_master.staff.rbac.resolve_acts_as for why this is
+        # the right identity signal, not the permission codes.
+        custom_role_obj = None
+        acts_as = set()
+        if d["role"] == "custom":
+            if not d.get("custom_role_id"):
+                return error("Select a custom role.", errors={"custom_role_id": "Required."})
+            from apps.hospital_master.staff.models import Role
+            try:
+                custom_role_obj = Role.objects.using(request.hospital_db).get(
+                    pk=d["custom_role_id"], is_system_role=False,
+                )
+            except Role.DoesNotExist:
+                return error("Custom role not found.", errors={"custom_role_id": "Invalid."})
+            acts_as = set(custom_role_obj.acts_as or [])
+        is_doctor_equivalent = d["role"] == "doctor" or "doctor" in acts_as
+
+        # ── Subscription limit check (fails CLOSED — see apps.atomwalk.hospital_master.services) ──
+        # Applies whether this ends up creating a brand-new StaffUser or
+        # reactivating a previously-deactivated one below — either way the
+        # active headcount for this role goes up by one, and a deactivated
+        # account isn't counted in current usage, so the same check (with its
+        # default increment=1) is correct for both paths.
+        from apps.atomwalk.hospital_master.models import Hospital
+        from apps.atomwalk.hospital_master.services import check_limit, LimitCheckFailed
+        resource = "doctors" if is_doctor_equivalent else "staff"
+        try:
+            hospital = Hospital.objects.using("default").get(pk=request.hospital_id)
+            check_limit(hospital, request.hospital_db, resource)
+        except Hospital.DoesNotExist:
+            return error("Unable to verify your plan limits right now. Please try again shortly.", status=503)
+        except LimitCheckFailed as exc:
+            return error(exc.message, status=exc.status)
+
+        # A mobile number already routed to a *different* hospital must not be
+        # silently reassigned here — that would hijack that person's login at
+        # their existing hospital. Only proceed if it's unused, or already
+        # points at this same hospital (the reactivation path below).
+        existing_index = StaffMobileIndex.objects.using("default").filter(mobile=d["phone"]).first()
+        if existing_index and existing_index.db_name != request.hospital_db:
+            return error(
+                f"Mobile number {d['phone']} is already registered at another hospital.",
+                errors={"phone": "Already in use."},
+            )
+
+        existing = StaffUser.objects.using(request.hospital_db).filter(phone=d["phone"]).first()
+        if existing:
+            if existing.is_active:
+                return error(f"Staff with mobile number {d['phone']} already exists.")
+            # Reactivate a previously deactivated staff member
+            email_error = _email_collision(d.get("email"), request.hospital_db, exclude_staff_id=existing.id)
+            if email_error:
+                return error(email_error, errors={"email": "Already in use."})
+            temp_password = _gen_temp_password()
+            existing.is_active            = True
+            existing.first_name           = d["first_name"]
+            existing.last_name            = d.get("last_name", existing.last_name)
+            existing.role                 = d["role"]
+            existing.custom_role          = custom_role_obj
+            existing.email                = d.get("email") or existing.email
+            # Employee ID is auto-generated via NNTM, never typed in — see
+            # next_employee_id. Someone predating this feature (or created
+            # before it) may not have one yet; assign it now rather than
+            # leaving it permanently blank. Once set it never changes.
+            if not existing.employee_id:
+                existing.employee_id = next_employee_id(request.hospital_db)
+            existing.must_change_password = True
+            existing.set_password(temp_password)
+            existing.save(using=request.hospital_db)
+            StaffMobileIndex.objects.using("default").update_or_create(
+                mobile=d["phone"],
+                defaults={
+                    "hospital_id": request.hospital_id,
+                    "email": existing.email or None,
+                },
+            )
+            if "branch_ids" in d:
+                from apps.hospital_master.facility.branch_utils import set_staff_branches
+                set_staff_branches(existing, d.get("branch_ids") or [], d.get("branch_id"), request.hospital_db)
+                existing.save(using=request.hospital_db, update_fields=["branch"])
+            _send_new_account_email(existing, temp_password)
+            return created(data={
+                **StaffSerializer(existing).data,
+                "temp_password": temp_password,
+                "note": "Account reactivated. Share these credentials with the staff member."
+                        + (" A copy was also emailed to them." if existing.email else ""),
+            }, message=f"{existing.get_full_name()} reactivated.")
+
+        # Resolve branch
+        branch = None
+        if d.get("branch_id"):
+            try:
+                branch = Branch.objects.using(request.hospital_db).get(
+                    pk=d["branch_id"], is_active=True
+                )
+            except Branch.DoesNotExist:
+                return error("Branch not found.", errors={"branch_id": "Invalid."})
+
+        # Resolve department (optional)
+        department = None
+        if d.get("department_id"):
+            try:
+                department = Department.objects.using(request.hospital_db).get(
+                    pk=d["department_id"], is_active=True
+                )
+            except Department.DoesNotExist:
+                return error("Department not found.", errors={"department_id": "Invalid."})
+
+        email_error = _email_collision(d.get("email"), request.hospital_db)
+        if email_error:
+            return error(email_error, errors={"email": "Already in use."})
+
+        temp_password = _gen_temp_password()
+        staff = StaffUser(
+            phone=d["phone"],
+            email=d.get("email") or None,
+            employee_id=next_employee_id(request.hospital_db),
+            first_name=d["first_name"],
+            last_name=d.get("last_name", ""),
+            role=d["role"],
+            custom_role=custom_role_obj,
+            branch=branch,
+            department=department,
+            must_change_password=True,
+        )
+        staff.set_password(temp_password)
+        staff.save(using=request.hospital_db)
+
+        # Extra branches beyond the primary — meaningful for doctors who
+        # work more than one location; harmless single-row equivalent to
+        # the legacy branch FK for every other role. Only acts if the
+        # caller actually sent branch_ids (most invites won't).
+        if d.get("branch_ids"):
+            from apps.hospital_master.facility.branch_utils import set_staff_branches
+            set_staff_branches(staff, d["branch_ids"], branch.id if branch else None, request.hospital_db)
+            staff.save(using=request.hospital_db, update_fields=["branch"])
+
+        # Doctor basics — admin enters these now so patient-facing cards are
+        # never blank; the doctor fills in the rest themselves after login.
+        if is_doctor_equivalent and any(
+            d.get(f) for f in ("registration_no", "specialisation", "qualification", "experience_years",
+                               "consultation_fee", "followup_fee")
+        ):
+            # consultation_fee / followup_fee are only written when the
+            # hospital controls fees; when fee_ownership == "doctor" both
+            # fields belong to the doctor's self-service profile and are
+            # intentionally left null here.
+            from apps.atomwalk.hospital_master.models import Hospital as _Hospital
+            try:
+                _hospital = _Hospital.objects.using("default").get(pk=request.hospital_id)
+                hospital_owns_fee = _hospital.fee_ownership == "hospital"
+                fee_value = d.get("consultation_fee") if hospital_owns_fee else None
+                followup_fee_value = d.get("followup_fee") if hospital_owns_fee else None
+            except _Hospital.DoesNotExist:
+                fee_value = None
+                followup_fee_value = None
+
+            DoctorProfile.objects.using(request.hospital_db).create(
+                staff=staff,
+                registration_no=d.get("registration_no", ""),
+                specialisation=d.get("specialisation", ""),
+                qualification=d.get("qualification", ""),
+                experience_years=d.get("experience_years"),
+                consultation_fee=fee_value,
+                followup_fee=followup_fee_value,
+            )
+
+        # Working-hours schedule — optional at registration; doctor can also
+        # configure it later via PATCH /org/staff/<pk>/schedule/.
+        if is_doctor_equivalent and d.get("schedule"):
+            from apps.hospital_master.staff.models import DoctorSchedule, DoctorAvailabilitySlot
+            from apps.hospital_master.staff.serializers import DoctorScheduleSerializer as _SchedSer
+            sched_ser = _SchedSer(data=d["schedule"])
+            if sched_ser.is_valid():
+                sched_ser._db = request.hospital_db
+                sched_data = sched_ser.validated_data
+                days_data  = sched_data.pop("days", [])
+                sched = DoctorSchedule.objects.using(request.hospital_db).create(
+                    doctor=staff, **sched_data
+                )
+                for day in days_data:
+                    DoctorAvailabilitySlot.objects.using(request.hospital_db).create(
+                        schedule=sched, **day
+                    )
+        # Same basics for every other role — nursing/pharmacy council
+        # registration is legally required before those accounts should be
+        # treated as active, and nobody should end up with a blank profile.
+        elif not is_doctor_equivalent and any(
+            d.get(f) for f in ("registration_no", "council_name", "registration_expiry",
+                               "qualification", "experience_years")
+        ):
+            StaffProfile.objects.using(request.hospital_db).create(
+                staff=staff,
+                registration_no=d.get("registration_no", ""),
+                council_name=d.get("council_name", ""),
+                registration_expiry=d.get("registration_expiry"),
+                qualification=d.get("qualification", ""),
+                experience_years=d.get("experience_years"),
+            )
+
+        # Write to atomwalk index so login can route by mobile (no subdomain needed)
+        StaffMobileIndex.objects.using("default").update_or_create(
+            mobile=d["phone"],
+            defaults={
+                "hospital_id": request.hospital_id,
+                "email": staff.email or None,
+            },
+        )
+
+        _send_new_account_email(staff, temp_password)
+        return created(data={
+            **StaffSerializer(staff).data,
+            "temp_password": temp_password,
+            "note": "Share these credentials with the staff member. They will be prompted to change the password on first login."
+                    + (" A copy was also emailed to them." if staff.email else ""),
+        }, message=f"{staff.get_full_name()} invited.")
+
+
+class StaffDetailView(APIView):
+    """
+    GET   /api/v1/org/staff/{id}/  — staff member detail
+    PATCH /api/v1/org/staff/{id}/  — update role, branch, department, phone
+    DELETE /api/v1/org/staff/{id}/ — deactivate (soft)
+    """
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def _get(self, request, pk):
+        try:
+            return StaffUser.objects.using(request.hospital_db).get(pk=pk)
+        except StaffUser.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        staff = self._get(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+        return success(data=StaffSerializer(staff).data)
+
+    def patch(self, request, pk):
+        staff = self._get(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+
+        d = request.data
+
+        if "phone" in d and d["phone"] and not re.match(r"^\d{10}$", d["phone"]):
+            return error("Enter a valid 10-digit mobile number.", errors={"phone": "Invalid format."})
+
+        # Changing the login mobile number needs the atomwalk-wide index kept
+        # in sync — otherwise the old number stays routed here and the new
+        # one isn't routed anywhere, breaking this person's login either way.
+        # Reject up front if it's already claimed by someone else.
+        if "phone" in d and d["phone"] != staff.phone:
+            clash = StaffMobileIndex.objects.using("default").filter(mobile=d["phone"]).exclude(
+                hospital_id=request.hospital_id
+            ).exists()
+            if clash:
+                return error(
+                    f"Mobile number {d['phone']} is already registered at another hospital.",
+                    errors={"phone": "Already in use."},
+                )
+
+        # Refuse to role-change away the last active hospital_admin — see the
+        # matching check in apps/platform_admin/views.py for the deactivate
+        # case (this view's DELETE, below, does the deactivate check).
+        # Checks acts_as too — a custom role bundling "hospital_admin" counts
+        # as an effective admin here just like a literal one, on both sides
+        # (is THIS staff member currently one, and are there OTHERS besides
+        # them) — otherwise a hospital could be silently left with zero
+        # effective admins while this guard believed one still existed.
+        staff_old_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
+        staff_is_admin = staff.role == "hospital_admin" or "hospital_admin" in staff_old_acts_as
+        if "role" in d and d["role"] != "hospital_admin" and staff_is_admin and staff.is_active:
+            ADMIN_Q = Q(role="hospital_admin") | Q(role="custom", custom_role__acts_as__contains=["hospital_admin"])
+            other_admins = StaffUser.objects.using(request.hospital_db).filter(
+                ADMIN_Q, is_active=True
+            ).exclude(pk=staff.id).exists()
+            if not other_admins:
+                return error(
+                    "This is the only active hospital admin — changing their role "
+                    "would lock the hospital out of its own admin panel. Promote "
+                    "another staff member to hospital_admin first.",
+                )
+
+        # Resolve the custom role being moved TO, if any — needed both for
+        # the resource-bucket check right below and for actually setting
+        # staff.custom_role further down. See StaffInviteView for the same
+        # pattern (is_doctor_equivalent from acts_as, not literal role=="doctor").
+        new_custom_role_obj = None
+        if d.get("role") == "custom":
+            if not d.get("custom_role_id"):
+                return error("Select a custom role.", errors={"custom_role_id": "Required."})
+            from apps.hospital_master.staff.models import Role
+            try:
+                new_custom_role_obj = Role.objects.using(request.hospital_db).get(
+                    pk=d["custom_role_id"], is_system_role=False,
+                )
+            except Role.DoesNotExist:
+                return error("Custom role not found.", errors={"custom_role_id": "Invalid."})
+
+        # A role change that crosses the doctor / non-doctor line moves this
+        # person into a different capacity bucket (max_doctors vs max_staff)
+        # without freeing up a slot anywhere — check the bucket they'd be
+        # moving INTO before allowing it. No check needed for a role change
+        # within the same bucket (e.g. nurse → front_desk) since the total
+        # headcount in that bucket doesn't change.
+        if "role" in d and staff.is_active and d["role"] != staff.role:
+            old_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
+            old_is_doctor = staff.role == "doctor" or "doctor" in old_acts_as
+            new_acts_as = set((new_custom_role_obj.acts_as if new_custom_role_obj else []) or [])
+            new_is_doctor = d["role"] == "doctor" or "doctor" in new_acts_as
+            old_resource = "doctors" if old_is_doctor else "staff"
+            new_resource = "doctors" if new_is_doctor else "staff"
+            if new_resource != old_resource:
+                from apps.atomwalk.hospital_master.models import Hospital
+                from apps.atomwalk.hospital_master.services import check_limit, LimitCheckFailed
+                try:
+                    hospital = Hospital.objects.using("default").get(pk=request.hospital_id)
+                    check_limit(hospital, request.hospital_db, new_resource)
+                except Hospital.DoesNotExist:
+                    return error("Unable to verify your plan limits right now. Please try again shortly.", status=503)
+                except LimitCheckFailed as exc:
+                    return error(exc.message, status=exc.status)
+
+        # employee_id is deliberately NOT in this list — it's auto-generated
+        # via NNTM at creation time and never editable afterward (matches
+        # how UHID/invoice numbers work). Assign one now if this record
+        # predates the feature and somehow still doesn't have one.
+        if not staff.employee_id:
+            staff.employee_id = next_employee_id(request.hospital_db)
+
+        allowed = ["first_name", "last_name", "role", "phone", "date_of_birth", "branch_id", "department_id"]
+        for field in allowed:
+            if field in d:
+                if field == "branch_id":
+                    try:
+                        staff.branch = Branch.objects.using(request.hospital_db).get(pk=d[field])
+                    except Branch.DoesNotExist:
+                        return error("Branch not found.")
+                elif field == "department_id":
+                    try:
+                        staff.department = Department.objects.using(request.hospital_db).get(pk=d[field])
+                    except Department.DoesNotExist:
+                        return error("Department not found.")
+                elif field == "date_of_birth":
+                    dob = d.get("date_of_birth") or None
+                    if dob:
+                        try:
+                            dob = datetime.strptime(dob, "%Y-%m-%d").date()
+                        except ValueError:
+                            return error("Date of birth must be YYYY-MM-DD.", errors={"date_of_birth": "Invalid format."})
+                    staff.date_of_birth = dob
+                elif field == "role":
+                    staff.role = d["role"]
+                    # Only ever set for role="custom" — cleared otherwise so
+                    # a staff member moved back to a system role doesn't keep
+                    # a stale custom_role pointing at a bundle they're no
+                    # longer actually assigned.
+                    staff.custom_role = new_custom_role_obj
+                else:
+                    setattr(staff, field, d[field])
+
+        staff.save(using=request.hospital_db)
+
+        if "phone" in d:
+            # NOTE: "email" is deliberately not in `allowed` above (no endpoint
+            # currently lets staff email be edited), but we still sync whatever
+            # the current staff.email is into the index here so the two never
+            # drift apart when the mobile number changes.
+            StaffMobileIndex.objects.using("default").update_or_create(
+                mobile=staff.phone,
+                defaults={
+                    "hospital_id": request.hospital_id,
+                    "email": staff.email or None,
+                },
+            )
+
+        if "branch_id" in d:
+            # Keep the mapping table's primary row matching the legacy FK
+            # this endpoint just changed — see apps.hospital_master.facility.branch_utils. Extra
+            # (non-primary) branches, if any, are managed separately via
+            # StaffBranchesView, not through this plain field.
+            from apps.hospital_master.facility.branch_utils import sync_primary_branch
+            sync_primary_branch(staff, request.hospital_db)
+
+        return success(data=StaffSerializer(staff).data, message="Staff updated.")
+
+    def delete(self, request, pk):
+        staff = self._get(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+
+        staff_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
+        staff_is_admin = staff.role == "hospital_admin" or "hospital_admin" in staff_acts_as
+        if staff_is_admin and staff.is_active:
+            ADMIN_Q = Q(role="hospital_admin") | Q(role="custom", custom_role__acts_as__contains=["hospital_admin"])
+            other_admins = StaffUser.objects.using(request.hospital_db).filter(
+                ADMIN_Q, is_active=True
+            ).exclude(pk=staff.id).exists()
+            if not other_admins:
+                return error(
+                    "This is the only active hospital admin — deactivating them "
+                    "would lock the hospital out of its own admin panel. Promote "
+                    "another staff member to hospital_admin first.",
+                )
+
+        staff.is_active = False
+        staff.save(using=request.hospital_db, update_fields=["is_active"])
+        return success(message="Staff member deactivated.")
+
+
+class StaffBranchesView(APIView):
+    """
+    GET /api/v1/org/staff/{id}/branches/ — this staff member's full branch
+    assignment (usually just the one primary — see StaffBranchMapping).
+    PUT /api/v1/org/staff/{id}/branches/  — replace it.
+    Body: {"branch_ids": [1, 2], "primary_branch_id": 1}
+    Meaningful for doctors who work more than one branch; harmless to use
+    for any role (a single-entry list is equivalent to the legacy
+    single-branch assignment).
+    """
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def _get_staff(self, request, pk):
+        try:
+            return StaffUser.objects.using(request.hospital_db).get(pk=pk)
+        except StaffUser.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        staff = self._get_staff(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+        return success(data=StaffSerializer(staff).data["branches"])
+
+    def put(self, request, pk):
+        staff = self._get_staff(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+
+        branch_ids = request.data.get("branch_ids")
+        if branch_ids is None or not isinstance(branch_ids, list):
+            return error("branch_ids (a list) is required.", errors={"branch_ids": "Required."})
+        primary_branch_id = request.data.get("primary_branch_id")
+
+        if branch_ids:
+            valid_ids = set(
+                Branch.objects.using(request.hospital_db)
+                .filter(pk__in=branch_ids, is_active=True)
+                .values_list("id", flat=True)
+            )
+            invalid = set(int(b) for b in branch_ids) - valid_ids
+            if invalid:
+                return error(f"Unknown or inactive branch id(s): {sorted(invalid)}", errors={"branch_ids": "Invalid."})
+            if primary_branch_id is not None and int(primary_branch_id) not in valid_ids:
+                return error("primary_branch_id must be one of branch_ids.", errors={"primary_branch_id": "Invalid."})
+
+        from apps.hospital_master.facility.branch_utils import set_staff_branches
+        set_staff_branches(staff, branch_ids, primary_branch_id, request.hospital_db)
+        staff.save(using=request.hospital_db, update_fields=["branch"])
+
+        return success(data=StaffSerializer(staff).data["branches"], message="Branch assignment updated.")
+
+
+class StaffDoctorsView(APIView):
+    """
+    GET /api/v1/org/staff/{id}/doctors/ — the doctor(s) this nurse is
+    rostered to (empty for every other role).
+    PUT /api/v1/org/staff/{id}/doctors/  — replace it. Body: {"doctor_ids": [1, 2]}
+
+    This is what apps.hospital_master.opd.views's nurse-scoping (AppointmentListCreateView /
+    AppointmentUpcomingView / AppointmentHistoryView / MonitoringListView)
+    reads to decide which patients a nurse's queue/vitals/upcoming-schedule
+    views show — same "assigned, not everyone" idea a doctor already gets
+    from doctor_user_id=request.user.id, just admin-configured instead of
+    identity-derived. An empty list is valid (unassigns everything) and is
+    also every nurse's starting state until an admin sets this.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def _get_staff(self, request, pk):
+        try:
+            return StaffUser.objects.using(request.hospital_db).get(pk=pk)
+        except StaffUser.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        staff = self._get_staff(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+        return success(data=StaffSerializer(staff).data["assigned_doctors"])
+
+    def put(self, request, pk):
+        staff = self._get_staff(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+        if staff.role != "nurse":
+            return error("Doctor assignment only applies to nurses.", errors={"role": "Not a nurse."})
+
+        doctor_ids = request.data.get("doctor_ids")
+        if doctor_ids is None or not isinstance(doctor_ids, list):
+            return error("doctor_ids (a list) is required.", errors={"doctor_ids": "Required."})
+
+        if doctor_ids:
+            valid_ids = set(
+                StaffUser.objects.using(request.hospital_db)
+                .filter(pk__in=doctor_ids, role="doctor", is_active=True)
+                .values_list("id", flat=True)
+            )
+            invalid = set(int(d) for d in doctor_ids) - valid_ids
+            if invalid:
+                return error(f"Unknown or inactive doctor id(s): {sorted(invalid)}", errors={"doctor_ids": "Invalid."})
+
+        from apps.hospital_master.staff.nurse_doctor_utils import set_nurse_doctors
+        set_nurse_doctors(staff, doctor_ids, request.hospital_db)
+
+        return success(data=StaffSerializer(staff).data["assigned_doctors"], message="Doctor assignment updated.")
+
+
+class MyBranchesView(APIView):
+    """
+    GET /api/v1/org/me/branches/ — the logged-in staff member's own branch
+    assignment (self-service, read-only — branches are assigned by the
+    hospital admin, see StaffBranchesView). Used by the frontend to decide
+    whether to show a branch switcher: one entry (or zero, for staff who
+    predate branch assignment entirely) means no switcher is needed.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalStaff]
+
+    def get(self, request):
+        try:
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=request.user.id)
+        except StaffUser.DoesNotExist:
+            return not_found("Staff account not found.")
+        return success(data=StaffSerializer(staff).data["branches"])
+
+
+class StaffResendInviteView(APIView):
+    """POST /api/v1/org/staff/{id}/resend-invite/ — regenerate invite token."""
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def post(self, request, pk):
+        try:
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=pk, is_active=True)
+        except StaffUser.DoesNotExist:
+            return not_found("Staff member not found.")
+
+        temp_password = _gen_temp_password()
+        staff.set_password(temp_password)
+        staff.must_change_password = True
+        staff.save(using=request.hospital_db, update_fields=["password", "must_change_password"])
+
+        _send_new_account_email(staff, temp_password)
+        return success(data={
+            "temp_password": temp_password,
+            "note": "New temporary password generated. Share with the staff member."
+                    + (" A copy was also emailed to them." if staff.email else ""),
+        }, message="New temporary password generated.")
+
+
+# ── Table-driven RBAC ──────────────────────────────────────────────────────────
+# See apps.hospital_master.staff.rbac / docs/onboarding_auth_rbac_architecture.md 4.3. Every
+# hospital DB is seeded (migration 0013) with the 6 system roles and the fixed
+# permission catalog. Viewing is available to any hospital admin regardless
+# of tier — creating/editing a CUSTOM role requires feat_custom_roles
+# (enterprise). System roles are always read-only via this API; they exist
+# to describe the hardcoded Is* checks, not to be edited around them.
+
+class PermissionListView(APIView):
+    """GET /api/v1/org/permissions/ — the fixed, deploy-time permission catalog."""
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def get(self, request):
+        perms = Permission.objects.using(request.hospital_db).all()
+        return success(data=PermissionSerializer(perms, many=True).data)
+
+
+class RoleListCreateView(APIView):
+    """
+    GET  /api/v1/org/roles/  — every role (6 system + any custom), each with
+                                its granted permission codes.
+    POST /api/v1/org/roles/  — create a custom role. Requires feat_custom_roles.
+    """
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAuthenticated(), IsHospitalAdmin(), RequireFeature("feat_custom_roles")()]
+        return [IsAuthenticated(), IsHospitalAdmin()]
+
+    def get(self, request):
+        roles = Role.objects.using(request.hospital_db).prefetch_related("permissions").all()
+        return success(data=RoleSerializer(roles, many=True).data)
+
+    def post(self, request):
+        s = RoleWriteSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        d = s.validated_data
+
+        if Role.objects.using(request.hospital_db).filter(name__iexact=d["name"]).exists():
+            return error("A role with this name already exists.", errors={"name": "Already in use."})
+
+        valid_codes = set(
+            Permission.objects.using(request.hospital_db).values_list("code", flat=True)
+        )
+        requested_codes = set(d.get("permission_codes") or [])
+        unknown = requested_codes - valid_codes
+        if unknown:
+            return error(f"Unknown permission code(s): {', '.join(sorted(unknown))}.",
+                         errors={"permission_codes": "Contains unknown code(s)."})
+
+        role = Role.objects.using(request.hospital_db).create(
+            name=d["name"], description=d.get("description", ""), is_system_role=False,
+            acts_as=d.get("acts_as") or [],
+        )
+        if requested_codes:
+            perms = Permission.objects.using(request.hospital_db).filter(code__in=requested_codes)
+            role.permissions.set(perms)
+
+        return created(data=RoleSerializer(role).data, message="Role created.")
+
+
+class RoleDetailView(APIView):
+    """
+    PATCH  /api/v1/org/roles/{id}/  — edit a custom role's name/description/
+                                       permission_codes. System roles can't be
+                                       edited (400). Requires feat_custom_roles.
+    DELETE /api/v1/org/roles/{id}/  — delete a custom role. System roles can't
+                                       be deleted. Any staff still holding this
+                                       role (via UserRole) simply loses the
+                                       extra grant — their primary StaffUser.role
+                                       is untouched.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalAdmin, RequireFeature("feat_custom_roles")]
+
+    def _get_role(self, request, pk):
+        try:
+            return Role.objects.using(request.hospital_db).get(pk=pk)
+        except Role.DoesNotExist:
+            return None
+
+    def patch(self, request, pk):
+        role = self._get_role(request, pk)
+        if not role:
+            return not_found("Role not found.")
+        if role.is_system_role:
+            return error("System roles can't be edited.")
+
+        s = RoleWriteSerializer(data=request.data, partial=True)
+        s.is_valid(raise_exception=True)
+        d = s.validated_data
+
+        if "name" in d:
+            if Role.objects.using(request.hospital_db).filter(name__iexact=d["name"]).exclude(pk=role.pk).exists():
+                return error("A role with this name already exists.", errors={"name": "Already in use."})
+            role.name = d["name"]
+        if "description" in d:
+            role.description = d["description"]
+        if "acts_as" in d:
+            role.acts_as = d["acts_as"] or []
+        role.save(using=request.hospital_db)
+
+        if "permission_codes" in d:
+            valid_codes = set(
+                Permission.objects.using(request.hospital_db).values_list("code", flat=True)
+            )
+            requested_codes = set(d.get("permission_codes") or [])
+            unknown = requested_codes - valid_codes
+            if unknown:
+                return error(f"Unknown permission code(s): {', '.join(sorted(unknown))}.",
+                             errors={"permission_codes": "Contains unknown code(s)."})
+            perms = Permission.objects.using(request.hospital_db).filter(code__in=requested_codes)
+            role.permissions.set(perms)
+
+        return success(data=RoleSerializer(role).data, message="Role updated.")
+
+    def delete(self, request, pk):
+        role = self._get_role(request, pk)
+        if not role:
+            return not_found("Role not found.")
+        if role.is_system_role:
+            return error("System roles can't be deleted.")
+        # Unlike UserRole (extra roles — CASCADE is fine, losing an extra
+        # grant isn't destructive), StaffUser.custom_role is PROTECTed: a
+        # staff member whose PRIMARY role this is would be left with role=
+        # "custom" and no way to resolve permissions/identity at all if the
+        # role vanished under them. Check explicitly for a clear, actionable
+        # error instead of surfacing Django's raw ProtectedError as a 500.
+        holders = StaffUser.objects.using(request.hospital_db).filter(
+            custom_role=role, is_active=True
+        ).count()
+        if holders:
+            plural = "" if holders == 1 else "s"
+            return error(
+                f"{holders} active staff member{plural} currently use this as their primary "
+                "role. Reassign them to a different role first, then delete this one.",
+            )
+        role.delete()
+        return success(message="Role deleted.")
+
+
+class StaffRolesView(APIView):
+    """
+    GET /api/v1/org/staff/{id}/roles/ — this staff member's primary role
+                                         (StaffUser.role, always active) plus
+                                         any extra custom roles assigned.
+    PUT /api/v1/org/staff/{id}/roles/  — replace the extra-roles set.
+                                         Body: {"role_ids": [3, 5]}
+                                         Requires feat_custom_roles. The
+                                         primary role is unaffected — this
+                                         only manages additive grants.
+    """
+    def get_permissions(self):
+        if self.request.method == "PUT":
+            return [IsAuthenticated(), IsHospitalAdmin(), RequireFeature("feat_custom_roles")()]
+        return [IsAuthenticated(), IsHospitalAdmin()]
+
+    def get(self, request, pk):
+        try:
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=pk)
+        except StaffUser.DoesNotExist:
+            return not_found("Staff member not found.")
+        extra = (
+            UserRole.objects.using(request.hospital_db)
+            .filter(staff_id=staff.id).select_related("role")
+        )
+        return success(data={
+            "primary_role": staff.role,
+            "extra_roles": [RoleSerializer(ur.role).data for ur in extra],
+        })
+
+    def put(self, request, pk):
+        try:
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=pk)
+        except StaffUser.DoesNotExist:
+            return not_found("Staff member not found.")
+
+        role_ids = request.data.get("role_ids")
+        if role_ids is None or not isinstance(role_ids, list):
+            return error("role_ids (a list) is required.", errors={"role_ids": "Required."})
+
+        valid_roles = Role.objects.using(request.hospital_db).filter(pk__in=role_ids)
+        valid_ids = set(valid_roles.values_list("id", flat=True))
+        invalid = set(int(r) for r in role_ids) - valid_ids
+        if invalid:
+            return error(f"Unknown role id(s): {sorted(invalid)}.", errors={"role_ids": "Contains unknown id(s)."})
+
+        UserRole.objects.using(request.hospital_db).filter(staff_id=staff.id).delete()
+        UserRole.objects.using(request.hospital_db).bulk_create([
+            UserRole(staff_id=staff.id, role_id=rid) for rid in valid_ids
+        ])
+        return success(message="Roles updated.")
+
+
+# ── Doctor Profile ────────────────────────────────────────────────────────────
+
+class DoctorProfileView(APIView):
+    """
+    GET  /api/v1/org/staff/{id}/doctor-profile/ — get profile
+    POST /api/v1/org/staff/{id}/doctor-profile/ — create profile (doctor role only)
+    PATCH /api/v1/org/staff/{id}/doctor-profile/ — update profile
+    """
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def _get_staff(self, request, pk):
+        try:
+            return StaffUser.objects.using(request.hospital_db).get(pk=pk, is_active=True)
+        except StaffUser.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        staff = self._get_staff(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+        try:
+            profile = DoctorProfile.objects.using(request.hospital_db).get(staff=staff)
+            return success(data=DoctorProfileSerializer(profile).data)
+        except DoctorProfile.DoesNotExist:
+            return not_found("Doctor profile not found.")
+
+    def post(self, request, pk):
+        staff = self._get_staff(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+        if staff.role != "doctor":
+            return error("Doctor profile can only be created for staff with role 'doctor'.")
+        if DoctorProfile.objects.using(request.hospital_db).filter(staff=staff).exists():
+            return error("Doctor profile already exists. Use PATCH to update.")
+
+        s = DoctorProfileSerializer(data=request.data)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+
+        profile = DoctorProfile(staff=staff, **s.validated_data)
+        profile.save(using=request.hospital_db)
+        return created(data=DoctorProfileSerializer(profile).data, message="Doctor profile created.")
+
+    def patch(self, request, pk):
+        staff = self._get_staff(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+        try:
+            profile = DoctorProfile.objects.using(request.hospital_db).get(staff=staff)
+        except DoctorProfile.DoesNotExist:
+            return not_found("Doctor profile not found. Create it first with POST.")
+
+        s = DoctorProfileSerializer(profile, data=request.data, partial=True)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        for attr, val in s.validated_data.items():
+            setattr(profile, attr, val)
+        profile.save(using=request.hospital_db)
+        return success(data=DoctorProfileSerializer(profile).data, message="Doctor profile updated.")
+
+
+class MyDoctorProfileView(APIView):
+    """
+    GET   /api/v1/org/me/doctor-profile/ — the logged-in doctor's own profile
+    PATCH /api/v1/org/me/doctor-profile/ — self-service update
+
+    Doctor-only, and always scoped to request.user's own StaffUser row — no
+    :pk in the URL, so a doctor can never read or edit anyone else's profile.
+    Admin-set basics (registration_no, specialisation, qualification,
+    experience_years) are read-only here; use DoctorProfileView (admin-only)
+    to change those. Everything else — fee, signature, bio, photo, languages —
+    the doctor owns.
+    """
+    permission_classes = [IsAuthenticated, IsDoctor]
+
+    def _fee_editable(self, request):
+        """Returns True when this hospital delegates fee-setting to the doctor."""
+        from apps.atomwalk.hospital_master.models import Hospital as _Hospital
+        try:
+            t = _Hospital.objects.using("default").get(pk=request.hospital_id)
+            return t.fee_ownership == "doctor"
+        except _Hospital.DoesNotExist:
+            return False
+
+    def get(self, request):
+        profile, _ = DoctorProfile.objects.using(request.hospital_db).get_or_create(
+            staff_id=request.user.id
+        )
+        ctx = {"fee_editable": self._fee_editable(request)}
+        return success(data=DoctorSelfProfileSerializer(profile, context=ctx).data)
+
+    def patch(self, request):
+        profile, _ = DoctorProfile.objects.using(request.hospital_db).get_or_create(
+            staff_id=request.user.id
+        )
+        ctx = {"fee_editable": self._fee_editable(request)}
+
+        # digital_signature is handled separately from the generic serializer
+        # loop below — same reasoning as MyStaffProfileView's photo handling:
+        # base64 in, S3 key out, nothing but the key touches the DB.
+        # DoctorSelfProfileSerializer.digital_signature is read-only for this
+        # reason.
+        old_sig_key = profile.digital_signature
+        if "digital_signature" in request.data:
+            sig = request.data.get("digital_signature") or ""
+            if not sig:
+                profile.digital_signature = ""
+            else:
+                try:
+                    mime_type = validate_data_uri(sig)
+                except FileValidationError as exc:
+                    return error(str(exc), errors={"digital_signature": str(exc)})
+                from apps.atomwalk.hospital_master.models import Hospital as _Hospital
+                _hospital = _Hospital.objects.using("default").filter(pk=request.hospital_id).first()
+                folder = blob_storage.hospital_folder(_hospital) if _hospital else request.hospital_db
+                _staff = StaffUser.objects.using(request.hospital_db).filter(pk=request.user.id).first()
+                identity = blob_storage.identity_slug(
+                    name=_staff.get_full_name() if _staff else "", identifier=request.user.email,
+                )
+                try:
+                    profile.digital_signature = blob_storage.upload_data_uri(
+                        sig, prefix=f"doctor-signatures/{folder}", mime_type=mime_type,
+                        category="doctor-signature", identity=identity,
+                    )
+                except blob_storage.StorageError as exc:
+                    return error(str(exc), errors={"digital_signature": str(exc)})
+
+        s = DoctorSelfProfileSerializer(profile, data=request.data, partial=True, context=ctx)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        for attr, val in s.validated_data.items():
+            setattr(profile, attr, val)
+        profile.save(using=request.hospital_db)
+        if "digital_signature" in request.data and old_sig_key and old_sig_key != profile.digital_signature:
+            blob_storage.delete(old_sig_key)
+        return success(data=DoctorSelfProfileSerializer(profile, context=ctx).data, message="Profile updated.")
+
+
+# ── Staff Profile (every non-doctor role) ─────────────────────────────────────
+
+class StaffProfileView(APIView):
+    """
+    GET   /api/v1/org/staff/{id}/profile/ — get profile
+    POST  /api/v1/org/staff/{id}/profile/ — create profile (any non-doctor role)
+    PATCH /api/v1/org/staff/{id}/profile/ — update profile
+
+    Admin-only — mirrors DoctorProfileView but for nurse/front desk/lab tech/
+    pharmacist/hospital admin, which use StaffProfile instead of DoctorProfile.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def _get_staff(self, request, pk):
+        try:
+            return StaffUser.objects.using(request.hospital_db).get(pk=pk, is_active=True)
+        except StaffUser.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        staff = self._get_staff(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+        try:
+            profile = StaffProfile.objects.using(request.hospital_db).get(staff=staff)
+            return success(data=StaffProfileSerializer(profile).data)
+        except StaffProfile.DoesNotExist:
+            return not_found("Profile not found.")
+
+    def post(self, request, pk):
+        staff = self._get_staff(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+        from apps.hospital_master.staff.rbac import resolve_acts_as
+        if "doctor" in resolve_acts_as(staff):
+            return error("Doctors use /doctor-profile/, not /profile/.")
+        if StaffProfile.objects.using(request.hospital_db).filter(staff=staff).exists():
+            return error("Profile already exists. Use PATCH to update.")
+
+        s = StaffProfileSerializer(data=request.data)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+
+        profile = StaffProfile(staff=staff, **s.validated_data)
+        profile.save(using=request.hospital_db)
+        return created(data=StaffProfileSerializer(profile).data, message="Profile created.")
+
+    def patch(self, request, pk):
+        staff = self._get_staff(request, pk)
+        if not staff:
+            return not_found("Staff member not found.")
+        try:
+            profile = StaffProfile.objects.using(request.hospital_db).get(staff=staff)
+        except StaffProfile.DoesNotExist:
+            return not_found("Profile not found. Create it first with POST.")
+
+        s = StaffProfileSerializer(profile, data=request.data, partial=True)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        for attr, val in s.validated_data.items():
+            setattr(profile, attr, val)
+        profile.save(using=request.hospital_db)
+        return success(data=StaffProfileSerializer(profile).data, message="Profile updated.")
+
+
+class MyStaffProfileDetailsView(APIView):
+    """
+    GET   /api/v1/org/me/staff-profile/ — the logged-in (non-doctor) staff
+                                           member's own profile
+    PATCH /api/v1/org/me/staff-profile/ — self-service update
+
+    Mirrors MyDoctorProfileView for every other role. Doctors have their own
+    richer endpoint (MyDoctorProfileView) and should not hit this one.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalStaff]
+
+    def get(self, request):
+        if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
+            return error("Doctors use /me/doctor-profile/, not /me/staff-profile/.")
+        profile, _ = StaffProfile.objects.using(request.hospital_db).get_or_create(
+            staff_id=request.user.id
+        )
+        return success(data=StaffProfileSelfSerializer(profile).data)
+
+    def patch(self, request):
+        if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
+            return error("Doctors use /me/doctor-profile/, not /me/staff-profile/.")
+        profile, _ = StaffProfile.objects.using(request.hospital_db).get_or_create(
+            staff_id=request.user.id
+        )
+        s = StaffProfileSelfSerializer(profile, data=request.data, partial=True)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        for attr, val in s.validated_data.items():
+            setattr(profile, attr, val)
+        profile.save(using=request.hospital_db)
+        return success(data=StaffProfileSelfSerializer(profile).data, message="Profile updated.")
+
+
+class MyStaffProfileView(APIView):
+    """
+    GET   /api/v1/org/me/profile/ — the logged-in staff member's own basic profile
+    PATCH /api/v1/org/me/profile/ — self-service update (currently: photo only)
+
+    Open to ANY staff role (doctor, nurse, front desk, lab tech, pharmacist,
+    hospital admin) — always scoped to request.user's own StaffUser row.
+    This is deliberately separate from MyDoctorProfileView: photo is common
+    to every login, bio/signature/languages are doctor-specific.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalStaff]
+
+    def get(self, request):
+        try:
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=request.user.id)
+        except StaffUser.DoesNotExist:
+            return not_found("Staff member not found.")
+        return success(data=StaffMeSerializer(staff).data)
+
+    def patch(self, request):
+        try:
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=request.user.id)
+        except StaffUser.DoesNotExist:
+            return not_found("Staff member not found.")
+
+        # photo is handled separately from the generic serializer loop below
+        # — it arrives as a base64 data URI and needs to be verified + pushed
+        # to S3 (core.storage), with only the resulting object key ever
+        # touching the DB. StaffMeSerializer.photo is read-only for exactly
+        # this reason (see its definition) so it never appears in
+        # validated_data.
+        old_photo_key = staff.photo
+        if "photo" in request.data:
+            photo = request.data.get("photo") or ""
+            if not photo:
+                staff.photo = ""
+            else:
+                if len(photo) > _MAX_PHOTO_BASE64_CHARS:
+                    return error("Photo is too large. Please use an image under ~1.5MB.",
+                                 errors={"photo": "Too large."})
+                try:
+                    mime_type = validate_data_uri(photo)
+                except FileValidationError as exc:
+                    return error(str(exc), errors={"photo": str(exc)})
+                from apps.atomwalk.hospital_master.models import Hospital as _Hospital
+                _hospital = _Hospital.objects.using("default").filter(pk=request.hospital_id).first()
+                folder = blob_storage.hospital_folder(_hospital) if _hospital else request.hospital_db
+                identity = blob_storage.identity_slug(name=staff.get_full_name(), identifier=staff.email)
+                try:
+                    staff.photo = blob_storage.upload_data_uri(
+                        photo, prefix=f"staff-photos/{folder}", mime_type=mime_type,
+                        category="staff-photo", identity=identity,
+                    )
+                except blob_storage.StorageError as exc:
+                    return error(str(exc), errors={"photo": str(exc)})
+
+        s = StaffMeSerializer(staff, data=request.data, partial=True)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        for attr, val in s.validated_data.items():
+            setattr(staff, attr, val)
+        staff.save(using=request.hospital_db)
+        if "photo" in request.data and old_photo_key and old_photo_key != staff.photo:
+            blob_storage.delete(old_photo_key)
+        return success(data=StaffMeSerializer(staff).data, message="Profile updated.")
+
+
+# ── Doctors list (for scheduling dropdown etc.) ───────────────────────────────
+
+class DoctorListView(APIView):
+    """
+    GET /api/v1/org/doctors/?q=&specialisation=&branch_id= — list doctors
+    with profiles (any staff). Includes custom-role staff whose
+    Role.acts_as includes "doctor" (e.g. a solo-clinic role bundling
+    doctor+nurse+front_desk) — see apps.hospital_master.staff.rbac.resolve_acts_as. They get
+    a DoctorProfile at invite time the same as a literal doctor (see
+    StaffInviteView), so they show up here with real specialisation/fee/
+    schedule data, not a blank card.
+
+    ?q= matches first/last name or specialisation (front-desk doctor
+    search — "cardio" finds every cardiologist, "sharma" finds every
+    doctor named Sharma). ?specialisation= narrows to an exact
+    specialisation for a dedicated filter dropdown. ?branch_id= narrows to
+    doctors assigned to that branch (see apps.hospital_master.facility.branch_utils) — omitted
+    means "every branch", same default as everywhere else that filter is
+    optional.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalStaff]
+
+    def get(self, request):
+        qs = StaffUser.objects.using(request.hospital_db).filter(
+            Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"]),
+            is_active=True,
+        ).prefetch_related("doctor_profile")
+
+        q = (request.query_params.get("q") or "").strip()
+        if q:
+            qs = qs.filter(
+                Q(first_name__icontains=q) | Q(last_name__icontains=q)
+                | Q(doctor_profile__specialisation__icontains=q)
+                | Q(doctor_profile__known_for__icontains=q)
+            )
+
+        specialisation = (request.query_params.get("specialisation") or "").strip()
+        if specialisation:
+            qs = qs.filter(doctor_profile__specialisation__iexact=specialisation)
+
+        branch_id = request.query_params.get("branch_id")
+        if branch_id:
+            from apps.hospital_master.facility.branch_utils import get_staff_ids_in_branch
+            qs = qs.filter(pk__in=get_staff_ids_in_branch(branch_id, request.hospital_db))
+
+        return success(data=StaffSerializer(qs.distinct(), many=True).data)
+
+
+class DoctorSpecialisationListView(APIView):
+    """
+    GET /api/v1/org/doctors/specialisations/ — distinct, non-blank
+    specialisation values currently in use at this hospital, for a filter
+    dropdown (front desk doctor search) instead of free-typing.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalStaff]
+
+    def get(self, request):
+        values = (
+            StaffUser.objects.using(request.hospital_db)
+            .filter(
+                Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"]),
+                is_active=True,
+            )
+            .exclude(doctor_profile__specialisation="")
+            .values_list("doctor_profile__specialisation", flat=True)
+            .distinct()
+            .order_by("doctor_profile__specialisation")
+        )
+        return success(data=[v for v in values if v])
+
+
+# ── Hospital-level clinical settings ───────────────────────────────────────────
+
+class HospitalSettingsView(APIView):
+    """
+    GET   /api/v1/org/settings/  — read hospital-level clinical config
+    PATCH /api/v1/org/settings/  — update (hospital admin only)
+
+    Currently exposes fee_ownership.  Add other per-hospital knobs here rather
+    than scattering them across unrelated endpoints.
+    """
+    def get_permissions(self):
+        # Any staff role may read (the doctor profile needs fee_ownership);
+        # only admins see the full config or may change it.
+        perm = IsHospitalStaff if self.request.method == "GET" else IsHospitalAdmin
+        return [IsAuthenticated(), perm()]
+
+    def _get_hospital(self, request):
+        from apps.atomwalk.hospital_master.models import Hospital as _Hospital
+        try:
+            return _Hospital.objects.using("default").get(pk=request.hospital_id)
+        except _Hospital.DoesNotExist:
+            return None
+
+    def get(self, request):
+        hospital = self._get_hospital(request)
+        if not hospital:
+            return not_found("Hospital not found.")
+        if not IsHospitalAdmin().has_permission(request, self):
+            return success(data={"fee_ownership": hospital.fee_ownership})
+        return success(data={
+            "fee_ownership": hospital.fee_ownership,
+            # Read-only here — staff need this to log in with Employee ID
+            # instead of mobile (see auth_app.views.StaffLoginView), but it's
+            # not exposed for editing on this endpoint; see
+            # platform_admin.views.HospitalDetailView for that.
+            "subdomain": hospital.subdomain,
+            # ── Billing config ──────────────────────────────────────────
+            "registration_fee_enabled": hospital.registration_fee_enabled,
+            "registration_fee_amount": str(hospital.registration_fee_amount),
+            "default_tax_rate": str(hospital.default_tax_rate),
+            # ── Branding ───────────────────────────────────────────────
+            # hospital.logo stores an S3 object key, not a usable URL — sign
+            # it fresh on every read (see core/storage.py).
+            "logo": blob_storage.signed_url(hospital.logo),
+            # Empty means "using the auto-generated default" (hospital.db_name)
+            # — see core.storage.hospital_folder(). Frontend shows the
+            # effective folder name as a placeholder when this is blank.
+            "storage_folder": hospital.storage_folder,
+            "storage_folder_default": hospital.db_name,
+        })
+
+    def patch(self, request):
+        hospital = self._get_hospital(request)
+        if not hospital:
+            return not_found("Hospital not found.")
+        allowed = {"fee_ownership", "registration_fee_enabled", "registration_fee_amount", "default_tax_rate", "logo", "storage_folder"}
+        for key, val in request.data.items():
+            if key not in allowed:
+                return error(f"Field '{key}' is not configurable here.")
+        if "fee_ownership" in request.data:
+            fo = request.data["fee_ownership"]
+            from apps.atomwalk.hospital_master.models import Hospital as _Hospital
+            valid = [c[0] for c in _Hospital.FEE_OWNERSHIP_CHOICES]
+            if fo not in valid:
+                return error(f"fee_ownership must be one of: {valid}.")
+            hospital.fee_ownership = fo
+        if "registration_fee_enabled" in request.data:
+            hospital.registration_fee_enabled = bool(request.data["registration_fee_enabled"])
+        if "registration_fee_amount" in request.data:
+            try:
+                amt = Decimal(str(request.data["registration_fee_amount"]))
+            except Exception:
+                return error("registration_fee_amount must be a number.")
+            if amt < 0:
+                return error("registration_fee_amount can't be negative.")
+            hospital.registration_fee_amount = amt
+        if "default_tax_rate" in request.data:
+            try:
+                rate = Decimal(str(request.data["default_tax_rate"]))
+            except Exception:
+                return error("default_tax_rate must be a number.")
+            if rate < 0 or rate > 100:
+                return error("default_tax_rate must be between 0 and 100.")
+            hospital.default_tax_rate = rate
+        if "storage_folder" in request.data:
+            raw = (request.data.get("storage_folder") or "").strip()
+            if not raw:
+                hospital.storage_folder = ""
+            else:
+                slug = blob_storage.sanitize_folder_name(raw)
+                if not slug:
+                    return error("Storage folder name must contain at least one letter or number.",
+                                 errors={"storage_folder": "Invalid."})
+                hospital.storage_folder = slug
+        old_logo_key = hospital.logo
+        if "logo" in request.data:
+            logo = request.data["logo"] or ""
+            # Client resizes before upload (see HospitalLogoUpload.jsx), but
+            # don't trust that — cap the incoming string so a bypassed client
+            # can't force an enormous upload through.
+            if len(logo) > 1_500_000:
+                return error("Logo image is too large. Please upload a smaller file.")
+            if not logo:
+                hospital.logo = ""
+            else:
+                try:
+                    mime_type = validate_data_uri(logo)
+                except FileValidationError as exc:
+                    return error(str(exc), errors={"logo": str(exc)})
+                try:
+                    hospital.logo = blob_storage.upload_data_uri(
+                        logo, prefix=f"hospital-logos/{blob_storage.hospital_folder(hospital)}", mime_type=mime_type,
+                        category="hospital-logo",
+                    )
+                except blob_storage.StorageError as exc:
+                    return error(str(exc), errors={"logo": str(exc)})
+        hospital.save(using="default")
+        if "logo" in request.data and old_logo_key and old_logo_key != hospital.logo:
+            blob_storage.delete(old_logo_key)
+        return success(data={
+            "fee_ownership": hospital.fee_ownership,
+            "registration_fee_enabled": hospital.registration_fee_enabled,
+            "registration_fee_amount": str(hospital.registration_fee_amount),
+            "default_tax_rate": str(hospital.default_tax_rate),
+            "logo": blob_storage.signed_url(hospital.logo),
+            "storage_folder": hospital.storage_folder,
+            "storage_folder_default": hospital.db_name,
+        }, message="Settings updated.")
+
+
+# ── Doctor working-hours schedule ─────────────────────────────────────────────
+
+class DoctorScheduleView(APIView):
+    """
+    GET   /api/v1/org/staff/<pk>/schedule/  — get doctor's working hours
+    PUT   /api/v1/org/staff/<pk>/schedule/  — full replace (admin or the doctor themselves)
+
+    Both the hospital admin and the doctor whose schedule it is can call PUT.
+    Any other staff role is rejected.
+    """
+    permission_classes = [IsAuthenticated, IsHospitalStaff]
+
+    def _get_doctor(self, request, pk):
+        try:
+            staff = StaffUser.objects.using(request.hospital_db).get(pk=pk, is_active=True)
+            if staff.role != "doctor":
+                return None, error("Schedule is only supported for doctors.")
+            return staff, None
+        except StaffUser.DoesNotExist:
+            return None, not_found("Doctor not found.")
+
+    def _can_edit(self, request, staff):
+        """Admin always can; the doctor can edit their own schedule."""
+        acts_as = getattr(request.user, "acts_as", [])
+        if request.user.role == "hospital_admin" or "hospital_admin" in acts_as:
+            return True
+        if (request.user.role == "doctor" or "doctor" in acts_as) and request.user.id == staff.id:
+            return True
+        return False
+
+    def get(self, request, pk):
+        from apps.hospital_master.staff.models import DoctorSchedule as _DS
+        from apps.hospital_master.staff.serializers import DoctorScheduleSerializer as _SS
+        staff, err = self._get_doctor(request, pk)
+        if err:
+            return err
+        try:
+            sched = _DS.objects.using(request.hospital_db).prefetch_related("days").get(doctor=staff)
+        except _DS.DoesNotExist:
+            return success(data=None)   # no schedule configured yet
+        return success(data=_SS(sched).data)
+
+    def put(self, request, pk):
+        from apps.hospital_master.staff.models import DoctorSchedule as _DS, DoctorAvailabilitySlot as _DAS
+        from apps.hospital_master.staff.serializers import DoctorScheduleSerializer as _SS
+        staff, err = self._get_doctor(request, pk)
+        if err:
+            return err
+        if not self._can_edit(request, staff):
+            return error("You do not have permission to edit this schedule.", status=403)
+
+        s = _SS(data=request.data)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+
+        vd        = s.validated_data
+        days_data = vd.pop("days", [])
+
+        sched, _ = _DS.objects.using(request.hospital_db).get_or_create(doctor=staff)
+        sched.slot_duration_minutes = vd.get("slot_duration_minutes", sched.slot_duration_minutes)
+        sched.save(using=request.hospital_db)
+
+        # Full replace of day rows
+        sched.days.using(request.hospital_db).all().delete()
+        for day in days_data:
+            _DAS.objects.using(request.hospital_db).create(schedule=sched, **day)
+
+        sched.refresh_from_db(using=request.hospital_db)
+        return success(data=_SS(sched).data, message="Schedule updated.")
+
+
+class RoomAssignmentListCreateView(APIView):
+    """
+    GET  /api/v1/org/room-assignments/?room_id=&doctor_id=  — list (any staff)
+    POST /api/v1/org/room-assignments/                      — create a weekly
+         slice (hospital admin only). Rejects with 409 if it overlaps an
+         existing active assignment for the same room + day of week.
+    """
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsAuthenticated(), IsHospitalStaff()]
+        return [IsAuthenticated(), IsHospitalAdmin()]
+
+    def get(self, request):
+        qs = RoomAssignment.objects.using(request.hospital_db).filter(
+            is_active=True
+        ).select_related("room", "doctor")
+        room_id = request.query_params.get("room_id")
+        if room_id:
+            qs = qs.filter(room_id=room_id)
+        doctor_id = request.query_params.get("doctor_id")
+        if doctor_id:
+            qs = qs.filter(doctor_id=doctor_id)
+        branch_id = request.query_params.get("branch_id")
+        if branch_id:
+            qs = qs.filter(room__branch_id=branch_id)
+        return success(data=RoomAssignmentSerializer(qs, many=True).data)
+
+    def post(self, request):
+        from django.db import transaction
+        from apps.hospital_master.facility.room_utils import find_overlapping_assignment
+
+        s = RoomAssignmentSerializer(data=request.data)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        d = s.validated_data
+
+        try:
+            room = Room.objects.using(request.hospital_db).get(pk=d["room"].id, is_active=True)
+        except Room.DoesNotExist:
+            return error("Room not found.", errors={"room": "Invalid room."})
+        try:
+            doctor = StaffUser.objects.using(request.hospital_db).get(
+                Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"]),
+                pk=d["doctor"].id, is_active=True,
+            )
+        except StaffUser.DoesNotExist:
+            return error("Doctor not found.", errors={"doctor": "Invalid doctor."})
+
+        with transaction.atomic(using=request.hospital_db):
+            clash = find_overlapping_assignment(
+                request.hospital_db, room.id, d["day_of_week"], d["start_time"], d["end_time"],
+            )
+            if clash:
+                return error(
+                    f"{room.name} is already assigned to Dr. {clash.doctor.get_full_name()} "
+                    f"on {clash.get_day_of_week_display()} from {clash.start_time.strftime('%H:%M')} "
+                    f"to {clash.end_time.strftime('%H:%M')} — times overlap.",
+                    errors={"start_time": "Overlaps an existing assignment."},
+                    status=409,
+                )
+            assignment = RoomAssignment(
+                room=room, doctor=doctor, day_of_week=d["day_of_week"],
+                start_time=d["start_time"], end_time=d["end_time"],
+            )
+            assignment.save(using=request.hospital_db)
+
+        return created(data=RoomAssignmentSerializer(assignment).data, message="Room assignment created.")
+
+
+class RoomAssignmentDetailView(APIView):
+    """
+    PATCH  /api/v1/org/room-assignments/{id}/ — edit day/time/doctor (re-checks overlap)
+    DELETE /api/v1/org/room-assignments/{id}/ — deactivate
+    """
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def _get(self, request, pk):
+        try:
+            return RoomAssignment.objects.using(request.hospital_db).select_related("room", "doctor").get(pk=pk)
+        except RoomAssignment.DoesNotExist:
+            return None
+
+    def patch(self, request, pk):
+        from django.db import transaction
+        from apps.hospital_master.facility.room_utils import find_overlapping_assignment
+
+        assignment = self._get(request, pk)
+        if not assignment:
+            return not_found("Room assignment not found.")
+
+        s = RoomAssignmentSerializer(assignment, data=request.data, partial=True)
+        if not s.is_valid():
+            return error("Validation error.", errors=s.errors)
+        d = s.validated_data
+
+        room_id     = d["room"].id if "room" in d else assignment.room_id
+        day_of_week = d.get("day_of_week", assignment.day_of_week)
+        start_time  = d.get("start_time", assignment.start_time)
+        end_time    = d.get("end_time", assignment.end_time)
+
+        with transaction.atomic(using=request.hospital_db):
+            clash = find_overlapping_assignment(
+                request.hospital_db, room_id, day_of_week, start_time, end_time,
+                exclude_pk=assignment.pk,
+            )
+            if clash:
+                return error(
+                    f"Overlaps Dr. {clash.doctor.get_full_name()}'s existing assignment "
+                    f"({clash.get_day_of_week_display()} {clash.start_time.strftime('%H:%M')}"
+                    f"–{clash.end_time.strftime('%H:%M')}).",
+                    errors={"start_time": "Overlaps an existing assignment."},
+                    status=409,
+                )
+            for attr, val in d.items():
+                setattr(assignment, attr, val)
+            assignment.save(using=request.hospital_db)
+
+        return success(data=RoomAssignmentSerializer(assignment).data, message="Room assignment updated.")
+
+    def delete(self, request, pk):
+        assignment = self._get(request, pk)
+        if not assignment:
+            return not_found("Room assignment not found.")
+        assignment.is_active = False
+        assignment.save(using=request.hospital_db, update_fields=["is_active"])
+        return success(message="Room assignment removed.")

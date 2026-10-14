@@ -1,0 +1,36 @@
+"""
+apps/billing/services.py
+------------------------
+Invoice logic shared by every app that bills (billing, opd, ipd, lab, pharmacy, patients).
+Moved out of billing/views.py and opd/views.py, where other apps had to import
+underscore-prefixed view functions to reach it.
+"""
+
+from decimal import Decimal
+
+from apps.hospital_master.billing.models import InvoiceItem
+
+
+def recompute_invoice_totals(invoice, db):
+    """Subtotal/tax/total are derived from line items — never set directly."""
+    items = InvoiceItem.objects.using(db).filter(invoice=invoice)
+    subtotal = sum((i.unit_price * i.quantity for i in items), Decimal("0"))
+    tax_amount = sum(
+        ((i.unit_price * i.quantity) * (i.tax_rate / Decimal("100")) for i in items), Decimal("0")
+    )
+    invoice.subtotal = subtotal
+    invoice.tax_amount = tax_amount
+    invoice.total_amount = subtotal + tax_amount - invoice.discount_amount
+    invoice.save(using=db, update_fields=["subtotal", "tax_amount", "total_amount"])
+
+
+def hospital_default_tax_rate(hospital_id):
+    """The hospital's configured default tax rate (percent); 0 when unknown."""
+    from apps.atomwalk.hospital_master.models import Hospital
+
+    if not hospital_id:
+        return Decimal("0")
+    try:
+        return Hospital.objects.using("default").get(pk=hospital_id).default_tax_rate
+    except Hospital.DoesNotExist:
+        return Decimal("0")

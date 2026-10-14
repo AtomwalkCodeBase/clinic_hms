@@ -15,7 +15,7 @@ Role-based checks pass for either of two things: the user's literal `role`
 claim equals the role in question (the fast path — true for the 6 system
 roles StaffUser.role can be), OR the user's `role` is "custom" and that role
 key appears in their `acts_as` claim (a hospital-defined Role — see
-apps.org.rbac.resolve_acts_as — that was explicitly built to act as that
+apps.hospital_master.staff.rbac.resolve_acts_as — that was explicitly built to act as that
 identity, e.g. a solo-clinic "does everything" role). See _acts_as() below.
 Platform admin and patient are never reachable via a custom Role (they're
 not staff-side system roles), so IsPlatformAdmin/IsPatient stay pure literal
@@ -127,7 +127,7 @@ class IsDoctorOrFrontDesk(BasePermission):
     Doctor + front desk share write access to pediatric Birth History —
     front desk can capture it at registration (parent often has the details
     on hand right then), and the pediatrician can add/correct it later at
-    consultation. See apps.hospital_patients.models.BirthHistory.
+    consultation. See apps.hospital_master.patients.models.BirthHistory.
     """
     message = "Access restricted to front desk staff and doctors."
     def has_permission(self, request, view):

@@ -14,9 +14,11 @@ from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.auth_app.views import LogoutView, TokenRefreshView, _make_tokens
-from apps.org.models import Branch, StaffUser
-from apps.atomwalk.models import BlacklistedToken, PatientAccount
-from apps.hospitals.models import Subscription, Hospital
+from apps.hospital_master.facility.models import Branch
+from apps.hospital_master.staff.models import StaffUser
+from apps.atomwalk.patients.models import BlacklistedToken
+from apps.atomwalk.patients.models import PatientAccount
+from apps.atomwalk.hospital_master.models import Subscription, Hospital
 from core.authentication import JWTHospitalAuthentication
 from core.testing import HospitalDBTestCase, requires_hospital_db
 
