@@ -10,6 +10,7 @@ from apps.atomwalk.models import MedicalDocument
 from apps.records.tests.helpers import identity
 from apps.atomwalk.models import ConsultSession
 from core.authentication import MockUser
+from core.testing import ensure_hospital
 
 
 class InternalNoteViewTests(TestCase):
@@ -18,7 +19,7 @@ class InternalNoteViewTests(TestCase):
     def setUp(self):
         identity("AWP-T1")
         self.enc = uuid.uuid4()
-        self.sess = ConsultSession.objects.create(awpid="AWP-T1", hospital_id=3, encounter_id=self.enc,
+        self.sess = ConsultSession.objects.create(patient=identity("AWP-T1"), hospital=ensure_hospital(3), encounter_id=self.enc,
                                                   note_pdf="patients/AWP-T1/consult-notes/n.pdf")
 
     def get(self, role="doctor", hospital_id=3, enc=None, **params):

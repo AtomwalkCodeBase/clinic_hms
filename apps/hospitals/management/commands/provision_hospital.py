@@ -173,7 +173,6 @@ class Command(BaseCommand):
                 mobile=admin_mobile,
                 defaults={
                     "hospital_id": hospital.id,
-                    "db_name": db_name,
                     "email": admin_email or None,
                 },
             )

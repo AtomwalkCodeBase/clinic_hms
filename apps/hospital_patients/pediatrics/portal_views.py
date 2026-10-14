@@ -135,7 +135,7 @@ class PortalVaccinationUploadView(APIView):
         record = ImmunizationRecord.objects.using("default").create(
             patient=Patient.objects.using("default").filter(awpid=awpid).first(), vaccine_name=name, scheduled_label=text(d, "scheduled_label"), administered_date=given_on,
             source=ImmunizationRecord.SOURCE_SELF_REPORTED, verification_status=ImmunizationRecord.STATUS_PENDING,
-            file_name=file_name, mime_type=mime_type, file_data=file_key, recorded_by="patient")
+            file_name=file_name, mime_type=mime_type, file_data=file_key)
         return success(data={"id": record.id, "vaccine_name": record.vaccine_name,
                              "administered_date": str(record.administered_date),
                              "verification_status": record.verification_status},
@@ -153,7 +153,7 @@ class PortalVaccinationFileView(APIView):
         account = _account(request)
         owner_awpid = record.patient.awpid if record.patient_id else ""
         if owner_awpid != account.awpid and not PatientRelationship.objects.using("default").filter(
-                guardian_awpid=account.awpid, dependent_awpid=owner_awpid).exists():
+                guardian__awpid=account.awpid, dependent__awpid=owner_awpid).exists():
             return error("This record does not belong to you.", status=403)
         if not record.file_data:
             return not_found("No certificate has been uploaded for this record.")

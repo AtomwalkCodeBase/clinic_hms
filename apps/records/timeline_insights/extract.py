@@ -140,7 +140,7 @@ def _text_of(doc):
         return doc.extraction.extracted_text
     except DocumentExtraction.DoesNotExist:
         text, engine = extract_text(_read_file(doc), doc.mime_type or "application/pdf")
-        DocumentExtraction.objects.create(document=doc, patient=doc.patient, extracted_text=text, engine=engine)
+        DocumentExtraction.objects.create(document=doc, extracted_text=text, engine=engine)
         return text
 
 
@@ -150,8 +150,7 @@ def run_insights(document_id):
     hospital_date = (doc.document_date or doc.created_at.date()) if doc.source_hospital_id else None
     insights = build_insights(_text_of(doc), hospital_date)
     DocumentExtraction.objects.filter(document=doc).update(
-        normalised=insights, status=DocumentExtraction.Status.DONE, processed_at=timezone.now(), error="", doc_type=doc.document_type[:24],
-        document_date=hospital_date, date_source="document" if hospital_date else "", extractor_version=EXTRACTOR_VERSION)
+        normalised=insights, status=DocumentExtraction.Status.DONE, processed_at=timezone.now(), error="", extractor_version=EXTRACTOR_VERSION)
     _write_events(doc, insights)
 
 
@@ -170,7 +169,7 @@ def _write_events(doc, insights):
         events.create(patient=doc.patient, document=doc, event_date=e["date"], event_type="DIAGNOSIS", condition_text=name,
                       condition_group=name.upper()[:40], category=nature.upper() if nature in ("acute", "chronic") else "",
                       is_provisional=e["uncertain"], evidence=e["evidence"][:255], source="EXTRACTED",
-                      source_hospital_id=int(doc.source_hospital_id) if str(doc.source_hospital_id or "").isdigit() else None)
+                      source_hospital_id=doc.source_hospital_id)
     episodes.rebuild(doc.patient)
 
 
@@ -208,8 +207,8 @@ def build_timeline(awpid, *, audience="patient", hospital_id=None, start=None, e
                                                status__in=(MedicalDocument.Status.COMPLETED, MedicalDocument.Status.REVIEW_REQUIRED))
                 .exclude(awaiting_review_q()).select_related("extraction"))
     if hospital_id is not None:
-        docs = [d for d in docs if d.source_hospital_id == str(hospital_id)]
-    hospitals = dict(Hospital.objects.using("default").filter(id__in={int(d.source_hospital_id) for d in docs if str(d.source_hospital_id or "").isdigit()})
+        docs = [d for d in docs if d.source_hospital_id == int(hospital_id)]
+    hospitals = dict(Hospital.objects.using("default").filter(id__in={d.source_hospital_id for d in docs if d.source_hospital_id})
                      .values_list("id", "name"))             # the hospital behind a hospital-issued document
     merged = {}
     for d in docs:
@@ -229,7 +228,7 @@ def build_timeline(awpid, *, audience="patient", hospital_id=None, start=None, e
             if e["when"] == "resolved":
                 m["evidence"] = e["evidence"]            # "… resolved" says more than the heading before it
             m["sources"].setdefault(d.id, {"document_id": d.id, "file_name": d.file_name, "document_type": d.document_type, "evidence": e["evidence"],
-                                           "hospital": hospitals.get(int(d.source_hospital_id), "") if str(d.source_hospital_id or "").isdigit() else ""})
+                                           "hospital": hospitals.get(d.source_hospital_id, "")})
     for m in merged.values():
         whens = m.pop("whens")
         m["when"] = "resolved" if "resolved" in whens else "current" if "current" in whens else sorted(whens)[0]

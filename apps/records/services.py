@@ -66,7 +66,7 @@ def save_upload(awpid, files):
     UPLOAD_THREADS at a time (one after another made a big upload wait for the sum of every transfer); if any
     transfer fails, everything already sent is deleted and nothing is saved."""
     patient = Patient.objects.using("default").get(awpid=awpid)
-    batch = DocumentBatch.objects.create(patient=patient, total_files=len(files))
+    batch = DocumentBatch.objects.create(patient=patient)
     docs = [MedicalDocument(patient=patient, batch=batch, file_name=(f.name or "")[:100], size=len(raw),
                             uploaded_by="patient", status=Status.QUEUED)
             for f, raw in files]
@@ -145,13 +145,11 @@ def _in_status(document_id, *statuses):
 
 
 def _end(doc, status, **fields):
-    """Move a document to a new state and bring its batch counters in line."""
+    """Move a document to a new state."""
     doc.status = status
     for k, v in fields.items():
         setattr(doc, k, v)
     doc.save()
-    if doc.batch_id:
-        doc.batch.refresh()
 
 
 def fail_document(doc, message):
@@ -206,7 +204,7 @@ def extract_document(document_id):
             fail_document(doc, exc)
             return False
         text, engine = extract_text(raw, mime)
-        DocumentExtraction.objects.update_or_create(document=doc, defaults={"patient": doc.patient, "extracted_text": text, "engine": engine})
+        DocumentExtraction.objects.update_or_create(document=doc, defaults={"extracted_text": text, "engine": engine})
         doc.mime_type, doc.size, doc.status = mime, len(raw), Status.CLASSIFYING
         doc.save(update_fields=["mime_type", "size", "status", "updated_at"])
         return True
@@ -243,8 +241,6 @@ def reclassify_existing(limit=5000):
         rules.store_rule_result(doc, result)
         doc.status = Status.REVIEW_REQUIRED if result["status"] == rules.REVIEW_REQUIRED else Status.COMPLETED
         doc.save(update_fields=["document_type", "status", "updated_at"])
-        if doc.batch_id:
-            doc.batch.refresh()
         counts["checked"] += 1
         counts["changed"] += doc.document_type != before
         counts["unclassified" if doc.document_type == rules.NOT_CLASSIFIED else "classified"] += 1
@@ -371,12 +367,7 @@ def dismiss_document(doc):
     doc.delete()
     _safe_delete(name)
     if batch:
-        remaining = batch.documents.count()
-        if remaining:
-            batch.total_files = remaining
-            batch.save(update_fields=["total_files"])
-            batch.refresh()
-        else:
+        if not batch.documents.exists():
             batch.delete()
 
 

@@ -117,7 +117,7 @@ class StoreTests(TestCase):
         result = c.classify_document_by_rules(RX)
         classification = c.store_rule_result(doc, result)
         self.assertEqual(doc.document_type, "prescription")
-        self.assertEqual((classification.classifier, classification.ai_document_type, classification.final_document_type,
+        self.assertEqual((classification.classifier, classification.ai_document_type, classification.document.document_type,
                           classification.status), ("rule_engine", "prescription", "prescription", "rule_classified"))
         self.assertEqual((classification.rule_score, classification.second_best_score, classification.score_margin),
                          (21, 1, 20))
@@ -126,7 +126,7 @@ class StoreTests(TestCase):
     def test_an_ambiguous_verdict_keeps_what_it_came_closest_to(self):
         doc = make_doc(status="classifying")
         classification = c.store_rule_result(doc, c.classify_document_by_rules("discharge summary and invoice"))
-        self.assertEqual((doc.document_type, classification.ai_document_type, classification.final_document_type,
+        self.assertEqual((doc.document_type, classification.ai_document_type, classification.document.document_type,
                           classification.status), (c.NOT_CLASSIFIED, "discharge_summary", c.NOT_CLASSIFIED, c.REVIEW_REQUIRED))
 
     def test_running_the_rules_again_updates_the_same_row(self):
@@ -134,7 +134,7 @@ class StoreTests(TestCase):
         c.store_rule_result(doc, c.classify_document_by_rules("hello"))
         c.store_rule_result(doc, c.classify_document_by_rules(RX))
         self.assertEqual(PatientDocumentClassification.objects.filter(document=doc).count(), 1)
-        self.assertEqual(PatientDocumentClassification.objects.get(document=doc).final_document_type, "prescription")
+        self.assertEqual(doc.document_type, "prescription")
 
     def test_a_persons_choice_is_never_overwritten_by_the_rules(self):
         doc = make_doc(status="classifying")
@@ -142,7 +142,7 @@ class StoreTests(TestCase):
         doc.save()
         c.store_rule_result(doc, c.classify_document_by_rules(RX))
         row = PatientDocumentClassification.objects.get(document=doc)
-        self.assertEqual((row.status, row.final_document_type, row.human_document_type),
+        self.assertEqual((row.status, row.document.document_type, row.human_document_type),
                          (c.HUMAN_CLASSIFIED, "imaging_report", "imaging_report"))
         self.assertEqual(doc.document_type, "imaging_report")
 

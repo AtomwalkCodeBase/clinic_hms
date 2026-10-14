@@ -23,10 +23,13 @@ def _get_source_hospital_id(instance):
 
 @receiver(post_save, sender=Allergy)
 def on_allergy_save(sender, instance, **kwargs):
-    from apps.atomwalk.models import SharedAllergy
+    from apps.atomwalk.models import Patient, SharedAllergy
     try:
+        shared = Patient.objects.using("default").filter(awpid=instance.patient.awpid).first()
+        if shared is None:
+            raise LookupError(f"{instance.patient.awpid} has no shared patient")
         SharedAllergy.objects.using("default").update_or_create(
-            awpid=instance.patient.awpid,
+            patient=shared,
             substance=instance.substance,
             source_hospital_id=_get_source_hospital_id(instance),
             defaults={

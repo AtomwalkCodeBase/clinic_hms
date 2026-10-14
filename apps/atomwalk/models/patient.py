@@ -85,8 +85,8 @@ class PatientRelationship(models.Model):
         ("child", "Child"), ("parent", "Parent"), ("spouse", "Spouse"),
         ("sibling", "Sibling"), ("ward", "Ward"), ("other", "Other"),
     ]
-    dependent_awpid = models.CharField(max_length=30, db_index=True)
-    guardian_awpid  = models.CharField(max_length=30, db_index=True)
+    dependent       = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="guardian_links")
+    guardian        = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="dependent_links")
     relationship    = models.CharField(max_length=20, choices=REL_CHOICES, default="other")
     is_primary      = models.BooleanField(default=True)
     created_at      = models.DateTimeField(auto_now_add=True)
@@ -94,10 +94,18 @@ class PatientRelationship(models.Model):
     class Meta:
         app_label = "atomwalk"
         db_table  = "patient_relationship"
-        unique_together = [("dependent_awpid", "guardian_awpid")]
+        unique_together = [("dependent", "guardian")]
+
+    @property
+    def dependent_awpid(self):
+        return self.dependent.awpid if self.dependent_id else ""
+
+    @property
+    def guardian_awpid(self):
+        return self.guardian.awpid if self.guardian_id else ""
 
     def __str__(self):
-        return f"{self.dependent_awpid} ({self.relationship} of {self.guardian_awpid})"
+        return f"{self.dependent_id} ({self.relationship} of {self.guardian_id})"
 
 
 def mobile_hash_of(raw):

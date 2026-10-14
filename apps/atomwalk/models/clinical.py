@@ -9,6 +9,8 @@ A hospital's own records are copied here as they are signed, with the id of the 
   lab_result           lab reports and the values in them     birth_history                      one row per child
   shared_allergy       allergies                              shared_prescription_item           the drugs on a prescription
 """
+from decimal import Decimal
+
 from django.db import models
 from django.utils import timezone
 
@@ -22,6 +24,11 @@ SOURCE_CHOICES = [("HOSPITAL", "Written by a hospital"), ("EXTRACTED", "Read fro
 def patient_link(related_name):
     """The link every clinical table has to the patient."""
     return models.ForeignKey("atomwalk.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name=related_name)
+
+
+def hospital_link():
+    """The hospital a fact came from: kept when the hospital is removed (the fact stays, its source is then unknown)."""
+    return models.ForeignKey("hospitals.Hospital", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
 
 
 def document_link(related_name="+"):
@@ -63,7 +70,7 @@ class ClinicalEvent(models.Model):
 
     patient = patient_link("clinical_events")
     document = document_link("clinical_events")
-    source_hospital_id = models.IntegerField(null=True, blank=True)    # stored internally, NEVER returned to other hospitals
+    source_hospital = hospital_link()                      # stored internally, NEVER returned to other hospitals
     event_date = models.DateField(null=True, blank=True, db_index=True)
     event_type = models.CharField(max_length=12, choices=TYPES, default="DIAGNOSIS")
     condition_text = models.TextField(blank=True)
@@ -137,15 +144,12 @@ class LabResult(models.Model):
     """
     patient = patient_link("lab_results")
     document = document_link("lab_results")
-    source_hospital_id = models.IntegerField(null=True, blank=True)
+    source_hospital = hospital_link()
     test_name = models.CharField(max_length=200, blank=True)
     analyte = models.CharField(max_length=40, blank=True, db_index=True)
     value = models.FloatField(null=True, blank=True)
     unit_raw = models.CharField(max_length=30, blank=True)
-    result_summary = models.TextField(blank=True)              # free text or structured JSON
-    file_url = models.URLField(blank=True)
-    file_data = models.TextField(blank=True)                   # the result file as a base64 data URI
-    mime_type = models.CharField(max_length=100, blank=True)
+    result_summary = models.TextField(blank=True)              # free text or structured JSON; the report's file is the document
     collected_on = models.DateField(null=True, blank=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
     age_band = models.CharField(max_length=12, blank=True)
@@ -161,12 +165,12 @@ class LabResult(models.Model):
 
 class SharedAllergy(models.Model):
     """Written when an allergy is recorded or updated."""
-    awpid             = models.CharField(max_length=30, db_index=True)
+    patient           = patient_link("allergies")
     substance         = models.CharField(max_length=200)
     reaction          = models.TextField(blank=True)
     severity          = models.CharField(max_length=20, blank=True)  # mild/moderate/severe
     is_active         = models.BooleanField(default=True)
-    source_hospital_id  = models.IntegerField()
+    source_hospital  = hospital_link()
     recorded_at       = models.DateTimeField()
     created_at        = models.DateTimeField(auto_now_add=True)
 
@@ -183,7 +187,7 @@ class Vitals(models.Model):
     """
     patient = patient_link("vitals")
     appointment_id = models.UUIDField(null=True, blank=True, db_index=True)
-    source_hospital_id = models.IntegerField(null=True, blank=True)
+    source_hospital = hospital_link()
     source = models.CharField(max_length=20, default="clinic")          # clinic / home
     recorded_at = models.DateTimeField(default=timezone.now, db_index=True)
     recorded_by_user_id = models.UUIDField(null=True, blank=True)
@@ -195,7 +199,6 @@ class Vitals(models.Model):
     respiratory_rate = models.IntegerField(null=True, blank=True)       # /min
     weight_kg = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
     height_cm = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
-    bmi = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
     blood_sugar_rbs = models.IntegerField(null=True, blank=True)        # mg/dL random blood sugar
     nurse_notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -207,10 +210,12 @@ class Vitals(models.Model):
         constraints = [models.UniqueConstraint(fields=["appointment_id"], condition=models.Q(appointment_id__isnull=False),
                                                name="uniq_vitals_per_appointment")]
 
-    def save(self, *args, **kwargs):
+    @property
+    def bmi(self):
+        """Worked out from the height and weight, not stored."""
         if self.weight_kg and self.height_cm and self.height_cm > 0:
-            self.bmi = round(float(self.weight_kg) / ((float(self.height_cm) / 100) ** 2), 1)
-        super().save(*args, **kwargs)
+            return Decimal(f"{float(self.weight_kg) / ((float(self.height_cm) / 100) ** 2):.1f}")
+        return None
 
 
 class GrowthMeasurement(models.Model):
@@ -218,15 +223,13 @@ class GrowthMeasurement(models.Model):
     patient = patient_link("growth")
     document = document_link("growth_measurements")
     appointment_id = models.UUIDField(null=True, blank=True, db_index=True)
-    source_hospital_id = models.IntegerField(null=True, blank=True)
+    source_hospital = hospital_link()
     source = models.CharField(max_length=10, default="clinic")          # clinic / home / extracted / manual
     recorded_by_user_id = models.UUIDField(null=True, blank=True)
     measured_on = models.DateField(db_index=True)
-    age_months = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     weight_kg = models.DecimalField(max_digits=6, decimal_places=3, null=True, blank=True)
     height_cm = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
     head_circumference_cm = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
-    bmi = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
     weight_z = models.FloatField(null=True, blank=True)
     height_z = models.FloatField(null=True, blank=True)
     head_circ_z = models.FloatField(null=True, blank=True)
@@ -245,17 +248,19 @@ class GrowthMeasurement(models.Model):
         constraints = [models.UniqueConstraint(fields=["appointment_id"], condition=models.Q(appointment_id__isnull=False),
                                                name="uniq_growth_per_appointment")]
 
-    def save(self, *args, **kwargs):
+    @property
+    def bmi(self):
+        """Worked out from the height and weight, not stored."""
         if self.weight_kg and self.height_cm and self.height_cm > 0:
-            self.bmi = round(float(self.weight_kg) / ((float(self.height_cm) / 100) ** 2), 1)
-        super().save(*args, **kwargs)
+            return Decimal(f"{float(self.weight_kg) / ((float(self.height_cm) / 100) ** 2):.1f}")
+        return None
 
 
 class BirthHistory(models.Model):
     """
     A child's birth history, one row per child, kept for every hospital (and the emergency summary) to read. The front desk
     can capture it at registration and the pediatrician can add or correct it later; an edit overwrites it, and
-    source_hospital_id is the hospital that last wrote it. recorded_by / updated_by are staff ids (plain numbers).
+    source_hospital is the hospital that last wrote it. recorded_by / updated_by are staff ids (plain numbers).
     """
     DELIVERY_NORMAL = "normal"
     DELIVERY_C_SECTION = "c_section"
@@ -271,7 +276,7 @@ class BirthHistory(models.Model):
     patient = models.OneToOneField("atomwalk.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="birth_history")
     document = document_link("birth_histories")
     source = models.CharField(max_length=10, choices=SOURCE_CHOICES, default="MANUAL")
-    source_hospital_id = models.IntegerField(null=True, blank=True)
+    source_hospital = hospital_link()
     gestational_age_weeks = models.PositiveSmallIntegerField(null=True, blank=True)
     birth_weight_kg = models.DecimalField(max_digits=5, decimal_places=3, null=True, blank=True)
     delivery_mode = models.CharField(max_length=12, choices=DELIVERY_MODE_CHOICES, blank=True)
@@ -362,8 +367,7 @@ class ImmunizationRecord(models.Model):
     mime_type            = models.CharField(max_length=100, blank=True)
     file_data            = models.TextField(blank=True)
 
-    source_hospital_id    = models.IntegerField(null=True, blank=True)  # the hospital that logged or verified it; empty until reviewed
-    recorded_by          = models.CharField(max_length=20, default="patient")  # "patient" or "staff"
+    source_hospital      = hospital_link()  # the hospital that logged or verified it; empty until reviewed
 
     created_at           = models.DateTimeField(auto_now_add=True)
     updated_at           = models.DateTimeField(auto_now=True)
@@ -373,6 +377,11 @@ class ImmunizationRecord(models.Model):
         db_table  = "immunization_record"
         indexes = [models.Index(fields=["patient", "verification_status"])]
         ordering  = ["administered_date"]
+
+    @property
+    def recorded_by(self):
+        """"patient" for a parent's own report, otherwise "staff"."""
+        return "patient" if self.source == self.SOURCE_SELF_REPORTED else "staff"
 
     def __str__(self):
         return f"{self.patient_id} — {self.vaccine_name} ({self.verification_status})"
@@ -403,7 +412,7 @@ class MilestoneRecord(models.Model):
     notes            = models.TextField(blank=True)
 
     recorded_by_name = models.CharField(max_length=200, blank=True)  # a name, not a link: staff live in hospital databases
-    source_hospital_id = models.IntegerField(null=True, blank=True)
+    source_hospital = hospital_link()
 
     created_at       = models.DateTimeField(auto_now_add=True)
     updated_at       = models.DateTimeField(auto_now=True)

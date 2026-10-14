@@ -160,7 +160,7 @@ class BatchDetailViewTests(TestCase):
 
     def test_returns_the_batch_counts_and_each_document(self, _resolve):
         identity("AWP-T1")
-        batch = DocumentBatch.objects.create(patient=identity("AWP-T1"), total_files=3)
+        batch = DocumentBatch.objects.create(patient=identity("AWP-T1"))
         make_doc(batch=batch, status="completed", document_type="lab_report", by="rules", name="a.pdf")
         make_doc(batch=batch, status="queued", name="b.pdf")
         make_doc(batch=batch, status="review_required", by="rules", name="c.pdf")
@@ -176,16 +176,15 @@ class BatchDetailViewTests(TestCase):
 
     def test_a_batch_is_complete_when_every_document_is_in_a_final_state(self, _resolve):
         identity("AWP-T1")
-        batch = DocumentBatch.objects.create(patient=identity("AWP-T1"), total_files=3)
+        batch = DocumentBatch.objects.create(patient=identity("AWP-T1"))
         make_doc(batch=batch, status="completed", document_type="imaging_report", by="rules")
         make_doc(batch=batch, status="review_required", by="rules")
         make_doc(batch=batch, status="failed")
-        batch.refresh()
         self.assertEqual((batch.processed_files, batch.failed_files, batch.status), (2, 1, "completed_with_errors"))
         self.assertEqual(services.batch_summary(batch)["status"], "completed")
 
     def test_someone_elses_batch_is_not_found(self, _resolve):
-        batch = DocumentBatch.objects.create(patient=identity("AWP-OTHER"), total_files=1)
+        batch = DocumentBatch.objects.create(patient=identity("AWP-OTHER"))
         self.assertEqual(self.get(batch.id).status_code, 404)
 
 
@@ -203,7 +202,7 @@ class UploadForWhomTests(TestCase):
         identity("AWP-ME")
         identity("AWP-KID")
         identity("AWP-STRANGER")
-        PatientRelationship.objects.using("default").create(guardian_awpid="AWP-ME", dependent_awpid="AWP-KID", relationship="child")
+        PatientRelationship.objects.using("default").create(guardian=identity("AWP-ME"), dependent=identity("AWP-KID"), relationship="child")
 
     def post(self, awpid=None):
         data = {"files": [pdf("a.pdf")], **({"patient_awpid": awpid} if awpid else {})}

@@ -14,6 +14,7 @@ from apps.hospital_patients.pediatrics import growth_reference as who
 from apps.hospital_patients.pediatrics import roadmap
 from apps.hospital_patients.pediatrics.vaccine_schedule import build_roadmap, summarize_roadmap
 from apps.atomwalk.models import ImmunizationRecord, Patient, Schedule, ScheduleRule
+from core.testing import ensure_hospital
 
 V = ImmunizationRecord
 
@@ -137,6 +138,8 @@ class RoadmapContentTests(TestCase):
     ]
 
     def setUp(self):
+        ensure_hospital(1)
+        ensure_hospital(2)
         self.dob = dt.date.today() - timedelta(days=60)           # a 2-month-old
 
     def record(self, name="BCG", label="Birth", **fields):

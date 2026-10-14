@@ -1269,7 +1269,7 @@ class EncounterConsultSessionView(APIView):
         sess = _open_consult_session(enc.id, request.hospital_id)
         if not sess:
             sess = ConsultSession.objects.using("default").create(
-                awpid=patient.awpid, hospital_id=request.hospital_id, encounter_id=enc.id,
+                patient=identity, hospital_id=request.hospital_id, encounter_id=enc.id,
                 doctor_user_id=request.user.id,
                 expires_at=timezone.now() + timedelta(hours=12),
             )

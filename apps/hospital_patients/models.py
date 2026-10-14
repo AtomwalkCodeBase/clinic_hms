@@ -139,7 +139,7 @@ class HospitalPatient(models.Model):
             return None
         if not hasattr(self, "_guardian_link"):
             from apps.atomwalk.models import PatientRelationship
-            self._guardian_link = (PatientRelationship.objects.using("default").filter(dependent_awpid=self.awpid)
+            self._guardian_link = (PatientRelationship.objects.using("default").filter(dependent__awpid=self.awpid)
                                    .order_by("-is_primary", "id").first())
         return self._guardian_link
 

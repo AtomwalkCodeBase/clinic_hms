@@ -373,8 +373,8 @@ class PatientService:
         with transaction.atomic(using="default"):
             existing_rel_awpids = list(
                 PatientRelationship.objects.using("default")
-                .filter(guardian_awpid=guardian_awpid)
-                .values_list("dependent_awpid", flat=True)
+                .filter(guardian__awpid=guardian_awpid)
+                .values_list("dependent__awpid", flat=True)
             )
             identity = None
             if existing_rel_awpids:
@@ -411,7 +411,7 @@ class PatientService:
             # exists, so this is a harmless no-op), and a relinked-after-
             # removal identity (the row was deleted and needs recreating).
             PatientRelationship.objects.using("default").get_or_create(
-                dependent_awpid=identity.awpid, guardian_awpid=guardian_awpid,
+                dependent=identity, guardian=Patient.objects.using("default").get(awpid=guardian_awpid),
                 defaults={"relationship": relationship},
             )
         return identity, created
@@ -427,9 +427,9 @@ class PatientService:
         from .models import HospitalPatient as _Patient  # local import avoids a cycle at module load
 
         members = []
-        rels = PatientRelationship.objects.using("default").filter(guardian_awpid=guardian_awpid)
+        rels = PatientRelationship.objects.using("default").filter(guardian__awpid=guardian_awpid).select_related("dependent")
         for rel in rels:
-            dep = Patient.objects.using("default").filter(awpid=rel.dependent_awpid).first()
+            dep = rel.dependent
             if not dep:
                 continue
             entry = {
@@ -469,7 +469,7 @@ class PatientService:
             relationship=data.get("relationship", "other"),
         )
         PatientRelationship.objects.using("default").filter(
-            dependent_awpid=identity.awpid, guardian_awpid=guardian_awpid,
+            dependent=identity, guardian__awpid=guardian_awpid,
         ).update(relationship=data.get("relationship", "other"))
         return {
             "awpid": identity.awpid,
@@ -491,7 +491,7 @@ class PatientService:
         `data` — a partial patch, not a full overwrite.
         """
         rel = PatientRelationship.objects.using("default").filter(
-            guardian_awpid=guardian_awpid, dependent_awpid=dependent_awpid,
+            guardian__awpid=guardian_awpid, dependent__awpid=dependent_awpid,
         ).first()
         if not rel:
             raise ValueError("Family member not found.")
@@ -537,7 +537,7 @@ class PatientService:
         cancelling a booking never deletes the Appointment row either.
         """
         rel = PatientRelationship.objects.using("default").filter(
-            guardian_awpid=guardian_awpid, dependent_awpid=dependent_awpid,
+            guardian__awpid=guardian_awpid, dependent__awpid=dependent_awpid,
         ).first()
         if not rel:
             raise ValueError("Family member not found.")
@@ -572,7 +572,7 @@ class PatientService:
 
         # Is this person a guardian? (has dependents registered under them)
         is_guardian = PatientRelationship.objects.using("default").filter(
-            guardian_awpid=awpid
+            guardian__awpid=awpid
         ).exists()
 
         if is_guardian:
@@ -580,7 +580,7 @@ class PatientService:
         else:
             # Is this person a dependent? Find who their guardian is.
             rel = PatientRelationship.objects.using("default").filter(
-                dependent_awpid=awpid
+                dependent__awpid=awpid
             ).first()
             guardian_awpid = rel.guardian_awpid if rel else None
 
@@ -717,18 +717,18 @@ class PatientService:
 
         allergies = list(
             SharedAllergy.objects.using("default")
-            .filter(awpid=awpid, is_active=True)
+            .filter(patient__awpid=awpid, is_active=True)
             .values("substance", "reaction", "severity", "is_active", "recorded_at")
         )
 
         lab_results = list(
             LabResult.objects.using("default")
             .filter(patient__awpid=awpid, delivered_at__isnull=False)
-            .values("id", "test_name", "result_summary", "delivered_at", "mime_type")
+            .values("id", "test_name", "result_summary", "delivered_at", "document_id")
             .order_by("-delivered_at")[:20]
         )
         for r in lab_results:
-            r["has_file"] = bool(r.pop("mime_type", None))
+            r["has_file"] = bool(r.pop("document_id", None))
 
         prescriptions = []
         for rx in (

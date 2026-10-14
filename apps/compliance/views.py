@@ -184,7 +184,7 @@ class PortalRecordAmendmentView(APIView):
         target_awpid = (request.query_params.get("patient_awpid") or "").strip() or acct.awpid
         if target_awpid != acct.awpid:
             is_family = PatientRelationship.objects.using("default").filter(
-                guardian_awpid=acct.awpid, dependent_awpid=target_awpid,
+                guardian__awpid=acct.awpid, dependent__awpid=target_awpid,
             ).exists()
             if not is_family:
                 return error("That patient isn't linked to your account.", status=403)
@@ -232,7 +232,7 @@ class PortalRecordAmendmentView(APIView):
         target_awpid = (d.get("patient_awpid") or "").strip() or acct.awpid
         if target_awpid != acct.awpid:
             is_family = PatientRelationship.objects.using("default").filter(
-                guardian_awpid=acct.awpid, dependent_awpid=target_awpid,
+                guardian__awpid=acct.awpid, dependent__awpid=target_awpid,
             ).exists()
             if not is_family:
                 return error("That patient isn't linked to your account.", status=403)

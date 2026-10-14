@@ -50,7 +50,7 @@ def sync_patient_booking(appointment, db_name):
             # (same as when a patient books a family member through the
             # portal directly — see PortalBookView.post).
             rel = PatientRelationship.objects.using("default").filter(
-                dependent_awpid=patient_awpid
+                dependent__awpid=patient_awpid
             ).first()
             if rel:
                 acct = PatientAccount.objects.using("default").filter(awpid=rel.guardian_awpid).first()

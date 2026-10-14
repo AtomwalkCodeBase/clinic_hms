@@ -256,7 +256,6 @@ def store_rule_result(document, result):
     classification.second_best_score = result["second_best_score"]
     classification.score_margin = result["score_margin"]
     classification.rule_matches = result["matched_rules"]
-    classification.final_document_type = result["document_type"]
     classification.status = result["status"]
     classification.save()
     document.document_type = result["document_type"]
@@ -270,7 +269,6 @@ def store_human_choice(document, document_type):
     from apps.atomwalk.models import PatientDocumentClassification
     classification, _ = PatientDocumentClassification.objects.using("default").get_or_create(document=document)
     classification.human_document_type = document_type
-    classification.final_document_type = document_type
     classification.status = HUMAN_CLASSIFIED
     classification.save()
     document.document_type = document_type
@@ -284,7 +282,6 @@ def store_issued_type(document, document_type):
     classification, _ = PatientDocumentClassification.objects.using("default").get_or_create(document=document)
     classification.classifier = CLASSIFIER_HOSPITAL
     classification.ai_document_type = None
-    classification.final_document_type = document_type
     classification.status = ISSUED
     classification.save()
     document.document_type = document_type

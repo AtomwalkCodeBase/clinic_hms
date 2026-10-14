@@ -46,7 +46,7 @@ def _given(request):
 def _new_record(request, patient, **fields):
     return V.objects.using("default").create(
         patient=Patient.objects.using("default").filter(awpid=patient.awpid).first(),
-        source_hospital_id=request.hospital_id, recorded_by="staff", **fields)
+        source_hospital_id=request.hospital_id, **fields)
 
 
 def _already_recorded(patient, name, given_on, dose_number):
@@ -275,7 +275,7 @@ class PatientVaccinationAdministerView(APIView):
             old_key = record.file_data
             if not fields["dose_number"]:
                 del fields["dose_number"]                                   # keep the dose the order already had
-            fields.update(recorded_by="staff", source_hospital_id=record.source_hospital_id or request.hospital_id)
+            fields.update(source_hospital_id=record.source_hospital_id or request.hospital_id)
             for field, value in fields.items():
                 setattr(record, field, value)
             record.save(using="default", update_fields=list(fields))

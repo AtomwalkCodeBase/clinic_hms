@@ -328,7 +328,7 @@ class PatientHistoryView(APIView):
             from apps.atomwalk.models import MedicalDocument
             own_notes = list(
                 MedicalDocument.objects.using("default")
-                .filter(patient__awpid=patient.awpid, source_hospital_id=str(request.hospital_id))
+                .filter(patient__awpid=patient.awpid, source_hospital_id=request.hospital_id)
                 .values("id", "file_name", "mime_type", "uploaded_by", "created_at",
                         title=F("file_name"), doc_type=F("document_type"))
                 .order_by("-created_at")[:50]
@@ -375,7 +375,7 @@ class PatientDocumentDetailView(APIView):
         # handwritten/typeset prescription) is exempt from the HIE gate — it's
         # our own record, not cross-hospital sharing. Same carve-out as
         # PatientHistoryView's no-consent branch.
-        own_hospital_doc = doc.source_hospital_id == str(request.hospital_id)
+        own_hospital_doc = doc.source_hospital_id == request.hospital_id
         if not own_hospital_doc and (not owner or not owner.hie_consent_given):
             from core.audit import log_action
             log_action(request, request.hospital_db, action="patient.document.view_blocked_no_consent",
@@ -417,7 +417,7 @@ class PatientLabResultDetailView(APIView):
     def get(self, request, result_id):
         from apps.atomwalk.models import LabResult
         try:
-            r = LabResult.objects.using("default").get(pk=result_id)
+            r = LabResult.objects.using("default").select_related("document").get(pk=result_id)
         except LabResult.DoesNotExist:
             return not_found("Lab result not found.")
 
@@ -436,7 +436,8 @@ class PatientLabResultDetailView(APIView):
 
         return success(data={
             "id": r.id, "test_name": r.test_name, "result_summary": r.result_summary,
-            "mime_type": r.mime_type, "file_data": blob_storage.signed_url(r.file_data), "delivered_at": r.delivered_at,
+            "mime_type": r.document.mime_type if r.document_id else "",
+            "file_data": blob_storage.signed_url(r.document.file.name) if r.document_id else "", "delivered_at": r.delivered_at,
         })
 
 

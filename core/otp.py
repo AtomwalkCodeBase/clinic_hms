@@ -96,6 +96,7 @@ def create_otp(purpose, identifier, target_type="", target_id=None, target_db=""
     Returns (otp_row, raw_code, channel).
     """
     from apps.atomwalk.models import OTPCode
+    from apps.hospitals.models import Hospital
 
     remaining = resend_cooldown_remaining(purpose, identifier)
     if remaining > 0:
@@ -110,7 +111,7 @@ def create_otp(purpose, identifier, target_type="", target_id=None, target_db=""
         code_hash=hash_code(code),
         target_type=target_type,
         target_id=target_id,
-        target_db=target_db,
+        hospital_id=Hospital.objects.using("default").filter(db_name=target_db).values_list("id", flat=True).first() if target_db else None,
         expires_at=timezone.now() + timedelta(minutes=OTP_TTL_MINUTES),
     )
     return otp, code, channel

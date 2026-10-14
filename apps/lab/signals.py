@@ -26,7 +26,18 @@ def on_report_delivered(sender, instance, **kwargs):
     if instance.status != "delivered" or not instance.delivered_at:
         return
 
-    from apps.atomwalk.models import LabResult, Patient
+    from apps.atomwalk.models import LabResult, MedicalDocument, Patient
+
+    # Mirror into the My Reports document vault (MedicalDocument) so a delivered lab report shows in the patient's
+    # My Reports. The result below links to it; it is also the report's file. Best-effort: a failure here must not
+    # roll back the deliver.
+    document = None
+    try:
+        from apps.lab.archive import store_lab_report_document
+        document = store_lab_report_document(instance, instance._state.db, _get_source_hospital_id(instance))
+    except Exception:
+        logger.exception("My Reports vault mirror failed for report=%s", instance.id)
+
     try:
         shared = Patient.objects.using("default").filter(awpid=instance.patient.awpid).first()
         if shared is None:
@@ -38,21 +49,8 @@ def on_report_delivered(sender, instance, **kwargs):
             defaults={
                 "test_name":      instance.request.test.name,
                 "result_summary": instance.result_summary,
-                # file_url stays untouched (URLField, can't hold a base64 data
-                # URI) — the actual result file goes in file_data instead.
-                "file_data":      instance.file_url,
-                "mime_type":      instance.mime_type,
+                "document":       document if isinstance(document, MedicalDocument) else None,
             },
         )
     except Exception:
         logger.exception("HIE LabResult write failed for report=%s", instance.id)
-
-    # Mirror into the My Reports document vault (MedicalDocument) — same as
-    # prescriptions get on sign, so a delivered lab report shows in the
-    # patient's My Reports alongside them. Best-effort; a failure here must
-    # not roll back the deliver.
-    try:
-        from apps.lab.archive import store_lab_report_document
-        store_lab_report_document(instance, instance._state.db, _get_source_hospital_id(instance))
-    except Exception:
-        logger.exception("My Reports vault mirror failed for report=%s", instance.id)

@@ -18,7 +18,7 @@ from unittest import mock
 
 from django.utils import timezone
 
-from core.testing import HospitalDBTestCase, requires_hospital_db
+from core.testing import HospitalDBTestCase, ensure_hospital, requires_hospital_db
 
 from apps.lab.models import LabReport, LabRequest, LabTest
 from apps.lab.views import LabRequestAttachDocumentView
@@ -77,6 +77,8 @@ class SyncToHieTests(ProvenanceFixtureMixin, HospitalDBTestCase):
     def test_two_hospitals_do_not_overwrite_each_others_rows(self):
         """With both stamped 0 the update_or_create key (awpid, hospital, ICD code) collapsed to one row."""
         self.make_fixture()
+        ensure_hospital(11)
+        ensure_hospital(22)
         sync_encounter_to_hie(_fake_encounter(), self.hospital_alias, self.patient, hospital_id=11)
         sync_encounter_to_hie(_fake_encounter(), self.hospital_alias, self.patient, hospital_id=22)
         rows = ClinicalEvent.objects.using("default").order_by("source_hospital_id")
@@ -132,4 +134,4 @@ class LabHospitalIdTests(ProvenanceFixtureMixin, HospitalDBTestCase):
             )
         self.assertLess(resp.status_code, 300, resp.data)
         doc = MedicalDocument.objects.using("default").get(source_type="lab_request")
-        self.assertEqual(doc.source_hospital_id, str(self.hospital.id))
+        self.assertEqual(doc.source_hospital_id, self.hospital.id)

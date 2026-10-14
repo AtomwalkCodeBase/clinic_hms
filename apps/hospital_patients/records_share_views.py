@@ -111,7 +111,7 @@ def _get_grant(token):
 def _audit(awpid, event, ip=None):
     try:
         EmergencyAccessLog.objects.using("default").create(
-            awpid=awpid or "", event=event, ip_address=ip,
+            patient=Patient.objects.using("default").filter(awpid=awpid).first(), event=event, ip_address=ip,
         )
     except Exception:
         logger.exception("EmergencyAccessLog write failed (%s) for awpid=%s", event, awpid)
@@ -186,7 +186,7 @@ def _vault_documents(awpid, limit=200):
 # (RecordsShareRequest.shown_private_ids), which is dropped when the visit ends.
 
 def _privacy_for(awpid):
-    return RecordsPrivacy.objects.using("default").filter(awpid=awpid).first()
+    return RecordsPrivacy.objects.using("default").filter(patient__awpid=awpid).first()
 
 
 def _privacy_hidden_ids(awpid, docs, privacy=None):
@@ -258,7 +258,7 @@ class RecordsShareCreateView(APIView):
         code = f"{secrets.randbelow(1_000_000):06d}"     # spoken fallback
 
         grant = RecordsShareRequest.objects.using("default").create(
-            token=token, code=code, requester_label=note, awpid=me,
+            token=token, code=code, requester_label=note, patient=Patient.objects.using("default").get(awpid=me),
             status=RecordsShareRequest.STATUS_PENDING, created_ip=_client_ip(request),
         )
 
@@ -666,8 +666,8 @@ class RecordsShareDecisionView(APIView):
         if not approve:
             grant.status = RecordsShareRequest.STATUS_DENIED
             grant.decided_at = timezone.now()
-            grant.awpid = me
-            grant.save(using="default", update_fields=["status", "decided_at", "awpid"])
+            grant.patient = Patient.objects.using("default").get(awpid=me)
+            grant.save(using="default", update_fields=["status", "decided_at", "patient"])
             _audit(me, EmergencyAccessLog.EVENT_GENERATED, _client_ip(request))
             return success(data={"status": grant.status}, message="Request declined.")
 
@@ -689,8 +689,8 @@ class RecordsShareDecisionView(APIView):
             if locked:
                 grant.status = RecordsShareRequest.STATUS_DENIED
                 grant.decided_at = timezone.now()
-                grant.awpid = me
-                fields += ["status", "decided_at", "awpid"]
+                grant.patient = Patient.objects.using("default").get(awpid=me)
+                fields += ["status", "decided_at", "patient"]
             grant.save(using="default", update_fields=fields)
             if locked:
                 return error(
@@ -728,13 +728,13 @@ class RecordsShareDecisionView(APIView):
         share_all = (request.data.get("share_scope") or "default").strip() == "all"
 
         now = timezone.now()
-        grant.awpid = me
+        grant.patient = Patient.objects.using("default").get(awpid=me)
         grant.status = RecordsShareRequest.STATUS_APPROVED
         grant.decided_at = now
         grant.expires_at = now + timedelta(hours=RecordsShareRequest.WINDOW_HOURS)
         grant.share_all = share_all
         grant.save(using="default", update_fields=[
-            "awpid", "status", "decided_at", "expires_at", "share_all",
+            "patient", "status", "decided_at", "expires_at", "share_all",
         ])
         _audit(me, EmergencyAccessLog.EVENT_GENERATED, _client_ip(request))
 
@@ -821,7 +821,7 @@ class RecordsShareMineView(APIView):
 
         grants = (
             RecordsShareRequest.objects.using("default")
-            .filter(awpid=me, status=RecordsShareRequest.STATUS_APPROVED)
+            .filter(patient__awpid=me, status=RecordsShareRequest.STATUS_APPROVED)
             .order_by("-decided_at")
         )
         out = []
@@ -942,7 +942,7 @@ class RecordsPrivacyView(APIView):
 
         live = (
             RecordsShareRequest.objects.using("default")
-            .filter(awpid=me, status=RecordsShareRequest.STATUS_APPROVED)
+            .filter(patient__awpid=me, status=RecordsShareRequest.STATUS_APPROVED)
             .order_by("-decided_at")
             .first()
         )

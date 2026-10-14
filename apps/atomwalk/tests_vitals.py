@@ -7,6 +7,7 @@ from django.test import TestCase
 
 from apps.atomwalk import vitals
 from apps.atomwalk.models import GrowthMeasurement, Patient, Vitals
+from core.testing import ensure_hospital
 
 FORM = {"systolic_bp": 110, "diastolic_bp": 70, "pulse_rate": 90, "temperature": Decimal("98.6"),
         "height_cm": Decimal("85"), "weight_kg": Decimal("12"), "head_circumference_cm": Decimal("47"), "nurse_notes": "calm"}
@@ -16,6 +17,8 @@ class VisitVitalsTests(TestCase):
     databases = {"default"}
 
     def setUp(self):
+        ensure_hospital(1)
+        ensure_hospital(2)
         self.patient = Patient.objects.using("default").create(awpid="AW-V1", full_name="V One")
         self.visit = uuid.uuid4()
 

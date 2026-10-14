@@ -109,7 +109,7 @@ class SubmitTests(TestCase):
         doc = reload(doc)
         self.assertEqual((doc.document_type, cls.method_of(doc), cls.is_confirmed(doc)), ("prescription", "staff", True))
         classification = doc.classification
-        self.assertEqual((classification.status, classification.human_document_type, classification.final_document_type,
+        self.assertEqual((classification.status, classification.human_document_type, classification.document.document_type,
                           classification.ai_document_type), ("human_classified", "prescription", "prescription", "lab_report"))
 
     def test_confirming_the_suggestion_also_locks_it(self, _r):
@@ -276,7 +276,7 @@ class BatchProgressTests(TestCase):
 
     @RESOLVE_RECORDS
     def test_the_batch_reports_how_far_it_has_got(self, _r):
-        batch = DocumentBatch.objects.create(patient=identity("AWP-T1"), total_files=4)
+        batch = DocumentBatch.objects.create(patient=identity("AWP-T1"))
         for status in ("completed", "review_required", "failed", "extracting"):
             make_doc("AWP-T1", status=status, batch=batch)
         data = call(BatchDetailView, "get", batch_id=batch.id).data["data"]

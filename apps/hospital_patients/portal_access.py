@@ -26,7 +26,7 @@ def resolve_target_awpid_and_dob(request):
 
     from apps.atomwalk.models import PatientRelationship
     is_family = PatientRelationship.objects.using("default").filter(
-        guardian_awpid=acct.awpid, dependent_awpid=target_awpid,
+        guardian__awpid=acct.awpid, dependent__awpid=target_awpid,
     ).exists()
     if not is_family:
         return None, None, error("That patient isn't linked to your account.", status=403)

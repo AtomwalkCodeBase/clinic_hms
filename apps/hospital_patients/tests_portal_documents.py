@@ -98,11 +98,10 @@ class PortalDocumentTests(TestCase):
         self.assertTrue(MedicalDocument.objects.filter(pk=other.pk).exists())
 
     def test_dismissing_keeps_the_batch_counters_right(self):
-        batch = DocumentBatch.objects.create(patient=identity(self.acct.awpid), total_files=3)
+        batch = DocumentBatch.objects.create(patient=identity(self.acct.awpid))
         good = make_doc(self.acct.awpid, status="completed", batch=batch)
         make_doc(self.acct.awpid, status="completed", batch=batch)
         bad = make_doc(self.acct.awpid, status="failed", batch=batch)
-        batch.refresh()
         with mock.patch("core.storage.delete"):
             self.assertEqual(self.dismiss(bad).status_code, 200)
         batch.refresh_from_db()
@@ -110,7 +109,7 @@ class PortalDocumentTests(TestCase):
         self.assertTrue(MedicalDocument.objects.filter(pk=good.pk).exists())
 
     def test_dismissing_the_only_file_of_a_batch_removes_the_batch(self):
-        batch = DocumentBatch.objects.create(patient=identity(self.acct.awpid), total_files=1)
+        batch = DocumentBatch.objects.create(patient=identity(self.acct.awpid))
         bad = make_doc(self.acct.awpid, status="failed", batch=batch)
         with mock.patch("core.storage.delete"):
             self.assertEqual(self.dismiss(bad).status_code, 200)
@@ -141,7 +140,7 @@ class PortalDocumentTests(TestCase):
         make_doc(self.acct.awpid, status="completed", document_type="prescription", by="issued", uploaded_by="staff",
                  source_hospital_id="7", document_ref="RX-1")
         row = self.call(PortalDocumentListCreateView, "get").data["results"][0]
-        self.assertEqual((row["public_document_id"], row["source_hospital_id"], row["method"]), ("RX-1", "7", "staff"))
+        self.assertEqual((row["public_document_id"], row["source_hospital_id"], row["method"]), ("RX-1", 7, "staff"))
         self.assertNotIn("hospital_label", row)
         self.assertNotIn("doctor_label", row)
 

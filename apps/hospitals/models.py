@@ -37,31 +37,10 @@ class Hospital(models.Model):
     latitude    = models.FloatField(null=True, blank=True)
     longitude   = models.FloatField(null=True, blank=True)
     is_active   = models.BooleanField(default=True)
-    # Which VaccinationSchedule (apps.atomwalk.models.VaccinationSchedule)
-    # this hospital's staff-facing vaccination roadmap is built against.
-    # Plain IntegerField, not a real Django FK — even though Hospital
-    # (app_label "hospitals") and VaccinationSchedule (app_label "atomwalk")
-    # both route to the "default" atomwalk DB (see core/db_router.py:
-    # ATOMWALK_APPS includes both "hospitals" and "atomwalk"), this codebase's
-    # established convention is to never put a real cross-app FK to/from
-    # Hospital — every other cross-app reference to Hospital.id in this codebase
-    # (StaffMobileIndex.hospital_id, PatientBooking.hospital_id, HospitalAuditLog
-    # uses a real FK only because it's declared *inside* the hospitals app
-    # itself) uses a plain mirrored IntegerField instead, to keep the
-    # atomwalk app and the hospitals app decoupled from each other's model
-    # imports. Matching that pattern here for consistency rather than
-    # introducing the first cross-app FK. null=True: a hospital with no
-    # schedule assigned yet (shouldn't normally happen post-migration, but
-    # the field must tolerate it) falls back to the global "Default
-    # Schedule" template at the call site.
-    active_vaccination_schedule_id = models.IntegerField(null=True, blank=True)
-
-    # Same pattern as active_vaccination_schedule_id above, for the
-    # pediatric developmental-milestone module (apps.atomwalk.models.
-    # MilestoneSchedule) — hospital-configurable milestone catalog, cloned
-    # from a platform-admin template the same way vaccination schedules are.
-    # null=True: falls back to the global default template at the call site.
-    active_milestone_schedule_id = models.IntegerField(null=True, blank=True)
+    # The schedules this hospital's staff-facing vaccination and milestone roadmaps are built from: a platform template or the
+    # hospital's own copy. Empty = the platform's default template (decided where the roadmap is built).
+    active_vaccination_schedule = models.ForeignKey("atomwalk.Schedule", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    active_milestone_schedule = models.ForeignKey("atomwalk.Schedule", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
 
     # Who controls the consultation fee for doctors at this hospital.
     #   "doctor"   — each doctor sets their own fee from their profile.

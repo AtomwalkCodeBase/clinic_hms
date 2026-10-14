@@ -289,7 +289,7 @@ class HospitalListCreateView(APIView):
             # Write to atomwalk index — login uses mobile, not subdomain
             StaffMobileIndex.objects.using("default").update_or_create(
                 mobile=admin_mobile,
-                defaults={"hospital_id": hospital.id, "db_name": db_name},
+                defaults={"hospital_id": hospital.id},
             )
             logger.info("hospital_admin created and indexed for hospital %s", subdomain)
 

@@ -391,7 +391,6 @@ class StaffInviteView(APIView):
                 mobile=d["phone"],
                 defaults={
                     "hospital_id": request.hospital_id,
-                    "db_name": request.hospital_db,
                     "email": existing.email or None,
                 },
             )
@@ -524,7 +523,6 @@ class StaffInviteView(APIView):
             mobile=d["phone"],
             defaults={
                 "hospital_id": request.hospital_id,
-                "db_name": request.hospital_db,
                 "email": staff.email or None,
             },
         )
@@ -693,7 +691,6 @@ class StaffDetailView(APIView):
                 mobile=staff.phone,
                 defaults={
                     "hospital_id": request.hospital_id,
-                    "db_name": request.hospital_db,
                     "email": staff.email or None,
                 },
             )

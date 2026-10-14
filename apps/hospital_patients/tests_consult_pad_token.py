@@ -8,6 +8,7 @@ from rest_framework.test import APIRequestFactory
 
 from apps.hospital_patients.consult_pad_views import ConsultPadView, _open_session_for_token
 from apps.atomwalk.models import ConsultSession, Patient
+from core.testing import ensure_hospital
 
 
 class ConsultPadTokenTests(TestCase):
@@ -18,7 +19,7 @@ class ConsultPadTokenTests(TestCase):
 
     def session(self, hospital_id=1, **fields):
         return ConsultSession.objects.using("default").create(
-            awpid="AW-PAD", hospital_id=hospital_id, encounter_id=uuid.uuid4(),
+            patient=self.patient, hospital=ensure_hospital(hospital_id), encounter_id=uuid.uuid4(),
             expires_at=timezone.now() + timedelta(hours=12), **fields)
 
     def test_every_session_gets_its_own_random_token(self):

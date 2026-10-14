@@ -1,6 +1,7 @@
 from apps.records import classification as rules
 from apps.atomwalk.models import DocumentExtraction, MedicalDocument, PatientDocumentClassification
 from apps.atomwalk.models import Patient
+from core.testing import ensure_hospital
 
 PDF = b"%PDF-1.4\n" + b"x" * 100
 
@@ -14,6 +15,9 @@ def make_doc(awpid="AWP-T1", *, status="queued", document_type=rules.NOT_CLASSIF
              name="doc.pdf", **fields):
     """A MedicalDocument in `status` and of `document_type`. `by` records how the type was decided
     ("rules", "human" or "issued"); `text` stores the extracted text."""
+    if fields.get("source_hospital_id") is not None:
+        fields["source_hospital_id"] = int(fields["source_hospital_id"])
+        ensure_hospital(fields["source_hospital_id"])
     doc = MedicalDocument(patient=identity(awpid), batch=batch, file_name=name, status=status,
                           document_type=document_type, **fields)
     doc.file = "documents/AWP-T1/1/1.pdf"
@@ -22,15 +26,15 @@ def make_doc(awpid="AWP-T1", *, status="queued", document_type=rules.NOT_CLASSIF
         DocumentExtraction.objects.create(document=doc, extracted_text=text, engine="ocr")
     if by == "rules":
         PatientDocumentClassification.objects.create(
-            document=doc, ai_document_type=document_type, rule_score=20, final_document_type=document_type,
+            document=doc, ai_document_type=document_type, rule_score=20,
             status=rules.RULE_CLASSIFIED if document_type != rules.NOT_CLASSIFIED else rules.REVIEW_REQUIRED)
     elif by == "human":
         PatientDocumentClassification.objects.create(
-            document=doc, human_document_type=document_type, final_document_type=document_type,
+            document=doc, human_document_type=document_type,
             status=rules.HUMAN_CLASSIFIED)
     elif by == "issued":
         PatientDocumentClassification.objects.create(
-            document=doc, classifier=rules.CLASSIFIER_HOSPITAL, final_document_type=document_type, status=rules.ISSUED)
+            document=doc, classifier=rules.CLASSIFIER_HOSPITAL, status=rules.ISSUED)
     return reload(doc)
 
 

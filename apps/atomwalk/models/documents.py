@@ -23,10 +23,6 @@ class DocumentBatch(models.Model):
         COMPLETED_WITH_ERRORS = "completed_with_errors"
 
     patient = models.ForeignKey("atomwalk.Patient", on_delete=models.CASCADE, related_name="p_batches")
-    total_files = models.PositiveIntegerField(default=0)
-    processed_files = models.PositiveIntegerField(default=0)
-    failed_files = models.PositiveIntegerField(default=0)
-    status = models.CharField(max_length=24, choices=Status.choices, default=Status.PROCESSING)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -34,19 +30,34 @@ class DocumentBatch(models.Model):
         db_table = "document_batch"
 
     def __str__(self):
-        return f"batch {self.id} · {self.patient_id} · {self.processed_files}+{self.failed_files}/{self.total_files}"
+        return f"batch {self.id} · {self.patient_id}"
 
-    def refresh(self):
-        """Recount from the documents (never drifts) and set the batch status. A document waiting for a person to
-        classify it has finished its processing, so it counts as processed."""
-        counts = dict(self.documents.values_list("status").annotate(n=models.Count("id")))
-        S = MedicalDocument.Status
-        self.processed_files = counts.get(S.COMPLETED, 0) + counts.get(S.REVIEW_REQUIRED, 0)
-        self.failed_files = counts.get(S.FAILED, 0)
-        done = self.processed_files + self.failed_files >= self.total_files
-        self.status = (self.Status.PROCESSING if not done else
-                       self.Status.COMPLETED_WITH_ERRORS if self.failed_files else self.Status.COMPLETED)
-        self.save(update_fields=["processed_files", "failed_files", "status", "updated_at"])
+    # The counts and the status are worked out from the batch's documents each time, so they can never be wrong.
+    def _counts(self):
+        return dict(self.documents.values_list("status").annotate(n=models.Count("id")))
+
+    @property
+    def total_files(self):
+        return sum(self._counts().values())
+
+    @property
+    def processed_files(self):
+        """A document waiting for a person to classify it has finished its processing, so it counts as processed."""
+        counts = self._counts()
+        return counts.get(MedicalDocument.Status.COMPLETED, 0) + counts.get(MedicalDocument.Status.REVIEW_REQUIRED, 0)
+
+    @property
+    def failed_files(self):
+        return self._counts().get(MedicalDocument.Status.FAILED, 0)
+
+    @property
+    def status(self):
+        counts = self._counts()
+        processed = counts.get(MedicalDocument.Status.COMPLETED, 0) + counts.get(MedicalDocument.Status.REVIEW_REQUIRED, 0)
+        failed = counts.get(MedicalDocument.Status.FAILED, 0)
+        if processed + failed < sum(counts.values()):
+            return self.Status.PROCESSING
+        return self.Status.COMPLETED_WITH_ERRORS if failed else self.Status.COMPLETED
 
 
 class MedicalDocument(models.Model):
@@ -80,7 +91,7 @@ class MedicalDocument(models.Model):
 
     source_type = models.CharField(max_length=30, choices=Source.choices, default=Source.UPLOAD, db_index=True)
     source_id = models.CharField(max_length=80, blank=True, db_index=True)
-    source_hospital_id = models.CharField(max_length=30, null=True, blank=True)
+    source_hospital = models.ForeignKey("hospitals.Hospital", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     document_ref = models.CharField(max_length=40, blank=True)
     uploaded_by = models.CharField(max_length=10, default="patient")   # patient | staff
     created_at = models.DateTimeField(auto_now_add=True)
@@ -114,13 +125,9 @@ class DocumentExtraction(models.Model):
         SKIPPED = "skipped"
 
     document = models.OneToOneField(MedicalDocument, on_delete=models.CASCADE, related_name="extraction")
-    patient = models.ForeignKey("atomwalk.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="extractions")
     extracted_text = models.TextField(blank=True)
     engine = models.CharField(max_length=30, blank=True)             # what read it: "pdf_text" or "ocr"
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING, db_index=True)   # of the findings, not the text
-    doc_type = models.CharField(max_length=24, blank=True)
-    document_date = models.DateField(null=True, blank=True)
-    date_source = models.CharField(max_length=10, blank=True)       # "document" (printed on it) or "upload"
     extractor_version = models.CharField(max_length=30, blank=True)
     normalised = models.JSONField(default=dict, blank=True)         # the findings, as the timeline reads them (timeline_insights/extract.py)
     warnings = models.JSONField(default=list, blank=True)
@@ -147,11 +154,10 @@ class PatientDocumentClassification(models.Model):
     score_margin = models.FloatField(null=True, blank=True)          # rule_score minus second_best_score
     rule_matches = models.JSONField(null=True, blank=True)           # the keywords that matched
     human_document_type = models.CharField(max_length=50, null=True, blank=True)
-    final_document_type = models.CharField(max_length=50, null=True, blank=True)
     status = models.CharField(max_length=30, default=rules.RULE_CLASSIFIED)
 
     class Meta:
         db_table = "patient_document_classification"
 
     def __str__(self):
-        return f"document {self.document_id} → {self.final_document_type or 'unclassified'}"
+        return f"document {self.document_id} → {self.document.document_type}"

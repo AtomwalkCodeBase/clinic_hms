@@ -19,7 +19,7 @@ class Schedule(models.Model):
     kind            = models.CharField(max_length=15, choices=KIND_CHOICES)
     name            = models.CharField(max_length=200)
     description     = models.TextField(blank=True)
-    owner_hospital_id = models.IntegerField(null=True, blank=True)  # null = system-level template
+    owner_hospital = models.ForeignKey("hospitals.Hospital", null=True, blank=True, on_delete=models.CASCADE, related_name="schedules")  # empty = a platform template
     is_template     = models.BooleanField(default=False)
     active          = models.BooleanField(default=True)  # soft-disable instead of delete
     created_at      = models.DateTimeField(auto_now_add=True)

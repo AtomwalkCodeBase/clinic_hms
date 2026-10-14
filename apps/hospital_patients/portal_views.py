@@ -854,7 +854,7 @@ class PortalBookView(APIView):
         else:
             from apps.atomwalk.models import PatientRelationship, Patient
             is_family = PatientRelationship.objects.using("default").filter(
-                guardian_awpid=acct.awpid, dependent_awpid=target_awpid,
+                guardian__awpid=acct.awpid, dependent__awpid=target_awpid,
             ).exists()
             if not is_family:
                 return Response({"error": "That patient isn't linked to your account."}, status=403)
@@ -1035,7 +1035,7 @@ class PortalMyRecordsView(APIView):
         if target_awpid != acct.awpid:
             from apps.atomwalk.models import PatientRelationship
             is_family = PatientRelationship.objects.using("default").filter(
-                guardian_awpid=acct.awpid, dependent_awpid=target_awpid,
+                guardian__awpid=acct.awpid, dependent__awpid=target_awpid,
             ).exists()
             if not is_family:
                 return error("That patient isn't linked to your account.", status=403)
@@ -1224,7 +1224,7 @@ class PortalInvoiceReceiptPDFView(APIView):
         if patient.awpid != acct.awpid:
             from apps.atomwalk.models import PatientRelationship
             is_family = PatientRelationship.objects.using("default").filter(
-                guardian_awpid=acct.awpid, dependent_awpid=patient.awpid,
+                guardian__awpid=acct.awpid, dependent__awpid=patient.awpid,
             ).exists()
             if not is_family:
                 return error("This bill does not belong to you.")
@@ -1944,7 +1944,7 @@ class PortalLabOrderChoiceView(APIView):
             # order always failed with "This order does not belong to you."
             from apps.atomwalk.models import PatientRelationship
             is_family = PatientRelationship.objects.using("default").filter(
-                guardian_awpid=acct.awpid, dependent_awpid=order_awpid,
+                guardian__awpid=acct.awpid, dependent__awpid=order_awpid,
             ).exists()
             if not is_family:
                 return error("This order does not belong to you.")
@@ -2121,7 +2121,7 @@ class PortalPrescriptionChoiceView(APIView):
         if rx_awpid != acct.awpid:
             from apps.atomwalk.models import PatientRelationship
             is_family = PatientRelationship.objects.using("default").filter(
-                guardian_awpid=acct.awpid, dependent_awpid=rx_awpid,
+                guardian__awpid=acct.awpid, dependent__awpid=rx_awpid,
             ).exists()
             if not is_family:
                 return error("This prescription does not belong to you.")
@@ -2190,7 +2190,7 @@ class PortalPrescriptionReceiptPDFView(APIView):
         if patient.awpid != acct.awpid:
             from apps.atomwalk.models import PatientRelationship
             is_family = PatientRelationship.objects.using("default").filter(
-                guardian_awpid=acct.awpid, dependent_awpid=patient.awpid,
+                guardian__awpid=acct.awpid, dependent__awpid=patient.awpid,
             ).exists()
             if not is_family:
                 return error("This prescription does not belong to you.")
@@ -2255,7 +2255,7 @@ class PortalLabReportFileView(APIView):
         if order_awpid != acct.awpid:
             from apps.atomwalk.models import PatientRelationship
             is_family = PatientRelationship.objects.using("default").filter(
-                guardian_awpid=acct.awpid, dependent_awpid=order_awpid,
+                guardian__awpid=acct.awpid, dependent__awpid=order_awpid,
             ).exists()
             if not is_family:
                 return error("This order does not belong to you.")
@@ -2527,7 +2527,7 @@ class PortalHealthSummaryView(APIView):
         target_awpid = (request.query_params.get("patient_awpid") or "").strip() or acct.awpid
         if target_awpid != acct.awpid:
             is_family = PatientRelationship.objects.using("default").filter(
-                guardian_awpid=acct.awpid, dependent_awpid=target_awpid,
+                guardian__awpid=acct.awpid, dependent__awpid=target_awpid,
             ).exists()
             if not is_family:
                 return error("That patient isn't linked to your account.", status=403)
@@ -2536,7 +2536,7 @@ class PortalHealthSummaryView(APIView):
 
         allergies = list(
             SharedAllergy.objects.using("default")
-            .filter(awpid=target_awpid, is_active=True)
+            .filter(patient__awpid=target_awpid, is_active=True)
             .values("substance", "reaction", "severity")
         )
         diagnoses = list(
@@ -2881,7 +2881,7 @@ class PortalNotificationMarkReadView(APIView):
         owner_awpid = log.patient.awpid if log.patient else None
         is_owner = owner_awpid == acct.awpid
         is_family = bool(owner_awpid) and not is_owner and PatientRelationship.objects.using("default").filter(
-            guardian_awpid=acct.awpid, dependent_awpid=owner_awpid,
+            guardian__awpid=acct.awpid, dependent__awpid=owner_awpid,
         ).exists()
         if not (is_owner or is_family):
             return error("This notification does not belong to you.", status=403)
@@ -3016,8 +3016,8 @@ class PortalEmergencyTokenView(APIView):
         try:
             xff = request.META.get("HTTP_X_FORWARDED_FOR")
             EmergencyAccessLog.objects.using("default").create(
-                awpid=target_awpid, event=EmergencyAccessLog.EVENT_GENERATED,
-                generated_by_account_id=request.user.id, consent_confirmed=True,
+                patient=Patient.objects.using("default").filter(awpid=target_awpid).first(), event=EmergencyAccessLog.EVENT_GENERATED,
+                generated_by_id=request.user.id, consent_confirmed=True,
                 ip_address=(xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR")),
             )
         except Exception:

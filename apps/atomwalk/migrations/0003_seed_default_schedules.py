@@ -75,5 +75,5 @@ def seed(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    dependencies = [("atomwalk", "0001_initial")]
+    dependencies = [("atomwalk", "0002_initial")]
     operations = [migrations.RunPython(seed, migrations.RunPython.noop)]

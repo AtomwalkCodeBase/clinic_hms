@@ -10,6 +10,7 @@ from apps.platform_admin import urls as platform_urls
 from apps.atomwalk.models import Schedule
 from apps.hospitals.models import Hospital
 from core.authentication import MockUser
+from core.testing import ensure_hospital
 
 # per kind: (kind, view-name stem, hospital column, the rule key holding the name, the kind-specific rule key + value)
 KINDS = {
@@ -159,7 +160,7 @@ class ScheduleEndpointTests(TestCase):
                 resp = self.as_staff(kind, "post", pk=template, suffix="ScheduleActivateView")
                 self.assertEqual(resp.status_code, 200, resp.data)
                 self.assertEqual(getattr(Hospital.objects.using("default").get(pk=self.hospital.pk), KINDS[kind]["column"]), template)
-                other = Schedule.objects.create(kind=kind, name="theirs", owner_hospital_id=self.hospital.id + 1000)
+                other = Schedule.objects.create(kind=kind, name="theirs", owner_hospital=ensure_hospital(self.hospital.id + 1000))
                 self.assertEqual(self.as_staff(kind, "post", pk=other.id, suffix="ScheduleActivateView").status_code, 400)
                 self.assertEqual(self.as_staff(kind, "get", pk=other.id, suffix="ScheduleDetailView").status_code, 404)
 

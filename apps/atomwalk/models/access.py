@@ -47,8 +47,7 @@ class StaffMobileIndex(models.Model):
     # StaffEmailIndex (see deprecated model above) to avoid fragmenting
     # cross-hospital identity resolution across two similar tables.
     email     = models.EmailField(max_length=254, unique=True, null=True, blank=True, db_index=True)
-    hospital_id = models.IntegerField()          # mirrors Hospital.id — no FK across DBs
-    db_name   = models.CharField(max_length=100)
+    hospital = models.ForeignKey("hospitals.Hospital", on_delete=models.CASCADE, related_name="staff_mobiles")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -57,6 +56,11 @@ class StaffMobileIndex(models.Model):
 
     def __str__(self):
         return f"{self.mobile} → {self.db_name}"
+
+    @property
+    def db_name(self):
+        """The hospital's database: the hospital knows it, so it is not stored again here."""
+        return self.hospital.db_name
 
 
 class BlacklistedToken(models.Model):
@@ -143,14 +147,18 @@ class OTPCode(models.Model):
     # existing user yet.
     target_type = models.CharField(max_length=10, blank=True)   # "staff" / "patient" / ""
     target_id   = models.IntegerField(null=True, blank=True)
-    # Hospital db_name — only meaningful for target_type="staff" (a StaffUser
-    # id alone is ambiguous across hospital databases).
-    target_db   = models.CharField(max_length=100, blank=True)
+    # Only for target_type="staff": a StaffUser id alone is ambiguous across hospital databases.
+    hospital    = models.ForeignKey("hospitals.Hospital", null=True, blank=True, on_delete=models.CASCADE, related_name="+")
 
     attempts    = models.PositiveSmallIntegerField(default=0)
     is_used     = models.BooleanField(default=False)
     expires_at  = models.DateTimeField(db_index=True)
     created_at  = models.DateTimeField(auto_now_add=True)
+
+    @property
+    def target_db(self):
+        """The target staff member's hospital database ("" for a patient)."""
+        return self.hospital.db_name if self.hospital_id else ""
 
     class Meta:
         app_label = "atomwalk"
@@ -188,11 +196,11 @@ class EmergencyAccessLog(models.Model):
         (EVENT_PRIVACY,    "Shared-records privacy changed"),
     ]
 
-    awpid      = models.CharField(max_length=30, db_index=True)
+    patient    = models.ForeignKey("atomwalk.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="emergency_access_log")
     event      = models.CharField(max_length=24, choices=EVENT_CHOICES)
     # Which account actually triggered generation — blank for "viewed" rows,
     # since a scan is by definition someone without an account here.
-    generated_by_account_id = models.IntegerField(null=True, blank=True)
+    generated_by = models.ForeignKey("atomwalk.Patient", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     # True only for EVENT_GENERATED rows — durable proof the account holder
     # explicitly confirmed the consent prompt (see PortalEmergencyTokenView)
     # before this specific token was minted, not just a standing preference.
@@ -202,13 +210,18 @@ class EmergencyAccessLog(models.Model):
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    @property
+    def awpid(self):
+        """The patient's AWPID, read through the link."""
+        return self.patient.awpid if self.patient_id else ""
+
     class Meta:
         app_label = "atomwalk"
         db_table  = "emergency_access_log"
         ordering  = ["-created_at"]
 
     def __str__(self):
-        return f"{self.awpid} — {self.event} @ {self.created_at}"
+        return f"{self.patient_id} — {self.event} @ {self.created_at}"
 
 
 class ConsultSession(models.Model):
@@ -244,8 +257,8 @@ class ConsultSession(models.Model):
     # The secret in the QR / link the phone opens (no login). One per consultation, so it also says which hospital and
     # which patient the phone is writing for.
     token           = models.CharField(max_length=64, unique=True, db_index=True, default=new_pad_token)
-    awpid           = models.CharField(max_length=30, db_index=True)
-    hospital_id       = models.IntegerField(db_index=True)
+    patient         = models.ForeignKey("atomwalk.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="consult_sessions")
+    hospital          = models.ForeignKey("hospitals.Hospital", on_delete=models.CASCADE, related_name="consult_sessions")
     encounter_id    = models.UUIDField(db_index=True)
     doctor_user_id  = models.UUIDField(null=True, blank=True)
 
@@ -273,13 +286,18 @@ class ConsultSession(models.Model):
     expires_at = models.DateTimeField(null=True, blank=True)
     signed_at  = models.DateTimeField(null=True, blank=True)
 
+    @property
+    def awpid(self):
+        """The patient's AWPID, read through the link."""
+        return self.patient.awpid if self.patient_id else ""
+
     class Meta:
         app_label = "atomwalk"
         db_table  = "consult_session"
         ordering  = ["-created_at"]
         indexes = [
             models.Index(fields=["encounter_id", "status"]),
-            models.Index(fields=["awpid", "hospital_id", "status"]),
+            models.Index(fields=["patient", "hospital", "status"]),
         ]
 
     def __str__(self):
@@ -355,7 +373,7 @@ class RecordsShareRequest(models.Model):
     # Empty until a patient approves; then it's the awpid whose records this
     # grant exposes. A grant only ever covers the approving patient (no
     # family-member targeting in v1).
-    awpid       = models.CharField(max_length=30, blank=True, db_index=True)
+    patient     = models.ForeignKey("atomwalk.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="share_requests")
     status      = models.CharField(max_length=12, choices=STATUS_CHOICES,
                                    default=STATUS_PENDING, db_index=True)
 
@@ -413,16 +431,21 @@ class RecordsShareRequest(models.Model):
         import hashlib
         return hashlib.sha256(raw_token.encode()).hexdigest() == self.device_hash
 
+    @property
+    def awpid(self):
+        """The patient's AWPID, read through the link."""
+        return self.patient.awpid if self.patient_id else ""
+
     class Meta:
         app_label = "atomwalk"
         db_table  = "records_share_request"
         ordering  = ["-created_at"]
         indexes = [
-            models.Index(fields=["awpid", "status"]),
+            models.Index(fields=["patient", "status"]),
         ]
 
     def __str__(self):
-        return f"RecordsShareRequest {self.code} [{self.status}] awpid={self.awpid or '—'}"
+        return f"RecordsShareRequest {self.code} [{self.status}] patient={self.patient_id or '—'}"
 
     @property
     def is_live(self):
@@ -469,7 +492,7 @@ class RecordsPrivacy(models.Model):
     """
     SECTIONS = ("summary", "vitals", "diagnoses", "vaccinations")
 
-    awpid             = models.CharField(max_length=30, unique=True, db_index=True)
+    patient           = models.OneToOneField("atomwalk.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="records_privacy")
     hide_all          = models.BooleanField(default=False)
     hidden_doc_ids    = models.JSONField(default=list, blank=True)   # SharedDocument ids
     hidden_categories = models.JSONField(default=list, blank=True)   # report_categories slugs
@@ -478,14 +501,20 @@ class RecordsPrivacy(models.Model):
     updated_at        = models.DateTimeField(auto_now=True)
     created_at        = models.DateTimeField(auto_now_add=True)
 
+    @property
+    def awpid(self):
+        """The patient's AWPID, read through the link."""
+        return self.patient.awpid if self.patient_id else ""
+
     class Meta:
         app_label = "atomwalk"
         db_table  = "records_privacy"
 
     def __str__(self):
-        return f"RecordsPrivacy awpid={self.awpid} hide_all={self.hide_all}"
+        return f"RecordsPrivacy patient={self.patient_id} hide_all={self.hide_all}"
 
     @classmethod
     def for_awpid(cls, awpid):
-        obj, _ = cls.objects.using("default").get_or_create(awpid=awpid)
+        from .patient import Patient
+        obj, _ = cls.objects.using("default").get_or_create(patient=Patient.objects.using("default").get(awpid=awpid))
         return obj

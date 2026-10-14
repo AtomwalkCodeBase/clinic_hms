@@ -11,6 +11,7 @@ from django.test import TestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.hospital_patients.pediatrics import portal_views as views
+from core.testing import ensure_hospital
 from apps.atomwalk.models import (
     MilestoneScheduleRule, PatientAccount, Patient, PatientRelationship, MilestoneRecord,
     ImmunizationRecord, GrowthMeasurement, Vitals)
@@ -23,11 +24,12 @@ class PortalPediatricTests(TestCase):
     databases = {"default"}
 
     def setUp(self):
+        ensure_hospital(1)
         self.mom = PatientAccount.objects.using("default").create(
             awpid="AW-MOM", full_name="Mom", mobile="9111111111", password="x", date_of_birth=dt.date(1990, 1, 1))
         self.kid = Patient.objects.using("default").create(
             awpid="AW-KID", full_name="Kid", gender="F", date_of_birth=dt.date.today() - timedelta(days=730), is_dependent=True)
-        PatientRelationship.objects.using("default").create(guardian_awpid="AW-MOM", dependent_awpid="AW-KID", relationship="child")
+        PatientRelationship.objects.using("default").create(guardian=self.mom, dependent=self.kid, relationship="child")
 
     def call(self, view, method="get", data=None, query="", **kwargs):
         request = getattr(APIRequestFactory(), method)(f"/x/{query}", data, format="json")
@@ -136,7 +138,7 @@ class PortalPediatricTests(TestCase):
         self.assertEqual(added.status_code, 200, added.data)
         self.assertEqual(added.data["message"], "Family member added.")
         awpid = added.data["data"]["awpid"]
-        self.assertTrue(PatientRelationship.objects.using("default").filter(guardian_awpid="AW-MOM", dependent_awpid=awpid).exists())
+        self.assertTrue(PatientRelationship.objects.using("default").filter(guardian__awpid="AW-MOM", dependent__awpid=awpid).exists())
 
         again = self.call(views.PortalFamilyListCreateView, "post", {"full_name": "Baby Two", "date_of_birth": "2025-06-01"})
         self.assertIn("Reconnected", again.data["message"])                 # same name and birth date: same person, not a duplicate
@@ -146,7 +148,7 @@ class PortalPediatricTests(TestCase):
         self.assertEqual(Patient.objects.using("default").get(awpid=awpid).full_name, "Baby Too")
 
         self.assertEqual(self.call(views.PortalFamilyDetailView, "delete", awpid=awpid).status_code, 200)
-        self.assertFalse(PatientRelationship.objects.using("default").filter(dependent_awpid=awpid).exists())
+        self.assertFalse(PatientRelationship.objects.using("default").filter(dependent__awpid=awpid).exists())
         self.assertTrue(Patient.objects.using("default").filter(awpid=awpid).exists())    # the person's record stays
 
     def test_a_family_member_needs_a_name_and_only_the_guardian_can_edit(self):

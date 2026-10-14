@@ -12,7 +12,7 @@ from unittest import mock
 from apps.hospital_patients.pediatrics import growth_vaccination_views as vax_views
 from apps.hospital_patients.pediatrics import pediatric_views as ped_views
 from apps.atomwalk.models import BirthHistory, GrowthMeasurement, ImmunizationRecord, MilestoneRecord, Patient
-from core.testing import HospitalDBTestCase, requires_hospital_db
+from core.testing import HospitalDBTestCase, ensure_hospital, requires_hospital_db
 
 V = ImmunizationRecord
 
@@ -33,6 +33,8 @@ class PediatricStaffTests(HospitalDBTestCase):
             awpid="AW-KID-1", uhid="UHID-K1", branch=self.branch, full_name="Kid One", gender="F",
             date_of_birth=dt.date.today() - timedelta(days=730), is_dependent=True,
         )
+        ensure_hospital(self.hospital.id + 1)
+        ensure_hospital(self.hospital.id + 50)
         self.shared = Patient.objects.using("default").create(awpid="AW-KID-1", full_name="Kid One", gender="F", is_dependent=True)
         self.appt = Appointment.objects.using(db).create(
             patient_id=self.child.uuid, patient_awpid=self.child.awpid, doctor_user_id=uuid.UUID(int=5),

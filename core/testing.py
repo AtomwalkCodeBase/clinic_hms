@@ -60,3 +60,10 @@ class HospitalDBTestCase(HospitalDBMixin, TestCase):
 class HospitalDBTransactionTestCase(HospitalDBMixin, TransactionTestCase):
     """Commits for real (tables are flushed afterwards); needed when several threads/connections
     must see each other's writes, e.g. row-lock tests."""
+
+
+def ensure_hospital(pk):
+    """A hospital row with this id (tests that stamp a fact with "hospital 3" need hospital 3 to exist, now that it is a link)."""
+    from apps.hospitals.models import Hospital
+    return Hospital.objects.using("default").get_or_create(
+        id=int(pk), defaults={"name": f"Hospital {pk}", "subdomain": f"hospital-{pk}", "db_name": f"hospital_db_{pk}"})[0]

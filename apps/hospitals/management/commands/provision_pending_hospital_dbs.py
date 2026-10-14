@@ -166,7 +166,7 @@ class Command(BaseCommand):
 
         StaffMobileIndex.objects.using("default").update_or_create(
             mobile=mobile,
-            defaults={"hospital_id": hospital.id, "db_name": db, "email": None},
+            defaults={"hospital_id": hospital.id, "email": None},
         )
         self._credentials.append({"hospital": hospital.name, "mobile": mobile, "password": password})
         self.stdout.write(self.style.SUCCESS(f"  Created hospital_admin login: {mobile}"))

@@ -26,7 +26,7 @@ class WaitingUploadsAreNotSharedTests(TestCase):
         self.issued = make_doc(AWPID, status="completed", document_type="prescription", by="issued", name="issued.pdf",
                                uploaded_by="staff")
         self.grant = RecordsShareRequest.objects.using("default").create(
-            token="tok-wait-1", code="654321", awpid=AWPID, status=RecordsShareRequest.STATUS_APPROVED,
+            token="tok-wait-1", code="654321", patient=identity(AWPID), status=RecordsShareRequest.STATUS_APPROVED,
             expires_at=timezone.now() + timedelta(hours=1),
         )
 

@@ -84,8 +84,8 @@ def _resolve_emergency_contact(awpid):
         }
 
     rel = (
-        PatientRelationship.objects.using("default").filter(dependent_awpid=awpid, is_primary=True).first()
-        or PatientRelationship.objects.using("default").filter(dependent_awpid=awpid).first()
+        PatientRelationship.objects.using("default").filter(dependent__awpid=awpid, is_primary=True).first()
+        or PatientRelationship.objects.using("default").filter(dependent__awpid=awpid).first()
     )
     if rel:
         guardian = PatientAccount.objects.using("default").filter(awpid=rel.guardian_awpid).first()
@@ -215,8 +215,8 @@ class EmergencySummaryView(APIView):
         # endpoints with), so resolve every file to a signed URL right here.
         lab_result_ids = [r["id"] for r in history["lab_results"] if r.get("has_file")]
         lab_files = {
-            r.id: blob_storage.signed_url(r.file_data)
-            for r in LabResult.objects.using("default").filter(id__in=lab_result_ids)
+            r.id: blob_storage.signed_url(r.document.file.name)
+            for r in LabResult.objects.using("default").filter(id__in=lab_result_ids, document__isnull=False).select_related("document")
         }
         for r in history["lab_results"]:
             r["file_url"] = lab_files.get(r["id"], "")
@@ -238,7 +238,7 @@ class EmergencySummaryView(APIView):
         ip_address = xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR")
         try:
             EmergencyAccessLog.objects.using("default").create(
-                awpid=awpid, event=EmergencyAccessLog.EVENT_VIEWED, ip_address=ip_address,
+                patient=identity, event=EmergencyAccessLog.EVENT_VIEWED, ip_address=ip_address,
             )
         except Exception:
             logger.exception("EmergencyAccessLog write failed (viewed) for awpid=%s", awpid)

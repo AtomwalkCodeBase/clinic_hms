@@ -136,19 +136,19 @@ class ClassifyDocumentTests(TestCase):
     databases = {"default"}
 
     def test_a_clear_verdict_completes_the_document_with_its_type(self):
-        batch = DocumentBatch.objects.create(patient=identity(), total_files=1)
+        batch = DocumentBatch.objects.create(patient=identity())
         doc = make_doc(status=S.CLASSIFYING, text=RX, batch=batch)
         classify_document_task(doc.id)
         doc = row(doc)
         self.assertEqual((doc.status, doc.document_type, doc.error_message), (S.COMPLETED, "prescription", ""))
         c = classification(doc)
-        self.assertEqual((c.status, c.final_document_type, c.rule_score, c.second_best_score, c.score_margin),
+        self.assertEqual((c.status, c.document.document_type, c.rule_score, c.second_best_score, c.score_margin),
                          ("rule_classified", "prescription", 21, 1, 20))
         batch.refresh_from_db()
         self.assertEqual((batch.processed_files, batch.failed_files, batch.status), (1, 0, "completed"))
 
     def test_text_the_rules_cannot_place_needs_review(self):
-        batch = DocumentBatch.objects.create(patient=identity(), total_files=1)
+        batch = DocumentBatch.objects.create(patient=identity())
         doc = make_doc(status=S.CLASSIFYING, text="hello world", batch=batch)
         classify_document_task(doc.id)
         doc = row(doc)
@@ -193,7 +193,7 @@ class WholePipelineTests(TestCase):
 
     @mock.patch("apps.records.services.extract_text", return_value=(RX, "ocr"))
     def test_a_queued_document_ends_completed_with_its_text_and_classification(self, _extract, _get):
-        batch = DocumentBatch.objects.create(patient=identity(), total_files=1)
+        batch = DocumentBatch.objects.create(patient=identity())
         doc = make_doc(status=S.QUEUED, batch=batch)
         with mock.patch("apps.records.tasks.classify_document_task.apply_async",
                         side_effect=lambda args, queue: classify_document_task(*args)):
@@ -231,7 +231,7 @@ class StartProcessingTests(TestCase):
 
     @mock.patch("apps.records.tasks.extract_document_task.apply_async", side_effect=ConnectionError("broker down"))
     def test_when_the_queue_is_unreachable_the_documents_fail_so_the_patient_can_retry(self, _delay):
-        batch = DocumentBatch.objects.create(patient=identity(), total_files=1)
+        batch = DocumentBatch.objects.create(patient=identity())
         doc = make_doc(batch=batch)
         services.start_processing([doc.id])
         self.assertEqual(row(doc).status, S.FAILED)
@@ -249,12 +249,12 @@ class CorrectionTests(TestCase):
         doc = row(doc)
         self.assertEqual((doc.status, doc.document_type, cls.method_of(doc)), (S.COMPLETED, "lab_report", "staff"))
         c = classification(doc)
-        self.assertEqual((c.human_document_type, c.final_document_type, c.status), ("lab_report", "lab_report", "human_classified"))
+        self.assertEqual((c.human_document_type, c.document.document_type, c.status), ("lab_report", "lab_report", "human_classified"))
 
     def test_a_person_can_change_the_type_the_rules_chose(self):
         doc = make_doc(status=S.COMPLETED, document_type="lab_report", by="rules")
         services.correct_document(doc, "prescription")
-        self.assertEqual((row(doc).document_type, classification(doc).final_document_type), ("prescription", "prescription"))
+        self.assertEqual((row(doc).document_type, row(doc).document_type), ("prescription", "prescription"))
 
     def test_a_failed_file_becomes_a_normal_completed_one(self):
         doc = make_doc(status=S.FAILED, error_message="unreadable")
@@ -310,13 +310,11 @@ class BatchCounterTests(TestCase):
     databases = {"default"}
 
     def test_the_batch_counts_follow_its_documents(self):
-        batch = DocumentBatch.objects.create(patient=identity(), total_files=4)
+        batch = DocumentBatch.objects.create(patient=identity())
         make_doc(batch=batch, status=S.COMPLETED, document_type="lab_report", by="rules")
         make_doc(batch=batch, status=S.REVIEW_REQUIRED, by="rules")
         make_doc(batch=batch, status=S.CLASSIFYING)
         make_doc(batch=batch, status=S.FAILED)
-        batch.refresh()
         self.assertEqual((batch.processed_files, batch.failed_files, batch.status), (2, 1, "processing"))
         MedicalDocument.objects.filter(batch=batch, status=S.CLASSIFYING).update(status=S.COMPLETED)
-        batch.refresh()
         self.assertEqual((batch.processed_files, batch.status), (3, "completed_with_errors"))

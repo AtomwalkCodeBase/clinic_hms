@@ -6,10 +6,14 @@ from django.test import TestCase
 from apps.records import services
 from apps.atomwalk.models import DocumentBatch, MedicalDocument, PatientDocumentClassification
 from apps.records.tests.helpers import identity, make_doc
+from core.testing import ensure_hospital
 
 
 class IssuedDocumentTests(TestCase):
     databases = {"default"}
+
+    def setUp(self):
+        ensure_hospital(3)
 
     def test_a_hospital_issued_document_is_stored_typed_and_complete_with_what_is_printed_on_it(self):
         identity("AWP-T1")
@@ -19,7 +23,7 @@ class IssuedDocumentTests(TestCase):
             document_date=datetime.date(2026, 9, 12))
         self.assertEqual((doc.status, doc.document_type, doc.uploaded_by), ("completed", "prescription", "staff"))
         self.assertEqual((doc.document_ref, doc.document_date, doc.source_hospital_id, doc.source_ref),
-                         ("RX-000123", datetime.date(2026, 9, 12), "3", "encounter:9"))
+                         ("RX-000123", datetime.date(2026, 9, 12), 3, "encounter:9"))
         self.assertEqual((doc.patient.awpid, doc.file_name), ("AWP-T1", "Prescription RX-000123 — 2026-09-12.pdf"))
 
     def test_the_file_is_the_one_already_in_the_bucket(self):
@@ -39,7 +43,7 @@ class IssuedDocumentTests(TestCase):
         doc = services.create_issued_document(awpid="AWP-T1", file_path="p", name="x.pdf", doc_type="lab_report",
                                               source_hospital_id=3, source_type="lab_report", source_id="1")
         c = PatientDocumentClassification.objects.get(document=doc)
-        self.assertEqual((c.classifier, c.status, c.final_document_type, c.rule_score), ("hospital", "issued", "lab_report", None))
+        self.assertEqual((c.classifier, c.status, c.document.document_type, c.rule_score), ("hospital", "issued", "lab_report", None))
 
     def test_a_type_that_is_not_one_of_the_fixed_types_becomes_other(self):
         identity("AWP-T1")
@@ -52,7 +56,7 @@ class PatientLinkTests(TestCase):
     databases = {"default"}
 
     def test_a_document_and_a_batch_need_a_real_patient(self):
-        for create in (lambda: DocumentBatch.objects.create(patient_id=999999, total_files=1),
+        for create in (lambda: DocumentBatch.objects.create(patient_id=999999),
                        lambda: MedicalDocument.objects.create(patient_id=999999, file="x")):
             with self.assertRaises(IntegrityError), transaction.atomic():
                 create()
