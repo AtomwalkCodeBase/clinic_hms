@@ -17,10 +17,10 @@ from apps.auth_app.views import LogoutView, TokenRefreshView, _make_tokens
 from apps.hospital_master.facility.models import Branch
 from apps.hospital_master.staff.models import StaffUser
 from apps.atomwalk.patients.models import BlacklistedToken
-from apps.atomwalk.patients.models import PatientAccount
 from apps.atomwalk.hospital_master.models import Subscription, Hospital
 from core.authentication import JWTHospitalAuthentication
 from core.testing import HospitalDBTestCase, requires_hospital_db
+from apps.atomwalk.patients.services import accounts, create_account
 
 FAR_FUTURE = "2099-01-01T00:00:00Z"
 
@@ -125,7 +125,7 @@ class AuthenticationTests(HospitalDBTestCase):
 
     # ── patients ─────────────────────────────────────────────────────────────
     def make_patient(self, awpid="AW-AUTH-1"):
-        return PatientAccount.objects.using("default").create(
+        return create_account(
             awpid=awpid, full_name="P", mobile="9111111111", password="x",
         )
 
@@ -144,7 +144,7 @@ class AuthenticationTests(HospitalDBTestCase):
 
     def test_a_deactivated_patient_account_is_rejected(self):
         acct = self.make_patient()
-        PatientAccount.objects.using("default").filter(pk=acct.pk).update(is_active=False)
+        accounts().filter(pk=acct.pk).update(is_active=False)
         token = _make_tokens({"user_id": acct.id, "role": "patient", "awpid": acct.awpid})["access"]
         with self.assertRaises(AuthenticationFailed):
             self.authenticate(token)

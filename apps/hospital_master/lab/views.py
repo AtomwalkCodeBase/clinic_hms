@@ -430,7 +430,7 @@ class LabRequestAttachDocumentView(APIView):
         return created(data={
             "id": doc.id, "title": doc.file_name, "doc_type": doc.document_type,
             "file_name": doc.file_name, "mime_type": doc.mime_type,
-            "source_ref": doc.source_ref, "created_at": doc.created_at,
+            "source_ref": f"{doc.source_type}:{doc.source_id}" if doc.source_id else "", "created_at": doc.created_at,
         }, message="Report attached.")
 
 

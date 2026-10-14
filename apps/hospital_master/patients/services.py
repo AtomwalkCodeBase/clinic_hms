@@ -580,7 +580,7 @@ class PatientService:
             rel = PatientRelationship.objects.using("default").filter(
                 dependent__awpid=awpid
             ).first()
-            guardian_awpid = rel.guardian_awpid if rel else None
+            guardian_awpid = rel.guardian.awpid if rel else None
 
         if not guardian_awpid:
             return {"guardian_awpid": None, "members": []}

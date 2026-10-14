@@ -1,6 +1,7 @@
 """Views for documents, the timeline, vaccination and growth, and the immunization and milestone schedules."""
 import logging
 import time
+from apps.atomwalk.documents.models import DOMAIN_CHOICES, Schedule, ScheduleRule
 from apps.atomwalk.documents.services import text, staff_name
 from datetime import date
 from rest_framework.parsers import MultiPartParser
@@ -39,11 +40,12 @@ from core.utils.age import age_years_months
 from apps.atomwalk.documents.services import PATIENT_NOT_FOUND, get_patient, parse_date, staff_name as _staff_name, text as _text
 from apps.atomwalk.documents.services import add_percentiles
 from apps.atomwalk.documents.services import rules_for
-from apps.atomwalk.patients.models import Patient, PatientAccount, PatientRelationship
+from apps.atomwalk.patients.models import Patient, PatientRelationship
 from apps.atomwalk.documents.services import growth_points
 from core.audit import log_action
 from apps.hospital_master.patients.serializers import BirthHistorySerializer
 from apps.hospital_master.patients.services import PatientService
+from apps.atomwalk.patients.services import accounts
 
 
 logger = logging.getLogger(__name__)
@@ -89,7 +91,7 @@ class UploadView(APIView):
         docs = list(batch.documents.order_by("id"))      # fresh: a file that couldn't be queued is already "failed"
         return success(data={
             "batch_id": batch.id, "mode": mode,
-            "documents": [{"id": d.id, "file_name": d.file_name, "processing_status": d.processing_status} for d in docs],
+            "documents": [{"id": d.id, "file_name": d.file_name, "processing_status": d.status} for d in docs],
         }, status=202)
 class BatchDetailView(APIView):
     """GET /api/v1/records/batches/<id>/ — the batch, its counts by status, then each of its documents.
@@ -270,21 +272,17 @@ class _Kind:
         self.rule_dict, self.template_message = rule_dict, template_message
         self.editable = [name_key, extra_key, "scheduled_label", "min_age_days", "max_age_days", "mandatory", "sort_order"]
 
-    @property
-    def Schedule(self):
-        from apps.atomwalk.documents import models
-        return getattr(models, f"{self.noun.title()}Schedule")
+    def schedules(self):
+        return Schedule.objects.using("default").filter(kind=self.noun)
 
-    @property
-    def Rule(self):
-        from apps.atomwalk.documents import models
-        return getattr(models, f"{self.noun.title()}ScheduleRule")
+    def rules(self):
+        return ScheduleRule.objects.using("default").filter(schedule__kind=self.noun)
 
     def new_rule(self, rd, default_sort):
         """The field values for a new rule from a request dict, or None when it is missing something required."""
         if not rd.get(self.name_key) or not rd.get("scheduled_label") or rd.get("min_age_days") is None:
             return None
-        if self.extra_default is None and rd.get(self.extra_key) not in dict(self.Rule.DOMAIN_CHOICES):
+        if self.extra_default is None and rd.get(self.extra_key) not in dict(DOMAIN_CHOICES):
             return None
         numbers = _checked_numbers(rd)
         return {
@@ -331,14 +329,13 @@ def _edit(kind, schedule, d):
         schedule.save(using="default", update_fields=changed)
 
     touched = 0
-    Rule = kind.Rule
     for rd in rules_in:
         rid = rd.get("id")
         if rid and rd.get("_delete"):
-            Rule.objects.using("default").filter(pk=rid, schedule=schedule).delete()
+            ScheduleRule.objects.using("default").filter(pk=rid, schedule=schedule).delete()
             touched += 1
         elif rid:
-            rule = Rule.objects.using("default").filter(pk=rid, schedule=schedule).first()
+            rule = ScheduleRule.objects.using("default").filter(pk=rid, schedule=schedule).first()
             fields = [f for f in kind.editable if f in rd] if rule else []
             for f in fields:
                 setattr(rule, f, checked[id(rd)].get(f, None if rd[f] in (None, "") else rd[f]) if f in _NUMBERS else rd[f])
@@ -348,7 +345,7 @@ def _edit(kind, schedule, d):
         else:
             values = kind.new_rule(rd, 0)
             if values:
-                Rule.objects.using("default").create(schedule=schedule, **values)
+                ScheduleRule.objects.using("default").create(schedule=schedule, **values)
                 touched += 1
     return touched
 def _set_active(request, kind, schedule):
@@ -367,8 +364,8 @@ def hospital_views(kind):
             from apps.atomwalk.hospital_master.models import Hospital
             hospital = Hospital.objects.using("default").filter(pk=request.hospital_id).first()
             active_id = getattr(hospital, kind.hospital_column) if hospital else None
-            own = kind.Schedule.objects.using("default").filter(owner_hospital_id=request.hospital_id).order_by("-created_at")
-            templates = (kind.Schedule.objects.using("default")
+            own = kind.schedules().filter(owner_hospital_id=request.hospital_id).order_by("-created_at")
+            templates = (kind.schedules()
                          .filter(owner_hospital_id__isnull=True, is_template=True, active=True).order_by("name"))
             return success(data={
                 "own_schedules": [schedule_dict(s, active_id) for s in own],
@@ -380,18 +377,18 @@ def hospital_views(kind):
             template_id = request.data.get("template_id")
             if not template_id:
                 return error("template_id is required.", errors={"template_id": "Required."})
-            template = kind.Schedule.objects.using("default").filter(
+            template = kind.schedules().filter(
                 pk=template_id, owner_hospital_id__isnull=True, is_template=True).first()
             if not template:
                 return not_found("Template schedule not found.")
 
             name = (request.data.get("name") or "").strip() or f"{template.name} (customized)"
-            clone = kind.Schedule.objects.using("default").create(
+            clone = Schedule.objects.using("default").create(kind=kind.noun, 
                 name=name, description=template.description, owner_hospital_id=request.hospital_id,
                 is_template=False, active=True)
-            rules = list(kind.Rule.objects.using("default").filter(schedule=template).order_by("sort_order"))
-            kind.Rule.objects.using("default").bulk_create([
-                kind.Rule(schedule=clone, item=r.item, dose_number=r.dose_number, domain=r.domain,
+            rules = list(kind.rules().filter(schedule=template).order_by("sort_order"))
+            ScheduleRule.objects.using("default").bulk_create([
+                ScheduleRule(schedule=clone, item=r.item, dose_number=r.dose_number, domain=r.domain,
                           scheduled_label=r.scheduled_label, min_age_days=r.min_age_days, max_age_days=r.max_age_days,
                           mandatory=r.mandatory, sort_order=r.sort_order)
                 for r in rules])
@@ -404,14 +401,14 @@ def hospital_views(kind):
         permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
         def get(self, request, pk):
-            schedule = kind.Schedule.objects.using("default").filter(pk=pk).first()
+            schedule = kind.schedules().filter(pk=pk).first()
             if not schedule or schedule.owner_hospital_id not in (None, request.hospital_id):
                 return not_found("Schedule not found.")
             rules, rules_json = kind.rules_json(schedule)
             return success(data={**schedule_dict(schedule, rule_count=len(rules)), "rules": rules_json})
 
         def patch(self, request, pk):
-            schedule = kind.Schedule.objects.using("default").filter(pk=pk, owner_hospital_id=request.hospital_id).first()
+            schedule = kind.schedules().filter(pk=pk, owner_hospital_id=request.hospital_id).first()
             if not schedule:
                 return not_found("Schedule not found, or not owned by this hospital — clone a template first.")
             try:
@@ -427,7 +424,7 @@ def hospital_views(kind):
         permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
         def post(self, request, pk):
-            schedule = kind.Schedule.objects.using("default").filter(pk=pk, active=True).first()
+            schedule = kind.schedules().filter(pk=pk, active=True).first()
             if not schedule:
                 return not_found("Schedule not found.")
             if schedule.owner_hospital_id not in (None, request.hospital_id):
@@ -441,14 +438,14 @@ def hospital_views(kind):
 # ── platform admin ────────────────────────────────────────────────────────────────────────────────────────────────
 def template_views(kind):
     def get_template(pk):
-        return kind.Schedule.objects.using("default").filter(pk=pk, owner_hospital_id__isnull=True, is_template=True).first()
+        return kind.schedules().filter(pk=pk, owner_hospital_id__isnull=True, is_template=True).first()
 
     class ListCreate(APIView):
         permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
         def get(self, request):
             from apps.atomwalk.hospital_master.models import Hospital
-            templates = (kind.Schedule.objects.using("default")
+            templates = (kind.schedules()
                          .filter(owner_hospital_id__isnull=True, is_template=True).order_by("name"))
             using = {}
             for schedule_id in (Hospital.objects.using("default").exclude(**{kind.hospital_column + "__isnull": True})
@@ -466,12 +463,12 @@ def template_views(kind):
                 checked = [kind.new_rule(rd, i) if isinstance(rd, dict) else None for i, rd in enumerate(rules_in)]
             except _InvalidRule as exc:
                 return error(str(exc))
-            template = kind.Schedule.objects.using("default").create(
+            template = Schedule.objects.using("default").create(kind=kind.noun, 
                 name=name, description=(d.get("description") or "").strip(), owner_hospital_id=None,
                 is_template=True, active=bool(d.get("active", True)))
-            rules = [kind.Rule(schedule=template, **values) for values in checked if values]
+            rules = [ScheduleRule(schedule=template, **values) for values in checked if values]
             if rules:
-                kind.Rule.objects.using("default").bulk_create(rules)
+                ScheduleRule.objects.using("default").bulk_create(rules)
             return created(data=template_dict(template, rule_count=len(rules), hospitals_using=0),
                            message=kind.template_message)
 
@@ -847,7 +844,7 @@ class PatientMilestoneListCreateView(APIView):
 
 _MAX_CERTIFICATE_CHARS = 15_500_000      # about 11 MB of base64, the same cap as document uploads
 def _account(request):
-    return PatientAccount.objects.using("default").get(pk=request.user.id)
+    return accounts().get(pk=request.user.id)
 # ── growth ────────────────────────────────────────────────────────────────────────────────────────────────────────
 class PortalGrowthView(APIView):
     """Readings come from growth_measurement and vitals (every hospital's visits), with source "clinic" or "home"."""

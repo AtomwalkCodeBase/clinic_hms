@@ -1,5 +1,6 @@
 """Tests of the patient portal, consult pad and record sharing."""
 import uuid
+from apps.atomwalk.documents.services import batch_counts
 from unittest import mock
 from django.test import TestCase, override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate, APIClient
@@ -7,7 +8,7 @@ from apps.atomwalk.patients.views import PortalRegisterView, PortalProfileView, 
 from django.core.exceptions import FieldDoesNotExist
 from apps.auth_app.otp_views import OTPRequestView
 from apps.auth_app.views import PatientLoginView
-from apps.atomwalk.patients.models import OTPCode, PatientAccount, Patient, ConsultSession, RecordsShareRequest
+from apps.atomwalk.patients.models import OTPCode, Patient, ConsultSession, RecordsShareRequest
 from core.authentication import MockUser
 from core.utils.hashing import hash_mobile, normalize_mobile
 from django.urls import NoReverseMatch, reverse
@@ -20,6 +21,7 @@ from apps.atomwalk.patients.views import ConsultPadView, _open_session_for_token
 from core.testing import ensure_hospital
 from apps.atomwalk.patients.views import _vault_documents
 from apps.hospital_master.patients.services import PatientService
+from apps.atomwalk.patients.services import accounts, create_account, set_password, check_password
 
 
 BODY = {"action_token": "t", "full_name": "Asha Rao", "mobile": "9876543210", "password": "Str0ng!pass"}
@@ -35,17 +37,17 @@ class PortalAccountTests(TestCase):
     def test_signing_up_creates_one_row_that_is_both_the_identity_and_the_login(self):
         self.assertEqual(self.register().status_code, 200)
         self.assertEqual(Patient.objects.count(), 1)
-        account = PatientAccount.objects.get()
+        account = accounts().get()
         self.assertEqual((account.mobile_hash, account.email), (hash_mobile(normalize_mobile("9876543210")), "asha@example.com"))
-        self.assertTrue(account.check_password("Str0ng!pass"))
+        self.assertTrue(check_password(account, "Str0ng!pass"))
 
     def test_a_walk_in_who_later_signs_up_keeps_the_awpid_they_already_have(self):
         walk_in = Patient.objects.create(
             awpid="AW-WALKIN", full_name="Asha Rao", mobile_hash=hash_mobile(normalize_mobile("9876543210")))
-        self.assertEqual(PatientAccount.objects.count(), 0)          # registered at a front desk: no login yet
+        self.assertEqual(accounts().count(), 0)          # registered at a front desk: no login yet
         self.assertEqual(self.register().status_code, 200)
         self.assertEqual(Patient.objects.count(), 1)
-        self.assertEqual(PatientAccount.objects.get().awpid, walk_in.awpid)
+        self.assertEqual(accounts().get().awpid, walk_in.awpid)
 
     def test_signing_up_twice_with_the_same_mobile_is_refused(self):
         self.register()
@@ -56,9 +58,9 @@ class MobileIsOnlyStoredScrambledTests(TestCase):
     databases = {"default"}
 
     def setUp(self):
-        self.acct = PatientAccount.objects.using("default").create(
+        self.acct = create_account(
             awpid="AWPID-LOGIN1", full_name="Asha", mobile="9876543210", email="asha@example.com", password="x")
-        self.acct.set_password("Str0ng!pass")
+        set_password(self.acct, "Str0ng!pass")
         self.acct.save(using="default")
 
     def post(self, view, data):
@@ -96,7 +98,7 @@ class MobileIsOnlyStoredScrambledTests(TestCase):
         self.assertEqual(send.call_args.args[1], "email")
 
     def test_an_account_with_no_email_is_asked_to_use_its_mobile_instead(self):
-        PatientAccount.objects.using("default").filter(pk=self.acct.pk).update(email="")
+        accounts().filter(pk=self.acct.pk).update(email="")
         with mock.patch("apps.auth_app.otp_views._send_code", return_value=True) as send:
             resp = self.post(OTPRequestView, {"purpose": OTPCode.PURPOSE_LOGIN_PATIENT, "identifier": "AWPID-LOGIN1"})
         self.assertEqual(resp.status_code, 400)
@@ -108,7 +110,7 @@ class PortalDocumentTests(TestCase):
     databases = {"default"}
 
     def setUp(self):
-        self.acct = PatientAccount.objects.using("default").create(
+        self.acct = create_account(
             awpid="AW-DOC-1", full_name="P", mobile="9222222222", password="x",
         )
         identity(self.acct.awpid)
@@ -188,7 +190,7 @@ class PortalDocumentTests(TestCase):
         with mock.patch("core.storage.delete"):
             self.assertEqual(self.dismiss(bad).status_code, 200)
         batch.refresh_from_db()
-        self.assertEqual((batch.total_files, batch.processed_files, batch.failed_files, batch.status), (2, 2, 0, "completed"))
+        self.assertEqual((batch_counts(batch)["total_files"], batch_counts(batch)["processed_files"], batch_counts(batch)["failed_files"], batch_counts(batch)["status"]), (2, 2, 0, "completed"))
         self.assertTrue(MedicalDocument.objects.filter(pk=good.pk).exists())
 
     def test_dismissing_the_only_file_of_a_batch_removes_the_batch(self):
@@ -254,7 +256,7 @@ class PortalDocumentTests(TestCase):
         resp = self.patch(doc, doc_type="prescription")
         self.assertEqual(resp.status_code, 200)
         doc = reload(doc)
-        self.assertEqual((doc.document_type, doc.processing_status), ("prescription", "completed"))
+        self.assertEqual((doc.document_type, doc.status), ("prescription", "completed"))
         self.assertEqual(resp.data["data"]["method"], "staff")
 
     def test_the_patient_can_only_choose_one_of_the_fixed_types(self):

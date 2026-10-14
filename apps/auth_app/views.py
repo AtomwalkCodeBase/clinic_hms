@@ -39,6 +39,8 @@ from apps.auth_app.serializers import (
     SetupPasswordSerializer,
     ChangePasswordSerializer,
 )
+from apps.atomwalk.patients.models import Patient
+from apps.atomwalk.patients.services import accounts, accounts_with_mobile, check_password
 
 
 def _make_tokens(payload: dict) -> dict:
@@ -110,7 +112,7 @@ class StaffLoginView(APIView):
                     index = StaffMobileIndex.objects.using("default").get(mobile=identifier)
             except StaffMobileIndex.DoesNotExist:
                 return error("Invalid credentials.")
-            db_name, hospital_id = index.db_name, index.hospital_id
+            db_name, hospital_id = index.hospital.db_name, index.hospital_id
 
             # ── Step 2: Verify hospital is active ───────────────────────────────
             try:
@@ -249,7 +251,6 @@ class PatientLoginView(APIView):
     throttle_scope = "login"
 
     def post(self, request):
-        from apps.atomwalk.patients.models import PatientAccount
 
         login_id = (request.data.get("mobile") or request.data.get("awpid") or "").strip()
         password = request.data.get("password") or ""
@@ -258,15 +259,15 @@ class PatientLoginView(APIView):
 
         try:
             if login_id.upper().startswith("AWPID-"):
-                acct = PatientAccount.objects.using("default").get(awpid=login_id, is_active=True)
+                acct = accounts().get(awpid=login_id, is_active=True)
             elif "@" in login_id:
-                acct = PatientAccount.objects.using("default").get(email__iexact=login_id, is_active=True)
+                acct = accounts().get(email__iexact=login_id, is_active=True)
             else:
-                acct = PatientAccount.objects.using("default").with_mobile(login_id).get(is_active=True)
-        except PatientAccount.DoesNotExist:
+                acct = accounts_with_mobile(login_id).get(is_active=True)
+        except Patient.DoesNotExist:
             return error("Invalid credentials.")
 
-        if not acct.check_password(password):
+        if not check_password(acct, password):
             return error("Invalid credentials.")
 
         acct.last_login = timezone.now()
@@ -419,8 +420,7 @@ class MeView(APIView):
         try:
             from core import storage as blob_storage
             if p.get("role") == "patient":
-                from apps.atomwalk.patients.models import PatientAccount
-                acct = PatientAccount.objects.using("default").get(pk=p.get("user_id"))
+                acct = accounts().get(pk=p.get("user_id"))
                 data["photo"] = blob_storage.signed_url(acct.photo)
             elif not p.get("is_platform") and p.get("db_name"):
                 staff = StaffUser.objects.using(p["db_name"]).get(pk=p.get("user_id"))

@@ -34,6 +34,7 @@ from apps.hospital_master.compliance.serializers import (
     RecordAmendmentResolveSerializer,
     ConsentRecordSerializer,
 )
+from apps.atomwalk.patients.services import accounts
 
 logger = logging.getLogger(__name__)
 
@@ -178,9 +179,9 @@ class PortalRecordAmendmentView(APIView):
     def get(self, request):
         from apps.atomwalk.hospital_master.models import Hospital
         from apps.hospital_master.patients.models import HospitalPatient
-        from apps.atomwalk.patients.models import PatientAccount, PatientRelationship
+        from apps.atomwalk.patients.models import PatientRelationship
 
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        acct = accounts().get(pk=request.user.id)
         target_awpid = (request.query_params.get("patient_awpid") or "").strip() or acct.awpid
         if target_awpid != acct.awpid:
             is_family = PatientRelationship.objects.using("default").filter(
@@ -216,7 +217,7 @@ class PortalRecordAmendmentView(APIView):
         from apps.atomwalk.hospital_master.models import Hospital
         from apps.atomwalk.hospital_master.services import ensure_hospital_db
         from apps.hospital_master.patients.models import HospitalPatient
-        from apps.atomwalk.patients.models import PatientAccount, PatientRelationship
+        from apps.atomwalk.patients.models import PatientRelationship
 
         d = request.data
         hospital_id = d.get("hospital_id")
@@ -228,7 +229,7 @@ class PortalRecordAmendmentView(APIView):
         except Hospital.DoesNotExist:
             return error("Hospital not found.")
 
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        acct = accounts().get(pk=request.user.id)
         target_awpid = (d.get("patient_awpid") or "").strip() or acct.awpid
         if target_awpid != acct.awpid:
             is_family = PatientRelationship.objects.using("default").filter(

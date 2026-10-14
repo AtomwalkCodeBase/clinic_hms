@@ -103,10 +103,10 @@ class Command(BaseCommand):
         # clone-on-provision. The hospital can later clone it into its own
         # editable copy via the admin UI (a separate task) if it wants to
         # customize; until then it's reading (not owning) the template.
-        from apps.atomwalk.documents.models import VaccinationSchedule
+        from apps.atomwalk.documents.models import Schedule
         default_schedule = (
-            VaccinationSchedule.objects.using("default")
-            .filter(owner_hospital_id__isnull=True, is_template=True, active=True)
+            Schedule.objects.using("default")
+            .filter(kind="vaccination", owner_hospital_id__isnull=True, is_template=True, active=True)
             .order_by("id")
             .first()
         )

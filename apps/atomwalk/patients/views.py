@@ -27,7 +27,6 @@ from apps.atomwalk.documents import services as doc_rules
 from core import storage as blob_storage
 from apps.atomwalk.hospital_master.models import Hospital
 from apps.atomwalk.patients.models import (
-    PatientAccount,
     Patient,
     PatientRelationship,
     EmergencyAccessLog,
@@ -41,6 +40,7 @@ from core.utils.age import age_years_months as _age_years_months
 from apps.atomwalk.documents.services import DOCUMENT_TYPES
 from apps.atomwalk.documents.services import awaiting_review_q
 from collections import Counter
+from apps.atomwalk.patients.services import accounts, accounts_with_mobile, awpid_of, privacy_for_awpid, pending_stale, device_matches, is_live, lapse_if_due, seconds_left, set_password, check_password
 
 
 logger = logging.getLogger(__name__)
@@ -114,13 +114,13 @@ class PortalRegisterView(APIView):
 
         if "@" not in email:
             return error("Invalid verification token.")
-        if PatientAccount.objects.using("default").filter(email__iexact=email).exists():
+        if accounts().filter(email__iexact=email).exists():
             return error("An account with this email already exists. Please log in.")
 
         mobile = (d.get("mobile") or "").strip()
         if not re.match(r"^\d{10}$", mobile):
             return error("Enter a valid 10-digit mobile number.", errors={"mobile": "Invalid format."})
-        if PatientAccount.objects.using("default").with_mobile(mobile).exists():
+        if accounts_with_mobile(mobile).exists():
             return error("An account with this mobile number already exists. Please log in.")
         from core.realworld_validation import validate_mobile_real
         is_valid, reason = validate_mobile_real(mobile)
@@ -161,9 +161,9 @@ class PortalRegisterView(APIView):
             identity.email = identity.email or email
             identity.gender = identity.gender or gender
             identity.date_of_birth = identity.date_of_birth or d.get("date_of_birth") or None
-            identity.set_password(d["password"])
+            set_password(identity, d["password"])
             identity.save(using="default")
-            acct = PatientAccount.objects.using("default").get(pk=identity.pk)
+            acct = accounts().get(pk=identity.pk)
 
         logger.info("Patient account registered via OTP: account_id=%s awpid=%s email_verified=True", acct.id, acct.awpid)
         return success(
@@ -762,8 +762,8 @@ class PortalBookView(APIView):
         # scrambled, so the number comes from the patient here (it must be the number on their account).
         contact_mobile = (d.get("mobile") or "").strip()
         if contact_mobile:
-            from apps.atomwalk.patients.models import mobile_hash_of
-            acct_hash = PatientAccount.objects.using("default").filter(pk=request.user.id).values_list("mobile_hash", flat=True).first()
+            from apps.atomwalk.patients.services import mobile_hash_of
+            acct_hash = accounts().filter(pk=request.user.id).values_list("mobile_hash", flat=True).first()
             if not re.match(r"^\d{10}$", contact_mobile) or mobile_hash_of(contact_mobile) != acct_hash:
                 return Response({"error": "That is not the mobile number on your account."}, status=400)
 
@@ -805,7 +805,7 @@ class PortalBookView(APIView):
         # into the staff account's first name — see _doctor_display_name().
         doctor_name = _doctor_display_name(doctor).replace("Dr. ", "", 1) or doctor.email
 
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        acct = accounts().get(pk=request.user.id)
 
         # ── Who is this booking actually for? ──────────────────────────────
         # Defaults to the account owner. If patient_awpid is given and isn't
@@ -991,7 +991,7 @@ class PortalMyRecordsView(APIView):
         from apps.hospital_master.opd.models import Appointment, OPDEncounter, Prescription
         from apps.atomwalk.documents.services import visit_vitals
 
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        acct = accounts().get(pk=request.user.id)
 
         target_awpid = (request.query_params.get("patient_awpid") or "").strip() or acct.awpid
         if target_awpid != acct.awpid:
@@ -1178,7 +1178,7 @@ class PortalInvoiceReceiptPDFView(APIView):
         if not patient:
             return not_found("Bill not found.")
 
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        acct = accounts().get(pk=request.user.id)
         if patient.awpid != acct.awpid:
             from apps.atomwalk.patients.models import PatientRelationship
             is_family = PatientRelationship.objects.using("default").filter(
@@ -1526,9 +1526,9 @@ def _document_row(d, handwritten_doc_id=None):
         "uploaded_by": d.uploaded_by, "created_at": d.created_at,
         "document_date": d.document_date, "public_document_id": d.document_ref,
         "source_hospital_id": d.source_hospital_id,
-        "processing_status": d.processing_status, "score": doc_rules.score_of(d), "method": doc_rules.method_of(d),
+        "processing_status": d.status, "score": doc_rules.score_of(d), "method": doc_rules.method_of(d),
         "suggested_type": doc_rules.suggested_type_of(d), "confirmed": doc_rules.is_confirmed(d),
-        "error": d.error_message if d.processing_status == "failed" else "",
+        "error": d.error_message if d.status == "failed" else "",
         "batch_id": d.batch_id, "handwritten_doc_id": handwritten_doc_id,
     }
 def _events(doc):
@@ -1860,7 +1860,7 @@ class PortalLabOrderChoiceView(APIView):
         except LabRequest.DoesNotExist:
             return error("Lab order not found.")
 
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        acct = accounts().get(pk=request.user.id)
         order_awpid = lab_req.patient.awpid
         if order_awpid != acct.awpid:
             # Not the account owner's own order — still valid if it belongs
@@ -2028,7 +2028,7 @@ class PortalPrescriptionChoiceView(APIView):
         except Prescription.DoesNotExist:
             return error("Prescription not found.")
 
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        acct = accounts().get(pk=request.user.id)
         # Ownership resolved via the encounter's appointment, same chain
         # PortalPrescriptionListView uses — not rx.patient_id directly,
         # which is set independently at encounter-creation time and isn't
@@ -2107,7 +2107,7 @@ class PortalPrescriptionReceiptPDFView(APIView):
         except (Appointment.DoesNotExist, HospitalPatient.DoesNotExist, AttributeError):
             return not_found("Prescription not found.")
 
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        acct = accounts().get(pk=request.user.id)
         if patient.awpid != acct.awpid:
             from apps.atomwalk.patients.models import PatientRelationship
             is_family = PatientRelationship.objects.using("default").filter(
@@ -2169,7 +2169,7 @@ class PortalLabReportFileView(APIView):
         except LabRequest.DoesNotExist:
             return not_found("Lab order not found.")
 
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        acct = accounts().get(pk=request.user.id)
         order_awpid = lab_req.patient.awpid
         if order_awpid != acct.awpid:
             from apps.atomwalk.patients.models import PatientRelationship
@@ -2217,8 +2217,8 @@ class PortalMobileChangeRequestOTPView(APIView):
         from apps.atomwalk.patients.models import OTPCode
 
         try:
-            acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-        except PatientAccount.DoesNotExist:
+            acct = accounts().get(pk=request.user.id)
+        except Patient.DoesNotExist:
             return not_found("Account not found.")
 
         if not acct.email:
@@ -2259,8 +2259,8 @@ class PortalProfileView(APIView):
     def get(self, request):
         from apps.atomwalk.patients.models import Patient
         try:
-            acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-        except PatientAccount.DoesNotExist:
+            acct = accounts().get(pk=request.user.id)
+        except Patient.DoesNotExist:
             return not_found("Account not found.")
         identity = Patient.objects.using("default").filter(awpid=acct.awpid).first()
         return success(data={
@@ -2282,8 +2282,8 @@ class PortalProfileView(APIView):
 
     def patch(self, request):
         try:
-            acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-        except PatientAccount.DoesNotExist:
+            acct = accounts().get(pk=request.user.id)
+        except Patient.DoesNotExist:
             return not_found("Account not found.")
 
         d = request.data
@@ -2295,9 +2295,8 @@ class PortalProfileView(APIView):
             acct.full_name = full_name
             fields.append("full_name")
         if "mobile" in d:
-            from apps.atomwalk.patients.models import Patient
             from core.utils.hashing import hash_mobile, normalize_mobile
-            from apps.atomwalk.patients.models import mobile_hash_of
+            from apps.atomwalk.patients.services import mobile_hash_of
 
             mobile = (d.get("mobile") or "").strip()
             if mobile and not re.match(r"^\d{10}$", mobile):
@@ -2318,7 +2317,7 @@ class PortalProfileView(APIView):
                 if payload.get("target_id") != acct.id or payload.get("identifier") != (acct.email or "").lower():
                     return error("Verification does not match this account.", errors={"mobile": "Verification required."})
 
-            if mobile and PatientAccount.objects.using("default").with_mobile(mobile).exclude(pk=acct.id).exists():
+            if mobile and accounts_with_mobile(mobile).exclude(pk=acct.id).exists():
                 return error("Another account already uses this mobile number.", errors={"mobile": "Already in use."})
 
             # Keep the network-wide Patient.mobile_hash in sync — it's
@@ -2437,7 +2436,7 @@ class PortalHealthSummaryView(APIView):
         from apps.atomwalk.documents.models import SharedAllergy, ClinicalEvent
         from apps.atomwalk.patients.models import PatientRelationship
 
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        acct = accounts().get(pk=request.user.id)
 
         target_awpid = (request.query_params.get("patient_awpid") or "").strip() or acct.awpid
         if target_awpid != acct.awpid:
@@ -2776,7 +2775,7 @@ class PortalNotificationMarkReadView(APIView):
             return error("Unknown hospital.")
         ensure_hospital_db(hospital_db)
 
-        acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+        acct = accounts().get(pk=request.user.id)
         try:
             log = NotificationLog.objects.using(hospital_db).select_related("patient").get(pk=pk)
         except NotificationLog.DoesNotExist:
@@ -2820,14 +2819,14 @@ class PortalChangePasswordView(APIView):
             return error("New password must be at least 8 characters.", errors={"new_password": "Too short."})
 
         try:
-            acct = PatientAccount.objects.using("default").get(pk=request.user.id)
-        except PatientAccount.DoesNotExist:
+            acct = accounts().get(pk=request.user.id)
+        except Patient.DoesNotExist:
             return not_found("Account not found.")
 
-        if not acct.check_password(current):
+        if not check_password(acct, current):
             return error("Current password is incorrect.", errors={"current_password": "Incorrect."})
 
-        acct.set_password(new)
+        set_password(acct, new)
         acct.save(using="default", update_fields=["password"])
         return success(message="Password changed successfully.")
 # ── Emergency QR ─────────────────────────────────────────────────────────────
@@ -2890,7 +2889,7 @@ class PortalEmergencyTokenView(APIView):
 
         if not request.data.get("consent_confirmed"):
             target_name = ""
-            if target_awpid != PatientAccount.objects.using("default").filter(
+            if target_awpid != accounts().filter(
                 pk=request.user.id).values_list("awpid", flat=True).first():
                 identity = Patient.objects.using("default").filter(awpid=target_awpid).first()
                 target_name = identity.full_name if identity else ""
@@ -2965,7 +2964,7 @@ def _resolve_emergency_contact(awpid):
     Returns None if neither resolves to anything (self-registered adult who
     never filled in an emergency contact, no guardian on file).
     """
-    account = PatientAccount.objects.using("default").filter(awpid=awpid).first()
+    account = accounts().filter(awpid=awpid).first()
     if account and (account.emergency_contact_name or account.emergency_contact_phone):
         return {
             "name": account.emergency_contact_name,
@@ -2978,7 +2977,7 @@ def _resolve_emergency_contact(awpid):
         or PatientRelationship.objects.using("default").filter(dependent__awpid=awpid).first()
     )
     if rel:
-        guardian = PatientAccount.objects.using("default").filter(awpid=rel.guardian_awpid).first()
+        guardian = accounts().filter(awpid=rel.guardian.awpid).first()
         if guardian:
             return {
                 "name": guardian.full_name,
@@ -3165,7 +3164,7 @@ def _device_guard(grant, request):
     Returns an error Response to bail with, or None to proceed. A leaked link
     or a photographed QR carries no device token, so it reads nothing.
     """
-    if grant.opened_at and not grant.device_matches(_device_token(request)):
+    if grant.opened_at and not device_matches(grant, _device_token(request)):
         from django.conf import settings
         host = settings.FRONTEND_URL.rstrip("/").split("://", 1)[-1]
         return error(
@@ -3191,7 +3190,7 @@ def _get_grant(token):
             .first()
         )
     if grant:
-        grant.lapse_if_due()
+        lapse_if_due(grant)
     return grant
 def _audit(awpid, event, ip=None):
     try:
@@ -3201,7 +3200,7 @@ def _audit(awpid, event, ip=None):
     except Exception:
         logger.exception("EmergencyAccessLog write failed (%s) for awpid=%s", event, awpid)
 def _self_awpid(request):
-    acct = PatientAccount.objects.using("default").filter(pk=request.user.id).first()
+    acct = accounts().filter(pk=request.user.id).first()
     return acct.awpid if acct else None
 def _patient_name(awpid):
     """Identity is the source of truth, but a self-registered patient may only
@@ -3209,7 +3208,7 @@ def _patient_name(awpid):
     identity = Patient.objects.using("default").filter(awpid=awpid).first()
     if identity and identity.full_name:
         return identity.full_name, identity
-    acct = PatientAccount.objects.using("default").filter(awpid=awpid).first()
+    acct = accounts().filter(awpid=awpid).first()
     return (acct.full_name if acct else ""), identity
 # The navigable Rx & Reports vault — same row shape PortalDocumentListCreateView
 # returns, so the frontend list/detail components are reused unchanged. The
@@ -3294,7 +3293,7 @@ def _pending_download_payload(grant):
     if not grant.pending_download_id:
         return None
     doc = MedicalDocument.objects.using("default").filter(
-        id=grant.pending_download_id, patient__awpid=grant.awpid,
+        id=grant.pending_download_id, patient__awpid=awpid_of(grant),
     ).first()
     return {
         "id": grant.pending_download_id,
@@ -3377,11 +3376,11 @@ class RecordsShareClaimView(APIView):
         else:
             grant = RecordsShareRequest.objects.using("default").filter(token=raw).first()
 
-        if not grant or (by_code and grant.pending_stale):
+        if not grant or (by_code and pending_stale(grant)):
             return error("That code didn't match a waiting request. Ask the "
                          "patient to create a new share and read you the code.",
                          status=404)
-        grant.lapse_if_due()
+        lapse_if_due(grant)
 
         if grant.status == RecordsShareRequest.STATUS_APPROVED:
             return error("This session is already open on another computer. Ask "
@@ -3432,7 +3431,7 @@ class RecordsShareStatusView(APIView):
 
         # Heartbeat so the patient's "who has access" view can show whether
         # the doctor is actively looking right now.
-        if grant.is_live:
+        if is_live(grant):
             RecordsShareRequest.objects.using("default").filter(pk=grant.pk).update(
                 last_seen_at=timezone.now())
 
@@ -3442,7 +3441,7 @@ class RecordsShareStatusView(APIView):
             "pairing": grant.pairing,
             "requester_label": grant.requester_label,
             "window_hours": RecordsShareRequest.WINDOW_HOURS,
-            "seconds_left": grant.seconds_left() if grant.is_live else 0,
+            "seconds_left": seconds_left(grant) if is_live(grant) else 0,
         }
         if grant.status == RecordsShareRequest.STATUS_PENDING:
             from django.conf import settings
@@ -3450,8 +3449,8 @@ class RecordsShareStatusView(APIView):
             if grant.pairing:
                 link = f"{link}?p={grant.pairing}"
             data["qr_image"] = _render_qr_data_uri(link)
-        if grant.is_live:
-            data["patient_name"] = _patient_name(grant.awpid)[0]
+        if is_live(grant):
+            data["patient_name"] = _patient_name(awpid_of(grant))[0]
             data["pending_download"] = _pending_download_payload(grant)
         return success(data=data)
 class RecordsShareRecordsView(APIView):
@@ -3476,7 +3475,7 @@ class RecordsShareRecordsView(APIView):
         bail = _device_guard(grant, request)
         if bail:
             return bail
-        if not grant.is_live:
+        if not is_live(grant):
             return error(
                 "This access has ended. Ask the patient to grant access again.",
                 errors={"status": grant.status}, status=403,
@@ -3484,11 +3483,11 @@ class RecordsShareRecordsView(APIView):
 
         from apps.hospital_master.patients.services import PatientService
         from apps.atomwalk.patients.views import _resolve_emergency_contact, _vaccination_history
-        name, identity = _patient_name(grant.awpid)
-        history = PatientService.get_shared_history(awpid=grant.awpid)
+        name, identity = _patient_name(awpid_of(grant))
+        history = PatientService.get_shared_history(awpid=awpid_of(grant))
 
         unlocked = set(grant.download_unlocked_ids or [])
-        documents = _vault_documents(grant.awpid)
+        documents = _vault_documents(awpid_of(grant))
 
         # ── standing privacy: drop what the patient keeps private, minus the
         #    records they revealed for this one visit — skipped entirely when
@@ -3499,8 +3498,8 @@ class RecordsShareRecordsView(APIView):
         if grant.share_all:
             hidden_ids, withheld, hidden_sections = set(), 0, []
         else:
-            privacy = _privacy_for(grant.awpid)
-            hidden_ids = _privacy_hidden_ids(grant.awpid, documents, privacy)
+            privacy = _privacy_for(awpid_of(grant))
+            hidden_ids = _privacy_hidden_ids(awpid_of(grant), documents, privacy)
             withheld = sum(1 for d in documents if d["id"] in hidden_ids and d["id"] not in shown_now)
             documents = [d for d in documents if d["id"] not in hidden_ids or d["id"] in shown_now]
             hidden_sections = list((privacy.hidden_sections if privacy else []) or [])
@@ -3526,12 +3525,12 @@ class RecordsShareRecordsView(APIView):
                 bits = [it.get("drug_name"), it.get("dose"), it.get("frequency")]
                 current_meds.append(" ".join(b for b in bits if b))
 
-        _audit(grant.awpid, EmergencyAccessLog.EVENT_VIEWED, _client_ip(request))
+        _audit(awpid_of(grant), EmergencyAccessLog.EVENT_VIEWED, _client_ip(request))
 
         summary = {
             "current_meds": [] if "summary" in hidden_sections else current_meds,
             "emergency_contact": None if "summary" in hidden_sections
-                                 else _resolve_emergency_contact(grant.awpid),
+                                 else _resolve_emergency_contact(awpid_of(grant)),
         }
         sections_withheld = [
             _SECTION_LABELS[s] for s in RecordsPrivacy.SECTIONS if s in hidden_sections
@@ -3540,7 +3539,7 @@ class RecordsShareRecordsView(APIView):
         return success(data={
             "patient": {
                 "full_name": name,
-                "awpid": grant.awpid,
+                "awpid": awpid_of(grant),
                 "age_years": _age(identity.date_of_birth) if identity else None,
                 "gender": identity.gender if identity else "",
                 "blood_group": identity.blood_group if identity else "",
@@ -3551,14 +3550,14 @@ class RecordsShareRecordsView(APIView):
             "vitals": [] if "vitals" in hidden_sections else history["vitals"],
             "prescriptions": history["prescriptions"],
             "vaccinations": [] if "vaccinations" in hidden_sections
-                            else _vaccination_history(grant.awpid),
+                            else _vaccination_history(awpid_of(grant)),
             "documents": documents,
             # One honest line for the clinician: the record list / sections may
             # be partial. It never says *what* is held back.
             "records_withheld": withheld > 0,
             "sections_withheld": sections_withheld,
             "requester_label": grant.requester_label,
-            "seconds_left": grant.seconds_left(),
+            "seconds_left": seconds_left(grant),
             "window_hours": RecordsShareRequest.WINDOW_HOURS,
         })
 class RecordsShareDownloadView(APIView):
@@ -3580,7 +3579,7 @@ class RecordsShareDownloadView(APIView):
         bail = grant and _device_guard(grant, request)
         if bail:
             return bail
-        if not grant or not grant.is_live:
+        if not grant or not is_live(grant):
             return error("This access has ended.", status=403)
 
         try:
@@ -3589,7 +3588,7 @@ class RecordsShareDownloadView(APIView):
             return error("Which document?", errors={"doc_id": "Required."})
 
         doc = MedicalDocument.objects.using("default").filter(
-            id=doc_id, patient__awpid=grant.awpid,
+            id=doc_id, patient__awpid=awpid_of(grant),
         ).exclude(awaiting_review_q()).first()
         if not doc:
             return error("That document isn't part of this patient's records.", status=404)
@@ -3636,10 +3635,10 @@ class RecordsShareDocumentViewView(APIView):
         bail = grant and _device_guard(grant, request)
         if bail:
             return bail
-        if not grant or not grant.is_live:
+        if not grant or not is_live(grant):
             return error("This access has ended.", status=403)
         doc = MedicalDocument.objects.using("default").filter(
-            id=doc_id, patient__awpid=grant.awpid,
+            id=doc_id, patient__awpid=awpid_of(grant),
         ).exclude(awaiting_review_q()).first()
         if not doc:
             return error("That document isn't part of this patient's records.", status=404)
@@ -3713,7 +3712,7 @@ class RecordsShareDecisionView(APIView):
         me = _self_awpid(request)
         if not me:
             return error("No patient account found.", status=403)
-        if grant.awpid and grant.awpid != me:
+        if awpid_of(grant) and awpid_of(grant) != me:
             return error("This share link was created by a different account.", status=403)
 
         approve = bool(request.data.get("approve"))
@@ -3798,7 +3797,7 @@ class RecordsShareDecisionView(APIView):
             "status": grant.status,
             "requester_label": grant.requester_label,
             "expires_at": grant.expires_at,
-            "seconds_left": grant.seconds_left(),
+            "seconds_left": seconds_left(grant),
             "share_all": grant.share_all,
         }, message="Access granted for the next 2 hours.")
 class RecordsShareEndView(APIView):
@@ -3811,7 +3810,7 @@ class RecordsShareEndView(APIView):
             return error("This access code is not valid.", status=404)
 
         me = _self_awpid(request)
-        if grant.awpid and grant.awpid != me:
+        if awpid_of(grant) and awpid_of(grant) != me:
             return error("This isn't your access grant.", status=403)
         if grant.status not in (RecordsShareRequest.STATUS_APPROVED, RecordsShareRequest.STATUS_PENDING):
             return success(data={"status": grant.status})
@@ -3833,11 +3832,11 @@ class RecordsShareDownloadDecisionView(APIView):
 
     def post(self, request, token):
         grant = _get_grant(token)
-        if not grant or not grant.is_live:
+        if not grant or not is_live(grant):
             return error("This access has ended.", status=403)
 
         me = _self_awpid(request)
-        if grant.awpid != me:
+        if awpid_of(grant) != me:
             return error("This isn't your access grant.", status=403)
         if not grant.pending_download_id:
             return success(data={"pending_download": None})
@@ -3875,14 +3874,14 @@ class RecordsShareMineView(APIView):
         )
         out = []
         for g in grants:
-            if g.lapse_if_due():
+            if lapse_if_due(g):
                 continue
             out.append({
                 "token": g.token,
                 "requester_label": g.requester_label,
                 "approved_at": g.decided_at,
                 "expires_at": g.expires_at,
-                "seconds_left": g.seconds_left(),
+                "seconds_left": seconds_left(g),
                 "last_seen_at": g.last_seen_at,
                 "pending_download": _pending_download_payload(g),
                 "share_all": g.share_all,
@@ -3956,7 +3955,7 @@ class RecordsPrivacyView(APIView):
         if not me:
             return error("No patient account found.", status=403)
 
-        p = RecordsPrivacy.for_awpid(me)
+        p = privacy_for_awpid(me)
         docs = _vault_documents(me, limit=_PRIVACY_VAULT_MAX)
         hidden = _privacy_hidden_ids(me, docs, p)
         locked_ids = set(p.hidden_doc_ids or [])
@@ -3967,7 +3966,7 @@ class RecordsPrivacyView(APIView):
             .order_by("-decided_at")
             .first()
         )
-        if live and not live.is_live:
+        if live and not is_live(live):
             live = None
         shown_now = set(live.shown_private_ids or []) if live else set()
 
@@ -4058,7 +4057,7 @@ class RecordsPrivacyView(APIView):
             "active_session": ({
                 "token":             live.token,
                 "requester_label":   live.requester_label,
-                "seconds_left":      live.seconds_left(),
+                "seconds_left":      seconds_left(live),
                 "shown_private_ids": live.shown_private_ids or [],
                 "share_all":         live.share_all,
             } if live else None),
@@ -4069,7 +4068,7 @@ class RecordsPrivacyView(APIView):
         if not me:
             return error("No patient account found.", status=403)
 
-        p = RecordsPrivacy.for_awpid(me)
+        p = privacy_for_awpid(me)
         d = request.data
         fields = ["updated_at"]
 
@@ -4132,7 +4131,7 @@ class RecordsPrivacyToggleView(APIView):
             return error("That report isn't in your records.", status=404)
 
         make_private = bool(request.data.get("private"))
-        p = RecordsPrivacy.for_awpid(me)
+        p = privacy_for_awpid(me)
         ids = set(p.hidden_doc_ids or [])
         ids.add(doc_id) if make_private else ids.discard(doc_id)
         p.hidden_doc_ids = sorted(ids)
@@ -4159,9 +4158,9 @@ class RecordsShareRevealView(APIView):
         grant = _get_grant(token)
         if not grant:
             return error("This access code is not valid.", status=404)
-        if grant.awpid and grant.awpid != me:
+        if awpid_of(grant) and awpid_of(grant) != me:
             return error("This isn't your access grant.", status=403)
-        if not grant.is_live:
+        if not is_live(grant):
             return error("This access has ended.", status=403)
 
         scope = (request.data.get("scope") or "visit").strip()
@@ -4179,7 +4178,7 @@ class RecordsShareRevealView(APIView):
         grant.save(using="default", update_fields=["shown_private_ids"])
 
         if scope == "always" and ids:
-            p = RecordsPrivacy.for_awpid(me)
+            p = privacy_for_awpid(me)
             p.hidden_doc_ids = sorted(set(p.hidden_doc_ids or []) - ids)
             p.save(using="default", update_fields=["hidden_doc_ids", "updated_at"])
 
@@ -4622,7 +4621,7 @@ def _run_tab_recognition(session_id, tab: str, pending_token: str):
 def _open_session_for_token(token: str):
     """token -> (identity, the ConsultSession while it is still open, else None). A token belongs to ONE consultation."""
     session = ConsultSession.objects.using("default").filter(token=token).first()
-    identity = Patient.objects.using("default").filter(awpid=session.awpid).first() if session else None
+    identity = Patient.objects.using("default").filter(awpid=awpid_of(session)).first() if session else None
     if not identity:
         return None, None
     if session.status != ConsultSession.STATUS_OPEN:

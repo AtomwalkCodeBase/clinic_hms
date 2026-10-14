@@ -3,6 +3,7 @@ import uuid
 import datetime
 import base64
 import datetime as dt
+from apps.atomwalk.documents.services import batch_counts, bmi
 from apps.atomwalk.documents import services
 from apps.atomwalk.documents import services as rules
 from apps.atomwalk.documents import services as c
@@ -20,15 +21,12 @@ from apps.atomwalk.documents.models import (
     HealthEpisode,
     RecurrenceFlag,
     ImmunizationRecord,
-    Schedule,
     ScheduleRule,
-    MilestoneScheduleRule,
     MilestoneRecord,
     BirthHistory,
-    MilestoneSchedule,
-    VaccinationSchedule,
+    Schedule,
 )
-from apps.atomwalk.patients.models import Patient, ConsultSession, PatientAccount, PatientRelationship
+from apps.atomwalk.patients.models import Patient, ConsultSession, PatientRelationship
 from core.testing import ensure_hospital, HospitalDBTestCase, requires_hospital_db
 from django.test import SimpleTestCase, TestCase, override_settings
 from unittest import mock
@@ -72,6 +70,7 @@ from apps.atomwalk.documents import urls as org_urls
 from apps.atomwalk.documents.services import build_roadmap, summarize_roadmap
 from apps.atomwalk.documents.services import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
 from apps.platform_admin import urls as platform_urls
+from apps.atomwalk.patients.services import create_account
 
 
 PDF = b"%PDF-1.4\n" + b"x" * 100
@@ -329,7 +328,7 @@ class IssuedDocumentTests(TestCase):
             doc_type="prescription", source_hospital_id=3, source_type="encounter", source_id="9", public_document_id="RX-000123",
             document_date=datetime.date(2026, 9, 12))
         self.assertEqual((doc.status, doc.document_type, doc.uploaded_by), ("completed", "prescription", "staff"))
-        self.assertEqual((doc.document_ref, doc.document_date, doc.source_hospital_id, doc.source_ref),
+        self.assertEqual((doc.document_ref, doc.document_date, doc.source_hospital_id, f"{doc.source_type}:{doc.source_id}"),
                          ("RX-000123", datetime.date(2026, 9, 12), 3, "encounter:9"))
         self.assertEqual((doc.patient.awpid, doc.file_name), ("AWP-T1", "Prescription RX-000123 — 2026-09-12.pdf"))
 
@@ -515,7 +514,7 @@ class LockTests(TestCase):
 
     def setUp(self):
         identity("AWP-T1")
-        self.acct = PatientAccount.objects.using("default").create(awpid="AWP-T1", full_name="P", mobile="9333333333", password="x")
+        self.acct = create_account(awpid="AWP-T1", full_name="P", mobile="9333333333", password="x")
 
     def test_a_confirmed_document_cannot_be_changed_again(self):
         doc = reviewable("lab_report")
@@ -760,7 +759,7 @@ class ClassifyDocumentTests(TestCase):
         self.assertEqual((c.status, c.document.document_type, c.rule_score, c.second_best_score, c.score_margin),
                          ("rule_classified", "prescription", 21, 1, 20))
         batch.refresh_from_db()
-        self.assertEqual((batch.processed_files, batch.failed_files, batch.status), (1, 0, "completed"))
+        self.assertEqual((batch_counts(batch)["processed_files"], batch_counts(batch)["failed_files"], batch_counts(batch)["status"]), (1, 0, "completed"))
 
     def test_text_the_rules_cannot_place_needs_review(self):
         batch = DocumentBatch.objects.create(patient=identity())
@@ -770,7 +769,7 @@ class ClassifyDocumentTests(TestCase):
         self.assertEqual((doc.status, doc.document_type), (S.REVIEW_REQUIRED, "not_classified"))
         self.assertEqual(classification(doc).status, "review_required")
         batch.refresh_from_db()
-        self.assertEqual((batch.processed_files, batch.status), (1, "completed"))     # finished, awaiting a person
+        self.assertEqual((batch_counts(batch)["processed_files"], batch_counts(batch)["status"]), (1, "completed"))     # finished, awaiting a person
 
     def test_a_document_with_no_text_needs_review(self):
         doc = make_doc(status=S.CLASSIFYING)
@@ -815,7 +814,7 @@ class WholePipelineTests(TestCase):
         self.assertEqual((doc.status, doc.document_type, cls.method_of(doc), cls.score_of(doc)), (S.COMPLETED, "prescription", "rule", 21))
         self.assertEqual(cls.text_of(doc), RX)
         batch.refresh_from_db()
-        self.assertEqual((batch.processed_files, batch.status), (1, "completed"))
+        self.assertEqual((batch_counts(batch)["processed_files"], batch_counts(batch)["status"]), (1, "completed"))
 class StartProcessingTests(TestCase):
     databases = {"default"}
 
@@ -848,7 +847,7 @@ class StartProcessingTests(TestCase):
         self.assertEqual(row(doc).status, S.FAILED)
         self.assertIn("Couldn't start processing", row(doc).error_message)
         batch.refresh_from_db()
-        self.assertEqual((batch.failed_files, batch.status), (1, "completed_with_errors"))
+        self.assertEqual((batch_counts(batch)["failed_files"], batch_counts(batch)["status"]), (1, "completed_with_errors"))
 class CorrectionTests(TestCase):
     databases = {"default"}
 
@@ -920,9 +919,9 @@ class BatchCounterTests(TestCase):
         make_doc(batch=batch, status=S.REVIEW_REQUIRED, by="rules")
         make_doc(batch=batch, status=S.CLASSIFYING)
         make_doc(batch=batch, status=S.FAILED)
-        self.assertEqual((batch.processed_files, batch.failed_files, batch.status), (2, 1, "processing"))
+        self.assertEqual((batch_counts(batch)["processed_files"], batch_counts(batch)["failed_files"], batch_counts(batch)["status"]), (2, 1, "processing"))
         MedicalDocument.objects.filter(batch=batch, status=S.CLASSIFYING).update(status=S.COMPLETED)
-        self.assertEqual((batch.processed_files, batch.status), (3, "completed_with_errors"))
+        self.assertEqual((batch_counts(batch)["processed_files"], batch_counts(batch)["status"]), (3, "completed_with_errors"))
 
 
 VISIT = """Date: 14/03/2026
@@ -1150,9 +1149,9 @@ class UploadViewTests(TestCase):
 
         self.assertEqual(resp.status_code, 202)
         batch = DocumentBatch.objects.get()
-        self.assertEqual((batch.patient.awpid, batch.total_files, resp.data["data"]["batch_id"]), ("AWP-T1", 1, batch.id))
+        self.assertEqual((batch.patient.awpid, batch_counts(batch)["total_files"], resp.data["data"]["batch_id"]), ("AWP-T1", 1, batch.id))
         doc = MedicalDocument.objects.get()
-        self.assertEqual((doc.processing_status, doc.patient.awpid, doc.file_name, doc.batch_id, doc.size, doc.document_type),
+        self.assertEqual((doc.status, doc.patient.awpid, doc.file_name, doc.batch_id, doc.size, doc.document_type),
                          ("queued", "AWP-T1", "a.pdf", batch.id, len(PDF), "not_classified"))
         self.assertRegex(doc.file.name, rf"^documents/AWP-T1/{batch.id}/[0-9a-f]{{32}}\.pdf$")
         start.assert_called_once_with([doc.id], "instant")
@@ -1169,7 +1168,7 @@ class UploadViewTests(TestCase):
 
         self.assertEqual(resp.status_code, 202)
         batch = DocumentBatch.objects.get()
-        self.assertEqual(batch.total_files, 3)
+        self.assertEqual(batch_counts(batch)["total_files"], 3)
         docs = MedicalDocument.objects.filter(batch=batch)
         self.assertEqual(docs.count(), 3)
         self.assertTrue(all(d.file.name.startswith(f"documents/AWP-T1/{batch.id}/") for d in docs))
@@ -1292,7 +1291,7 @@ class BatchDetailViewTests(TestCase):
         make_doc(batch=batch, status="completed", document_type="imaging_report", by="rules")
         make_doc(batch=batch, status="review_required", by="rules")
         make_doc(batch=batch, status="failed")
-        self.assertEqual((batch.processed_files, batch.failed_files, batch.status), (2, 1, "completed_with_errors"))
+        self.assertEqual((batch_counts(batch)["processed_files"], batch_counts(batch)["failed_files"], batch_counts(batch)["status"]), (2, 1, "completed_with_errors"))
         self.assertEqual(services.batch_summary(batch)["status"], "completed")
 
     def test_someone_elses_batch_is_not_found(self, _resolve):
@@ -1307,8 +1306,8 @@ class UploadForWhomTests(TestCase):
     databases = {"default"}
 
     def setUp(self):
-        from apps.atomwalk.patients.models import PatientAccount, PatientRelationship
-        self.acct = PatientAccount.objects.using("default").create(awpid="AWP-ME", full_name="Me", mobile="9333333331", password="x")
+        from apps.atomwalk.patients.models import PatientRelationship
+        self.acct = create_account(awpid="AWP-ME", full_name="Me", mobile="9333333331", password="x")
         identity("AWP-ME")
         identity("AWP-KID")
         identity("AWP-STRANGER")
@@ -1451,7 +1450,7 @@ class VisitVitalsTests(TestCase):
     def test_an_adult_visit_is_one_vitals_row_with_height_and_weight(self):
         merged = self.save(minor=False)
         row = Vitals.objects.get()
-        self.assertEqual((row.systolic_bp, row.height_cm, row.weight_kg, row.bmi), (110, Decimal("85.0"), Decimal("12.0"), Decimal("16.6")))
+        self.assertEqual((row.systolic_bp, row.height_cm, row.weight_kg, bmi(row)), (110, Decimal("85.0"), Decimal("12.0"), Decimal("16.6")))
         self.assertFalse(GrowthMeasurement.objects.exists())
         self.assertIsNone(merged.head_circumference_cm)             # an adult's head size is not kept
 
@@ -1784,7 +1783,7 @@ class PortalPediatricTests(TestCase):
 
     def setUp(self):
         ensure_hospital(1)
-        self.mom = PatientAccount.objects.using("default").create(
+        self.mom = create_account(
             awpid="AW-MOM", full_name="Mom", mobile="9111111111", password="x", date_of_birth=dt.date(1990, 1, 1))
         self.kid = Patient.objects.using("default").create(
             awpid="AW-KID", full_name="Kid", gender="F", date_of_birth=dt.date.today() - timedelta(days=730), is_dependent=True)
@@ -1833,7 +1832,7 @@ class PortalPediatricTests(TestCase):
         self.assertNotIn("next_due", data)
 
     def test_the_milestone_roadmap_shows_an_assessment(self):
-        slot = MilestoneScheduleRule.objects.using("default").first()          # a slot of the seeded default schedule
+        slot = ScheduleRule.objects.using("default").filter(schedule__kind="milestone").first()          # a slot of the seeded default schedule
         MilestoneRecord.objects.using("default").create(
             patient=self.kid, domain=slot.domain, milestone=slot.milestone, scheduled_label=slot.scheduled_label,
             status="achieved", achieved_date=dt.date.today(), assessed_date=dt.date.today())
@@ -2237,7 +2236,7 @@ class PlatformTemplateListTests(TestCase):
 
     def test_vaccination_templates(self):
         from apps.atomwalk.documents.views import VaccinationTemplateListCreateView
-        VaccinationSchedule.objects.using("default").create(name="India UIP", is_template=True)
+        Schedule.objects.using("default").create(kind="vaccination", name="India UIP", is_template=True)
         resp = self.get(VaccinationTemplateListCreateView)
         self.assertEqual(resp.status_code, 200)
         names = [t["name"] for t in resp.data["data"]]
@@ -2247,7 +2246,7 @@ class PlatformTemplateListTests(TestCase):
 
     def test_milestone_templates(self):
         from apps.atomwalk.documents.views import MilestoneTemplateListCreateView
-        MilestoneSchedule.objects.using("default").create(name="WHO milestones", is_template=True)
+        Schedule.objects.using("default").create(kind="milestone", name="WHO milestones", is_template=True)
         resp = self.get(MilestoneTemplateListCreateView)
         self.assertEqual(resp.status_code, 200)
         self.assertIn("WHO milestones", [t["name"] for t in resp.data["data"]])

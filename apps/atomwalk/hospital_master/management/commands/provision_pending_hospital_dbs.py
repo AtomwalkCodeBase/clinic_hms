@@ -126,20 +126,19 @@ class Command(BaseCommand):
         # brand-new hospital — these rows never got it since 0015 only wrote
         # the bare Hospital/Subscription fields.
         if hospital.active_vaccination_schedule_id is None:
-            from apps.atomwalk.documents.models import VaccinationSchedule
+            from apps.atomwalk.documents.models import Schedule
             default_schedule = (
-                VaccinationSchedule.objects.using("default")
-                .filter(owner_hospital_id__isnull=True, is_template=True, active=True)
+                Schedule.objects.using("default")
+                .filter(kind="vaccination", owner_hospital_id__isnull=True, is_template=True, active=True)
                 .order_by("id").first()
             )
             if default_schedule:
                 hospital.active_vaccination_schedule_id = default_schedule.id
                 self.stdout.write(f"  Assigned default vaccination schedule (id={default_schedule.id}).")
         if hospital.active_milestone_schedule_id is None:
-            from apps.atomwalk.documents.models import MilestoneSchedule
             default_milestones = (
-                MilestoneSchedule.objects.using("default")
-                .filter(owner_hospital_id__isnull=True, is_template=True, active=True)
+                Schedule.objects.using("default")
+                .filter(kind="milestone", owner_hospital_id__isnull=True, is_template=True, active=True)
                 .order_by("id").first()
             )
             if default_milestones:

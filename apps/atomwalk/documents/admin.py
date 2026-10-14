@@ -1,13 +1,13 @@
 from django.contrib import admin
 
-from apps.atomwalk.documents.models import ClinicalEvent, GrowthMeasurement, LabResult, SharedAllergy, Vitals, VaccinationSchedule, VaccinationScheduleRule
+from apps.atomwalk.documents.models import ClinicalEvent, GrowthMeasurement, LabResult, SharedAllergy, Vitals, Schedule, ScheduleRule
 
 from apps.atomwalk.documents.models import DocumentBatch, DocumentExtraction, MedicalDocument, PatientDocumentClassification
 
 
 @admin.register(DocumentBatch)
 class DocumentBatchAdmin(admin.ModelAdmin):
-    list_display = ["id", "patient", "total_files", "processed_files", "failed_files", "status", "created_at"]
+    list_display = ["id", "patient", "created_at"]
     search_fields = ["patient__awpid"]
 
 
@@ -50,14 +50,14 @@ admin.site.register(Vitals)
 admin.site.register(GrowthMeasurement)
 
 
-class VaccinationScheduleRuleInline(admin.TabularInline):
-    model = VaccinationScheduleRule
+class ScheduleRuleInline(admin.TabularInline):
+    model = ScheduleRule
     extra = 1
 
 
-@admin.register(VaccinationSchedule)
-class VaccinationScheduleAdmin(admin.ModelAdmin):
+@admin.register(Schedule)
+class ScheduleAdmin(admin.ModelAdmin):
     list_display = ["name", "owner_hospital_id", "is_template", "active", "updated_at"]
     search_fields = ["name"]
     list_filter = ["is_template", "active"]
-    inlines = [VaccinationScheduleRuleInline]
+    inlines = [ScheduleRuleInline]

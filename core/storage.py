@@ -392,3 +392,11 @@ class PrivateS3Storage(Storage):
 
     def size(self, name):
         return _client().head_object(Bucket=settings.AWS_S3_BUCKET, Key=name)["ContentLength"]
+
+
+def documents_storage():
+    return PrivateS3Storage()
+
+
+def document_file_path(instance, filename):
+    return f"documents/{instance.patient.awpid}/{instance.batch_id or 'NA'}/{filename}"

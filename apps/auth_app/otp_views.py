@@ -40,6 +40,8 @@ from core.otp import (
 from core.email import send_otp_email
 from core.sms import send_otp_sms
 from apps.atomwalk.patients.models import OTPCode
+from apps.atomwalk.patients.models import Patient
+from apps.atomwalk.patients.services import accounts, accounts_with_mobile, set_password
 
 logger = logging.getLogger(__name__)
 
@@ -82,28 +84,27 @@ def _resolve_staff_target(identifier):
     except StaffMobileIndex.DoesNotExist:
         return None
 
-    ensure_hospital_db(index.db_name)
+    ensure_hospital_db(index.hospital.db_name)
     try:
         from django.db.models import Q
-        staff = StaffUser.objects.using(index.db_name).get(
+        staff = StaffUser.objects.using(index.hospital.db_name).get(
             Q(phone=identifier) | Q(email__iexact=identifier), is_active=True
         )
     except StaffUser.DoesNotExist:
         return None
-    return staff.id, index.db_name
+    return staff.id, index.hospital.db_name
 
 
 def _resolve_patient_target(identifier):
     """Mobile, email, or AWPID, matching PatientLoginView's own resolution. Returns PatientAccount or None."""
-    from apps.atomwalk.patients.models import PatientAccount
 
     try:
         if identifier.upper().startswith("AWPID-"):
-            return PatientAccount.objects.using("default").get(awpid__iexact=identifier, is_active=True)
+            return accounts().get(awpid__iexact=identifier, is_active=True)
         if "@" in identifier:
-            return PatientAccount.objects.using("default").get(email__iexact=identifier, is_active=True)
-        return PatientAccount.objects.using("default").with_mobile(identifier).get(is_active=True)
-    except PatientAccount.DoesNotExist:
+            return accounts().get(email__iexact=identifier, is_active=True)
+        return accounts_with_mobile(identifier).get(is_active=True)
+    except Patient.DoesNotExist:
         return None
 
 
@@ -164,7 +165,6 @@ class OTPRequestView(APIView):
                 identifier = acct.email.lower()
 
         elif purpose == OTPCode.PURPOSE_REGISTRATION_PATIENT:
-            from apps.atomwalk.patients.models import PatientAccount
             # Email-based for now — verifying via mobile requires a paid SMS
             # gateway (see core/sms.py) that isn't wired up yet. Email is
             # free to send (SMTP already live) and PatientAccount.email is
@@ -173,7 +173,7 @@ class OTPRequestView(APIView):
             # (PortalRegisterView) as a required field, just not OTP-proven.
             if "@" not in identifier:
                 return error("Enter a valid email address.", errors={"identifier": "Invalid format."})
-            if PatientAccount.objects.using("default").filter(email__iexact=identifier).exists():
+            if accounts().filter(email__iexact=identifier).exists():
                 return error("An account with this email already exists. Please log in.")
             from core.realworld_validation import validate_email_domain
             is_valid, reason = validate_email_domain(identifier)
@@ -228,7 +228,7 @@ class OTPVerifyView(APIView):
         except OTPError as exc:
             return error(str(exc))
 
-        token = make_action_token(purpose, identifier, otp.target_type, otp.target_id, otp.target_db)
+        token = make_action_token(purpose, identifier, otp.target_type, otp.target_id, (otp.hospital.db_name if otp.hospital_id else ""))
         return success(data={"action_token": token}, message="Verified.")
 
 
@@ -288,13 +288,12 @@ class PatientForgotPasswordResetView(APIView):
         except OTPError as exc:
             return error(str(exc))
 
-        from apps.atomwalk.patients.models import PatientAccount
         try:
-            acct = PatientAccount.objects.using("default").get(pk=payload.get("target_id"), is_active=True)
-        except PatientAccount.DoesNotExist:
+            acct = accounts().get(pk=payload.get("target_id"), is_active=True)
+        except Patient.DoesNotExist:
             return error("Account not found.")
 
-        acct.set_password(new_password)
+        set_password(acct, new_password)
         acct.save(using="default", update_fields=["password"])
 
         # Atomwalk-level (cross-hospital) security event — logged, not written
@@ -324,11 +323,10 @@ class PatientOTPLoginView(APIView):
         except OTPError as exc:
             return error(str(exc))
 
-        from apps.atomwalk.patients.models import PatientAccount
         from django.utils import timezone
         try:
-            acct = PatientAccount.objects.using("default").get(pk=payload.get("target_id"), is_active=True)
-        except PatientAccount.DoesNotExist:
+            acct = accounts().get(pk=payload.get("target_id"), is_active=True)
+        except Patient.DoesNotExist:
             return error("Account not found.")
 
         acct.last_login = timezone.now()

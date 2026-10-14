@@ -7,7 +7,7 @@ import json
 import re
 import time
 import requests
-from apps.atomwalk.patients.models import PatientAccount, Patient
+from apps.atomwalk.patients.models import Patient
 from core.response import error
 from django.conf import settings
 
@@ -20,7 +20,7 @@ def resolve_target_awpid_and_dob(request):
     PortalHealthSummaryView: a family member's AWPID is only valid here if
     PatientRelationship actually links it to this account.
     """
-    acct = PatientAccount.objects.using("default").get(pk=request.user.id)
+    acct = accounts().get(pk=request.user.id)
     target_awpid = (request.query_params.get("patient_awpid") or request.data.get("patient_awpid") or "").strip() or acct.awpid
 
     if target_awpid == acct.awpid:
@@ -46,7 +46,7 @@ def sync_patient_booking(appointment, db_name):
     that's the normal case for most front-desk walk-ins, not an error.
     """
     try:
-        from apps.atomwalk.patients.models import Patient, PatientAccount, PatientRelationship
+        from apps.atomwalk.patients.models import Patient, PatientRelationship
         from apps.atomwalk.patients.models import PatientBooking
         from apps.atomwalk.hospital_master.models import Hospital
 
@@ -60,7 +60,7 @@ def sync_patient_booking(appointment, db_name):
         if PatientBooking.objects.using("default").filter(appointment_id=appointment.id).exists():
             return
 
-        acct = PatientAccount.objects.using("default").filter(awpid=patient_awpid).first()
+        acct = accounts().filter(awpid=patient_awpid).first()
         if not acct:
             # Not the account owner themself — maybe a dependent, in which
             # case the booking should show up on the GUARDIAN's dashboard
@@ -70,7 +70,7 @@ def sync_patient_booking(appointment, db_name):
                 dependent__awpid=patient_awpid
             ).first()
             if rel:
-                acct = PatientAccount.objects.using("default").filter(awpid=rel.guardian_awpid).first()
+                acct = accounts().filter(awpid=rel.guardian.awpid).first()
 
         if not acct:
             return  # no portal account anywhere in this chain — nothing to sync
@@ -965,3 +965,85 @@ def consult_pad_lab_aliases_alias_pairs():
             a = (a or "").strip().lower()
             if a:
                 yield a, canon
+
+
+from datetime import timedelta
+
+from django.contrib.auth.hashers import check_password as _check_password, make_password
+from django.utils import timezone
+
+from apps.atomwalk.patients.models import RecordsPrivacy
+
+
+def mobile_hash_of(raw):
+    from core.utils.hashing import hash_mobile, normalize_mobile
+    return hash_mobile(normalize_mobile(raw))
+
+
+def set_password(patient, raw):
+    patient.password = make_password(raw)
+
+
+def check_password(patient, raw):
+    return _check_password(raw, patient.password)
+
+
+def accounts():
+    return Patient.objects.using("default").exclude(password="")
+
+
+def accounts_with_mobile(raw):
+    try:
+        return accounts().filter(mobile_hash=mobile_hash_of(raw))
+    except ValueError:
+        return Patient.objects.none()
+
+
+def create_account(**fields):
+    if "mobile" in fields:
+        fields["mobile_hash"] = mobile_hash_of(fields.pop("mobile"))
+    identity, _ = Patient._base_manager.using("default").get_or_create(
+        awpid=fields["awpid"], defaults={"full_name": fields.get("full_name") or "Patient"})
+    for name, value in fields.items():
+        setattr(identity, name, value)
+    identity.save(using="default")
+    return accounts().get(pk=identity.pk)
+
+
+def awpid_of(row):
+    return row.patient.awpid if row.patient_id else ""
+
+
+def privacy_for_awpid(awpid):
+    obj, _ = RecordsPrivacy.objects.using("default").get_or_create(patient=Patient.objects.using("default").get(awpid=awpid))
+    return obj
+
+
+def pending_stale(grant):
+    return grant.status == grant.STATUS_PENDING and timezone.now() - grant.created_at > timedelta(minutes=grant.PENDING_TTL_MINUTES)
+
+
+def device_matches(grant, raw_token):
+    if not grant.device_hash:
+        return True
+    if not raw_token:
+        return False
+    return hashlib.sha256(raw_token.encode()).hexdigest() == grant.device_hash
+
+
+def is_live(grant):
+    return grant.status == grant.STATUS_APPROVED and grant.expires_at is not None and timezone.now() < grant.expires_at
+
+
+def lapse_if_due(grant):
+    if grant.status == grant.STATUS_APPROVED and grant.expires_at is not None and timezone.now() >= grant.expires_at:
+        grant.status = grant.STATUS_EXPIRED
+        grant.save(using="default", update_fields=["status"])
+        return True
+    return False
+
+
+def seconds_left(grant):
+    if not grant.expires_at:
+        return 0
+    return max(0, int((grant.expires_at - timezone.now()).total_seconds()))

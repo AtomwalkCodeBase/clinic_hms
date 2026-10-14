@@ -169,8 +169,8 @@ class JWTHospitalAuthentication(BaseAuthentication):
         # reused/orphaned ID is caught immediately instead of silently
         # leaking another patient's records.
         if user.role == "patient":
-            from apps.atomwalk.patients.models import PatientAccount
-            current_awpid = PatientAccount.objects.using("default").filter(
+            from apps.atomwalk.patients.services import accounts
+            current_awpid = accounts().filter(
                 pk=user.id, is_active=True
             ).values_list("awpid", flat=True).first()
             if not current_awpid or current_awpid != user.awpid:

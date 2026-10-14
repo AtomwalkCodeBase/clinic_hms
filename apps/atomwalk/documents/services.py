@@ -6,6 +6,8 @@ import uuid
 import re
 import csv
 import math
+from decimal import Decimal
+from apps.atomwalk.documents.models import Schedule
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from django.conf import settings
@@ -105,10 +107,11 @@ def batch_summary(batch):
     for d in docs:
         counts[d.status] = counts.get(d.status, 0) + 1
     finished = sum(counts.get(k, 0) for k in (Status.COMPLETED, Status.REVIEW_REQUIRED, Status.FAILED))
+    total = len(docs)
     return {
-        "id": batch.id, "total_files": batch.total_files, "created_at": batch.created_at,
-        "status": "processing" if batch.status == DocumentBatch.Status.PROCESSING else "completed",
-        "progress_percent": int(round(100.0 * finished / batch.total_files)) if batch.total_files else 100,
+        "id": batch.id, "total_files": total, "created_at": batch.created_at,
+        "status": "processing" if finished < total else "completed",
+        "progress_percent": int(round(100.0 * finished / total)) if total else 100,
         "counts": counts,
         "documents": [{"id": d.id, "file_name": d.file_name, "size": d.size, "status": d.status,
                        "processing_status": d.status, "doc_type": d.document_type, "method": method_of(d),
@@ -824,12 +827,13 @@ def _merged(vitals, growth):
     for row in (growth, vitals):                               # vitals last: its note and time win
         if row is None:
             continue
-        for f in VITAL_SIGNS + GROWTH + ("bmi",):
+        for f in VITAL_SIGNS + GROWTH:
             if hasattr(row, f) and getattr(row, f) not in (None, ""):
                 setattr(one, f, getattr(row, f))
         one.recorded_by_user_id = row.recorded_by_user_id or one.recorded_by_user_id
         one.recorded_at = getattr(row, "recorded_at", None) or timezone.make_aware(datetime.combine(row.measured_on, time(12, 0)))
         one.id = row.id
+    one.bmi = bmi(one)
     return one
 def save_visit(patient, appointment_id, hospital_id, user_id, data, *, is_minor):
     """
@@ -913,7 +917,7 @@ def growth_points(awpid, *, hospital_id=None, include_other=True):
         else:
             continue
         point = {"date": str(day), "height_cm": _number(row.height_cm), "weight_kg": _number(row.weight_kg),
-                 "head_circumference_cm": _number(head), "bmi": _number(row.bmi), "source": source}
+                 "head_circumference_cm": _number(head), "bmi": _number(bmi(row)), "source": source}
         if str(day) not in points or (source == "this_hospital" and points[str(day)]["source"] != "this_hospital"):
             points[str(day)] = point
     return sorted(points.values(), key=lambda p: p["date"])
@@ -1157,7 +1161,9 @@ DUE_LEAD_DAYS = 14
 PAST_WINDOW_GRACE_DAYS = 90
 def rule_get(rule, key):
     """A rule may be a model instance or a plain dict."""
-    return rule.get(key) if isinstance(rule, dict) else getattr(rule, key, None)
+    if isinstance(rule, dict):
+        return rule.get(key)
+    return getattr(rule, "item" if key in ("vaccine_name", "milestone") else key, None)
 def timing_for(age_days, min_age_days, max_age_days):
     if age_days is None or min_age_days is None:
         return None
@@ -1192,18 +1198,16 @@ def rules_for(noun, hospital_id=None):
     their hospital_id and get that hospital's active schedule; with no hospital_id (the patient portal, which spans
     hospitals) or when the hospital has none set, the system "Default Schedule" template is used.
     """
-    from apps.atomwalk.documents import models
     from apps.atomwalk.hospital_master.models import Hospital
 
-    Schedule = getattr(models, f"{noun.title()}Schedule")
+    schedules = Schedule.objects.using("default").filter(kind=noun)
     schedule = None
     if hospital_id:
         hospital = Hospital.objects.using("default").filter(pk=hospital_id).first()
         schedule_id = getattr(hospital, f"active_{noun}_schedule_id", None)
-        schedule = Schedule.objects.using("default").filter(pk=schedule_id, active=True).first() if schedule_id else None
+        schedule = schedules.filter(pk=schedule_id, active=True).first() if schedule_id else None
     if not schedule:
-        schedule = (Schedule.objects.using("default")
-                    .filter(owner_hospital_id__isnull=True, is_template=True, active=True).order_by("id").first())
+        schedule = schedules.filter(owner_hospital_id__isnull=True, is_template=True, active=True).order_by("id").first()
     return list(schedule.rules.order_by("sort_order")) if schedule else []
 
 
@@ -1222,7 +1226,7 @@ def _serialize_matched(rule, record):
         "verification_status": record.verification_status,
         "record_id": record.id,
         "has_certificate": bool(record.file_data),
-        "recorded_by": record.recorded_by,    # "staff" or "patient" (a parent's upload)
+        "recorded_by": recorded_by(record),    # "staff" or "patient" (a parent's upload)
         "verified_by_name": record.verified_by_name,
         "extra": rule is None,                # a record that fits no slot of the schedule
     }
@@ -1345,7 +1349,7 @@ def milestone_roadmap_summarize_roadmap(roadmap):
 def vaccination_rule_dict(rule):
     return {
         "id": rule.id,
-        "vaccine_name": rule.vaccine_name,
+        "vaccine_name": rule.item,
         "dose_number": rule.dose_number,
         "scheduled_label": rule.scheduled_label,
         "min_age_days": rule.min_age_days,
@@ -1357,7 +1361,7 @@ def milestone_rule_dict(rule):
     return {
         "id": rule.id,
         "domain": rule.domain,
-        "milestone": rule.milestone,
+        "milestone": rule.item,
         "scheduled_label": rule.scheduled_label,
         "min_age_days": rule.min_age_days,
         "max_age_days": rule.max_age_days,
@@ -1386,3 +1390,22 @@ def template_dict(schedule, rule_count=None, hospitals_using=None):
         "rule_count": rule_count if rule_count is not None else schedule.rules.count(),
         "hospitals_using": hospitals_using,
     }
+
+
+def bmi(row):
+    if row.weight_kg and row.height_cm and row.height_cm > 0:
+        return Decimal(f"{float(row.weight_kg) / ((float(row.height_cm) / 100) ** 2):.1f}")
+    return None
+
+
+def recorded_by(record):
+    return "patient" if record.source == record.SOURCE_SELF_REPORTED else "staff"
+
+
+def batch_counts(batch):
+    counts = dict(batch.documents.values_list("status").annotate(n=Count("id")))
+    total = sum(counts.values())
+    processed = counts.get(MedicalDocument.Status.COMPLETED, 0) + counts.get(MedicalDocument.Status.REVIEW_REQUIRED, 0)
+    failed = counts.get(MedicalDocument.Status.FAILED, 0)
+    status = "processing" if processed + failed < total else "completed_with_errors" if failed else "completed"
+    return {"total_files": total, "processed_files": processed, "failed_files": failed, "status": status}

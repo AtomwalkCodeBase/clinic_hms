@@ -204,7 +204,7 @@ class StaffInviteView(APIView):
         # their existing hospital. Only proceed if it's unused, or already
         # points at this same hospital (the reactivation path below).
         existing_index = StaffMobileIndex.objects.using("default").filter(mobile=d["phone"]).first()
-        if existing_index and existing_index.db_name != request.hospital_db:
+        if existing_index and existing_index.hospital.db_name != request.hospital_db:
             return error(
                 f"Mobile number {d['phone']} is already registered at another hospital.",
                 errors={"phone": "Already in use."},
