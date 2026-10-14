@@ -109,6 +109,8 @@ class AppointmentSerializer(serializers.ModelSerializer):
 
 
 class AppointmentCreateSerializer(serializers.ModelSerializer):
+    patient_id = serializers.UUIDField()      # declared: DRF would otherwise treat the foreign key's column as read-only
+
     class Meta:
         model = Appointment
         fields = [

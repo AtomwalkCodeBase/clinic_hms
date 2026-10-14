@@ -7,6 +7,7 @@ apps/opd/archive.py.) Moved out of opd/views.py, which the seed commands had to 
 """
 
 import logging
+from datetime import date
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +26,15 @@ def sync_encounter_to_hie(encounter, db, patient, hospital_id=None):
 
     from apps.atomwalk.models import ClinicalEvent, Patient
     from apps.hospitals.utils import resolve_source_hospital_id
+    from apps.records.timeline_insights import episodes
+    from apps.records.timeline_insights.episodes import condition_group
 
     shared = Patient.objects.using("default").filter(awpid=patient.awpid).first()
     if shared is None:
         logger.warning("HIE sync skipped for encounter %s: %s has no shared patient.", encounter.id, patient.awpid)
         return
     source_hospital_id = hospital_id or resolve_source_hospital_id(db)
-    seen_on = getattr(encounter, "encounter_date", None)
+    seen_on = getattr(getattr(encounter, "appointment", None), "scheduled_date", None) or date.today()
 
     # OPDEncounter.diagnoses is a JSON list of {code, description}
     for diag in (encounter.diagnoses or []):
@@ -39,7 +42,11 @@ def sync_encounter_to_hie(encounter, db, patient, hospital_id=None):
             ClinicalEvent.objects.using("default").update_or_create(
                 patient=shared, source_hospital_id=source_hospital_id, event_type="DIAGNOSIS", icd10=diag.get("code", ""),
                 defaults={"condition_text": diag.get("description", ""), "clinical_status": "active", "event_date": seen_on,
-                          "source": "HOSPITAL"},
+                          "condition_group": condition_group(diag.get("code"), diag.get("description")), "source": "HOSPITAL"},
             )
         except Exception:
             logger.exception("HIE ClinicalEvent write failed for encounter=%s", encounter.id)
+    try:
+        episodes.rebuild(shared)
+    except Exception:
+        logger.exception("Episodes rebuild failed for encounter=%s", encounter.id)

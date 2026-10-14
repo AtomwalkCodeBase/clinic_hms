@@ -23,7 +23,8 @@ from pathlib import Path
 from django.db.models import Q
 from django.utils import timezone
 
-from apps.atomwalk.models import DocumentExtraction, MedicalDocument
+from apps.atomwalk.models import ClinicalEvent, DocumentExtraction, MedicalDocument
+from . import episodes
 from ..services import awaiting_review_q, extract_text
 
 logger = logging.getLogger(__name__)
@@ -151,6 +152,26 @@ def run_insights(document_id):
     DocumentExtraction.objects.filter(document=doc).update(
         normalised=insights, status=DocumentExtraction.Status.DONE, processed_at=timezone.now(), error="", doc_type=doc.document_type[:24],
         document_date=hospital_date, date_source="document" if hospital_date else "", extractor_version=EXTRACTOR_VERSION)
+    _write_events(doc, insights)
+
+
+def _write_events(doc, insights):
+    """The conditions found in a document become clinical events of its patient (and the patient's episodes are rebuilt).
+    A person's verdict on an event (verified or rejected) is never overwritten by a new reading."""
+    events = ClinicalEvent.objects.using("default")
+    events.filter(document=doc, source="EXTRACTED", is_verified=False, is_rejected=False).delete()
+    vocab = _vocabulary()
+    for e in insights["entries"]:
+        name, kind, nature = vocab.get(e["word"], (None, None, None))
+        if kind != "condition" or e["negated"] or e["family"] or not e["date"]:
+            continue
+        if events.filter(document=doc, condition_text=name, event_date=e["date"]).exists():
+            continue                                    # already there, or a person has dealt with it
+        events.create(patient=doc.patient, document=doc, event_date=e["date"], event_type="DIAGNOSIS", condition_text=name,
+                      condition_group=name.upper()[:40], category=nature.upper() if nature in ("acute", "chronic") else "",
+                      is_provisional=e["uncertain"], evidence=e["evidence"][:255], source="EXTRACTED",
+                      source_hospital_id=int(doc.source_hospital_id) if str(doc.source_hospital_id or "").isdigit() else None)
+    episodes.rebuild(doc.patient)
 
 
 def run_all(redo=False):

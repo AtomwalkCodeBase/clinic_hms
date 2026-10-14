@@ -18,7 +18,7 @@ request, in PortalNotificationsView via apps.hospital_patients.pediatrics.vaccin
 — vaccination due-ness is inherently always-current (it's just today's date
 vs. the patient's age), so persisting a stale "reminder" row for it would be
 wrong the moment the underlying roadmap changes (e.g. a dose gets logged).
-Also SharedVaccination is a atomwalk (cross-hospital) model, not hospital-owned,
+Also ImmunizationRecord is a atomwalk (cross-hospital) model, not hospital-owned,
 so there's no single hospital DB to log it against.
 """
 import logging

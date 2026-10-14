@@ -48,7 +48,10 @@ class Appointment(models.Model):
     TYPE_EMERGENCY = "emergency"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    patient_id = models.UUIDField(db_index=True)           # FK → patients.patient.id
+    # The hospital's own patient (by its uuid; the code reads and writes it as patient_id). The awpid is the person across hospitals:
+    # a plain value, because that patient lives in another database.
+    patient = models.ForeignKey("hospital_patients.HospitalPatient", to_field="uuid", db_column="patient_id",
+                                on_delete=models.CASCADE, related_name="appointments")
     patient_awpid = models.CharField(max_length=30, db_index=True)
     doctor_user_id = models.UUIDField(db_index=True)       # atomwalk_user.id
     doctor_name = models.CharField(max_length=255)

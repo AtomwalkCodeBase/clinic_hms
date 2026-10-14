@@ -8,7 +8,7 @@ certificates).
 Replaces the old convention of storing files as base64 data URIs directly in
 a Postgres TextField (StaffUser.photo, PatientAccount.photo, Hospital.logo,
 DoctorProfile.digital_signature, LabReport.file_url, and
-atomwalk.SharedDocument / SharedLabResult / SharedVaccination.file_data) —
+atomwalk.MedicalDocument / LabResult / ImmunizationRecord.file_data) —
 that was fine for a demo but doesn't scale: every row load pulls the full
 file bytes through Postgres, backups balloon with binary data, and there's
 no CDN/caching in front of any of it.
@@ -83,8 +83,8 @@ def identity_slug(*, name: str = "", identifier: str = "") -> str:
     console instead of having to open files one by one to check.
 
     `identifier` should be the durable, unique handle: a patient's AWPID
-    for anything patient-owned (SharedDocument.awpid, SharedVaccination.awpid,
-    PatientAccount.awpid, Patient.awpid, SharedLabResult.awpid), or a staff
+    for anything patient-owned (MedicalDocument.patient, ImmunizationRecord.patient,
+    PatientAccount.awpid, Patient.awpid, LabResult.patient), or a staff
     member's email for staff-owned uploads (StaffUser/DoctorProfile don't
     have an AWPID — they're not patients). `name` is included only to make
     the key human-readable while browsing; the identifier is what's actually
@@ -224,7 +224,7 @@ def upload_data_uri(data_uri: str, *, prefix: str, mime_type: str, category: str
     Returns the S3 object key to store in the model field — never a URL.
     Callers must call signed_url() separately whenever the file is actually
     served back to a client. Callers that also store a user-facing file_name
-    (LabReport, SharedDocument, SharedVaccination) should set it from
+    (LabReport, MedicalDocument, ImmunizationRecord) should set it from
     display_file_name(category, mime_type), not from client input either.
 
     Raises StorageError if S3 isn't configured or the upload fails — callers
