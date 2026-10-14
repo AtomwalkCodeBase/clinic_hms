@@ -32,7 +32,6 @@ def sync_patient_booking(appointment, db_name):
     try:
         from apps.atomwalk.models import Patient, PatientAccount, PatientRelationship, PatientBooking
         from apps.hospitals.models import Hospital
-        from apps.hospital_patients.models import HospitalPatient
 
         patient_awpid = (appointment.patient_awpid or "").strip()
         if not patient_awpid:
@@ -63,21 +62,15 @@ def sync_patient_booking(appointment, db_name):
         if not hospital:
             return
 
-        patient = HospitalPatient.objects.using(db_name).filter(awpid=patient_awpid).first()
-        patient_name = patient.full_name if patient else ""
-
         PatientBooking.objects.using("default").create(
-            account=acct,
-            hospital_id=hospital.id,
-            db_name=db_name,
-            hospital_name=hospital.name,
+            booked_by=acct,
+            hospital=hospital,
             appointment_id=appointment.id,
             doctor_name=appointment.doctor_name or "",
             scheduled_date=appointment.scheduled_date,
             chief_complaint=appointment.chief_complaint or "",
             status=appointment.status,
             patient=Patient.objects.using("default").filter(awpid=patient_awpid).first(),
-            patient_name=patient_name,
         )
     except Exception:
         # Same graceful-degradation pattern as core.audit.log_action — a

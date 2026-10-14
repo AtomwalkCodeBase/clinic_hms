@@ -976,17 +976,14 @@ class PortalBookView(APIView):
         )
 
         booking = PatientBooking.objects.using("default").create(
-            account=acct,
-            hospital_id=hospital.id,
-            db_name=db,
-            hospital_name=hospital.name,
+            booked_by=acct,
+            hospital=hospital,
             appointment_id=appt.id,
             doctor_name=doctor_name,
             scheduled_date=scheduled_date,
             chief_complaint=chief_complaint,
             status="scheduled",
             patient=acct if target_awpid == acct.awpid else Patient.objects.using("default").filter(awpid=target_awpid).first(),
-            patient_name=target_name,
         )
 
         return Response({
@@ -1295,18 +1292,9 @@ class PortalMyBookingsView(APIView):
         from apps.opd.models import Appointment
 
         qs = PatientBooking.objects.using("default").filter(
-            account_id=request.user.id
-        ).select_related("patient").order_by("-scheduled_date", "-id")
+            booked_by_id=request.user.id
+        ).select_related("patient", "hospital").order_by("-scheduled_date", "-id")
         bookings, meta = paginate_queryset(request, qs)
-
-        # Batched once per page (not per booking) — city/state are the same
-        # for every booking at a given hospital, so this is one query for
-        # the whole page rather than N.
-        hospital_map = {
-            t.id: t for t in Hospital.objects.using("default").filter(
-                id__in={b.hospital_id for b in bookings}
-            )
-        }
 
         today = str(date.today())
         # States where the patient is still "in the queue" — before this,
@@ -1328,9 +1316,9 @@ class PortalMyBookingsView(APIView):
             doctor_photo = None
             doctor_specialisation = ""
             try:
-                ensure_hospital_db(b.db_name)
-                appt = Appointment.objects.using(b.db_name).get(pk=b.appointment_id)
-                status_now = _auto_expire_if_stale(appt, b.db_name)
+                ensure_hospital_db(b.hospital.db_name)
+                appt = Appointment.objects.using(b.hospital.db_name).get(pk=b.appointment_id)
+                status_now = _auto_expire_if_stale(appt, b.hospital.db_name)
                 token = appt.token_number
                 slot_time = appt.scheduled_time.strftime("%H:%M") if appt.scheduled_time else None
                 # appt.doctor_user_id is a UUIDField, but the value actually
@@ -1351,10 +1339,10 @@ class PortalMyBookingsView(APIView):
                 # same try/except as the rest of this per-booking lookup.
                 if doctor_id:
                     from apps.org.models import StaffUser, DoctorProfile
-                    staff_obj = StaffUser.objects.using(b.db_name).filter(pk=doctor_id).first()
+                    staff_obj = StaffUser.objects.using(b.hospital.db_name).filter(pk=doctor_id).first()
                     if staff_obj and staff_obj.photo:
                         doctor_photo = blob_storage.signed_url(staff_obj.photo) or None
-                    profile_obj = DoctorProfile.objects.using(b.db_name).filter(staff_id=doctor_id).first()
+                    profile_obj = DoctorProfile.objects.using(b.hospital.db_name).filter(staff_id=doctor_id).first()
                     if profile_obj:
                         doctor_specialisation = profile_obj.specialisation or ""
 
@@ -1388,7 +1376,7 @@ class PortalMyBookingsView(APIView):
                 # Real, live queue position — only meaningful same-day, and
                 # only while this appointment hasn't itself been called yet.
                 if str(appt.scheduled_date) == today and status_now in QUEUE_PENDING and token is not None:
-                    same_day_doctor = Appointment.objects.using(b.db_name).filter(
+                    same_day_doctor = Appointment.objects.using(b.hospital.db_name).filter(
                         doctor_user_id=appt.doctor_user_id, scheduled_date=appt.scheduled_date,
                     )
                     people_ahead = same_day_doctor.filter(
@@ -1405,12 +1393,12 @@ class PortalMyBookingsView(APIView):
                 # live token/queue data. Logged so a systemic issue (e.g. a
                 # schema change breaking this join hospital-wide) is visible
                 # somewhere instead of just presenting as "missing token".
-                logger.debug("PortalMyBookingsView: live status lookup failed for booking_id=%s db=%s", b.id, b.db_name, exc_info=True)
-            hospital = hospital_map.get(b.hospital_id)
+                logger.debug("PortalMyBookingsView: live status lookup failed for booking_id=%s db=%s", b.id, b.hospital.db_name, exc_info=True)
+            hospital = b.hospital
             results.append({
                 "id": b.id,
                 "hospital_id": b.hospital_id,
-                "hospital": b.hospital_name,
+                "hospital": hospital.name if hospital else "",
                 "hospital_city": (hospital.city if hospital else "") or "",
                 "hospital_state": (hospital.state if hospital else "") or "",
                 "hospital_latitude": hospital.latitude if hospital else None,
@@ -1434,9 +1422,7 @@ class PortalMyBookingsView(APIView):
                 "now_serving_token": now_serving,
                 "room_name": room_name,
                 "floor": floor,
-                # Blank on bookings made before family members existed —
-                # those were always for the account owner.
-                "patient_name": b.patient_name or None,
+                "patient_name": b.patient.full_name if b.patient else None,
                 "patient_awpid": b.patient.awpid if b.patient else None,
                 # "Booked on" — when this appointment was actually reserved,
                 # distinct from the visit date itself (see reference mockup's
@@ -1465,13 +1451,13 @@ class PortalCancelBookingView(APIView):
         from apps.opd.models import Appointment
 
         try:
-            booking = PatientBooking.objects.using("default").get(pk=pk, account_id=request.user.id)
+            booking = PatientBooking.objects.using("default").select_related("hospital").get(pk=pk, booked_by_id=request.user.id)
         except PatientBooking.DoesNotExist:
             return not_found("Booking not found.")
 
-        ensure_hospital_db(booking.db_name)
+        ensure_hospital_db(booking.hospital.db_name)
         try:
-            appt = Appointment.objects.using(booking.db_name).get(pk=booking.appointment_id)
+            appt = Appointment.objects.using(booking.hospital.db_name).get(pk=booking.appointment_id)
         except Appointment.DoesNotExist:
             return not_found("Appointment record not found.")
 
@@ -1480,7 +1466,7 @@ class PortalCancelBookingView(APIView):
             return error(f"Can't cancel an appointment that's already {appt.get_status_display().lower()}.")
 
         appt.status = Appointment.STATUS_CANCELLED
-        appt.save(using=booking.db_name, update_fields=["status"])
+        appt.save(using=booking.hospital.db_name, update_fields=["status"])
         booking.status = Appointment.STATUS_CANCELLED
         booking.save(using="default", update_fields=["status"])
         return Response({"status": "cancelled"})
@@ -1502,7 +1488,7 @@ class PortalRescheduleBookingView(APIView):
         from apps.opd.models import Appointment
 
         try:
-            booking = PatientBooking.objects.using("default").get(pk=pk, account_id=request.user.id)
+            booking = PatientBooking.objects.using("default").select_related("hospital").get(pk=pk, booked_by_id=request.user.id)
         except PatientBooking.DoesNotExist:
             return not_found("Booking not found.")
 
@@ -1519,8 +1505,8 @@ class PortalRescheduleBookingView(APIView):
         if new_date > date.today() + timedelta(days=62):
             return error("Appointments can only be booked up to 2 months in advance.")
 
-        ensure_hospital_db(booking.db_name)
-        db = booking.db_name
+        ensure_hospital_db(booking.hospital.db_name)
+        db = booking.hospital.db_name
         try:
             appt = Appointment.objects.using(db).get(pk=booking.appointment_id)
         except Appointment.DoesNotExist:
@@ -2563,26 +2549,19 @@ class PortalHealthSummaryView(APIView):
         bookings = list(
             PatientBooking.objects.using("default")
             .filter(patient__awpid=target_awpid)
+            .select_related("hospital")
             .order_by("-scheduled_date")
         )
-        # A booking with no patient is one for the account owner — include those too when we're
-        # looking at the account's own summary.
-        if target_awpid == acct.awpid:
-            bookings += list(
-                PatientBooking.objects.using("default")
-                .filter(account_id=acct.id, patient__isnull=True)
-                .order_by("-scheduled_date")
-            )
 
         last_visit = None
         hospitals = {}
         for b in bookings:
             if last_visit is None or b.scheduled_date > last_visit:
                 last_visit = b.scheduled_date
-            existing = hospitals.get(b.hospital_name)
+            existing = hospitals.get(b.hospital.name)
             if not existing or b.scheduled_date > existing["last_visit"]:
-                hospitals[b.hospital_name] = {
-                    "hospital_name": b.hospital_name,
+                hospitals[b.hospital.name] = {
+                    "hospital_name": b.hospital.name,
                     "hospital_id": b.hospital_id,
                     "last_visit": b.scheduled_date,
                 }

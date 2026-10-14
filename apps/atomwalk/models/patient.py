@@ -150,17 +150,12 @@ class PatientBooking(models.Model):
     The authoritative appointment lives in the hospital DB; this row lets the
     patient list their bookings across hospitals without scanning every hospital.
     """
-    account         = models.ForeignKey(Patient, on_delete=models.CASCADE,
-                                        related_name="bookings")
-    hospital_id       = models.IntegerField(db_index=True)
-    db_name         = models.CharField(max_length=100, db_index=True)
-    hospital_name   = models.CharField(max_length=200)
-    appointment_id  = models.UUIDField()
+    booked_by       = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="bookings_made")   # who is logged in
+    patient         = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="bookings")        # who the visit is for: the same person, or a family member (PatientRelationship)
+    hospital        = models.ForeignKey("hospitals.Hospital", null=True, blank=True, on_delete=models.CASCADE, related_name="bookings")
+    appointment_id  = models.UUIDField()                       # the hospital's appointment: a plain id, it lives in the hospital's database
+    # Copies of the appointment, so "my bookings" lists every hospital without opening each one's database
     doctor_name     = models.CharField(max_length=255, blank=True)
-    # Which patient this booking is actually for: the account owner by default
-    # (empty), or a linked family member (see PatientRelationship).
-    patient         = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="bookings_for")
-    patient_name    = models.CharField(max_length=200, blank=True)
     scheduled_date  = models.DateField()
     chief_complaint = models.TextField(blank=True)
     status          = models.CharField(max_length=15, default="scheduled", db_index=True)
@@ -172,4 +167,4 @@ class PatientBooking(models.Model):
         ordering  = ["-created_at"]
 
     def __str__(self):
-        return f"{self.account.email} @ {self.hospital_name} on {self.scheduled_date}"
+        return f"{self.patient_id} @ {self.hospital_id} on {self.scheduled_date}"
