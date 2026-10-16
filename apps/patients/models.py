@@ -4,21 +4,24 @@ from core.utils.tokens import new_pad_token
 
 
 class Patient(models.Model):
-    awpid               = models.CharField(max_length=30, unique=True, db_index=True)
+    GENDER_CHOICES = [("M", "Male"), ("F", "Female"), ("O", "Other")]
+    BLOOD_GROUP_CHOICES = [(g, g) for g in ("A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-")]
+
+    awpid               = models.CharField(max_length=30, unique=True)
     full_name           = models.CharField(max_length=100)
     date_of_birth       = models.DateField(null=True, blank=True)
-    gender              = models.CharField(max_length=10, blank=True)
+    gender              = models.CharField(max_length=1, choices=GENDER_CHOICES, blank=True)
 
-    mobile              = models.CharField(max_length=10, unique=True, db_index=True, null=True, blank=True)
+    mobile              = models.CharField(max_length=10, unique=True, null=True, blank=True)
 
-    guardian_mobile     = models.CharField(max_length=10, blank=True, db_index=True)
+    guardian_mobile     = models.CharField(max_length=15, blank=True, db_index=True)
     is_dependent        = models.BooleanField(default=False)
     email               = models.EmailField(blank=True)
-    blood_group         = models.CharField(max_length=5, blank=True)
+    blood_group         = models.CharField(max_length=3, choices=BLOOD_GROUP_CHOICES, blank=True)
     preferred_language  = models.CharField(max_length=10, default="en")
 
     password      = models.CharField(max_length=128, blank=True)
-    photo         = models.ImageField(blank=True)
+    photo         = models.ImageField(upload_to="patients/photos/", blank=True)
     is_active     = models.BooleanField(default=True)
     last_login    = models.DateTimeField(null=True, blank=True)
 
@@ -27,7 +30,6 @@ class Patient(models.Model):
     emergency_contact_relation = models.CharField(max_length=30, blank=True)
 
     created_at          = models.DateTimeField(auto_now_add=True)
-    updated_at          = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table  = "patient"
