@@ -2,7 +2,7 @@
 apps/billing/tests.py
 ---------------------
 Hospital-DB tests for payment posting. Needs the "hospital_test" alias:
-  python manage.py test apps.billing --settings=atomwalk.settings.test   (skipped otherwise)
+  python manage.py test apps.billing --settings=core.settings.test   (skipped otherwise)
 """
 
 import threading

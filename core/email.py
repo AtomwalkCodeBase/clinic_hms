@@ -3,7 +3,7 @@ core/email.py
 ---------------
 Thin wrapper over Django's own email machinery (django.core.mail) — this
 codebase had no EMAIL_BACKEND configured at all before this file existed
-(see atomwalk/settings/base.py). In DEBUG it defaults to Django's console
+(see core/settings/base.py). In DEBUG it defaults to Django's console
 backend (prints the email to the server log — no account needed, fully
 functional for local dev/demo). In production it requires real SMTP
 credentials via env vars (EMAIL_HOST / EMAIL_HOST_USER / EMAIL_HOST_PASSWORD

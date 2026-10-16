@@ -23,10 +23,10 @@ sequence.
 
 Usage:
   # One hospital:
-  python manage.py assign_employee_ids --hospital aw_novacare_flagship --settings=atomwalk.settings.development
+  python manage.py assign_employee_ids --hospital aw_novacare_flagship --settings=core.settings.development
 
   # Every active hospital on the platform in one pass:
-  python manage.py assign_employee_ids --all --settings=atomwalk.settings.development
+  python manage.py assign_employee_ids --all --settings=core.settings.development
 
 Also writes EMPLOYEE_LOGIN_CODES.md (same directory convention as
 INVESTOR_DEMO_CREDENTIALS.md) with one section per hospital processed,

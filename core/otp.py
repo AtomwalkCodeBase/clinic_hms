@@ -54,7 +54,7 @@ class OTPError(Exception):
 
 def _pepper() -> str:
     # settings.OTP_HASH_PEPPER already resolves the DEBUG-only fallback to
-    # JWT_SIGNING_KEY (see atomwalk/settings/base.py) — required standalone
+    # JWT_SIGNING_KEY (see core/settings/base.py) — required standalone
     # in production so this hash can be rotated independently of the JWT
     # signing key.
     return settings.OTP_HASH_PEPPER

@@ -1,5 +1,5 @@
 """
-atomwalk/urls.py
+core/urls.py
 ----------------
 Root URL configuration for Atomwalk HMS.
 All API routes are versioned under /api/v1/.

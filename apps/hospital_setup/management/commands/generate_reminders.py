@@ -7,10 +7,10 @@ Celery/cron runner built into this stack, so this has to be invoked on a
 schedule by something outside Django:
 
   Linux/cron (once a day, e.g. 7am):
-    0 7 * * * cd /path/to/repo && python manage.py generate_reminders --settings=atomwalk.settings.production
+    0 7 * * * cd /path/to/repo && python manage.py generate_reminders --settings=core.settings.production
 
   Windows Task Scheduler: create a daily basic task that runs
-    python manage.py generate_reminders --settings=atomwalk.settings.production
+    python manage.py generate_reminders --settings=core.settings.production
   from the repo directory.
 
 Safe to run more than once a day — every reminder is keyed by a stable
@@ -18,8 +18,8 @@ reference (appointment id / encounter id) and only ever created once (see
 _log_in_app in services.py), so re-runs just find nothing new to do.
 
 Usage:
-  python manage.py generate_reminders --settings=atomwalk.settings.development
-  python manage.py generate_reminders --db aw_sunrise_clinic --settings=atomwalk.settings.development
+  python manage.py generate_reminders --settings=core.settings.development
+  python manage.py generate_reminders --db aw_sunrise_clinic --settings=core.settings.development
 """
 
 from django.core.management.base import BaseCommand

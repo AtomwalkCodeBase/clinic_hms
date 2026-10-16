@@ -21,8 +21,8 @@ via pg_database, not just db_name being set on the Hospital row) and skips
 creating a second hospital_admin if one already exists in that hospital DB.
 
 Usage:
-  python manage.py provision_pending_hospital_dbs --settings=atomwalk.settings.development
-  python manage.py provision_pending_hospital_dbs --hospital-code care-cure-clinic --settings=atomwalk.settings.development
+  python manage.py provision_pending_hospital_dbs --settings=core.settings.development
+  python manage.py provision_pending_hospital_dbs --hospital-code care-cure-clinic --settings=core.settings.development
 """
 
 import secrets

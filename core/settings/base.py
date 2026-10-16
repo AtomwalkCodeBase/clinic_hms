@@ -130,7 +130,7 @@ MIDDLEWARE = [
     "core.middleware.JWTHospitalMiddleware",
 ]
 
-ROOT_URLCONF = "atomwalk.urls"
+ROOT_URLCONF = "core.urls"
 
 TEMPLATES = [
     {
@@ -148,8 +148,8 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = "atomwalk.wsgi.application"
-ASGI_APPLICATION = "atomwalk.asgi.application"
+WSGI_APPLICATION = "core.wsgi.application"
+ASGI_APPLICATION = "core.asgi.application"
 
 # ── Databases ────────────────────────────────────────────────────────────────
 # 'default' is always the Atomwalk DB.
@@ -420,12 +420,12 @@ PEDIATRIC_HEALTH_CONFIG = config("PEDIATRIC_HEALTH_CONFIG", default="") or None
 # interval is DB-backed (django_celery_beat's DatabaseScheduler below), kept in sync by
 # SweepConfig.save() creating/updating its PeriodicTask + IntervalSchedule rows.
 
-# ── Celery (atomwalk/celery.py) ──────────────────────────────────────────────
+# ── Celery (core/celery.py) ──────────────────────────────────────────────
 #   Two queues (apps/records/services.py): "instant" for a single-file upload, "bulk" for several. ONE worker serves
 #   both (the legacy "celery" queue too); Redis hands it tasks from the queues in turn, so an instant file waits for at
 #   most the one task already running, never for a whole bulk backlog:
-#   worker: celery -A atomwalk worker -Q instant,bulk,celery --loglevel=info --pool=solo
-#   beat:           celery -A atomwalk beat --loglevel=info
+#   worker: celery -A core worker -Q instant,bulk,celery --loglevel=info --pool=solo
+#   beat:           celery -A core beat --loglevel=info
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
 CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cast=bool)

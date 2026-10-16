@@ -81,7 +81,7 @@ class EncounterSignSideEffectsTests(TestCase):
 # ── Sign-off characterization (hospital DB) ────────────────────────────────────
 # Pins what EncounterSignView does today so the billing / HIE code it calls can be
 # moved and changed safely. Needs the hospital_test alias:
-#   python manage.py test apps.opd --settings=atomwalk.settings.test   (skipped otherwise)
+#   python manage.py test apps.opd --settings=core.settings.test   (skipped otherwise)
 
 import datetime as _dt
 import uuid as _uuid

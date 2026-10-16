@@ -3,7 +3,7 @@ core/testing.py
 ---------------
 Shared helpers for tests that need a hospital database.
 
-Use HospitalDBTestCase with `--settings=atomwalk.settings.test` (which defines the
+Use HospitalDBTestCase with `--settings=core.settings.test` (which defines the
 "hospital_test" alias). Under any other settings module the test classes are skipped.
 """
 
@@ -22,7 +22,7 @@ HAS_HOSPITAL_DB = HOSPITAL_ALIAS in settings.DATABASES
 
 requires_hospital_db = unittest.skipUnless(
     HAS_HOSPITAL_DB,
-    "needs the hospital_test alias — run with --settings=atomwalk.settings.test",
+    "needs the hospital_test alias — run with --settings=core.settings.test",
 )
 
 

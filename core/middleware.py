@@ -53,7 +53,7 @@ EXEMPT_PREFIXES = (
                                       # (apps/hospital_patients/document_view_views.py) — no Atomwalk login at all;
                                       # auth is the signed token in the URL itself (core/qr_token.py).
     "/health/",
-    "/django-admin/",                # Django admin (atomwalk/urls.py) — it has its own session login, not a Bearer token
+    "/django-admin/",                # Django admin (core/urls.py) — it has its own session login, not a Bearer token
 )
 
 # drf-spectacular's schema and Swagger views are AllowAny once past this middleware, so

@@ -16,7 +16,7 @@ Usage:
     --gstin 07AABCU9603R1ZX \\
     --admin-email admin@apollodelhi.in \\
     --tier starter \\
-    --settings=atomwalk.settings.development
+    --settings=core.settings.development
 """
 
 import secrets

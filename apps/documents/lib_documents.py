@@ -40,7 +40,7 @@ _UPLOAD_EXT = {"pdf", "jpg", "jpeg", "png"}
 _DECLARED_MIME = {"application/pdf", "image/jpeg", "image/png"}
 Status = MedicalDocument.Status
 # Two Celery queues, so one file never waits behind someone else's big upload: "instant" is for a single file,
-# "bulk" for several. Run one worker per queue (celery -A atomwalk worker -Q instant / -Q bulk).
+# "bulk" for several. Run one worker per queue (celery -A core worker -Q instant / -Q bulk).
 INSTANT_QUEUE = "instant"
 BULK_QUEUE = "bulk"
 MAX_SUBMIT = 100            # decisions in one submit call
