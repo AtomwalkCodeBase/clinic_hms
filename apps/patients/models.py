@@ -3,6 +3,10 @@ from django.db import models
 from core.utils.tokens import new_pad_token
 
 
+def get_patient_photo_path(instance, filename):
+    return f"patients/{instance.awpid}/photo/{filename}"
+
+
 class Patient(models.Model):
     GENDER_CHOICES = [("M", "Male"), ("F", "Female"), ("O", "Other")]
     BLOOD_GROUP_CHOICES = [(g, g) for g in ("A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-")]
@@ -21,7 +25,7 @@ class Patient(models.Model):
     preferred_language  = models.CharField(max_length=10, default="en")
 
     password      = models.CharField(max_length=128, blank=True)
-    photo         = models.ImageField(upload_to="patients/photos/", blank=True)
+    photo         = models.ImageField(upload_to=get_patient_photo_path, blank=True)
     is_active     = models.BooleanField(default=True)
     last_login    = models.DateTimeField(null=True, blank=True)
 
