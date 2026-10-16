@@ -43,7 +43,7 @@ class Migration(migrations.Migration):
                 ('blood_group', models.CharField(blank=True, choices=[('A+', 'A+'), ('A-', 'A-'), ('B+', 'B+'), ('B-', 'B-'), ('AB+', 'AB+'), ('AB-', 'AB-'), ('O+', 'O+'), ('O-', 'O-')], max_length=3)),
                 ('preferred_language', models.CharField(default='en', max_length=10)),
                 ('password', models.CharField(blank=True, max_length=128)),
-                ('photo', models.ImageField(blank=True, storage=core.storage.documents_storage, upload_to=apps.patients.models.get_patient_photo_path)),
+                ('photo', models.ImageField(blank=True, null=True, storage=core.storage.documents_storage, upload_to=apps.patients.models.get_patient_photo_path)),
                 ('is_active', models.BooleanField(default=True)),
                 ('last_login', models.DateTimeField(blank=True, null=True)),
                 ('emergency_contact_name', models.CharField(blank=True, max_length=100)),

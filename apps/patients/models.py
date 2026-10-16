@@ -30,7 +30,7 @@ class Patient(models.Model):
     preferred_language  = models.CharField(max_length=10, default="en")
 
     password      = models.CharField(max_length=128, blank=True)
-    photo         = models.ImageField(storage=documents_storage, upload_to=get_patient_photo_path, blank=True)
+    photo         = models.ImageField(upload_to=get_patient_photo_path, storage=documents_storage, blank=True, null=True)
     is_active     = models.BooleanField(default=True)
     last_login    = models.DateTimeField(null=True, blank=True)
 
