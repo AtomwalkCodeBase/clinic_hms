@@ -1,4 +1,4 @@
-from apps.facility.models import Branch, NextNumber
+from apps.hospital_setup.models import Branch, NextNumber
 from core.testing import HospitalDBTestCase, requires_hospital_db
 from core.utils.nntm import get_next_number
 

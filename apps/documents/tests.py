@@ -46,14 +46,14 @@ from apps.documents.views import (
 )
 from apps.documents.tasks import classify_document_task, extract_document_task
 from types import SimpleNamespace
-from apps.hospital_patients.models import HospitalPatient, Allergy
+from apps.opd.models import HospitalPatient, Allergy
 from apps.documents import lib_documents as extract
 from apps.lab.models import LabReport, LabRequest, LabTest
 from apps.lab.views import LabRequestAttachDocumentView
 from apps.opd.models import Appointment, OPDEncounter
 from apps.documents.lib_documents import sync_encounter_to_hie
-from apps.facility.models import Branch
-from apps.staff.models import StaffUser
+from apps.hospital_setup.models import Branch
+from apps.hospital_setup.models import StaffUser
 from apps.hospital_master.models import Hospital, HospitalParameters
 from decimal import Decimal
 from apps.documents import lib_documents as vitals
@@ -1620,8 +1620,8 @@ class PediatricStaffTests(HospitalDBTestCase):
     def setUp(self):
         super().setUp()
         from apps.opd.models import Appointment
-        from apps.facility.models import Branch
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.hospital_setup.models import Branch
+        from apps.opd.models import HospitalPatient
         from apps.hospital_master.models import Hospital
 
         db = self.hospital_alias
@@ -1818,7 +1818,7 @@ class PediatricStaffTests(HospitalDBTestCase):
         self.assertEqual(self.call(view, "get").data["data"]["gestational_age_weeks"], 38)
 
     def test_birth_history_changes_are_written_to_the_audit_log(self):
-        from apps.staff.models import AuditLog
+        from apps.hospital_setup.models import AuditLog
         view = ped_views.BirthHistoryView
         self.call(view, "post", data={"gestational_age_weeks": 38, "delivery_mode": "normal"})
         self.call(view, "patch", data={"gestational_age_weeks": 36, "notes": "late preterm"})
@@ -1828,7 +1828,7 @@ class PediatricStaffTests(HospitalDBTestCase):
         self.assertEqual(rows[1].patient_id, self.child.uuid)
 
     def test_the_audit_log_notes_when_another_hospitals_birth_history_is_replaced(self):
-        from apps.staff.models import AuditLog
+        from apps.hospital_setup.models import AuditLog
         BirthHistory.objects.using("default").create(patient=self.shared, gestational_age_weeks=40, source_hospital_id=self.hospital.id + 50)
         self.call(ped_views.BirthHistoryView, "patch", data={"gestational_age_weeks": 38})
         row = AuditLog.objects.using(self.hospital_alias).get(action="birth_history.update")

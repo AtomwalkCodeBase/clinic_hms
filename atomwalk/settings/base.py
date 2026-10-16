@@ -98,16 +98,12 @@ LOCAL_APPS = [
     "apps.documents",
     "apps.hospital_master",
     # apps whose tables live in each hospital's own database
-    "apps.staff",
-    "apps.facility",
-    "apps.hospital_patients",
+    "apps.hospital_setup",
     "apps.opd",
     "apps.ipd",
     "apps.lab",
     "apps.pharmacy",
     "apps.billing",
-    "apps.compliance",
-    "apps.notifications",
     # API-only apps (no tables)
     "apps.auth_app",
     "apps.platform_admin",
@@ -227,7 +223,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ── Custom User Model ────────────────────────────────────────────────────────
 # Using Django's built-in User for platform admin (Django admin panel).
-# Per-hospital staff use apps.staff.StaffUser, which extends AbstractUser separately.
+# Per-hospital staff use apps.hospital_setup.StaffUser, which extends AbstractUser separately.
 # AUTH_USER_MODEL is intentionally NOT overridden — StaffUser is a standalone model.
 
 # ── DRF ─────────────────────────────────────────────────────────────────────

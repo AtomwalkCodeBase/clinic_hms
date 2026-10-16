@@ -24,7 +24,7 @@ def log_action(request, db, action, resource_type="", resource_id="", patient_id
     (e.g. management commands can pass request=None).
     """
     try:
-        from apps.staff.models import AuditLog
+        from apps.hospital_setup.models import AuditLog
 
         actor_user_id = None
         actor_email = ""

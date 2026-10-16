@@ -53,8 +53,8 @@ from apps.documents.lib_documents import active_schedule, rules_for, schedule_us
 from apps.patients.models import Patient, PatientRelationship
 from apps.documents.lib_documents import growth_points
 from core.audit import log_action
-from apps.hospital_patients.serializers import BirthHistorySerializer
-from apps.hospital_patients.services import PatientService
+from apps.opd.patient_serializers import BirthHistorySerializer
+from apps.opd.patient_services import PatientService
 from apps.patients.services import accounts
 
 

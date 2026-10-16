@@ -65,7 +65,7 @@ class AppointmentSerializer(serializers.ModelSerializer):
 
     def _get_patient(self, obj):
         try:
-            from apps.hospital_patients.models import HospitalPatient
+            from apps.opd.models import HospitalPatient
             db = self.context.get("db") or (getattr(obj, "_state", None) and obj._state.db)
             if db:
                 return HospitalPatient.objects.using(db).filter(uuid=obj.patient_id).first()
@@ -205,7 +205,7 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
 
     def _patient(self, obj):
         try:
-            from apps.hospital_patients.models import HospitalPatient
+            from apps.opd.models import HospitalPatient
             db = getattr(obj._state, "db", None) or self.context.get("db")
             if db:
                 return HospitalPatient.objects.using(db).filter(uuid=obj.patient_id).first()

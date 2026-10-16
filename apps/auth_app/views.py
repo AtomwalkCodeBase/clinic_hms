@@ -28,7 +28,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from core.response import success, error
 from apps.hospital_master.models import Hospital, Subscription
 from apps.hospital_master.services import TIER_FEATURE_DEFAULTS
-from apps.staff.models import StaffUser
+from apps.hospital_setup.models import StaffUser
 from apps.patients.models import StaffMobileIndex
 
 logger = logging.getLogger(__name__)
@@ -153,7 +153,7 @@ class StaffLoginView(APIView):
         except Subscription.DoesNotExist:
             return error("Subscription not found.")
 
-        from apps.staff.rbac import resolve_acts_as
+        from apps.hospital_setup.rbac import resolve_acts_as
         payload = {
             "user_id":      staff.id,
             "email":        staff.email,

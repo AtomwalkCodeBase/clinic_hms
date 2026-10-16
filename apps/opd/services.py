@@ -28,7 +28,7 @@ def resolve_doctor_consultation_fee(db, doctor_user_id, appointment_type=None):
     fee resolvable at all.
     """
     import uuid as _uuid
-    from apps.staff.models import StaffUser
+    from apps.hospital_setup.models import StaffUser
     from apps.opd.models import Appointment
 
     raw = doctor_user_id.int if isinstance(doctor_user_id, _uuid.UUID) else doctor_user_id
@@ -57,7 +57,7 @@ def auto_generate_invoice(encounter, db, user, patient=None, hospital_id=None):
     """
     from decimal import Decimal
     from apps.billing.models import Invoice, InvoiceItem
-    from apps.hospital_patients.models import HospitalPatient
+    from apps.opd.models import HospitalPatient
     from apps.opd.models import Appointment
     from core.utils.nntm import get_next_number
 

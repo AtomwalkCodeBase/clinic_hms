@@ -46,7 +46,7 @@ class MockUser:
         # every Is*/doctor-listing check — [] for the 6 system roles (they
         # don't need it, .role already says everything) and non-empty only
         # for role="custom" staff, e.g. ["doctor", "nurse", "front_desk"].
-        # Set once at login time (see apps.staff.rbac.resolve_acts_as +
+        # Set once at login time (see apps.hospital_setup.rbac.resolve_acts_as +
         # StaffLoginView) and baked into the JWT rather than looked up per
         # request — same tradeoff as .role itself: a custom role's acts_as
         # changing takes effect on next login, not instantly, which matches
@@ -143,7 +143,7 @@ class JWTHospitalAuthentication(BaseAuthentication):
             # in progress. Checked fresh every request (one extra indexed
             # lookup on the hospital DB, same cost as the subscription check
             # above) so deactivation takes effect on the very next call.
-            from apps.staff.models import StaffUser
+            from apps.hospital_setup.models import StaffUser
             still_active = StaffUser.objects.using(user.db_name).filter(
                 pk=user.id
             ).values_list("is_active", flat=True).first()

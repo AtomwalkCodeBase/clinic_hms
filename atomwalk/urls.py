@@ -38,7 +38,7 @@ urlpatterns = [
     path("api/v1/platform/",     include("apps.platform_admin.urls")),
     path("api/v1/opd/",          include("apps.opd.urls")),
     path("api/v1/ipd/",          include("apps.ipd.urls")),  # Phase 1 — admission intake only
-    path("api/v1/patients/",     include("apps.hospital_patients.urls")),
+    path("api/v1/patients/",     include("apps.opd.patient_urls")),
     # portal/, emergency/, consult-pad/ and records-share/ (several of them deliberately public) are set up in apps/patients/urls.py;
     # records/, view-report/ (public) and the org/ schedule routes in apps/documents/urls.py
     path("api/v1/",              include("apps.patients.urls")),
@@ -53,13 +53,12 @@ urlpatterns = [
     path("api/v1/lab/",          include("apps.lab.urls")),
     path("api/v1/billing/",      include("apps.billing.urls")),
     path("api/v1/pharmacy/",     include("apps.pharmacy.urls")),
-    path("api/v1/org/",          include("apps.staff.urls")),
-    path("api/v1/org/",          include("apps.facility.urls")),
+    path("api/v1/org/",          include("apps.hospital_setup.urls")),
     # apps.tasks (Task/TaskAssignment) was retired (v7 table-count
     # redesign) — a complete, working API with zero frontend consumer
     # anywhere (confirmed by grep), so its URL route is gone too. See
     # apps/tasks/models.py for the full removal note.
-    path("api/v1/compliance/",   include("apps.compliance.urls")),
+    path("api/v1/compliance/",   include("apps.hospital_setup.compliance_urls")),
 ]
 
 # ── API docs (drf-spectacular) ──────────────────────────────────────────────

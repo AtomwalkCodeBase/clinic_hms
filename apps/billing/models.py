@@ -28,9 +28,9 @@ can cover every list_type uniformly.
 """
 
 from django.db import models
-from apps.staff.models import StaffUser
-from apps.facility.models import Branch
-from apps.hospital_patients.models import HospitalPatient
+from apps.hospital_setup.models import StaffUser
+from apps.hospital_setup.models import Branch
+from apps.opd.models import HospitalPatient
 
 
 class OptionList(models.Model):
@@ -50,8 +50,8 @@ class OptionList(models.Model):
     # and becomes hospital-configurable, same as everything else here —
     # see org.Room's own comment and org.views.RoomListCreateView/
     # RoomDetailView for where it's validated (value must match an active
-    # row here, checked with a local import to avoid apps.staff <-> apps.billing
-    # circularity, since apps.billing.models already imports from apps.staff).
+    # row here, checked with a local import to avoid apps.hospital_setup <-> apps.billing
+    # circularity, since apps.billing.models already imports from apps.hospital_setup).
     #
     # v8 unification: this catalog now ALSO carries what used to be the
     # separate "ward_type" list (General/Private/Semi-Private/ICU/HDU/

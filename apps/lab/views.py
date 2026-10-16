@@ -54,7 +54,7 @@ class LabCatalogView(APIView):
         return created(data=LabTestSerializer(test).data, message="Test added to catalog.")
 
     def _next_test_code(self, request, db):
-        from apps.facility.models import NextNumber, Branch
+        from apps.hospital_setup.models import NextNumber, Branch
 
         branch_id = getattr(request.user, "branch_id", None)
         if not branch_id:
@@ -199,7 +199,7 @@ class LabRequestListCreateView(APIView):
         except OPDEncounter.DoesNotExist:
             return not_found("Encounter not found.")
 
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
         try:
             patient = HospitalPatient.objects.using(db).get(uuid=enc.patient_id)
         except HospitalPatient.DoesNotExist:
@@ -221,7 +221,7 @@ class LabRequestListCreateView(APIView):
         # NULL branch (LabRequest.branch is required, so that would 500).
         branch_id = enc.appointment.branch_id or patient.branch_id
         if not branch_id:
-            from apps.facility.models import Branch
+            from apps.hospital_setup.models import Branch
             fallback_branch = Branch.objects.using(db).filter(is_active=True).order_by("id").first()
             branch_id = fallback_branch.id if fallback_branch else None
         if not branch_id:
@@ -246,7 +246,7 @@ class LabRequestListCreateView(APIView):
             # before this field existed.
             request_number = None
             try:
-                from apps.facility.models import NextNumber
+                from apps.hospital_setup.models import NextNumber
                 NextNumber.objects.using(db).get_or_create(
                     branch_id=branch_id, entity="lab_request",
                     defaults={"prefix": "LR-", "pad_length": 6, "last_number": 0},

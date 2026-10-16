@@ -28,7 +28,7 @@ def get_next_number(branch_id: int, entity: str, using: str = "default") -> tupl
     Args:
         branch_id: The branch this number belongs to. For 'employee_id',
                    which is a hospital-wide (not per-branch) sequence, pass 0
-                   — see apps.staff.services.next_employee_id.
+                   — see apps.hospital_setup.staff_services.next_employee_id.
         entity:    One of: 'uhid', 'invoice', 'lab_report', 'lab_test', 'lab_request', 'prescription', 'queue', 'employee_id', 'drug', 'admission'.
         using:     The database alias to use (hospital DB name).
 
@@ -41,7 +41,7 @@ def get_next_number(branch_id: int, entity: str, using: str = "default") -> tupl
         ValueError if entity is not a recognized type.
     """
     # Import here to avoid circular imports
-    from apps.facility.models import NextNumber
+    from apps.hospital_setup.models import NextNumber
 
     # 'drug' was missing here even though DrugCatalogView._next_drug_code()
     # (apps/prescriptions/views.py) has called get_next_number(entity="drug")
@@ -72,7 +72,7 @@ def get_next_number(branch_id: int, entity: str, using: str = "default") -> tupl
         # the prefix (first branch keeps its historical format).
         infix = ""
         if branch_id:
-            from apps.facility.models import Branch
+            from apps.hospital_setup.models import Branch
             first = Branch.objects.using(using).order_by("id").values_list("id", flat=True).first()
             if first is not None and branch_id != first:
                 infix = f"B{branch_id}-"

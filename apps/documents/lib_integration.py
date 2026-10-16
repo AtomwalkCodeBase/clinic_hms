@@ -2,7 +2,7 @@
 from apps.documents.lib_documents import document_text as doc_text
 from apps.hospital_master.models import Hospital
 from apps.patients.models import PatientRelationship
-from apps.hospital_patients.models import HospitalPatient
+from apps.opd.models import HospitalPatient
 
 MAX_AGE_DAYS = 6574
 

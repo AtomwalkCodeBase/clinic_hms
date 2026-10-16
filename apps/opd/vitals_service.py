@@ -11,7 +11,7 @@ from core.utils.age import age_years_months
 
 def record_vitals(appointment, db, hospital_id, user_id, data):
     """Store the vitals of this appointment. Returns (the visit's vitals, whether they are new)."""
-    from apps.hospital_patients.models import HospitalPatient
+    from apps.opd.models import HospitalPatient
 
     patient = HospitalPatient.objects.using(db).filter(uuid=appointment.patient_id).first()
     age = age_years_months(patient.date_of_birth) if patient else None

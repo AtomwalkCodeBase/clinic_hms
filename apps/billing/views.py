@@ -202,7 +202,7 @@ class InvoiceListCreateView(APIView):
         appointment_id = request.data.get("appointment_id")
         if appointment_id:
             from apps.opd.models import Appointment
-            from apps.hospital_patients.models import HospitalPatient
+            from apps.opd.models import HospitalPatient
             try:
                 appt = Appointment.objects.using(db).get(pk=appointment_id)
             except Appointment.DoesNotExist:
@@ -227,7 +227,7 @@ class InvoiceListCreateView(APIView):
         if not branch_id:
             branch_id = getattr(request.user, "branch_id", None)
         if not branch_id:
-            from apps.hospital_patients.models import HospitalPatient
+            from apps.opd.models import HospitalPatient
             branch_id = HospitalPatient.objects.using(db).filter(pk=patient_pk).values_list("branch_id", flat=True).first()
         if not branch_id:
             return error(
@@ -334,8 +334,8 @@ class InvoicePDFView(APIView):
 
     def get(self, request, pk):
         import base64
-        from apps.hospital_patients.models import HospitalPatient
-        from apps.facility.models import Branch
+        from apps.opd.models import HospitalPatient
+        from apps.hospital_setup.models import Branch
         from apps.hospital_master.models import Hospital
         from apps.billing.pdf import generate_invoice_pdf
 
@@ -412,8 +412,8 @@ class PaymentCreateView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
-        from apps.hospital_patients.models import HospitalPatient
-        from apps.staff.models import StaffUser
+        from apps.opd.models import HospitalPatient
+        from apps.hospital_setup.models import StaffUser
 
         db = request.hospital_db
         qs = Payment.objects.using(db).select_related("invoice").order_by("-paid_at")
@@ -583,7 +583,7 @@ class BillingSummaryView(APIView):
 
         if not patient_id and request.query_params.get("appointment_id"):
             from apps.opd.models import Appointment
-            from apps.hospital_patients.models import HospitalPatient
+            from apps.opd.models import HospitalPatient
             try:
                 appt = Appointment.objects.using(db).get(pk=request.query_params["appointment_id"])
                 patient_id = HospitalPatient.objects.using(db).get(uuid=appt.patient_id).id

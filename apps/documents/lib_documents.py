@@ -30,7 +30,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from datetime import date, datetime, time
 from django.utils import timezone
 from types import SimpleNamespace
-from apps.hospital_patients.models import HospitalPatient
+from apps.opd.models import HospitalPatient
 from core.response import error
 
 

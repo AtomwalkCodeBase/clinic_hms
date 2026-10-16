@@ -1,0 +1,771 @@
+"""
+apps/opd/patient_services.py
+--------------------------
+PatientService — all business logic for patient registration and HIE lookup.
+Views are thin wrappers; they call these methods and return the result.
+"""
+
+import logging
+from django.db import transaction
+from django.db.models import F, Q
+from django.utils import timezone
+
+from core.utils.hashing  import hash_mobile, normalize_mobile
+from core.utils.awpid    import generate_unique_awpid
+from core.utils.nntm     import get_next_number
+from apps.hospital_setup.models import Branch
+from apps.patients.models import Patient, PatientRelationship
+from apps.documents.models import ClinicalEvent, SharedAllergy, LabResult
+from apps.documents.lib_documents import history_readings
+from apps.documents.models import MedicalDocument
+from apps.opd.models import HospitalPatient
+
+logger = logging.getLogger(__name__)
+
+_GENDER_MAP = {"male": "M", "female": "F", "other": "O", "prefer_not_to_say": "O"}
+
+
+def _normalize_gender(gender_raw: str) -> str:
+    """Frontend sends verbose gender strings ('male'/'female'/...); model wants a single char."""
+    if not gender_raw:
+        return ""
+    return _GENDER_MAP.get(gender_raw.lower(), gender_raw[:1].upper())
+
+
+class PatientService:
+
+    @staticmethod
+    def attach_network_patient(mobile_raw: str, branch_id: int, db_name: str) -> HospitalPatient:
+        """Create this hospital's operational record for an existing Atomwalk identity.
+
+        The identity is never recreated: this only gives a cross-hospital
+        patient a hospital-local UHID, which the hospital-scoped OPD/IPD models
+        require. It is intentionally a visit attachment, not a second patient
+        registration or a registration-fee event.
+        """
+        mobile_norm = normalize_mobile(mobile_raw)
+        identity = Patient.objects.using("default").filter(
+            mobile_hash=hash_mobile(mobile_norm)
+        ).first()
+        if not identity:
+            raise ValueError("No Atomwalk patient was found for this mobile number.")
+        existing = HospitalPatient.objects.using(db_name).filter(awpid=identity.awpid).first()
+        if existing:
+            return existing
+        try:
+            branch = Branch.objects.get(pk=branch_id, is_active=True)
+        except Branch.DoesNotExist:
+            raise ValueError("Select an active branch before booking this patient.")
+        uhid, _ = get_next_number(branch_id=branch.id, entity="uhid", using=db_name)
+        return HospitalPatient.objects.using(db_name).create(
+            awpid=identity.awpid, uhid=uhid, branch=branch,
+            full_name=identity.full_name, date_of_birth=identity.date_of_birth,
+            gender=_normalize_gender(identity.gender), blood_group=identity.blood_group,
+            mobile=mobile_raw, email=identity.email,
+            preferred_language=identity.preferred_language,
+        )
+
+    # ── Registration ──────────────────────────────────────────────────────
+    @staticmethod
+    def register(data: dict, hospital_id: int, db_name: str, request=None) -> HospitalPatient:
+        """
+        Register a patient at a branch.
+
+        `request` is optional and only used to attach an IP/user-agent to
+        the ConsentRecord proof rows written below (see
+        apps.hospital_setup.compliance_services.record_consent) — registration itself
+        works fine without it, same graceful-degradation as core.audit.log_action.
+
+        Two identity-resolution paths:
+
+          Adults (has their own mobile) — unchanged: normalize + hash the
+          mobile, look up/create a Patient by mobile_hash.
+
+          Dependents (data["is_dependent"] — a child, or anyone with no
+          mobile of their own) — identity is never tied to a mobile number
+          at all. Dedup key is instead (guardian_awpid, full_name,
+          date_of_birth) via PatientRelationship, so the same child
+          registered at a second hospital under the same guardian reuses
+          their existing AWPID instead of getting a disconnected duplicate.
+          A patient record must be able to exist independently of whether
+          that person has a login/mobile — a dependent is a patient because
+          they receive care, not because they can be reached directly.
+
+        Raises:
+          ValueError — if branch not found, guardian not found, or patient
+          already registered at this branch.
+        """
+        branch_id = data["branch_id"]
+        try:
+            branch = Branch.objects.get(pk=branch_id, is_active=True)
+        except Branch.DoesNotExist:
+            raise ValueError(f"Branch {branch_id} not found.")
+
+        is_dependent = bool(data.get("is_dependent"))
+        mobile_raw = ""
+
+        if is_dependent:
+            guardian_awpid = (data.get("guardian_awpid") or "").strip()
+            guardian_mobile_raw = data.get("guardian_mobile", "")
+
+            if guardian_awpid:
+                guardian_identity = Patient.objects.using("default").filter(awpid=guardian_awpid).first()
+                if not guardian_identity:
+                    raise ValueError("Guardian not found — the guardian must be registered first.")
+            elif guardian_mobile_raw:
+                # Emergency quick-register path: front desk doesn't have an
+                # existing guardian AWPID to pick from (e.g. "the patient is
+                # my mom" from a cold call) — resolve/create the caller's
+                # network identity from their mobile number alone, same
+                # dedup-by-mobile_hash rule used for any adult patient. This
+                # only touches the shared atomwalk identity table, not any
+                # hospital's hospital Patient table, so the caller isn't
+                # registered as a patient here just by being a guardian.
+                guardian_mobile_norm = normalize_mobile(guardian_mobile_raw)
+                guardian_mobile_hash = hash_mobile(guardian_mobile_norm)
+                with transaction.atomic(using="default"):
+                    guardian_identity, _ = Patient.objects.using("default").get_or_create(
+                        mobile_hash=guardian_mobile_hash,
+                        defaults={
+                            "awpid": generate_unique_awpid(),
+                            "full_name": data.get("guardian_name", "") or "Guardian",
+                            "preferred_language": data.get("preferred_language", "en"),
+                        },
+                    )
+                guardian_awpid = guardian_identity.awpid
+            else:
+                raise ValueError("A guardian must be selected to register a dependent patient.")
+
+            identity, created = PatientService.resolve_dependent_identity(
+                guardian_awpid=guardian_awpid,
+                guardian_mobile_hash=guardian_identity.mobile_hash,
+                full_name=data["full_name"],
+                date_of_birth=data.get("date_of_birth"),
+                gender=data.get("gender", ""),
+                relationship=data.get("relationship", "other"),
+                email=data.get("email", ""),
+                blood_group=data.get("blood_group", ""),
+                preferred_language=data.get("preferred_language", "en"),
+            )
+        else:
+            mobile_raw  = data.get("mobile", "")
+            mobile_norm = normalize_mobile(mobile_raw)
+            mobile_hash = hash_mobile(mobile_norm)
+
+            # ── Find or create Patient in Atomwalk DB ─────────────
+            with transaction.atomic(using="default"):
+                identity, created = Patient.objects.using("default").get_or_create(
+                    mobile_hash=mobile_hash,
+                    defaults={
+                        "awpid":              generate_unique_awpid(),
+                        "full_name":          data["full_name"],
+                        "date_of_birth":      data.get("date_of_birth"),
+                        "gender":             data.get("gender", ""),
+                        "email":              data.get("email", ""),
+                        "blood_group":        data.get("blood_group", ""),
+                        "preferred_language": data.get("preferred_language", "en"),
+                    },
+                )
+
+        # ── Check if patient already registered at this hospital ──────────
+        # Hospital-wide, not just this branch — a patient who visited Branch A
+        # last month and walks into Branch B today is still the same person at
+        # the same hospital and must reuse their one UHID, not get a second.
+        existing = HospitalPatient.objects.using(db_name).filter(awpid=identity.awpid).first()
+        if existing:
+            raise ValueError(
+                f"Patient already registered at this hospital — UHID {existing.uhid}"
+                f"{f' ({existing.branch.name})' if existing.branch else ''}. Use their existing record."
+            )
+
+        # ── Generate UHID ─────────────────────────────────────────────────
+        uhid, _ = get_next_number(branch_id=branch.id, entity="uhid", using=db_name)
+
+        # ── Normalise gender from frontend verbose → model single char ────────
+        gender = _normalize_gender(data.get("gender", ""))
+
+        # ── Create hospital Patient ─────────────────────────────────────────────
+        patient = HospitalPatient.objects.using(db_name).create(
+            awpid=identity.awpid,
+            uhid=uhid,
+            branch=branch,
+            # Personal
+            full_name=data["full_name"],
+            date_of_birth=data.get("date_of_birth"),
+            gender=gender,
+            blood_group=data.get("blood_group", ""),
+            marital_status=data.get("marital_status", ""),
+            nationality=data.get("nationality", "Indian"),
+            occupation=data.get("occupation", ""),
+            # Contact
+            mobile=mobile_raw,
+            alternate_mobile=data.get("alternate_mobile", ""),
+            email=data.get("email", ""),
+            address_line1=data.get("address_line1", ""),
+            city=data.get("city", ""),
+            state=data.get("state", ""),
+            pincode=data.get("pincode", ""),
+            # Emergency — frontend sends emergency_name / emergency_phone
+            emergency_contact_name=data.get("emergency_name", "") or data.get("emergency_contact_name", ""),
+            emergency_contact_phone=data.get("emergency_phone", "") or data.get("emergency_contact_phone", ""),
+            emergency_contact_relation=data.get("emergency_relation", ""),
+            # Insurance
+            payer_type=data.get("payer_type", "self"),
+            insurance_provider=data.get("insurance_provider", ""),
+            policy_number=data.get("policy_number", ""),
+            tpa_name=data.get("tpa_name", ""),
+            # Dependent / guardian (plain per-hospital copy for display here)
+            is_dependent=is_dependent,
+            guardian_name=data.get("guardian_name", "") if is_dependent else "",
+            guardian_mobile=data.get("guardian_mobile", "") if is_dependent else "",
+            # Consent
+            dpdp_consent_captured=bool(data.get("dpdp_consent", False)),
+            dpdp_consent_at=timezone.now() if data.get("dpdp_consent") else None,
+            hie_consent_given=bool(data.get("hie_consent", False)),
+            hie_consent_at=timezone.now() if data.get("hie_consent") else None,
+            preferred_language=data.get("preferred_language", "en"),
+        )
+
+        logger.info(
+            "Patient registered: awpid=%s uhid=%s branch=%s (new_identity=%s, dependent=%s)",
+            identity.awpid, uhid, branch.name, created, is_dependent,
+        )
+
+        # ── Consent proof trail (HMS-07c / DPDP) ────────────────────────────
+        # The booleans above are the fast "is this patient consented" check
+        # used at request time; these rows are the durable, append-only
+        # proof behind them — see apps.hospital_setup.compliance_services.record_consent.
+        from apps.hospital_setup.compliance_services import record_consent
+        from apps.hospital_setup.models import ConsentRecord
+        recorded_by = getattr(request, "user", None) if request is not None else None
+        if data.get("dpdp_consent"):
+            record_consent(
+                db_name, patient, ConsentRecord.CONSENT_DPDP_PROCESSING,
+                ConsentRecord.SOURCE_FRONT_DESK, request=request, recorded_by=recorded_by,
+            )
+        if data.get("hie_consent"):
+            record_consent(
+                db_name, patient, ConsentRecord.CONSENT_HIE_SHARING,
+                ConsentRecord.SOURCE_FRONT_DESK, request=request, recorded_by=recorded_by,
+            )
+
+        return patient
+
+    # ── Emergency / unidentified registration ───────────────────────────
+    # See docs/PENDING_IMPROVEMENTS.md item 1. Separate from register()
+    # above rather than another conditional branch inside it: this path
+    # skips identity resolution by mobile/guardian entirely (there may be
+    # neither), mints a brand-new provisional network identity every time
+    # (nothing to dedupe an unidentified patient against yet — that's what
+    # the identity-merge step, #2 in the same backlog item, is for once a
+    # real identity becomes known), and defers consent with a logged reason
+    # instead of requiring it.
+    @staticmethod
+    def register_emergency(data: dict, db_name: str, request=None) -> HospitalPatient:
+        """
+        Register an emergency/unidentified patient — no mobile, no
+        guardian, minimal identity. Raises ValueError if the branch is not
+        found. Unlike register(), there is no "already registered" check
+        (a genuinely unidentified patient can't be deduped against
+        anything) and no dpdp/hie consent is captured — see
+        consent_deferred_reason.
+        """
+        branch_id = data["branch_id"]
+        try:
+            branch = Branch.objects.get(pk=branch_id, is_active=True)
+        except Branch.DoesNotExist:
+            raise ValueError(f"Branch {branch_id} not found.")
+
+        placeholder_label = (data.get("placeholder_label") or "").strip()
+        full_name = (data.get("full_name") or "").strip() or placeholder_label
+        if not full_name:
+            raise ValueError("Either a name or a placeholder label is required.")
+
+        with transaction.atomic(using="default"):
+            identity = Patient.objects.using("default").create(
+                awpid=generate_unique_awpid(),
+                full_name=full_name,
+                date_of_birth=data.get("date_of_birth"),
+                gender=_normalize_gender(data.get("gender", "")),
+                mobile_hash=None,
+                is_dependent=False,
+                preferred_language=data.get("preferred_language", "en"),
+            )
+
+        uhid, _ = get_next_number(branch_id=branch.id, entity="uhid", using=db_name)
+
+        consent_deferred_reason = (
+            data.get("consent_deferred_reason", "").strip()
+            or "DPDP/HIE consent deferred — patient unable to consent and no "
+               "guardian present at registration (emergency-treatment doctrine)."
+        )
+
+        patient = HospitalPatient.objects.using(db_name).create(
+            awpid=identity.awpid,
+            uhid=uhid,
+            branch=branch,
+            full_name=full_name,
+            date_of_birth=data.get("date_of_birth"),
+            gender=_normalize_gender(data.get("gender", "")),
+            mobile=data.get("mobile", ""),
+            guardian_name=data.get("guardian_name", ""),
+            guardian_mobile=data.get("guardian_mobile", ""),
+            identity_status=HospitalPatient.IDENTITY_PROVISIONAL,
+            is_mlc=bool(data.get("is_mlc", False)),
+            arrival_channel=data.get("arrival_channel", ""),
+            placeholder_label=placeholder_label,
+            consent_deferred_reason=consent_deferred_reason,
+            # Deliberately NOT captured — see consent_deferred_reason above.
+            dpdp_consent_captured=False,
+            hie_consent_given=False,
+            preferred_language=data.get("preferred_language", "en"),
+        )
+
+        logger.info(
+            "Emergency patient registered: awpid=%s uhid=%s branch=%s is_mlc=%s",
+            identity.awpid, uhid, branch.name, patient.is_mlc,
+        )
+
+        # Consent is deliberately NOT recorded as granted here (unlike
+        # register() above) — the whole point of this path is that it
+        # wasn't captured. The deferral itself is on the Patient row
+        # (consent_deferred_reason) and in the audit log the calling view
+        # writes, which together are the durable proof of why it's absent.
+
+        return patient
+
+    # ── Dependents / family members ─────────────────────────────────────
+    # Shared by front-desk registration (register(), above) and the patient
+    # portal's self-service "Family Members" section — one identity-
+    # resolution path so a dependent added either way dedupes the same way.
+    @staticmethod
+    def resolve_dependent_identity(guardian_awpid: str, guardian_mobile_hash, full_name: str,
+                                    date_of_birth, gender: str = "", relationship: str = "other",
+                                    email: str = "", blood_group: str = "",
+                                    preferred_language: str = "en"):
+        """
+        Find-or-create a dependent's Patient under a guardian.
+
+        Dedup key: (guardian_awpid, full_name, date_of_birth) — not a mobile
+        number, since a dependent may never have one. Reuses an existing
+        dependent's AWPID if the same guardian already has one by that name
+        and DOB (registered here, at another hospital, or via the portal),
+        so the same child never ends up with two disconnected records.
+
+        Also relinks a PREVIOUSLY linked dependent who was removed and is
+        now being re-added: remove_family_member() deliberately hard-deletes
+        only the PatientRelationship join row (see its own docstring — the
+        identity must stay resolvable for existing history), which means a
+        plain "currently linked?" lookup can no longer find them, and would
+        otherwise mint a brand-new AWPID here — silently orphaning that
+        person's prior appointment/prescription/lab/document history under
+        the old, now-permanently-disconnected identity. guardian_mobile_hash
+        lives on Patient itself (set once at creation, untouched by
+        removal) precisely so this guardian's dependents can still be found
+        by mobile after a relationship row is gone — reused here as the
+        fallback dedup key, scoped to this guardian's own mobile hash so it
+        can never match a different guardian's family member.
+
+        Returns (identity, created).
+        """
+        with transaction.atomic(using="default"):
+            existing_rel_awpids = list(
+                PatientRelationship.objects.using("default")
+                .filter(guardian__awpid=guardian_awpid)
+                .values_list("dependent__awpid", flat=True)
+            )
+            identity = None
+            if existing_rel_awpids:
+                identity = Patient.objects.using("default").filter(
+                    awpid__in=existing_rel_awpids,
+                    full_name__iexact=full_name,
+                    date_of_birth=date_of_birth,
+                ).first()
+
+            if identity is None and guardian_mobile_hash:
+                identity = Patient.objects.using("default").filter(
+                    guardian_mobile_hash=guardian_mobile_hash,
+                    full_name__iexact=full_name,
+                    date_of_birth=date_of_birth,
+                    is_dependent=True,
+                ).exclude(awpid__in=existing_rel_awpids).first()
+
+            created = identity is None
+            if identity is None:
+                identity = Patient.objects.using("default").create(
+                    awpid=generate_unique_awpid(),
+                    full_name=full_name,
+                    date_of_birth=date_of_birth,
+                    gender=_normalize_gender(gender),
+                    mobile_hash=None,
+                    guardian_mobile_hash=guardian_mobile_hash or "",
+                    is_dependent=True,
+                    email=email,
+                    blood_group=blood_group,
+                    preferred_language=preferred_language,
+                )
+            # Covers all three paths above uniformly: brand-new identity (no
+            # relationship exists yet), still-linked identity (already
+            # exists, so this is a harmless no-op), and a relinked-after-
+            # removal identity (the row was deleted and needs recreating).
+            PatientRelationship.objects.using("default").get_or_create(
+                dependent=identity, guardian=Patient.objects.using("default").get(awpid=guardian_awpid),
+                defaults={"relationship": relationship},
+            )
+        return identity, created
+
+    @staticmethod
+    def list_family_members(guardian_awpid: str, db_name: str | None = None) -> list:
+        """
+        Every dependent linked to a guardian AWPID. If db_name is given,
+        each entry also says whether that dependent has a local Patient row
+        at that hospital yet (used by front-desk lookup); portal callers
+        that just need the family list can omit db_name.
+        """
+        from apps.opd.models import HospitalPatient as _Patient  # local import avoids a cycle at module load
+
+        members = []
+        rels = PatientRelationship.objects.using("default").filter(guardian__awpid=guardian_awpid).select_related("dependent")
+        for rel in rels:
+            dep = rel.dependent
+            if not dep:
+                continue
+            entry = {
+                "awpid": dep.awpid,
+                "full_name": dep.full_name,
+                "date_of_birth": dep.date_of_birth,
+                "gender": dep.gender,
+                "relationship": rel.relationship,
+            }
+            if db_name:
+                dep_local = _Patient.objects.using(db_name).filter(awpid=dep.awpid).first()
+                entry["already_registered_here"] = bool(dep_local)
+                entry["existing_uhid"] = dep_local.uhid if dep_local else None
+            members.append(entry)
+        return members
+
+    @staticmethod
+    def add_family_member(guardian_awpid: str, guardian_mobile_hash: str, data: dict) -> dict:
+        """
+        Portal self-service equivalent of the dependent path in register() —
+        adds a family member under the logged-in account without needing a
+        hospital branch (identity only; a local Patient row gets created the
+        first time that family member is actually booked somewhere, same as
+        the account owner's own first booking).
+        """
+        if not data.get("full_name", "").strip():
+            raise ValueError("Full name is required.")
+        if not data.get("date_of_birth"):
+            raise ValueError("Date of birth is required to identify a family member across hospitals.")
+
+        identity, created = PatientService.resolve_dependent_identity(
+            guardian_awpid=guardian_awpid,
+            guardian_mobile_hash=guardian_mobile_hash or "",
+            full_name=data["full_name"],
+            date_of_birth=data.get("date_of_birth"),
+            gender=data.get("gender", ""),
+            relationship=data.get("relationship", "other"),
+        )
+        PatientRelationship.objects.using("default").filter(
+            dependent=identity, guardian__awpid=guardian_awpid,
+        ).update(relationship=data.get("relationship", "other"))
+        return {
+            "awpid": identity.awpid,
+            "full_name": identity.full_name,
+            "date_of_birth": identity.date_of_birth,
+            "gender": identity.gender,
+            "relationship": data.get("relationship", "other"),
+            "created": created,
+        }
+
+    @staticmethod
+    def update_family_member(guardian_awpid: str, dependent_awpid: str, data: dict) -> dict:
+        """
+        Portal self-service edit — a guardian correcting a typo'd name/DOB or
+        updating gender/relationship on a dependent they already added.
+        Scoped to a PatientRelationship actually linking this guardian to
+        this dependent, so one account can never edit another's family
+        member by guessing an AWPID. Only touches fields actually present in
+        `data` — a partial patch, not a full overwrite.
+        """
+        rel = PatientRelationship.objects.using("default").filter(
+            guardian__awpid=guardian_awpid, dependent__awpid=dependent_awpid,
+        ).first()
+        if not rel:
+            raise ValueError("Family member not found.")
+
+        identity = Patient.objects.using("default").filter(awpid=dependent_awpid).first()
+        if not identity:
+            raise ValueError("Family member not found.")
+
+        if "full_name" in data:
+            full_name = (data.get("full_name") or "").strip()
+            if not full_name:
+                raise ValueError("Full name is required.")
+            identity.full_name = full_name
+        if "date_of_birth" in data:
+            if not data.get("date_of_birth"):
+                raise ValueError("Date of birth is required to identify a family member across hospitals.")
+            identity.date_of_birth = data["date_of_birth"]
+        if "gender" in data:
+            identity.gender = _normalize_gender(data.get("gender", ""))
+        identity.save(using="default")
+
+        if "relationship" in data:
+            rel.relationship = data.get("relationship", "other")
+            rel.save(using="default", update_fields=["relationship"])
+
+        return {
+            "awpid": identity.awpid,
+            "full_name": identity.full_name,
+            "date_of_birth": identity.date_of_birth,
+            "gender": identity.gender,
+            "relationship": rel.relationship,
+        }
+
+    @staticmethod
+    def remove_family_member(guardian_awpid: str, dependent_awpid: str) -> None:
+        """
+        Unlinks a dependent from this guardian's family list. Deliberately
+        only deletes the PatientRelationship row, never the underlying
+        Patient — that identity may already carry real appointment/
+        prescription/lab history at one or more hospitals (via patient_awpid
+        on those rows), and those records must stay resolvable even after
+        the guardian removes the family-list entry. This mirrors how
+        cancelling a booking never deletes the Appointment row either.
+        """
+        rel = PatientRelationship.objects.using("default").filter(
+            guardian__awpid=guardian_awpid, dependent__awpid=dependent_awpid,
+        ).first()
+        if not rel:
+            raise ValueError("Family member not found.")
+        rel.delete(using="default")
+
+    # ── Family tree ──────────────────────────────────────────────────────
+    @staticmethod
+    def get_family_tree(awpid: str, db_name: str) -> dict:
+        """
+        Given any one person's AWPID (guardian or dependent), resolve the
+        whole household so front desk can search for one family member and
+        book an appointment for any of them without a second search.
+
+        A person can be found either as:
+          - a guardian (has PatientRelationship rows where they're
+            guardian_awpid) — their household is themself + every dependent
+            registered under them; or
+          - a dependent (has a PatientRelationship row where they're
+            dependent_awpid) — their household is their guardian plus every
+            other dependent under that same guardian (i.e. siblings).
+
+        Returns {"guardian_awpid": str|None, "members": [...]}. Each member
+        dict has full_name/date_of_birth/gender/relationship/awpid plus
+        (when db_name is given) already_registered_here/existing_uhid,
+        same shape as list_family_members(). The member matching the
+        requested awpid is flagged is_self=True. Returns
+        {"guardian_awpid": None, "members": []} if this person has no
+        family relationships on file at all (an only-adult patient with no
+        dependents) — not an error, just nothing to show.
+        """
+        from apps.opd.models import HospitalPatient as _Patient
+
+        # Is this person a guardian? (has dependents registered under them)
+        is_guardian = PatientRelationship.objects.using("default").filter(
+            guardian__awpid=awpid
+        ).exists()
+
+        if is_guardian:
+            guardian_awpid = awpid
+        else:
+            # Is this person a dependent? Find who their guardian is.
+            rel = PatientRelationship.objects.using("default").filter(
+                dependent__awpid=awpid
+            ).first()
+            guardian_awpid = rel.guardian.awpid if rel else None
+
+        if not guardian_awpid:
+            return {"guardian_awpid": None, "members": []}
+
+        members = PatientService.list_family_members(guardian_awpid, db_name=db_name)
+
+        # The guardian themself isn't a "dependent" so list_family_members()
+        # (which only walks PatientRelationship rows) doesn't include them —
+        # add them in explicitly as the household head.
+        guardian_identity = Patient.objects.using("default").filter(
+            awpid=guardian_awpid
+        ).first()
+        if guardian_identity:
+            entry = {
+                "awpid": guardian_identity.awpid,
+                "full_name": guardian_identity.full_name,
+                "date_of_birth": guardian_identity.date_of_birth,
+                "gender": guardian_identity.gender,
+                "relationship": "self" if guardian_awpid == awpid else "guardian",
+            }
+            if db_name:
+                local = _Patient.objects.using(db_name).filter(awpid=guardian_awpid).first()
+                entry["already_registered_here"] = bool(local)
+                entry["existing_uhid"] = local.uhid if local else None
+            members.insert(0, entry)
+
+        for m in members:
+            m["is_self"] = (m["awpid"] == awpid)
+
+        return {"guardian_awpid": guardian_awpid, "members": members}
+
+    # ── Duplicate check ──────────────────────────────────────────────────
+    @staticmethod
+    def lookup_by_mobile(mobile_raw: str, db_name: str) -> dict:
+        """
+        Called as front desk types a mobile number during registration, so
+        the same real person never ends up with two disconnected identities
+        (one hospital's Patient row unaware of another's) just because two
+        different hospitals each typed them in fresh. Checks:
+          1. Does a Patient already exist for this mobile (i.e. has
+             this person been registered — here or at any other hospital —
+             before)?
+          2. If so, does THIS hospital's hospital DB already have a Patient
+             row for that AWPID (i.e. don't just dedupe globally, dedupe
+             locally too — no point creating a second local record)?
+          3. Does this person have any dependents (children, etc.) already
+             registered under them anywhere in the network? Returned as
+             family_members so front desk can pick an existing dependent
+             instead of re-typing (and re-guessing) their details, or add a
+             new one — the "Associated Family Members" screen.
+        Never reveals which other hospital a patient has visited — only
+        that they exist in the network at all.
+        """
+        mobile_norm = normalize_mobile(mobile_raw)
+        mobile_hash = hash_mobile(mobile_norm)
+
+        identity = Patient.objects.using("default").filter(mobile_hash=mobile_hash).first()
+        if not identity:
+            return {"exists_in_network": False, "already_registered_here": False}
+
+        local = HospitalPatient.objects.using(db_name).filter(awpid=identity.awpid).first()
+        family_members = PatientService.list_family_members(identity.awpid, db_name=db_name)
+
+        return {
+            "exists_in_network": True,
+            "awpid": identity.awpid,
+            "full_name": identity.full_name,
+            "date_of_birth": identity.date_of_birth,
+            "gender": identity.gender,
+            "already_registered_here": bool(local),
+            "existing_patient_id": local.id if local else None,
+            "existing_uhid": local.uhid if local else None,
+            "existing_branch_name": local.branch.name if local and local.branch else None,
+            "family_members": family_members,
+        }
+
+    # ── Search ────────────────────────────────────────────────────────────
+    @staticmethod
+    def search(query: str, branch_id: int | None, db_name: str):
+        """
+        Search patients by UHID, AWPID, name, or mobile (prefix match).
+        Returns a queryset.
+
+        An empty query is "browse mode" — the most recently registered
+        patients at this hospital, so front desk can scan a short list
+        instead of being forced to type an exact match first.
+
+        A multi-word query (e.g. "rohan john varghese") requires each word
+        to match somewhere (name/UHID/AWPID/mobile) rather than the whole
+        phrase matching literally in one field — a plain
+        full_name__icontains=query on the combined string used to miss
+        anyone typed with a middle name skipped, reordered, or with extra
+        whitespace, even though the patient record itself was correct.
+        """
+        qs = HospitalPatient.objects.using(db_name).select_related("branch")
+        if branch_id:
+            qs = qs.filter(branch_id=branch_id)
+
+        query = (query or "").strip()
+        if not query:
+            return qs.order_by("-registered_at")
+
+        combined = Q()
+        for word in query.split():
+            combined &= (
+                Q(full_name__icontains=word)
+                | Q(uhid__icontains=word)
+                | Q(awpid__icontains=word)
+                | Q(mobile__startswith=word)
+                # Dependents (children etc.) often get searched for by the
+                # parent/guardian's name instead of their own — front desk
+                # remembers "Ramesh's daughter", not the child's UHID.
+                | Q(guardian_name__icontains=word)
+            )
+        return qs.filter(combined).distinct().order_by("full_name")
+
+    # ── Cross-hospital HIE history ──────────────────────────────────────────
+    @staticmethod
+    def get_shared_history(awpid: str) -> dict:
+        """
+        Fetch all shared clinical records for a patient from the Atomwalk DB.
+        source_hospital_id is EXCLUDED from all results.
+        """
+        diagnoses = list(
+            ClinicalEvent.objects.using("default")
+            .filter(patient__awpid=awpid, event_type="DIAGNOSIS", is_rejected=False)
+            .order_by("-created_at")
+            .values("clinical_status", "created_at", icd10_code=F("icd10"), description=F("condition_text"), onset_date=F("event_date"))
+        )
+
+        vitals = history_readings(awpid, 20)  # last 20 vital records
+
+        allergies = list(
+            SharedAllergy.objects.using("default")
+            .filter(patient__awpid=awpid, is_active=True)
+            .values("substance", "reaction", "severity", "is_active", "recorded_at")
+        )
+
+        lab_results = list(
+            LabResult.objects.using("default")
+            .filter(patient__awpid=awpid, delivered_at__isnull=False)
+            .values("id", "test_name", "result_summary", "delivered_at", "document_id")
+            .order_by("-delivered_at")[:20]
+        )
+        for r in lab_results:
+            r["has_file"] = bool(r.pop("document_id", None))
+
+        prescriptions = []
+        for rx in (
+            MedicalDocument.objects.using("default")
+            .filter(patient__awpid=awpid, source_type=MedicalDocument.Source.ENCOUNTER)
+            .prefetch_related("drug_items")
+            .order_by("-document_date")[:10]
+        ):
+            prescriptions.append({
+                "prescribed_on": rx.document_date,
+                "items": list(rx.drug_items.values(
+                    "drug_name", "dose", "unit", "frequency", "route", "duration_days"
+                )),
+            })
+
+        # Lightweight only — no file_data here, so this history payload stays
+        # small. Full content is fetched separately (by id) only when a
+        # doctor actually opens a document.
+        # A patient's own upload that is still waiting for them to confirm its
+        # type is not theirs to share yet: it must not reach another hospital
+        # over the HIE until the patient has confirmed it (the same rule My
+        # Documents applies).
+        from apps.documents.lib_documents import awaiting_review_q
+        documents = list(
+            MedicalDocument.objects.using("default")
+            .filter(patient__awpid=awpid)
+            .exclude(awaiting_review_q())
+            .filter(status="completed")
+            .values("id", "file_name", "mime_type", "uploaded_by", "created_at",
+                    title=F("file_name"), doc_type=F("document_type"))
+            .order_by("-created_at")[:50]
+        )
+
+        return {
+            "awpid":        awpid,
+            "diagnoses":    diagnoses,
+            "vitals":       vitals,
+            "allergies":    allergies,
+            "lab_results":  lab_results,
+            "prescriptions":prescriptions,
+            "documents":    documents,
+        }

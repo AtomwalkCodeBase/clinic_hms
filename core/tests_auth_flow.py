@@ -14,8 +14,8 @@ from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.auth_app.views import LogoutView, TokenRefreshView, _make_tokens
-from apps.facility.models import Branch
-from apps.staff.models import StaffUser
+from apps.hospital_setup.models import Branch
+from apps.hospital_setup.models import StaffUser
 from apps.patients.models import BlacklistedToken
 from apps.hospital_master.models import Subscription, Hospital
 from core.authentication import JWTHospitalAuthentication

@@ -15,8 +15,8 @@ reliable way for a serializer to know which hospital DB to check against.
 from rest_framework import serializers
 
 from apps.billing.models import OptionList
-from apps.facility.models import Department, Bed
-from apps.hospital_patients.models import HospitalPatient
+from apps.hospital_setup.models import Department, Bed
+from apps.opd.models import HospitalPatient
 from apps.ipd.models import AdmissionReferral, Admission, AdmissionDeposit, PatientMovement
 
 

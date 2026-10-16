@@ -44,7 +44,7 @@ from django.utils import timezone
 
 from apps.hospital_master.models import Hospital
 from apps.hospital_master.services import ensure_hospital_db
-from apps.staff.models import StaffUser
+from apps.hospital_setup.models import StaffUser
 
 ROLE_PREFIX = {
     "doctor":         "DOC",

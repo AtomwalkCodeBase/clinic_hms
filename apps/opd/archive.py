@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 def store_prescription_document(rx, db, hospital_id):
     from apps.opd.models import OPDEncounter, Appointment, PrescriptionItem
     from apps.opd.pdf import generate_prescription_pdf
-    from apps.staff.models import StaffUser
-    from apps.facility.models import Branch
+    from apps.hospital_setup.models import StaffUser
+    from apps.hospital_setup.models import Branch
     from apps.hospital_master.models import Hospital
-    from apps.hospital_patients.models import HospitalPatient
+    from apps.opd.models import HospitalPatient
     from apps.documents.models import MedicalDocument
     from apps.documents.lib_documents import create_issued_document
     from core import storage as blob_storage

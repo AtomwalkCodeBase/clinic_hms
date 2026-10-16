@@ -15,9 +15,9 @@ from core.testing import HospitalDBTestCase, HospitalDBTransactionTestCase, requ
 
 from apps.billing.models import Invoice, Payment
 from apps.billing.views import PaymentCreateView
-from apps.facility.models import Branch
-from apps.staff.models import StaffUser
-from apps.hospital_patients.models import HospitalPatient
+from apps.hospital_setup.models import Branch
+from apps.hospital_setup.models import StaffUser
+from apps.opd.models import HospitalPatient
 
 
 @requires_hospital_db

@@ -20,9 +20,9 @@ _MIMES = ("application/pdf", "image/jpeg", "image/png")
 
 def store_lab_report_document(report, db, hospital_id):
     from apps.lab.models import LabRequest, LabTest, LabReportItem
-    from apps.facility.models import Branch
+    from apps.hospital_setup.models import Branch
     from apps.hospital_master.models import Hospital
-    from apps.hospital_patients.models import HospitalPatient
+    from apps.opd.models import HospitalPatient
     from apps.documents.models import MedicalDocument
     from apps.documents.lib_documents import create_issued_document
     from core import storage as blob_storage

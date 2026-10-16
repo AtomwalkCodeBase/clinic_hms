@@ -83,7 +83,7 @@ class DrugCatalogView(APIView):
         return created(data=DrugSerializer(drug).data, message="Drug added to catalog.")
 
     def _next_drug_code(self, request, db):
-        from apps.facility.models import NextNumber, Branch
+        from apps.hospital_setup.models import NextNumber, Branch
 
         branch_id = getattr(request.user, "branch_id", None)
         if not branch_id:

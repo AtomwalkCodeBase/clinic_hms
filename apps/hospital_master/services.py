@@ -4,8 +4,8 @@ import logging
 import threading
 from django.db import connections
 from django.conf import settings
-from apps.staff.models import StaffUser
-from apps.facility.models import Branch
+from apps.hospital_setup.models import StaffUser
+from apps.hospital_setup.models import Branch
 
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ def parameters_of(hospital):
 #
 # Note: AWPID generation lives in core/utils/awpid.py (generate_unique_awpid,
 # format AWPID-YYYYMMDD-XXXXXXXX) — that's the one actually called from
-# apps/hospital_patients/services.py. An earlier, differently-formatted AWPID
+# apps/opd/patient_services.py. An earlier, differently-formatted AWPID
 # generator (AWP-YYYYMMDD-NNNNNN) used to live in this file too; it had no
 # callers anywhere in the codebase and was removed to avoid two competing
 # ID formats existing side by side.
@@ -221,7 +221,7 @@ def get_usage_counts(db_name):
         role__in=_NON_DOCTOR_ROLES, is_active=True
     ).count()
 
-    # Custom-role staff (a hospital-defined Role — see apps.staff.rbac) count
+    # Custom-role staff (a hospital-defined Role — see apps.hospital_setup.rbac) count
     # against whichever bucket their acts_as implies. "doctor" wins if
     # present: one login = one hire, so a solo-clinic role that acts as
     # doctor+nurse+front_desk only consumes 1 doctor slot, not a doctor slot

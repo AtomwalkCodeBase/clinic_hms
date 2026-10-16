@@ -86,7 +86,7 @@ class AppointmentTypeDetailView(DropdownDetailView):
 
 def _nurse_assigned_doctor_ids(request, db):
     """
-    Doctor id(s) this nurse is rostered to (see apps.staff.NurseDoctorAssignment
+    Doctor id(s) this nurse is rostered to (see apps.hospital_setup.NurseDoctorAssignment
     / StaffDoctorsView, admin-configured via the Staff page's "Assign
     Doctors" action) — the nurse counterpart of the doctor self-scoping
     block above (`doctor_user_id=request.user.id`). A nurse who isn't
@@ -100,7 +100,7 @@ def _nurse_assigned_doctor_ids(request, db):
     acts_as = getattr(request.user, "acts_as", [])
     if request.user.role != "nurse" and "nurse" not in acts_as:
         return None
-    from apps.staff.nurse_doctor_utils import get_nurse_doctor_ids
+    from apps.hospital_setup.nurse_doctor_utils import get_nurse_doctor_ids
     return get_nurse_doctor_ids(request.user.id, db)
 
 
@@ -144,7 +144,7 @@ class AppointmentListCreateView(APIView):
         # every branch's queue mixed together. "all" opts out explicitly.
         #
         # A doctor passing an explicit branch_id must actually be assigned to
-        # it (see apps.facility.branch_utils / StaffBranchMapping) — this is what
+        # it (see apps.hospital_setup.branch_utils / StaffBranchMapping) — this is what
         # makes a doctor's branch switcher on the frontend a real access
         # boundary instead of just a UI filter; nothing previously stopped a
         # doctor from requesting any other hospital branch's queue by simply
@@ -152,8 +152,8 @@ class AppointmentListCreateView(APIView):
         branch_param = request.query_params.get("branch_id")
         if branch_param and branch_param != "all":
             if request.user.role == "doctor" or "doctor" in acts_as:
-                from apps.staff.models import StaffUser
-                from apps.facility.branch_utils import is_staff_in_branch
+                from apps.hospital_setup.models import StaffUser
+                from apps.hospital_setup.branch_utils import is_staff_in_branch
                 doctor = StaffUser.objects.using(db).filter(pk=request.user.id).first()
                 if not doctor or not is_staff_in_branch(doctor, branch_param, db):
                     return api_forbidden("You are not assigned to that branch.")
@@ -184,7 +184,7 @@ class AppointmentListCreateView(APIView):
         # itself so no extra join is needed for those.
         patient_q = (request.query_params.get("patient") or "").strip()
         if patient_q:
-            from apps.hospital_patients.models import HospitalPatient
+            from apps.opd.models import HospitalPatient
             matching_awpids = list(
                 HospitalPatient.objects.using(db).filter(
                     Q(full_name__icontains=patient_q) |
@@ -272,7 +272,7 @@ class AppointmentListCreateView(APIView):
         # registered patient silently never shows up in anyone's queue.
         # Falls back to the query param (explicit override) then the
         # booking user's branch only if the patient itself has none on file.
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
         patient = HospitalPatient.objects.using(db).filter(uuid=data["patient_id"]).first()
         branch_id = (
             (patient.branch_id if patient else None)
@@ -282,14 +282,14 @@ class AppointmentListCreateView(APIView):
 
         # Resolve room/floor from org.RoomAssignment, if the hospital has set
         # any up — a doctor sharing a room with others at different times of
-        # day (see apps.staff.models.RoomAssignment) is looked up by day-of-week
+        # day (see apps.hospital_setup.models.RoomAssignment) is looked up by day-of-week
         # + the booked time and baked into the appointment now, rather than
         # looked up live later, so it doesn't retroactively change if room
         # assignments are edited after the fact. No assignment configured for
         # this doctor/slot just leaves the appointment roomless — opt-in.
         room_fields = {}
         if scheduled_time:
-            from apps.facility.room_utils import resolve_room_for_slot
+            from apps.hospital_setup.room_utils import resolve_room_for_slot
             day_of_week = appt_date.weekday()
             match = resolve_room_for_slot(db, data["doctor_user_id"], day_of_week, scheduled_time)
             if match:
@@ -346,7 +346,7 @@ class AppointmentHistoryView(APIView):
     permission_classes = [IsHospitalStaff]
 
     def get(self, request):
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
 
         db = request.hospital_db
         qs = Appointment.objects.using(db)
@@ -472,7 +472,7 @@ class AppointmentUpcomingView(APIView):
     permission_classes = [IsHospitalStaff]
 
     def get(self, request):
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
 
         db = request.hospital_db
         qs = Appointment.objects.using(db)
@@ -662,7 +662,7 @@ class MonitoringListView(APIView):
     permission_classes = [IsHospitalStaff]
 
     def get(self, request):
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
 
         db = request.hospital_db
         mon_date = request.query_params.get("date", str(date.today()))
@@ -857,7 +857,7 @@ class AppointmentRescheduleView(APIView):
 
         room_fields = {"room_id": None, "room_name": "", "floor": ""}
         if new_time:
-            from apps.facility.room_utils import resolve_room_for_slot
+            from apps.hospital_setup.room_utils import resolve_room_for_slot
             match = resolve_room_for_slot(db, appt.doctor_user_id, new_date.weekday(), new_time)
             if match:
                 room_fields = {
@@ -1094,7 +1094,7 @@ def _fold_session_into_encounter(sess, enc, db):
 
 def _create_prescription_for(enc, db):
     from core.utils.nntm import get_next_number
-    from apps.hospital_patients.models import HospitalPatient
+    from apps.opd.models import HospitalPatient
     rx_number = None
     try:
         patient = HospitalPatient.objects.using(db).get(uuid=enc.patient_id)
@@ -1140,7 +1140,7 @@ def _store_handwriting_pdfs(enc, db, hospital_id, session_id):
     try:
         import base64
         from apps.opd.pdf import images_to_pdf
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
         from apps.hospital_master.models import Hospital
         from apps.patients.models import ConsultSession
         from apps.documents.models import MedicalDocument
@@ -1258,7 +1258,7 @@ class EncounterConsultSessionView(APIView):
         from django.conf import settings
         from apps.patients.models import Patient
         from apps.patients.models import ConsultSession
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
         from core.qr import render_qr_data_uri
 
         try:
@@ -1393,7 +1393,7 @@ class EncounterSignView(APIView):
         enc.sign(using=db)
 
         # Fetch patient once, share across the two post-sign side effects below.
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
         try:
             patient = HospitalPatient.objects.using(db).get(uuid=enc.patient_id)
         except HospitalPatient.DoesNotExist:
@@ -1443,7 +1443,7 @@ class FollowUpActionView(APIView):
     doctor booking it themselves — there's no in-app doctor-booking flow for
     this and the nurse already coordinates with the patient/front desk.
     mode="reminder" is the pre-existing, unchanged path: just sets
-    follow_up_in_days, and apps.notifications generates the patient-facing
+    follow_up_in_days, and apps.hospital_setup generates the patient-facing
     reminder as before.
     """
     permission_classes = [IsDoctor]
@@ -1490,8 +1490,8 @@ def _reconstruct_shared_reference(enc, db):
     encounter for the patient at all. Only used as a fallback by
     PreviousEncounterView — see its docstring.
     """
-    from apps.hospital_patients.models import HospitalPatient
-    from apps.hospital_patients.services import PatientService
+    from apps.opd.models import HospitalPatient
+    from apps.opd.patient_services import PatientService
 
     try:
         patient = HospitalPatient.objects.using(db).get(uuid=enc.patient_id)
@@ -1637,7 +1637,7 @@ class PreviousEncounterView(APIView):
         # broader than the query above — so a genuine mismatch between two
         # encounters' patient_id/awpid is directly visible side by side,
         # instead of silently vanishing from a filtered debug list too.
-        from apps.hospital_patients.models import HospitalPatient as _DebugPatient
+        from apps.opd.models import HospitalPatient as _DebugPatient
 
         recent = list(
             OPDEncounter.objects.using(db)
@@ -1702,8 +1702,8 @@ class FollowupNurseWorklistView(APIView):
     permission_classes = [IsHospitalStaff]
 
     def get(self, request):
-        from apps.hospital_patients.models import HospitalPatient
-        from apps.staff.models import StaffUser
+        from apps.opd.models import HospitalPatient
+        from apps.hospital_setup.models import StaffUser
 
         db = request.hospital_db
         encounters = (OPDEncounter.objects.using(db)
@@ -1780,9 +1780,9 @@ class EncounterSummaryPDFView(APIView):
         import base64
         import uuid as _uuid
         from apps.opd.pdf import generate_encounter_summary_pdf
-        from apps.hospital_patients.models import HospitalPatient
-        from apps.staff.models import StaffUser
-        from apps.facility.models import Branch
+        from apps.opd.models import HospitalPatient
+        from apps.hospital_setup.models import StaffUser
+        from apps.hospital_setup.models import Branch
 
         db = request.hospital_db
         try:
@@ -1867,7 +1867,7 @@ class PrescriptionCreateView(APIView):
         # rare row left with rx_number=None just isn't quotable/searchable
         # by token, same as it wasn't before this field existed.
         from core.utils.nntm import get_next_number
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
         rx_number = None
         try:
             patient = HospitalPatient.objects.using(db).get(uuid=enc.patient_id)

@@ -155,7 +155,7 @@ class DispenseView(APIView):
             from decimal import Decimal
             from apps.billing.models import Invoice, InvoiceItem
             from apps.billing.services import recompute_invoice_totals, hospital_default_tax_rate
-            from apps.hospital_patients.models import HospitalPatient
+            from apps.opd.models import HospitalPatient
             from core.utils.nntm import get_next_number
 
             # Its own savepoint: a failure half-way (invoice created, line item not) rolls the
@@ -228,8 +228,8 @@ class PendingPrescriptionsView(APIView):
     def get(self, request):
         from django.db.models import Sum
         from apps.opd.models import Prescription
-        from apps.hospital_patients.models import HospitalPatient
-        from apps.staff.models import StaffUser
+        from apps.opd.models import HospitalPatient
+        from apps.hospital_setup.models import StaffUser
 
         db = request.hospital_db
         status_filter = request.query_params.get("status", Prescription.STATUS_ACTIVE)
@@ -304,8 +304,8 @@ class PrescriptionLookupView(APIView):
 
     def get(self, request):
         from apps.opd.models import Prescription
-        from apps.hospital_patients.models import HospitalPatient
-        from apps.staff.models import StaffUser
+        from apps.opd.models import HospitalPatient
+        from apps.hospital_setup.models import StaffUser
         from django.db.models import Sum
 
         rx_number = (request.query_params.get("rx_number") or "").strip()

@@ -126,8 +126,8 @@ class Command(BaseCommand):
         parameters_of(hospital)
 
         # ── Hospital admin login ────────────────────────────────────────
-        from apps.staff.models import StaffUser
-        from apps.staff.services import next_employee_id
+        from apps.hospital_setup.models import StaffUser
+        from apps.hospital_setup.staff_services import next_employee_id
         from apps.patients.models import StaffMobileIndex
 
         if StaffUser.objects.using(db).filter(role="hospital_admin").exists():

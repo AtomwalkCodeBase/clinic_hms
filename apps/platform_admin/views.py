@@ -31,8 +31,8 @@ from apps.hospital_master.services import create_hospital_database, run_hospital
 from apps.hospital_master.services import TIER_FEATURE_DEFAULTS
 from apps.hospital_master.services import get_usage_counts
 from apps.hospital_master.services import parameters_of
-from apps.staff.models import StaffUser
-from apps.facility.models import Branch
+from apps.hospital_setup.models import StaffUser
+from apps.hospital_setup.models import Branch
 from apps.patients.models import StaffMobileIndex
 
 logger = logging.getLogger(__name__)
@@ -274,7 +274,7 @@ class HospitalListCreateView(APIView):
         admin_employee_id = None
         email_sent = False
         try:
-            from apps.staff.services import next_employee_id
+            from apps.hospital_setup.staff_services import next_employee_id
             admin_staff = StaffUser(
                 phone=admin_mobile,
                 email=admin_email,
@@ -536,7 +536,7 @@ class PlatformStatsView(APIView):
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request):
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
         from apps.opd.models import Appointment
 
         hospitals = list(Hospital.objects.all())
@@ -589,7 +589,7 @@ class HospitalOverviewView(APIView):
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request, pk):
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
         from apps.opd.models import Appointment
 
         try:

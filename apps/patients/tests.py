@@ -20,7 +20,7 @@ from django.utils import timezone
 from apps.patients.views import ConsultPadView, _open_session_for_token
 from core.testing import ensure_hospital
 from apps.patients.views import _vault_documents
-from apps.hospital_patients.services import PatientService
+from apps.opd.patient_services import PatientService
 from apps.patients.services import accounts, create_account, set_password, check_password
 
 

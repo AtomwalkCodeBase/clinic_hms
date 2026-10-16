@@ -18,9 +18,9 @@ from core.testing import HospitalDBTestCase, HospitalDBTransactionTestCase, requ
 
 from apps.billing.models import Invoice
 from apps.opd.models import Appointment, OPDEncounter, Prescription, PrescriptionItem
-from apps.facility.models import Branch, NextNumber
-from apps.staff.models import StaffUser
-from apps.hospital_patients.models import HospitalPatient
+from apps.hospital_setup.models import Branch, NextNumber
+from apps.hospital_setup.models import StaffUser
+from apps.opd.models import HospitalPatient
 from apps.pharmacy.models import Dispense, Stock, StockTransaction
 from apps.pharmacy.views import DispenseView, StockListView
 from apps.pharmacy.models import Drug

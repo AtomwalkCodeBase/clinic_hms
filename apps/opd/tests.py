@@ -97,9 +97,9 @@ class EncounterSignWorkflowTests(HospitalDBTestCase):
         super().setUp()
         from apps.billing.models import Invoice  # noqa: F401
         from apps.opd.models import Appointment, OPDEncounter
-        from apps.facility.models import Branch, NextNumber
-        from apps.staff.models import DoctorProfile, StaffUser
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.hospital_setup.models import Branch, NextNumber
+        from apps.hospital_setup.models import DoctorProfile, StaffUser
+        from apps.opd.models import HospitalPatient
         from apps.hospital_master.models import Hospital, HospitalParameters
 
         db = self.hospital_alias
@@ -140,7 +140,7 @@ class EncounterSignWorkflowTests(HospitalDBTestCase):
     def test_sign_closes_the_encounter_bills_and_mirrors_to_the_atomwalk(self):
         from apps.billing.models import Invoice, InvoiceItem
         from apps.opd.models import OPDEncounter
-        from apps.staff.models import AuditLog
+        from apps.hospital_setup.models import AuditLog
         from apps.documents.models import ClinicalEvent
 
         resp = self.sign()

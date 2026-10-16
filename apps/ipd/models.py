@@ -48,9 +48,9 @@ Two design decisions worth understanding before touching this file:
 import uuid
 from django.db import models
 
-from apps.staff.models import StaffUser
-from apps.facility.models import Department, Branch
-from apps.hospital_patients.models import HospitalPatient
+from apps.hospital_setup.models import StaffUser
+from apps.hospital_setup.models import Department, Branch
+from apps.opd.models import HospitalPatient
 from apps.opd.models import OPDEncounter, Appointment
 
 
@@ -242,7 +242,7 @@ class Admission(models.Model):
     # field is what actually lets that stop being true. See
     # docs/PENDING_IMPROVEMENTS.md item 3.
     bed = models.ForeignKey(
-        "facility.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="admissions",
+        "hospital_setup.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="admissions",
     )
     bed_assigned_at = models.DateTimeField(null=True, blank=True)
 
@@ -347,8 +347,8 @@ class PatientMovement(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     admission     = models.ForeignKey(Admission, on_delete=models.CASCADE, related_name="movements")
     movement_type = models.CharField(max_length=20, choices=MOVEMENT_CHOICES)
-    from_bed      = models.ForeignKey("facility.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="movements_from")
-    to_bed        = models.ForeignKey("facility.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="movements_to")
+    from_bed      = models.ForeignKey("hospital_setup.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="movements_from")
+    to_bed        = models.ForeignKey("hospital_setup.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="movements_to")
     # Denormalized at write time (same rationale as Admission.admission_type/
     # source) — a bed can be renamed/moved/deactivated later; this is what
     # the movement actually looked like at the moment it happened.

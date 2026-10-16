@@ -19,9 +19,9 @@ from core.utils.nntm import get_next_number
 from apps.billing.models import OptionList
 from apps.billing.option_list_views import DropdownListCreateView, DropdownDetailView
 from apps.billing.services import recompute_invoice_totals
-from apps.facility.models import Bed
-from apps.hospital_patients.models import HospitalPatient
-from apps.compliance.models import ConsentRecord
+from apps.hospital_setup.models import Bed
+from apps.opd.models import HospitalPatient
+from apps.hospital_setup.models import ConsentRecord
 
 from apps.ipd.models import AdmissionReferral, Admission, AdmissionDeposit, PatientMovement
 from apps.ipd.serializers import (

@@ -9,9 +9,9 @@ feat_lab gate is enforced at API view level.
 """
 
 from django.db import models
-from apps.staff.models import StaffUser
-from apps.facility.models import Branch
-from apps.hospital_patients.models import HospitalPatient
+from apps.hospital_setup.models import StaffUser
+from apps.hospital_setup.models import Branch
+from apps.opd.models import HospitalPatient
 from apps.opd.models import OPDEncounter
 
 

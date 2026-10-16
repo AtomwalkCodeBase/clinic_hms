@@ -74,7 +74,7 @@ _VERIFIABLE_PURPOSES = _HANDLED_PURPOSES | {OTPCode.PURPOSE_CONTACT_CHANGE_PATIE
 def _resolve_staff_target(identifier):
     """Mobile or email, matching StaffLoginView's own identifier resolution. Returns (staff_id, db_name) or None."""
     from apps.patients.models import StaffMobileIndex
-    from apps.staff.models import StaffUser
+    from apps.hospital_setup.models import StaffUser
 
     try:
         if "@" in identifier:
@@ -253,7 +253,7 @@ class StaffForgotPasswordResetView(APIView):
         db_name = payload.get("target_db")
         staff_id = payload.get("target_id")
         ensure_hospital_db(db_name)
-        from apps.staff.models import StaffUser
+        from apps.hospital_setup.models import StaffUser
         try:
             staff = StaffUser.objects.using(db_name).get(pk=staff_id, is_active=True)
         except StaffUser.DoesNotExist:
@@ -297,10 +297,10 @@ class PatientForgotPasswordResetView(APIView):
         acct.save(using="default", update_fields=["password"])
 
         # Atomwalk-level (cross-hospital) security event — logged, not written
-        # to a new table. apps.staff.AuditLog is per-hospital and patients have
+        # to a new table. apps.hospital_setup.AuditLog is per-hospital and patients have
         # no hospital context; a second/duplicate audit table was tried once
-        # already in this codebase (apps.compliance.AccessLog) and removed
-        # for exactly that reason — see apps/compliance/models.py's
+        # already in this codebase (apps.hospital_setup.AccessLog) and removed
+        # for exactly that reason — see apps/hospital_setup/models.py's
         # docstring. A log line is the correct-weight solution here.
         logger.info("Patient password reset via OTP: account_id=%s awpid=%s", acct.id, acct.awpid)
 

@@ -131,8 +131,8 @@ class Command(BaseCommand):
         self.stdout.write("[ 5/5 ] Creating hospital admin user...")
         temp_password = _gen_password()
         try:
-            from apps.staff.models import StaffUser
-            from apps.staff.services import next_employee_id
+            from apps.hospital_setup.models import StaffUser
+            from apps.hospital_setup.staff_services import next_employee_id
             admin = StaffUser(
                 phone=admin_mobile,
                 email=admin_email,

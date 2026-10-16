@@ -47,7 +47,7 @@ from apps.patients.services import accounts, accounts_with_mobile, awpid_of, pri
 logger = logging.getLogger(__name__)
 # Matches literal doctors AND custom-role staff whose Role.acts_as includes
 # "doctor" (e.g. a solo-clinic role bundling doctor+nurse+front_desk) — see
-# apps.staff.rbac.resolve_acts_as. Reused everywhere this module looks up
+# apps.hospital_setup.rbac.resolve_acts_as. Reused everywhere this module looks up
 # "doctors" for patient-facing search/booking, so a patient can find and
 # book this person the same as any literal doctor.
 DOCTOR_Q = Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"])
@@ -239,7 +239,7 @@ class PortalPlatformStatsView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.staff.models import StaffUser
+        from apps.hospital_setup.models import StaffUser
 
         active_hospitals = list(Hospital.objects.using("default").filter(is_active=True))
         doctor_count = 0
@@ -352,7 +352,7 @@ class PortalSearchView(APIView):
         if lat is not None:
             _sort_by_distance(hospitals)
 
-        from apps.staff.models import StaffUser, DoctorProfile
+        from apps.hospital_setup.models import StaffUser, DoctorProfile
 
         specialty_terms = _expand_search_terms(specialty) if specialty else set()
 
@@ -480,7 +480,7 @@ class PortalSpecialtyListView(APIView):
 
     def get(self, request):
         from collections import Counter
-        from apps.staff.models import StaffUser, DoctorProfile
+        from apps.hospital_setup.models import StaffUser, DoctorProfile
 
         counts = Counter()
         for hospital in Hospital.objects.using("default").filter(is_active=True):
@@ -520,7 +520,7 @@ class PortalDoctorListView(APIView):
             return Response({"error": "This hospital isn't available for online booking."}, status=403)
 
         ensure_hospital_db(hospital.db_name)
-        from apps.staff.models import StaffUser, DoctorProfile
+        from apps.hospital_setup.models import StaffUser, DoctorProfile
 
         try:
             staff_list = list(
@@ -562,7 +562,7 @@ class PortalDoctorDetailView(APIView):
             return Response({"error": "This hospital isn't available for online booking."}, status=403)
 
         ensure_hospital_db(hospital.db_name)
-        from apps.staff.models import StaffUser, DoctorProfile
+        from apps.hospital_setup.models import StaffUser, DoctorProfile
 
         try:
             staff = StaffUser.objects.using(hospital.db_name).get(
@@ -610,7 +610,7 @@ class PortalDoctorDetailView(APIView):
         # out after picking a date and seeing an empty slot grid (see
         # _slot_grid, which already has this same "no schedule configured"
         # fallback: None here means "no restriction", not "no days work").
-        from apps.staff.models import DoctorSchedule, DoctorAvailabilitySlot
+        from apps.hospital_setup.models import DoctorSchedule, DoctorAvailabilitySlot
         schedule = DoctorSchedule.objects.using(hospital.db_name).filter(doctor_id=staff.id).first()
         if schedule:
             data["working_days"] = sorted(
@@ -679,7 +679,7 @@ def _slot_grid(doctor_id, db, slot_date):
     which is why a doctor set up for 09:00-20:00 only ever showed slots
     up to 17:45.
     """
-    from apps.staff.models import DoctorSchedule, DoctorAvailabilitySlot
+    from apps.hospital_setup.models import DoctorSchedule, DoctorAvailabilitySlot
 
     schedule = DoctorSchedule.objects.using(db).filter(doctor_id=doctor_id).first()
     if not schedule:
@@ -748,9 +748,9 @@ class PortalBookView(APIView):
 
     def post(self, request):
         from apps.patients.models import PatientBooking
-        from apps.staff.models import StaffUser
-        from apps.facility.models import Branch
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.hospital_setup.models import StaffUser
+        from apps.hospital_setup.models import Branch
+        from apps.opd.models import HospitalPatient
         from apps.opd.models import Appointment
 
         d = request.data
@@ -886,9 +886,9 @@ class PortalBookView(APIView):
             # Durable proof trail behind the two booleans above — patient
             # granted both by submitting data_sharing_consent through the
             # portal itself (no staff intermediary), see
-            # apps.compliance.services.record_consent.
-            from apps.compliance.services import record_consent
-            from apps.compliance.models import ConsentRecord
+            # apps.hospital_setup.compliance_services.record_consent.
+            from apps.hospital_setup.compliance_services import record_consent
+            from apps.hospital_setup.models import ConsentRecord
             record_consent(db, patient, ConsentRecord.CONSENT_DPDP_PROCESSING,
                             ConsentRecord.SOURCE_PORTAL, request=request)
             record_consent(db, patient, ConsentRecord.CONSENT_HIE_SHARING,
@@ -915,7 +915,7 @@ class PortalBookView(APIView):
         # the same room-resolution logic rather than inheriting it.
         room_fields = {}
         if scheduled_time:
-            from apps.facility.room_utils import resolve_room_for_slot
+            from apps.hospital_setup.room_utils import resolve_room_for_slot
             match = resolve_room_for_slot(db, doctor.id, requested_date.weekday(), scheduled_time)
             if match:
                 room_fields = {
@@ -992,7 +992,7 @@ class PortalMyRecordsView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
         from apps.opd.models import Appointment, OPDEncounter, Prescription
         from apps.documents.lib_documents import visit_vitals
 
@@ -1097,7 +1097,7 @@ class PortalInvoiceListView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
         from apps.billing.models import Invoice
 
         target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
@@ -1155,8 +1155,8 @@ class PortalInvoiceReceiptPDFView(APIView):
 
     def get(self, request, hospital_db, pk):
         import base64
-        from apps.hospital_patients.models import HospitalPatient
-        from apps.facility.models import Branch
+        from apps.opd.models import HospitalPatient
+        from apps.hospital_setup.models import Branch
         from apps.billing.models import Invoice
         from apps.billing.pdf import generate_invoice_pdf
 
@@ -1295,7 +1295,7 @@ class PortalMyBookingsView(APIView):
                 # booking instead of browsing. Best-effort: folded into the
                 # same try/except as the rest of this per-booking lookup.
                 if doctor_id:
-                    from apps.staff.models import StaffUser, DoctorProfile
+                    from apps.hospital_setup.models import StaffUser, DoctorProfile
                     staff_obj = StaffUser.objects.using(b.hospital.db_name).filter(pk=doctor_id).first()
                     if staff_obj and staff_obj.photo:
                         doctor_photo = blob_storage.signed_url(staff_obj.photo) or None
@@ -1484,7 +1484,7 @@ class PortalRescheduleBookingView(APIView):
 
         room_fields = {"room_id": None, "room_name": "", "floor": ""}
         if new_time:
-            from apps.facility.room_utils import resolve_room_for_slot
+            from apps.hospital_setup.room_utils import resolve_room_for_slot
             match = resolve_room_for_slot(db, appt.doctor_user_id, new_date.weekday(), new_time)
             if match:
                 room_fields = {"room_id": match.room_id, "room_name": match.room.name, "floor": match.room.floor}
@@ -1743,7 +1743,7 @@ class PortalLabOrderListView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
         from apps.lab.models import LabRequest
 
         target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
@@ -1906,8 +1906,8 @@ class PortalPrescriptionListView(APIView):
 
     def get(self, request):
         from apps.opd.models import Appointment, OPDEncounter, Prescription
-        from apps.staff.models import StaffUser
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.hospital_setup.models import StaffUser
+        from apps.opd.models import HospitalPatient
         from apps.documents.models import MedicalDocument
         import uuid as _uuid
 
@@ -2010,7 +2010,7 @@ class PortalPrescriptionChoiceView(APIView):
 
     def post(self, request):
         from apps.opd.models import Prescription
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
 
         d = request.data
         hospital_db        = d.get("hospital_db")
@@ -2083,10 +2083,10 @@ class PortalPrescriptionReceiptPDFView(APIView):
         import base64
         import uuid as _uuid
         from apps.opd.models import Appointment, Prescription
-        from apps.staff.models import StaffUser
-        from apps.facility.models import Branch
+        from apps.hospital_setup.models import StaffUser
+        from apps.hospital_setup.models import Branch
         from apps.opd.pdf import generate_prescription_pdf
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
 
         if not Hospital.objects.using("default").filter(db_name=hospital_db, is_active=True).exists():
             return error("Unknown hospital.")
@@ -2520,7 +2520,7 @@ class PortalHealthTimelineView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import HospitalPatient
         from apps.opd.models import Appointment, OPDEncounter
         from apps.lab.models import LabRequest
         from apps.documents.lib_documents import history_readings
@@ -2684,7 +2684,7 @@ class PortalNotificationsView(APIView):
 
     Merges two different kinds of reminder into one in-app list (HMS-10g):
       - Appointment / follow-up reminders — pre-generated rows in each
-        hospital DB's NotificationLog (see apps.notifications.services, run by
+        hospital DB's NotificationLog (see apps.hospital_setup.notification_services, run by
         `python manage.py generate_reminders` on a schedule). Fanned out
         across every active hospital the same way PortalMyRecordsView does,
         since a patient's hospitals aren't known in advance.
@@ -2695,14 +2695,14 @@ class PortalNotificationsView(APIView):
         that could silently go stale (e.g. after a dose gets logged).
 
     No real SMS/email/push is sent for any of these — see the module
-    docstring on apps/notifications/services.py for why that's out of scope
+    docstring on apps/hospital_setup/notification_services.py for why that's out of scope
     without a provider account. This is the in-app fallback.
     """
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.hospital_patients.models import HospitalPatient
-        from apps.notifications.models import NotificationLog
+        from apps.opd.models import HospitalPatient
+        from apps.hospital_setup.models import NotificationLog
         from apps.documents.lib_documents import build_roadmap
 
         target_awpid, dob, err = resolve_target_awpid_and_dob(request)
@@ -2774,7 +2774,7 @@ class PortalNotificationMarkReadView(APIView):
     permission_classes = [IsPatient]
 
     def post(self, request, hospital_db, pk):
-        from apps.notifications.models import NotificationLog
+        from apps.hospital_setup.models import NotificationLog
         from apps.patients.models import PatientRelationship
 
         if not Hospital.objects.using("default").filter(db_name=hospital_db, is_active=True).exists():
@@ -3090,7 +3090,7 @@ class EmergencySummaryView(APIView):
             # safe rather than 500.
             return error(message="This emergency code is no longer valid.", status=404)
 
-        from apps.hospital_patients.services import PatientService
+        from apps.opd.patient_services import PatientService
         history = PatientService.get_shared_history(awpid=awpid)
 
         # get_shared_history() keeps lab results/documents lightweight (an id
@@ -3485,7 +3485,7 @@ class RecordsShareRecordsView(APIView):
                 errors={"status": grant.status}, status=403,
             )
 
-        from apps.hospital_patients.services import PatientService
+        from apps.opd.patient_services import PatientService
         from apps.patients.views import _resolve_emergency_contact, _vaccination_history
         name, identity = _patient_name(awpid_of(grant))
         history = PatientService.get_shared_history(awpid=awpid_of(grant))
