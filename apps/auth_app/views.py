@@ -4,8 +4,8 @@ apps/auth_app/views.py
 Authentication endpoints for all user types.
 
 Endpoints:
-  POST /api/v1/auth/login/staff/      — hospital staff login (profile-based routing, no subdomain)
-  POST /api/v1/auth/login/platform/   — Atomwalk platform admin login (no subdomain)
+  POST /api/v1/auth/login/staff/      — hospital staff login (profile-based routing, no hospital_code)
+  POST /api/v1/auth/login/platform/   — Atomwalk platform admin login (no hospital_code)
   POST /api/v1/auth/login/patient/    — patient portal login (email or AWPID)
   POST /api/v1/auth/token/refresh/    — refresh access token
   GET  /api/v1/auth/me/               — current user info
@@ -69,16 +69,16 @@ class StaffLoginView(APIView):
     POST /api/v1/auth/login/staff/
 
     Two supported request shapes (see StaffLoginSerializer):
-      1. {mobile, password} — profile-based routing, no subdomain needed.
+      1. {mobile, password} — profile-based routing, no hospital_code needed.
          The "mobile" field also accepts an email address (detected by the
          presence of "@") — either way it's resolved via StaffMobileIndex
          (atomwalk DB) → hospital db_name → StaffUser → verify password → JWT.
          This matches the design spec:
          Request → Authenticated User → Profile → Hospital → DB Name → Hospital DB
-      2. {subdomain, employee_id, password} — for hospitals using employee
+      2. {hospital_code, employee_id, password} — for hospitals using employee
          IDs. Employee IDs aren't globally unique (two hospitals can both
          have "EMP-001"), so this path resolves the hospital DIRECTLY from
-         the given subdomain instead of a atomwalk-wide index lookup.
+         the given hospital_code instead of a atomwalk-wide index lookup.
     """
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
@@ -90,12 +90,12 @@ class StaffLoginView(APIView):
             return error("Validation error.", errors=serializer.errors)
 
         d = serializer.validated_data
-        login_by_employee_id = bool(d.get("subdomain")) and bool(d.get("employee_id"))
+        login_by_employee_id = bool(d.get("hospital_code")) and bool(d.get("employee_id"))
 
         if login_by_employee_id:
-            # ── Step 1 (employee-ID path): resolve hospital directly by subdomain ──
+            # ── Step 1 (employee-ID path): resolve hospital directly by hospital_code ──
             try:
-                hospital = Hospital.objects.get(subdomain__iexact=d["subdomain"], is_active=True)
+                hospital = Hospital.objects.get(hospital_code__iexact=d["hospital_code"], is_active=True)
             except Hospital.DoesNotExist:
                 return error("Invalid credentials.")
             db_name, hospital_id = hospital.db_name, hospital.id
@@ -194,7 +194,7 @@ class PlatformLoginView(APIView):
     POST /api/v1/auth/login/platform/
     Authenticates against Django's built-in auth.User (the superuser created
     via DJANGO_SUPERUSER_* env vars + --noinput at startup).
-    No subdomain required — platform admin has no hospital context.
+    No hospital_code required — platform admin has no hospital context.
     """
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
@@ -443,7 +443,8 @@ class MeView(APIView):
             try:
                 from core import storage as blob_storage
                 hospital = Hospital.objects.using("default").get(pk=p["hospital_id"])
-                data["logo"] = blob_storage.signed_url(hospital.logo)
+                from apps.atomwalk.hospital_master.services import parameters_of
+                data["logo"] = blob_storage.signed_url(parameters_of(hospital).logo)
             except Exception:
                 logger.debug("MeView: could not resolve hospital logo for hospital_id=%s", p.get("hospital_id"), exc_info=True)
 

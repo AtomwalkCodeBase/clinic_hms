@@ -102,14 +102,14 @@ export function AuthProvider({ children }) {
    */
   /**
    * `credentials` is either a mobile number (string — the common case), or
-   * {subdomain, employeeId} for hospitals using employee-ID login (see
+   * {hospital_code, employeeId} for hospitals using employee-ID login (see
    * docs/onboarding_auth_rbac_architecture.md 3.1.2 — employee IDs aren't
-   * globally unique, so that path needs the hospital's subdomain too).
+   * globally unique, so that path needs the hospital's hospital_code too).
    */
   const loginStaff = useCallback(async (credentials, password) => {
     const body = typeof credentials === "string"
       ? { mobile: credentials, password }
-      : { subdomain: credentials.subdomain, employee_id: credentials.employeeId, password };
+      : { hospital_code: credentials.hospital_code, employee_id: credentials.employeeId, password };
     const { data } = await publicClient.post(API_ENDPOINTS.AUTH.STAFF_LOGIN, body);
     tokenStore.setAccess(data.data.access);
     tokenStore.setRefresh(data.data.refresh);

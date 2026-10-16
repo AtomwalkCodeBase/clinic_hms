@@ -381,9 +381,9 @@ class LabRequestAttachDocumentView(APIView):
         except FileValidationError as exc:
             return error(str(exc), errors={"file_data": str(exc)})
 
-        from apps.atomwalk.documents.services import CHOOSABLE_TYPES
+        from apps.atomwalk.documents.lib_documents import CHOOSABLE_TYPES
         from apps.atomwalk.documents.models import MedicalDocument
-        from apps.atomwalk.documents.services import create_issued_document
+        from apps.atomwalk.documents.lib_documents import create_issued_document
 
         doc_type = request.data.get("doc_type") or "lab_report"
         if doc_type not in CHOOSABLE_TYPES:

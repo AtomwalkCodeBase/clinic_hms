@@ -38,12 +38,14 @@ def _maybe_charge_registration_fee(patient, hospital_id, db, user):
     """
     try:
         from apps.atomwalk.hospital_master.models import Hospital
+        from apps.atomwalk.hospital_master.services import parameters_of
         from apps.hospital_master.billing.models import Invoice, InvoiceItem
         from apps.hospital_master.billing.services import recompute_invoice_totals
         from core.utils.nntm import get_next_number
 
         hospital = Hospital.objects.using("default").get(pk=hospital_id)
-        if not hospital.registration_fee_enabled or not hospital.registration_fee_amount:
+        params = parameters_of(hospital)
+        if not params.registration_fee_enabled or not params.registration_fee_amount:
             return
         if not getattr(patient, "branch_id", None):
             return  # Invoice.branch is required — nothing sensible to bill against
@@ -61,9 +63,9 @@ def _maybe_charge_registration_fee(patient, hospital_id, db, user):
             invoice=invoice,
             description="Registration Fee",
             quantity=1,
-            unit_price=hospital.registration_fee_amount,
-            tax_rate=hospital.default_tax_rate,
-            total=hospital.registration_fee_amount,
+            unit_price=params.registration_fee_amount,
+            tax_rate=params.default_tax_rate,
+            total=params.registration_fee_amount,
         )
         recompute_invoice_totals(invoice, db)
     except Exception as exc:

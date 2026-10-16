@@ -22,7 +22,7 @@ creating a second hospital_admin if one already exists in that hospital DB.
 
 Usage:
   python manage.py provision_pending_hospital_dbs --settings=atomwalk.settings.development
-  python manage.py provision_pending_hospital_dbs --subdomain care-cure-clinic --settings=atomwalk.settings.development
+  python manage.py provision_pending_hospital_dbs --hospital-code care-cure-clinic --settings=atomwalk.settings.development
 """
 
 import secrets
@@ -33,6 +33,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import connections
 
 from apps.atomwalk.hospital_master.models import Hospital
+from apps.atomwalk.hospital_master.services import parameters_of
 from apps.atomwalk.hospital_master.services import (
     create_hospital_database,
     run_hospital_migrations,
@@ -41,7 +42,7 @@ from apps.atomwalk.hospital_master.services import (
     ensure_hospital_db,
 )
 
-DEFAULT_SUBDOMAINS = [
+DEFAULT_HOSPITAL_CODES = [
     "care-cure-clinic",
     "krishna-healthcare",
     "nationwide-family-doctors",
@@ -76,16 +77,16 @@ class Command(BaseCommand):
     help = "Create the missing Postgres database + run migrations + a hospital_admin login for hospitals that only have a atomwalk row so far."
 
     def add_arguments(self, parser):
-        parser.add_argument("--subdomain", action="append", default=None,
-                             help="Limit to this subdomain (repeatable). Defaults to the 5 East-Bengaluru "
+        parser.add_argument("--hospital-code", action="append", default=None,
+                             help="Limit to this hospital_code (repeatable). Defaults to the 5 East-Bengaluru "
                                   "clinics that don't have a real database yet.")
 
     def handle(self, *args, **options):
-        subdomains = options["subdomain"] or DEFAULT_SUBDOMAINS
+        hospital_codes = options["hospital_code"] or DEFAULT_HOSPITAL_CODES
         self._credentials = []
 
-        for subdomain in subdomains:
-            self._provision_one(subdomain)
+        for hospital_code in hospital_codes:
+            self._provision_one(hospital_code)
 
         if self._credentials:
             self.stdout.write(self.style.SUCCESS(f"\n{len(self._credentials)} hospital(s) provisioned.\n"))
@@ -94,14 +95,14 @@ class Command(BaseCommand):
                 self.stdout.write(f"  {row['hospital']:<38} {row['mobile']:<12} {row['password']}")
         self.stdout.write("")
 
-    def _provision_one(self, subdomain):
+    def _provision_one(self, hospital_code):
         try:
-            hospital = Hospital.objects.using("default").get(subdomain=subdomain)
+            hospital = Hospital.objects.using("default").get(hospital_code=hospital_code)
         except Hospital.DoesNotExist:
-            raise CommandError(f"No hospital with subdomain={subdomain!r}.")
+            raise CommandError(f"No hospital with hospital_code={hospital_code!r}.")
 
         db = hospital.db_name
-        self.stdout.write(self.style.MIGRATE_HEADING(f"\n{hospital.name} ({subdomain}, {db})"))
+        self.stdout.write(self.style.MIGRATE_HEADING(f"\n{hospital.name} ({hospital_code}, {db})"))
 
         if _database_exists(db):
             self.stdout.write(self.style.WARNING("  Database already exists — skipping create+migrate."))
@@ -110,41 +111,19 @@ class Command(BaseCommand):
             try:
                 create_hospital_database(db)
             except Exception as exc:
-                raise CommandError(f"Failed to create database for {subdomain}: {exc}")
+                raise CommandError(f"Failed to create database for {hospital_code}: {exc}")
             self.stdout.write("  Running hospital migrations...")
             try:
                 run_hospital_migrations(db)
             except Exception as exc:
                 self.stdout.write(self.style.ERROR(f"  Migration failed: {exc} — dropping the half-migrated database."))
                 drop_hospital_database(db)
-                raise CommandError(f"Migration failed for {subdomain}, database rolled back: {exc}")
+                raise CommandError(f"Migration failed for {hospital_code}, database rolled back: {exc}")
             self.stdout.write(self.style.SUCCESS("  Database created and migrated."))
 
         ensure_hospital_db(db)
 
-        # Same default-template assignment provision_hospital does for a
-        # brand-new hospital — these rows never got it since 0015 only wrote
-        # the bare Hospital/Subscription fields.
-        if hospital.active_vaccination_schedule_id is None:
-            from apps.atomwalk.documents.models import Schedule
-            default_schedule = (
-                Schedule.objects.using("default")
-                .filter(kind="vaccination", owner_hospital_id__isnull=True, is_template=True, active=True)
-                .order_by("id").first()
-            )
-            if default_schedule:
-                hospital.active_vaccination_schedule_id = default_schedule.id
-                self.stdout.write(f"  Assigned default vaccination schedule (id={default_schedule.id}).")
-        if hospital.active_milestone_schedule_id is None:
-            default_milestones = (
-                Schedule.objects.using("default")
-                .filter(kind="milestone", owner_hospital_id__isnull=True, is_template=True, active=True)
-                .order_by("id").first()
-            )
-            if default_milestones:
-                hospital.active_milestone_schedule_id = default_milestones.id
-                self.stdout.write(f"  Assigned default milestone schedule (id={default_milestones.id}).")
-        hospital.save(using="default", update_fields=["active_vaccination_schedule_id", "active_milestone_schedule_id"])
+        parameters_of(hospital)
 
         # ── Hospital admin login ────────────────────────────────────────
         from apps.hospital_master.staff.models import StaffUser

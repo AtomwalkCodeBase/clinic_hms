@@ -5,7 +5,7 @@ A nurse records a visit's vitals in the hospital screens; they are stored in Ato
 finds who the patient is, whether they are a child, and hands the fields over.
 """
 from apps.atomwalk.patients.models import Patient
-from apps.atomwalk.documents.services import recorded, save_visit, visit_vitals
+from apps.atomwalk.documents.lib_documents import recorded, save_visit, visit_vitals
 from core.utils.age import age_years_months
 
 

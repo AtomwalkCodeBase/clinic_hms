@@ -2,7 +2,7 @@
 import logging
 import time
 from apps.atomwalk.documents.models import DOMAIN_CHOICES, Schedule, ScheduleRule
-from apps.atomwalk.documents.services import text, staff_name
+from apps.atomwalk.documents.lib_documents import text, staff_name
 from datetime import date
 from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -18,11 +18,20 @@ from core.permissions import (
     IsDoctorOrFrontDesk,
 )
 from core.response import error, not_found, success, created
-from apps.atomwalk.documents import services as rules
-from apps.atomwalk.documents.models import DocumentBatch, ImmunizationRecord, BirthHistory, MilestoneRecord
+from apps.atomwalk.documents import lib_documents as rules
+from apps.atomwalk.documents.models import (
+    BirthHistory, ClinicalEvent, DocumentBatch, GrowthMeasurement, ImmunizationRecord, MilestoneRecord, RecurrenceFlag,
+)
 from apps.atomwalk.documents.serializers import SubmitSerializer, UploadSerializer
-from apps.atomwalk.documents.services import build_timeline
+from django.shortcuts import get_object_or_404
+from rest_framework import serializers, status
+from rest_framework.response import Response
+from apps.atomwalk.documents import lib_integration as ig
+from apps.atomwalk.documents.lib_processing import SHOWN_VACCINES, build_timeline_payload, growth_dob, rebuild_patient
 from apps.atomwalk.documents.services import (
+    INDICATORS, age_in_months, classify_condition, immunization_status, load_config, next_due, reference_curves, resolve_vaccines,
+)
+from apps.atomwalk.documents.lib_documents import (
     BULK_QUEUE,
     INSTANT_QUEUE,
     awaiting_review_q,
@@ -32,16 +41,17 @@ from apps.atomwalk.documents.services import (
     submit_decisions,
 )
 from rest_framework.throttling import ScopedRateThrottle
+from apps.atomwalk.documents.tasks import rebuild_patient_task
 from core import qr_token as _qt, storage as blob_storage
-from apps.atomwalk.documents.services import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
+from apps.atomwalk.documents.lib_documents import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
 from django.utils import timezone
 from core.file_validation import validate_data_uri, FileValidationError
 from core.utils.age import age_years_months
-from apps.atomwalk.documents.services import PATIENT_NOT_FOUND, get_patient, parse_date, staff_name as _staff_name, text as _text
-from apps.atomwalk.documents.services import add_percentiles
-from apps.atomwalk.documents.services import rules_for
+from apps.atomwalk.documents.lib_documents import PATIENT_NOT_FOUND, get_patient, parse_date, staff_name as _staff_name, text as _text
+from apps.atomwalk.documents.lib_documents import add_percentiles
+from apps.atomwalk.documents.lib_documents import active_schedule, rules_for, schedule_usage
 from apps.atomwalk.patients.models import Patient, PatientRelationship
-from apps.atomwalk.documents.services import growth_points
+from apps.atomwalk.documents.lib_documents import growth_points
 from core.audit import log_action
 from apps.hospital_master.patients.serializers import BirthHistorySerializer
 from apps.hospital_master.patients.services import PatientService
@@ -88,7 +98,7 @@ class UploadView(APIView):
             logger.exception("records: upload to S3 failed")
             return error("Upload to storage failed — nothing was saved. Please try again.", status=503)
         start_processing([d.id for d in docs], INSTANT_QUEUE if mode == "instant" else BULK_QUEUE)
-        docs = list(batch.documents.order_by("id"))      # fresh: a file that couldn't be queued is already "failed"
+        docs = list(batch.d_documents.order_by("id"))      # fresh: a file that couldn't be queued is already "failed"
         return success(data={
             "batch_id": batch.id, "mode": mode,
             "documents": [{"id": d.id, "file_name": d.file_name, "processing_status": d.status} for d in docs],
@@ -137,61 +147,239 @@ class SubmitView(APIView):
                             .filter(awaiting_review_q(), patient__awpid=awpid,
                                     status__in=(MedicalDocument.Status.COMPLETED, MedicalDocument.Status.REVIEW_REQUIRED)).count()}
         return success(data=result)
-def _timeline_filters(request):
-    """(the timeline's filters from the query string, None), or (None, the 400 to return)."""
-    q = request.query_params
+# ── the pediatric health timeline: GET patients/<id>/health-timeline/ ... (urls.py, under peds/) ──
+def _patient_or_403(request, awpid):
+    patient = get_object_or_404(Patient, awpid=awpid)
+    if not ig.can_view_patient(request.user, patient):
+        return None, Response({"detail": "Not allowed"}, status=status.HTTP_403_FORBIDDEN)
+    return patient, None
+
+
+def _clinician_or_403(request):
+    if not ig.is_clinician(request.user):
+        return Response({"detail": "Clinician access required"}, status=status.HTTP_403_FORBIDDEN)
+    return None
+
+
+def _staff_id(request):
+    return request.user.id if isinstance(request.user.id, int) else None
+
+
+def _parse_period(request, dob):
     try:
-        start, end = [date.fromisoformat(q[k]).isoformat() if q.get(k) else None for k in ("from", "to")]
+        p_to = date.fromisoformat(request.query_params.get("to")) if request.query_params.get("to") \
+            else date.today()
+        p_from = date.fromisoformat(request.query_params.get("from")) if request.query_params.get("from") \
+            else dob
     except ValueError:
-        return None, error("from and to must be dates like 2026-03-14.")
-    return dict(start=start, end=end, kind=q.get("kind"), name=q.get("name"), nature=q.get("nature"), when=q.get("when"),
-                include_hidden=q.get("include_hidden") == "1"), None
-class TimelineView(APIView):
-    """
-    GET /api/v1/records/timeline/?from=2026-01-01&to=2026-06-30&kind=condition&name=diabetes&nature=chronic&when=current
+        return None, None
+    return max(p_from, dob), p_to
 
-    The findings read out of the patient's confirmed documents (conditions, symptoms, medications), one per date and
-    name, grouped by day, newest first: {"days": [{"date", "entries": [...]}], "undated": [...]}. A patient's upload is
-    dated by the date written in it, a hospital document by its own date; a finding with no date is "undated". Each
-    entry lists its "sources" (the reports that mention it). Every filter is optional:
-    from/to (ISO dates), kind (condition|symptom|medication), name (part of a name), nature (acute|chronic|unknown),
-    when (current|history|planned|resolved). include_hidden=1 also returns "no cough", "father has diabetes" and "asthma suspected" style mentions.
-    """
-    permission_classes = [IsPatient]
 
-    def get(self, request):
-        awpid, _dob, err = resolve_target_awpid_and_dob(request)
+# ----------------------------------------------------------------- timeline
+class PatientHealthTimelineView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, awpid):
+        patient, err = _patient_or_403(request, awpid)
         if err:
             return err
-        filters, err = _timeline_filters(request)
+        dob, _ = ig.patient_dob_sex(patient)
+        p_from, p_to = _parse_period(request, dob)
+        if not p_from or p_from > p_to:
+            return Response({"detail": "Invalid period"}, status=status.HTTP_400_BAD_REQUEST)
+        audience = "doctor" if (request.query_params.get("view") == "doctor"
+                                and ig.is_clinician(request.user)) else "guardian"
+        return Response(build_timeline_payload(patient, p_from, p_to, audience))
+
+
+# ------------------------------------------------------------------- growth
+class GrowthMeasurementIn(serializers.Serializer):
+    measured_on = serializers.DateField()
+    weight_kg = serializers.DecimalField(max_digits=6, decimal_places=3, required=False, allow_null=True)
+    height_cm = serializers.DecimalField(max_digits=5, decimal_places=1, required=False, allow_null=True)
+    head_circ_cm = serializers.DecimalField(max_digits=4, decimal_places=1, required=False, allow_null=True)
+
+    def validate(self, attrs):
+        rng = load_config()["growth"]["plausible_ranges"]
+        if not any(attrs.get(k) is not None for k in ("weight_kg", "height_cm", "head_circ_cm")):
+            raise serializers.ValidationError("At least one measurement is required")
+        for k in ("weight_kg", "height_cm", "head_circ_cm"):
+            v = attrs.get(k)
+            if v is not None and not (rng[k][0] <= float(v) <= rng[k][1]):
+                raise serializers.ValidationError({k: f"Outside plausible range {rng[k]}"})
+        if attrs["measured_on"] > date.today():
+            raise serializers.ValidationError({"measured_on": "Cannot be in the future"})
+        return attrs
+
+
+class PatientGrowthView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, awpid):
+        patient, err = _patient_or_403(request, awpid)
         if err:
             return err
-        return success(data=build_timeline(awpid, **filters))
-class StaffTimelineView(APIView):
-    """
-    GET /api/v1/records/patients/<pk>/timeline/   (same filters as the patient's timeline)
+        indicator = request.query_params.get("indicator", "weight_kg")
+        if indicator not in INDICATORS:
+            return Response({"detail": f"indicator must be one of {list(INDICATORS)}"}, status=400)
+        dob, sex = ig.patient_dob_sex(patient)
+        bh = BirthHistory.objects.filter(patient=patient).first()
+        corrected = growth_dob(dob, bh)
+        age_now = age_in_months(dob, date.today())
+        column = {"head_circ_cm": "head_circumference_cm"}.get(indicator, indicator)
+        z_field, pct_field = {"weight_kg": ("weight_z", "weight_pct"),
+                              "height_cm": ("height_z", "height_pct"),
+                              "head_circ_cm": ("head_circ_z", "head_circ_pct")}[indicator]
+        points = [{"date": g.measured_on.isoformat(), "age_months": round(age_in_months(corrected, g.measured_on), 2),
+                   "value": float(getattr(g, column)), "z": getattr(g, z_field),
+                   "percentile": getattr(g, pct_field), "flag": g.flags.get(column),
+                   "document_id": g.document_id, "source": g.source}
+                  for g in GrowthMeasurement.objects.filter(patient_id=patient.pk, is_rejected=False)
+                  .exclude(**{f"{column}__isnull": True}).order_by("measured_on")]
+        max_m = max([age_now + 3] + [p["age_months"] + 3 for p in points])
+        max_m = min(max_m, 60 if indicator == "head_circ_cm" else 216)
+        return Response({
+            "indicator": indicator, "sex": sex,
+            "uses_corrected_age": corrected != dob,
+            "reference": reference_curves(INDICATORS[indicator], sex, max_m,
+                                          step=0.5 if max_m <= 24 else 1.0),
+            "reference_note": "WHO 2006 (0-5 y), IAP 2015 (5-18 y)",
+            "points": points,
+        })
 
-    The same health timeline for a doctor or nurse looking at one of this hospital's patients, with what the patient
-    does not get: the medications (with dose and frequency), and the suspected / negated / family findings when asked
-    for. It follows the rule the other cross-hospital views use: a patient who has agreed to record sharing
-    (hie_consent_given) shows everything; otherwise only the documents this hospital issued. The view is audited.
-    Returns what the patient's timeline returns, plus "consent_given".
-    """
-    permission_classes = [IsAuthenticated, IsDoctorOrNurse]
-
-    def get(self, request, pk):
-        from apps.hospital_master.patients.models import HospitalPatient
-        from core.audit import log_action
-        patient = HospitalPatient.objects.using(request.hospital_db).filter(pk=pk).first()
-        if not patient:
-            return not_found("Patient not found.")
-        filters, err = _timeline_filters(request)
+    def post(self, request, awpid):
+        patient, err = _patient_or_403(request, awpid)
         if err:
             return err
-        consent = patient.hie_consent_given
-        data = build_timeline(patient.awpid, audience="staff", hospital_id=None if consent else request.hospital_id, **filters)
-        log_action(request, request.hospital_db, action="patient.timeline.view", resource_type="Patient", resource_id=patient.pk)
-        return success(data={**data, "consent_given": consent})
+        err = _clinician_or_403(request)
+        if err:
+            return err
+        ser = GrowthMeasurementIn(data=request.data)
+        ser.is_valid(raise_exception=True)
+        values = dict(ser.validated_data)
+        values["head_circumference_cm"] = values.pop("head_circ_cm", None)
+        GrowthMeasurement.objects.create(patient_id=patient.pk, source="manual", **values)
+        rebuild_patient(patient.pk)  # cheap; gives z-scores immediately
+        return Response({"status": "created"}, status=status.HTTP_201_CREATED)
+
+
+# ------------------------------------------------------------- immunization
+class ImmunizationIn(serializers.Serializer):
+    vaccine_text = serializers.CharField(max_length=100)
+    given_on = serializers.DateField()
+
+    def validate(self, attrs):
+        if not resolve_vaccines(attrs["vaccine_text"]):
+            raise serializers.ValidationError({"vaccine_text": "Vaccine not recognised"})
+        if attrs["given_on"] > date.today():
+            raise serializers.ValidationError({"given_on": "Cannot be in the future"})
+        return attrs
+
+
+class PatientImmunizationView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, awpid):
+        patient, err = _patient_or_403(request, awpid)
+        if err:
+            return err
+        dob, _ = ig.patient_dob_sex(patient)
+        given = [{"vaccine_text": v.vaccine_name, "given_on": v.administered_date, "document_id": v.document_id,
+                  "id": v.pk, "source": v.source}
+                 for v in ImmunizationRecord.objects.filter(patient_id=patient.pk, verification_status__in=SHOWN_VACCINES,
+                                                            administered_date__isnull=False)]
+        st = immunization_status(dob, given, date.today())
+        labels = load_config().get("patient_labels", {})
+        for r in st["rows"]:
+            r["status_label"] = labels.get(r["status"], r["status"])
+        st["next_due"] = next_due(st)
+        return Response(st)
+
+    def post(self, request, awpid):
+        patient, err = _patient_or_403(request, awpid)
+        if err:
+            return err
+        ser = ImmunizationIn(data=request.data)
+        ser.is_valid(raise_exception=True)
+        ImmunizationRecord.objects.create(
+            patient_id=patient.pk, source=ImmunizationRecord.SOURCE_MANUAL,
+            verification_status=ImmunizationRecord.STATUS_VERIFIED if ig.is_clinician(request.user) else ImmunizationRecord.STATUS_PENDING,
+            vaccines=resolve_vaccines(ser.validated_data["vaccine_text"]), vaccine_name=ser.validated_data["vaccine_text"],
+            administered_date=ser.validated_data["given_on"])
+        return Response({"status": "created"}, status=status.HTTP_201_CREATED)
+
+
+# ------------------------------------------------------------ clinician ops
+class ClinicalEventPatch(serializers.Serializer):
+    action = serializers.ChoiceField(choices=["verify", "reject", "recode"])
+    icd10 = serializers.CharField(max_length=10, required=False)
+    condition_text = serializers.CharField(max_length=255, required=False)
+    is_provisional = serializers.BooleanField(required=False)
+
+
+class ClinicalEventView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def patch(self, request, event_id):
+        err = _clinician_or_403(request)
+        if err:
+            return err
+        ev = get_object_or_404(ClinicalEvent, pk=event_id)
+        patient, err = _patient_or_403(request, ev.patient.awpid)
+        if err:
+            return err
+        ser = ClinicalEventPatch(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        if d["action"] == "reject":
+            ev.is_rejected, ev.is_verified = True, False
+        else:
+            if d["action"] == "recode":
+                if "icd10" in d:
+                    ev.icd10 = d["icd10"].upper()
+                    cls = classify_condition(ev.icd10, text=ev.condition_text)
+                    ev.condition_group, ev.category = cls["group"], cls["category"]
+                if "condition_text" in d:
+                    ev.condition_text = d["condition_text"]
+            if "is_provisional" in d:
+                ev.is_provisional = d["is_provisional"]
+            ev.is_verified, ev.is_rejected = True, False
+        ev.verified_by_id = _staff_id(request)
+        ev.verified_at = timezone.now()
+        ev.save()
+        rebuild_patient_task.delay(ev.patient_id)
+        return Response({"status": "ok", "event_id": ev.pk})
+
+
+class RecurrenceAckView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request, flag_id):
+        err = _clinician_or_403(request)
+        if err:
+            return err
+        flag = get_object_or_404(RecurrenceFlag, pk=flag_id)
+        _, err = _patient_or_403(request, flag.patient.awpid)
+        if err:
+            return err
+        flag.acknowledged_by_id, flag.acknowledged_at = _staff_id(request), timezone.now()
+        flag.save(update_fields=["acknowledged_by_id", "acknowledged_at", "updated_at"])
+        return Response({"status": "ok"})
+
+
+class PatientRebuildView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request, awpid):
+        err = _clinician_or_403(request)
+        if err:
+            return err
+        patient, err = _patient_or_403(request, awpid)
+        if err:
+            return err
+        rebuild_patient_task.delay(patient.pk)
+        return Response({"status": "queued"}, status=status.HTTP_202_ACCEPTED)
 
 
 logger = logging.getLogger(__name__)
@@ -266,8 +454,8 @@ def _checked_numbers(rd, current=None):
         raise _InvalidRule("The maximum age cannot be below the minimum age.")
     return numbers
 class _Kind:
-    def __init__(self, noun, hospital_column, name_key, extra_key, extra_default, rule_dict, template_message):
-        self.noun, self.hospital_column, self.name_key = noun, hospital_column, name_key
+    def __init__(self, noun, name_key, extra_key, extra_default, rule_dict, template_message):
+        self.noun, self.name_key = noun, name_key
         self.extra_key, self.extra_default = extra_key, extra_default   # dose_number (defaults to 1) / domain (required)
         self.rule_dict, self.template_message = rule_dict, template_message
         self.editable = [name_key, extra_key, "scheduled_label", "min_age_days", "max_age_days", "mandatory", "sort_order"]
@@ -286,7 +474,7 @@ class _Kind:
             return None
         numbers = _checked_numbers(rd)
         return {
-            self.name_key: rd[self.name_key], self.extra_key: numbers.get(self.extra_key, rd.get(self.extra_key, self.extra_default)),
+            "item": rd[self.name_key], self.extra_key: numbers.get(self.extra_key, rd.get(self.extra_key, self.extra_default)),
             "scheduled_label": rd["scheduled_label"], "min_age_days": numbers["min_age_days"],
             "max_age_days": numbers.get("max_age_days"), "mandatory": rd.get("mandatory", True),
             "sort_order": numbers.get("sort_order", default_sort),
@@ -295,9 +483,9 @@ class _Kind:
     def rules_json(self, schedule):
         rules = schedule.rules.all().order_by("sort_order")
         return rules, [self.rule_dict(r) for r in rules]
-VACCINATION = _Kind("vaccination", "active_vaccination_schedule_id", "vaccine_name", "dose_number", 1,
+VACCINATION = _Kind("vaccination", "vaccine_name", "dose_number", 1,
                     vaccination_rule_dict, "Vaccination schedule template created.")
-MILESTONE = _Kind("milestone", "active_milestone_schedule_id", "milestone", "domain", None,
+MILESTONE = _Kind("milestone", "milestone", "domain", None,
                   milestone_rule_dict, "Milestone schedule template created.")
 def _edit(kind, schedule, d):
     """Apply a PATCH body to a schedule and its rules. Returns how many rule changes were made. Raises _InvalidRule, before
@@ -338,9 +526,10 @@ def _edit(kind, schedule, d):
             rule = ScheduleRule.objects.using("default").filter(pk=rid, schedule=schedule).first()
             fields = [f for f in kind.editable if f in rd] if rule else []
             for f in fields:
-                setattr(rule, f, checked[id(rd)].get(f, None if rd[f] in (None, "") else rd[f]) if f in _NUMBERS else rd[f])
+                setattr(rule, "item" if f == kind.name_key else f,
+                        checked[id(rd)].get(f, None if rd[f] in (None, "") else rd[f]) if f in _NUMBERS else rd[f])
             if fields:
-                rule.save(using="default", update_fields=fields)
+                rule.save(using="default", update_fields=["item" if f == kind.name_key else f for f in fields])
                 touched += 1
         else:
             values = kind.new_rule(rd, 0)
@@ -348,12 +537,23 @@ def _edit(kind, schedule, d):
                 ScheduleRule.objects.using("default").create(schedule=schedule, **values)
                 touched += 1
     return touched
+def _clone_template(request, kind, template, name):
+    """The hospital's own copy of a template, switched on (the hospital's other schedules of this kind are switched off)."""
+    clone = Schedule.objects.using("default").create(kind=kind.noun,
+        name=name, description=template.description, owner_hospital_id=request.hospital_id, is_template=False, active=True)
+    rules = list(kind.rules().filter(schedule=template).order_by("sort_order"))
+    ScheduleRule.objects.using("default").bulk_create([
+        ScheduleRule(schedule=clone, item=r.item, dose_number=r.dose_number, domain=r.domain,
+                  scheduled_label=r.scheduled_label, min_age_days=r.min_age_days, max_age_days=r.max_age_days,
+                  mandatory=r.mandatory, sort_order=r.sort_order)
+        for r in rules])
+    _set_active(request, kind, clone)
+    return clone, rules
 def _set_active(request, kind, schedule):
     from apps.atomwalk.hospital_master.models import Hospital
     hospital = Hospital.objects.using("default").filter(pk=request.hospital_id).first()
     if hospital:
-        setattr(hospital, kind.hospital_column, schedule.id)
-        hospital.save(using="default", update_fields=[kind.hospital_column])
+        kind.schedules().filter(owner_hospital_id=hospital.id).exclude(pk=schedule.pk).update(active=False)
     return hospital
 # ── hospital admin ────────────────────────────────────────────────────────────────────────────────────────────────
 def hospital_views(kind):
@@ -361,9 +561,8 @@ def hospital_views(kind):
         permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
         def get(self, request):
-            from apps.atomwalk.hospital_master.models import Hospital
-            hospital = Hospital.objects.using("default").filter(pk=request.hospital_id).first()
-            active_id = getattr(hospital, kind.hospital_column) if hospital else None
+            active = active_schedule(kind.noun, request.hospital_id)
+            active_id = active.id if active else None
             own = kind.schedules().filter(owner_hospital_id=request.hospital_id).order_by("-created_at")
             templates = (kind.schedules()
                          .filter(owner_hospital_id__isnull=True, is_template=True, active=True).order_by("name"))
@@ -383,16 +582,7 @@ def hospital_views(kind):
                 return not_found("Template schedule not found.")
 
             name = (request.data.get("name") or "").strip() or f"{template.name} (customized)"
-            clone = Schedule.objects.using("default").create(kind=kind.noun, 
-                name=name, description=template.description, owner_hospital_id=request.hospital_id,
-                is_template=False, active=True)
-            rules = list(kind.rules().filter(schedule=template).order_by("sort_order"))
-            ScheduleRule.objects.using("default").bulk_create([
-                ScheduleRule(schedule=clone, item=r.item, dose_number=r.dose_number, domain=r.domain,
-                          scheduled_label=r.scheduled_label, min_age_days=r.min_age_days, max_age_days=r.max_age_days,
-                          mandatory=r.mandatory, sort_order=r.sort_order)
-                for r in rules])
-            _set_active(request, kind, clone)
+            clone, rules = _clone_template(request, kind, template, name)
             label = "" if kind is VACCINATION else f"{kind.noun} "
             return created(data=schedule_dict(clone, clone.id, len(rules)),
                            message=f"Cloned '{template.name}' and set as this hospital's active {label}schedule.")
@@ -420,7 +610,7 @@ def hospital_views(kind):
                            message=f"Schedule updated ({touched} rule change(s)).")
 
     class Activate(APIView):
-        """Make an own schedule, or a system template as it is (no clone), this hospital's active one."""
+        """Make an own schedule this hospital's active one. A system template is copied first, since a hospital runs on its own copy."""
         permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
         def post(self, request, pk):
@@ -429,8 +619,12 @@ def hospital_views(kind):
                 return not_found("Schedule not found.")
             if schedule.owner_hospital_id not in (None, request.hospital_id):
                 return error("You can only activate your own schedules or a system template.")
-            if not _set_active(request, kind, schedule):
+            if schedule.owner_hospital_id is None:
+                schedule, _ = _clone_template(request, kind, schedule, schedule.name)
+            elif not _set_active(request, kind, schedule):
                 return not_found("Hospital not found.")
+            else:
+                kind.schedules().filter(pk=schedule.pk).update(active=True)
             return success(data={"active_schedule_id": schedule.id},
                            message=f"'{schedule.name}' is now this hospital's active {kind.noun} schedule.")
 
@@ -447,10 +641,7 @@ def template_views(kind):
             from apps.atomwalk.hospital_master.models import Hospital
             templates = (kind.schedules()
                          .filter(owner_hospital_id__isnull=True, is_template=True).order_by("name"))
-            using = {}
-            for schedule_id in (Hospital.objects.using("default").exclude(**{kind.hospital_column + "__isnull": True})
-                                .values_list(kind.hospital_column, flat=True)):
-                using[schedule_id] = using.get(schedule_id, 0) + 1
+            using = schedule_usage(kind.noun)
             return success(data=[template_dict(t, hospitals_using=using.get(t.id, 0)) for t in templates])
 
         def post(self, request):
@@ -499,7 +690,7 @@ def template_views(kind):
             template = get_template(pk)
             if not template:
                 return not_found("Template not found.")
-            in_use = Hospital.objects.using("default").filter(**{kind.hospital_column: template.id}).count()
+            in_use = schedule_usage(kind.noun).get(template.id, 0)
             if in_use:
                 return error(
                     f"{in_use} hospital(s) currently have this template set as their active {kind.noun} schedule — "
@@ -551,37 +742,13 @@ def _certificate(patient, data, vaccine_name):
                                           name=patient.full_name, identifier=patient.awpid)
     return name, mime_type, key, None
 # ── growth ────────────────────────────────────────────────────────────────────────────────────────────────────────
-def _growth_series(patient, hospital_id):
-    """One point per day: this hospital's readings, plus other hospitals' on days we have none (if consented)."""
-    return growth_points(patient.awpid, hospital_id=hospital_id, include_other=patient.hie_consent_given)
-class PatientGrowthView(APIView):
-    permission_classes = [IsDoctorOrNurse]
-
-    def get(self, request, pk):
-        patient = get_patient(request, pk)
-        if not patient:
-            return not_found(PATIENT_NOT_FOUND)
-        series = _growth_series(patient, request.hospital_id)
-        age = age_years_months(patient.date_of_birth)
-        is_minor = age is not None and age[0] < 18
-        return success(data={
-            "patient_name": patient.full_name,
-            "date_of_birth": patient.date_of_birth,
-            "age_years": age[0] if age else None,
-            "age_months": age[1] if age else None,
-            "is_minor": is_minor,
-            "consent_given": patient.hie_consent_given,
-            "series": series,
-            "percentile_available": is_minor and add_percentiles(
-                series, patient.gender, patient.date_of_birth, only_source="this_hospital"),
-        })
 # ── vaccinations ──────────────────────────────────────────────────────────────────────────────────────────────────
 class PatientVaccinationListCreateView(APIView):
     def get_permissions(self):
         return [IsHospitalStaff() if self.request.method == "GET" else IsDoctorOrNurse()]
 
     def get(self, request, pk):
-        from apps.atomwalk.documents.services import build_roadmap
+        from apps.atomwalk.documents.lib_documents import build_roadmap
 
         patient = get_patient(request, pk)
         if not patient:
@@ -769,7 +936,7 @@ class BirthHistoryView(APIView):
         if not serializer.is_valid():
             return error(message="Validation error.", errors=serializer.errors)
         bh = BirthHistory.objects.using("default").create(
-            patient=shared, recorded_by=request.user.id, source_hospital_id=request.hospital_id, **serializer.validated_data)
+            patient=shared, source_hospital_id=request.hospital_id, **serializer.validated_data)
         log_action(request, request.hospital_db, "birth_history.create", resource_type="BirthHistory",
                    resource_id=bh.id, patient_id=patient.uuid, metadata={"replaced_other_hospitals_copy": None})
         return created(data=BirthHistorySerializer(bh).data, message="Birth history recorded.")
@@ -786,7 +953,7 @@ class BirthHistoryView(APIView):
             return error(message="Validation error.", errors=serializer.errors)
         before = {f: getattr(bh, f) for f in serializer.validated_data}
         previous_hospital = bh.source_hospital_id
-        serializer.save(updated_by=request.user.id, source_hospital_id=request.hospital_id)
+        serializer.save(source_hospital_id=request.hospital_id)
         changed = {f: [str(old), str(getattr(bh, f))] for f, old in before.items() if getattr(bh, f) != old}
         replaced = previous_hospital if previous_hospital not in (None, request.hospital_id) else None
         log_action(request, request.hospital_db, "birth_history.update", resource_type="BirthHistory",
@@ -798,7 +965,7 @@ class PatientMilestoneListCreateView(APIView):
     permission_classes = [IsDoctorOrNurse]
 
     def get(self, request, pk):
-        from apps.atomwalk.documents.services import milestone_roadmap_build_roadmap as build_roadmap
+        from apps.atomwalk.documents.lib_documents import milestone_roadmap_build_roadmap as build_roadmap
 
         patient = get_patient(request, pk)
         if not patient:
@@ -872,7 +1039,7 @@ class PortalVaccinationListView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.atomwalk.documents.services import build_roadmap, summarize_roadmap
+        from apps.atomwalk.documents.lib_documents import build_roadmap, summarize_roadmap
 
         awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
@@ -886,7 +1053,7 @@ class PortalMilestoneListView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.atomwalk.documents.services import (
+        from apps.atomwalk.documents.lib_documents import (
             milestone_roadmap_build_roadmap as build_roadmap,
             milestone_roadmap_summarize_roadmap as summarize_roadmap,
         )

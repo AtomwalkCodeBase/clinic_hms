@@ -10,7 +10,7 @@ Creates a new hospital hospital end-to-end:
 Usage:
   python manage.py provision_hospital \\
     --name "Apollo Delhi" \\
-    --subdomain apollo-delhi \\
+    --hospital-code apollo-delhi \\
     --city Delhi \\
     --state Delhi \\
     --gstin 07AABCU9603R1ZX \\
@@ -25,6 +25,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils.text import slugify
 
 from apps.atomwalk.hospital_master.models import Hospital, Subscription
+from apps.atomwalk.hospital_master.services import parameters_of
 from apps.atomwalk.hospital_master.services import create_hospital_database, run_hospital_migrations
 # Re-exported for backwards compatibility — apps/atomwalk/management/commands/
 # seed_full_demo.py imports TIER_FEATURE_DEFAULTS from this module. The real
@@ -43,8 +44,8 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--name", required=True, help="Hospital display name")
-        parser.add_argument("--subdomain", default=None,
-                            help="Subdomain slug (auto-derived from name if omitted)")
+        parser.add_argument("--hospital-code", default=None,
+                            help="Hospital code slug (auto-derived from name if omitted)")
         parser.add_argument("--city", default="")
         parser.add_argument("--state", default="")
         parser.add_argument("--gstin", default="")
@@ -58,7 +59,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         name = options["name"]
-        subdomain = options["subdomain"] or slugify(name)
+        hospital_code = options["hospital_code"] or slugify(name)
         city = options["city"]
         state = options["state"]
         gstin = options["gstin"]
@@ -66,20 +67,20 @@ class Command(BaseCommand):
         admin_email = options["admin_email"] or None
         tier = options["tier"]
 
-        # Derive db_name from subdomain
-        db_name = subdomain.replace("-", "_").replace(" ", "_").lower()
+        # Derive db_name from hospital_code
+        db_name = hospital_code.replace("-", "_").replace(" ", "_").lower()
         db_name = f"aw_{db_name}"
 
         self.stdout.write(f"\n{'='*60}")
         self.stdout.write(f"  Provisioning: {name}")
-        self.stdout.write(f"  Subdomain:    {subdomain}")
+        self.stdout.write(f"  Hospital code:    {hospital_code}")
         self.stdout.write(f"  DB Name:      {db_name}")
         self.stdout.write(f"  Tier:         {tier}")
         self.stdout.write(f"{'='*60}\n")
 
         # ── 1. Validate uniqueness ────────────────────────────────────
-        if Hospital.objects.filter(subdomain=subdomain).exists():
-            raise CommandError(f"Hospital with subdomain '{subdomain}' already exists.")
+        if Hospital.objects.filter(hospital_code=hospital_code).exists():
+            raise CommandError(f"Hospital with hospital_code '{hospital_code}' already exists.")
         if Hospital.objects.filter(db_name=db_name).exists():
             raise CommandError(f"Hospital with db_name '{db_name}' already exists.")
 
@@ -87,7 +88,7 @@ class Command(BaseCommand):
         self.stdout.write("[ 1/5 ] Creating Hospital record...")
         hospital = Hospital.objects.create(
             name=name,
-            subdomain=subdomain,
+            hospital_code=hospital_code,
             db_name=db_name,
             city=city,
             state=state,
@@ -96,30 +97,7 @@ class Command(BaseCommand):
         )
         self.stdout.write(self.style.SUCCESS(f"    Hospital created (id={hospital.id})"))
 
-        # Point the new hospital at the shared system "Default Schedule"
-        # vaccination-schedule template so it doesn't lose vaccination
-        # roadmap functionality on day one. This is v1's simplest-correct
-        # behavior: point directly at the shared template's id — NOT a
-        # clone-on-provision. The hospital can later clone it into its own
-        # editable copy via the admin UI (a separate task) if it wants to
-        # customize; until then it's reading (not owning) the template.
-        from apps.atomwalk.documents.models import Schedule
-        default_schedule = (
-            Schedule.objects.using("default")
-            .filter(kind="vaccination", owner_hospital_id__isnull=True, is_template=True, active=True)
-            .order_by("id")
-            .first()
-        )
-        if default_schedule:
-            hospital.active_vaccination_schedule_id = default_schedule.id
-            hospital.save(update_fields=["active_vaccination_schedule_id"])
-            self.stdout.write(self.style.SUCCESS(
-                f"    Assigned default vaccination schedule (id={default_schedule.id})"
-            ))
-        else:
-            self.stdout.write(self.style.WARNING(
-                "    No system 'Default Schedule' found — hospital provisioned without a vaccination schedule."
-            ))
+        parameters_of(hospital)
 
         # ── 3. Create Subscription ───────────────────────────────────
         self.stdout.write("[ 2/5 ] Creating Subscription...")
@@ -167,7 +145,7 @@ class Command(BaseCommand):
             admin.set_password(temp_password)
             admin.save(using=db_name)
 
-            # Write to atomwalk mobile index (enables login without subdomain)
+            # Write to atomwalk mobile index (enables login without hospital_code)
             from apps.atomwalk.patients.models import StaffMobileIndex
             StaffMobileIndex.objects.using("default").update_or_create(
                 mobile=admin_mobile,
@@ -186,14 +164,14 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("  ✓ HOSPITAL PROVISIONED SUCCESSFULLY"))
         self.stdout.write("=" * 60)
         self.stdout.write(f"  Hospital:      {name}")
-        self.stdout.write(f"  Subdomain:     {subdomain}")
+        self.stdout.write(f"  Hospital code:     {hospital_code}")
         self.stdout.write(f"  DB Name:       {db_name}")
         self.stdout.write(f"  Admin Mobile:  {admin_mobile}")
         self.stdout.write(f"  Temp Password: {temp_password}")
         self.stdout.write(f"  Tier:          {tier}")
         self.stdout.write("")
         self.stdout.write("  Login at the frontend with:")
-        self.stdout.write(f"    Subdomain: {subdomain}")
+        self.stdout.write(f"    Hospital code: {hospital_code}")
         self.stdout.write(f"    Mobile:    {admin_mobile}")
         self.stdout.write(f"    Password:  {temp_password}")
         self.stdout.write("=" * 60 + "\n")

@@ -25,7 +25,7 @@ def store_prescription_document(rx, db, hospital_id):
     from apps.atomwalk.hospital_master.models import Hospital
     from apps.hospital_master.patients.models import HospitalPatient
     from apps.atomwalk.documents.models import MedicalDocument
-    from apps.atomwalk.documents.services import create_issued_document
+    from apps.atomwalk.documents.lib_documents import create_issued_document
     from core import storage as blob_storage
 
     items = list(PrescriptionItem.objects.using(db).filter(prescription=rx))

@@ -31,6 +31,7 @@ from core.pagination import paginate_queryset
 from core.file_validation import validate_data_uri, FileValidationError
 from core import storage as blob_storage
 from apps.atomwalk.patients.models import StaffMobileIndex
+from apps.atomwalk.hospital_master.services import parameters_of
 
 from apps.hospital_master.facility.models import Branch, Department, Room
 from apps.hospital_master.staff.models import StaffUser, DoctorProfile, StaffProfile, Role, Permission, UserRole, RoomAssignment
@@ -315,7 +316,8 @@ class StaffInviteView(APIView):
             from apps.atomwalk.hospital_master.models import Hospital as _Hospital
             try:
                 _hospital = _Hospital.objects.using("default").get(pk=request.hospital_id)
-                hospital_owns_fee = _hospital.fee_ownership == "hospital"
+                from apps.atomwalk.hospital_master.services import parameters_of as _parameters_of
+                hospital_owns_fee = _parameters_of(_hospital).fee_ownership == "hospital"
                 fee_value = d.get("consultation_fee") if hospital_owns_fee else None
                 followup_fee_value = d.get("followup_fee") if hospital_owns_fee else None
             except _Hospital.DoesNotExist:
@@ -365,7 +367,7 @@ class StaffInviteView(APIView):
                 experience_years=d.get("experience_years"),
             )
 
-        # Write to atomwalk index so login can route by mobile (no subdomain needed)
+        # Write to atomwalk index so login can route by mobile (no hospital_code needed)
         StaffMobileIndex.objects.using("default").update_or_create(
             mobile=d["phone"],
             defaults={
@@ -997,7 +999,8 @@ class MyDoctorProfileView(APIView):
         from apps.atomwalk.hospital_master.models import Hospital as _Hospital
         try:
             t = _Hospital.objects.using("default").get(pk=request.hospital_id)
-            return t.fee_ownership == "doctor"
+            from apps.atomwalk.hospital_master.services import parameters_of as _parameters_of
+            return _parameters_of(t).fee_ownership == "doctor"
         except _Hospital.DoesNotExist:
             return False
 
@@ -1319,27 +1322,28 @@ class HospitalSettingsView(APIView):
         hospital = self._get_hospital(request)
         if not hospital:
             return not_found("Hospital not found.")
+        params = parameters_of(hospital)
         if not IsHospitalAdmin().has_permission(request, self):
-            return success(data={"fee_ownership": hospital.fee_ownership})
+            return success(data={"fee_ownership": params.fee_ownership})
         return success(data={
-            "fee_ownership": hospital.fee_ownership,
+            "fee_ownership": params.fee_ownership,
             # Read-only here — staff need this to log in with Employee ID
             # instead of mobile (see auth_app.views.StaffLoginView), but it's
             # not exposed for editing on this endpoint; see
             # platform_admin.views.HospitalDetailView for that.
-            "subdomain": hospital.subdomain,
+            "hospital_code": hospital.hospital_code,
             # ── Billing config ──────────────────────────────────────────
-            "registration_fee_enabled": hospital.registration_fee_enabled,
-            "registration_fee_amount": str(hospital.registration_fee_amount),
-            "default_tax_rate": str(hospital.default_tax_rate),
+            "registration_fee_enabled": params.registration_fee_enabled,
+            "registration_fee_amount": str(params.registration_fee_amount),
+            "default_tax_rate": str(params.default_tax_rate),
             # ── Branding ───────────────────────────────────────────────
-            # hospital.logo stores an S3 object key, not a usable URL — sign
+            # params.logo stores an S3 object key, not a usable URL — sign
             # it fresh on every read (see core/storage.py).
-            "logo": blob_storage.signed_url(hospital.logo),
+            "logo": blob_storage.signed_url(params.logo),
             # Empty means "using the auto-generated default" (hospital.db_name)
             # — see core.storage.hospital_folder(). Frontend shows the
             # effective folder name as a placeholder when this is blank.
-            "storage_folder": hospital.storage_folder,
+            "storage_folder": params.storage_folder,
             "storage_folder_default": hospital.db_name,
         })
 
@@ -1347,19 +1351,20 @@ class HospitalSettingsView(APIView):
         hospital = self._get_hospital(request)
         if not hospital:
             return not_found("Hospital not found.")
+        params = parameters_of(hospital)
         allowed = {"fee_ownership", "registration_fee_enabled", "registration_fee_amount", "default_tax_rate", "logo", "storage_folder"}
         for key, val in request.data.items():
             if key not in allowed:
                 return error(f"Field '{key}' is not configurable here.")
         if "fee_ownership" in request.data:
             fo = request.data["fee_ownership"]
-            from apps.atomwalk.hospital_master.models import Hospital as _Hospital
-            valid = [c[0] for c in _Hospital.FEE_OWNERSHIP_CHOICES]
+            from apps.atomwalk.hospital_master.models import HospitalParameters
+            valid = [c[0] for c in HospitalParameters.FEE_OWNERSHIP_CHOICES]
             if fo not in valid:
                 return error(f"fee_ownership must be one of: {valid}.")
-            hospital.fee_ownership = fo
+            params.fee_ownership = fo
         if "registration_fee_enabled" in request.data:
-            hospital.registration_fee_enabled = bool(request.data["registration_fee_enabled"])
+            params.registration_fee_enabled = bool(request.data["registration_fee_enabled"])
         if "registration_fee_amount" in request.data:
             try:
                 amt = Decimal(str(request.data["registration_fee_amount"]))
@@ -1367,7 +1372,7 @@ class HospitalSettingsView(APIView):
                 return error("registration_fee_amount must be a number.")
             if amt < 0:
                 return error("registration_fee_amount can't be negative.")
-            hospital.registration_fee_amount = amt
+            params.registration_fee_amount = amt
         if "default_tax_rate" in request.data:
             try:
                 rate = Decimal(str(request.data["default_tax_rate"]))
@@ -1375,18 +1380,18 @@ class HospitalSettingsView(APIView):
                 return error("default_tax_rate must be a number.")
             if rate < 0 or rate > 100:
                 return error("default_tax_rate must be between 0 and 100.")
-            hospital.default_tax_rate = rate
+            params.default_tax_rate = rate
         if "storage_folder" in request.data:
             raw = (request.data.get("storage_folder") or "").strip()
             if not raw:
-                hospital.storage_folder = ""
+                params.storage_folder = ""
             else:
                 slug = blob_storage.sanitize_folder_name(raw)
                 if not slug:
                     return error("Storage folder name must contain at least one letter or number.",
                                  errors={"storage_folder": "Invalid."})
-                hospital.storage_folder = slug
-        old_logo_key = hospital.logo
+                params.storage_folder = slug
+        old_logo_key = params.logo
         if "logo" in request.data:
             logo = request.data["logo"] or ""
             # Client resizes before upload (see HospitalLogoUpload.jsx), but
@@ -1395,29 +1400,29 @@ class HospitalSettingsView(APIView):
             if len(logo) > 1_500_000:
                 return error("Logo image is too large. Please upload a smaller file.")
             if not logo:
-                hospital.logo = ""
+                params.logo = ""
             else:
                 try:
                     mime_type = validate_data_uri(logo)
                 except FileValidationError as exc:
                     return error(str(exc), errors={"logo": str(exc)})
                 try:
-                    hospital.logo = blob_storage.upload_data_uri(
+                    params.logo = blob_storage.upload_data_uri(
                         logo, prefix=f"hospital-logos/{blob_storage.hospital_folder(hospital)}", mime_type=mime_type,
                         category="hospital-logo",
                     )
                 except blob_storage.StorageError as exc:
                     return error(str(exc), errors={"logo": str(exc)})
-        hospital.save(using="default")
-        if "logo" in request.data and old_logo_key and old_logo_key != hospital.logo:
+        params.save(using="default")
+        if "logo" in request.data and old_logo_key and old_logo_key != params.logo:
             blob_storage.delete(old_logo_key)
         return success(data={
-            "fee_ownership": hospital.fee_ownership,
-            "registration_fee_enabled": hospital.registration_fee_enabled,
-            "registration_fee_amount": str(hospital.registration_fee_amount),
-            "default_tax_rate": str(hospital.default_tax_rate),
-            "logo": blob_storage.signed_url(hospital.logo),
-            "storage_folder": hospital.storage_folder,
+            "fee_ownership": params.fee_ownership,
+            "registration_fee_enabled": params.registration_fee_enabled,
+            "registration_fee_amount": str(params.registration_fee_amount),
+            "default_tax_rate": str(params.default_tax_rate),
+            "logo": blob_storage.signed_url(params.logo),
+            "storage_folder": params.storage_folder,
             "storage_folder_default": hospital.db_name,
         }, message="Settings updated.")
 

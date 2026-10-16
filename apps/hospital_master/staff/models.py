@@ -73,7 +73,7 @@ class StaffUser(models.Model):
     # HR/payroll system with employee IDs (enterprise tier mainly). Unlike
     # phone, this is only unique WITHIN this hospital's own database — two
     # hospitals can both have an "EMP-001" — so logging in with it requires
-    # a hospital hint (hospital subdomain) that mobile-based login doesn't
+    # a hospital hint (hospital hospital_code) that mobile-based login doesn't
     # need. See StaffLoginView / docs/onboarding_auth_rbac_architecture.md 3.1.2.
     employee_id         = models.CharField(max_length=50, unique=True, null=True, blank=True)
     date_of_birth       = models.DateField(null=True, blank=True)

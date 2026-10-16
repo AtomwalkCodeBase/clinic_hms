@@ -108,7 +108,7 @@ export default function SettingsPage() {
             <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>Account</h2>
             <InfoRow label="Email"     value={user?.email} />
             <InfoRow label="Role"      value="Hospital Admin" />
-            <InfoRow label="Hospital Code" value={settings?.subdomain} mono />
+            <InfoRow label="Hospital Code" value={settings?.hospital_code} mono />
             <InfoRow label="Hospital ID" value={user?.hospital_id} />
             <InfoRow label="Database"  value={user?.db_name} mono />
             <InfoRow label="Plan"      value={user?.license_tier} />

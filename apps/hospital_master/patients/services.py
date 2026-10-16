@@ -16,7 +16,7 @@ from core.utils.nntm     import get_next_number
 from apps.hospital_master.facility.models import Branch
 from apps.atomwalk.patients.models import Patient, PatientRelationship
 from apps.atomwalk.documents.models import ClinicalEvent, SharedAllergy, LabResult
-from apps.atomwalk.documents.services import history_readings
+from apps.atomwalk.documents.lib_documents import history_readings
 from apps.atomwalk.documents.models import MedicalDocument
 from apps.hospital_master.patients.models import HospitalPatient
 
@@ -749,7 +749,7 @@ class PatientService:
         # type is not theirs to share yet: it must not reach another hospital
         # over the HIE until the patient has confirmed it (the same rule My
         # Documents applies).
-        from apps.atomwalk.documents.services import awaiting_review_q
+        from apps.atomwalk.documents.lib_documents import awaiting_review_q
         documents = list(
             MedicalDocument.objects.using("default")
             .filter(patient__awpid=awpid)

@@ -26,11 +26,9 @@ def recompute_invoice_totals(invoice, db):
 
 def hospital_default_tax_rate(hospital_id):
     """The hospital's configured default tax rate (percent); 0 when unknown."""
-    from apps.atomwalk.hospital_master.models import Hospital
+    from apps.atomwalk.hospital_master.models import HospitalParameters
 
     if not hospital_id:
         return Decimal("0")
-    try:
-        return Hospital.objects.using("default").get(pk=hospital_id).default_tax_rate
-    except Hospital.DoesNotExist:
-        return Decimal("0")
+    params = HospitalParameters.objects.using("default").filter(hospital_id=hospital_id).first()
+    return params.default_tax_rate if params else Decimal("0")

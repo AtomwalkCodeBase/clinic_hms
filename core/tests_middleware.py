@@ -78,7 +78,7 @@ class HospitalResolutionTests(TestCase):
 
     def test_an_active_hospitals_alias_is_registered_and_selected(self):
         from apps.atomwalk.hospital_master.models import Hospital
-        Hospital.objects.using("default").create(name="MW", subdomain="mw", db_name="aw_hospital_mw")
+        Hospital.objects.using("default").create(name="MW", hospital_code="mw", db_name="aw_hospital_mw")
         resp = self.call(db_name="aw_hospital_mw")
         self.assertEqual(resp.status_code, 200)
         self.assertIn("aw_hospital_mw", settings.DATABASES)
@@ -86,7 +86,7 @@ class HospitalResolutionTests(TestCase):
 
     def test_an_inactive_hospital_is_rejected(self):
         from apps.atomwalk.hospital_master.models import Hospital
-        Hospital.objects.using("default").create(name="MW", subdomain="mw", db_name="aw_hospital_mw", is_active=False)
+        Hospital.objects.using("default").create(name="MW", hospital_code="mw", db_name="aw_hospital_mw", is_active=False)
         self.assertEqual(self.call(db_name="aw_hospital_mw").status_code, 401)
 
     def test_platform_and_patient_tokens_never_select_a_hospital_alias(self):
@@ -98,7 +98,7 @@ class HospitalResolutionTests(TestCase):
 
     def test_the_alias_does_not_leak_into_the_next_request(self):
         from apps.atomwalk.hospital_master.models import Hospital
-        Hospital.objects.using("default").create(name="MW", subdomain="mw", db_name="aw_hospital_mw")
+        Hospital.objects.using("default").create(name="MW", hospital_code="mw", db_name="aw_hospital_mw")
         self.call(db_name="aw_hospital_mw")
         self.seen.clear()
         self.middleware(__import__("django.test", fromlist=["RequestFactory"]).RequestFactory().get("/health/"))

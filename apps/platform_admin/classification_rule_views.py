@@ -11,8 +11,8 @@ so changing one is a code change, not a screen.
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from apps.atomwalk.documents import services as rules
-from apps.atomwalk.documents import services
+from apps.atomwalk.documents import lib_documents as rules
+from apps.atomwalk.documents import lib_documents as services
 from apps.atomwalk.documents.models import MedicalDocument
 from core.pagination import paginate_queryset
 from core.permissions import IsPlatformAdmin
@@ -21,7 +21,7 @@ from core.response import error, not_found, success
 
 def _doc_row(d):
     return {"id": d.id, "title": d.file_name, "doc_type": d.document_type, "method": rules.method_of(d),
-            "score": rules.score_of(d), "best_guess": rules.best_guess_of(d), "processing_status": d.processing_status,
+            "score": rules.score_of(d), "best_guess": rules.best_guess_of(d), "processing_status": d.status,
             "awpid": d.patient.awpid, "created_at": d.created_at}
 
 
@@ -31,12 +31,12 @@ class DocumentReportView(APIView):
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request):
-        qs = MedicalDocument.objects.select_related("patient", "classification").order_by("-created_at")
+        qs = MedicalDocument.objects.select_related("patient", "d_classification").order_by("-created_at")
         method = request.query_params.get("method")
         if method == "staff":
-            qs = qs.filter(classification__status__in=(rules.HUMAN_CLASSIFIED, rules.ISSUED))
+            qs = qs.filter(d_classification__status__in=(rules.HUMAN_CLASSIFIED, rules.ISSUED))
         elif method == "rule":
-            qs = qs.filter(classification__status__in=(rules.RULE_CLASSIFIED, rules.REVIEW_REQUIRED))
+            qs = qs.filter(d_classification__status__in=(rules.RULE_CLASSIFIED, rules.REVIEW_REQUIRED))
         if request.query_params.get("status"):
             qs = qs.filter(status=request.query_params["status"])
         page, meta = paginate_queryset(request, qs)

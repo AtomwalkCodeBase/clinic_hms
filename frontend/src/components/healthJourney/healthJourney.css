@@ -1,0 +1,183 @@
+/* Health Journey — built on the app's own design tokens (styles/variables.css), so it follows whichever colour theme is
+   picked in the top bar. The --phj-* tokens below are what the charts read (theme.js); they are plain colours, because
+   canvas charts cannot use color-mix(). Everything else in this file may use color-mix freely. */
+:root {
+  --phj-surface-1: var(--color-surface);
+  --phj-page: var(--color-bg);
+  --phj-text-primary: var(--color-text);
+  --phj-text-secondary: var(--color-text-secondary);
+  --phj-text-muted: var(--color-text-muted);
+  --phj-grid: var(--color-border);
+  --phj-axis: var(--color-text-disabled);
+  --phj-border: var(--color-border);
+
+  --phj-chronic: var(--color-info);
+  --phj-acute: var(--color-text-secondary);
+  --phj-growth-line: var(--color-primary);
+  --phj-band-inner: var(--color-primary-light);
+  --phj-band-outer: var(--color-table-header);
+  --phj-band-median: var(--color-primary);
+
+  --phj-status-good: var(--color-success);
+  --phj-status-warning: var(--color-accent);
+  --phj-status-serious: var(--color-warning);
+  --phj-status-critical: var(--color-error);
+  --phj-good-text: var(--color-success);
+}
+
+.phj { color: var(--phj-text-primary); font-variant-numeric: tabular-nums; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; font-size: 15px; }
+.phj > * { min-width: 0; }
+.phj-h2 { font-family: var(--font-display); font-size: 25px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.phj-h3 { font-family: var(--font-display); font-size: 19px; font-weight: 600; margin: 0; }
+.phj-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.phj-between { justify-content: space-between; }
+.phj-gap { gap: 10px; margin: 2px 0 6px; }
+.phj-muted { color: var(--phj-text-secondary); font-size: 14px; margin: 0; }
+.phj-note { color: var(--phj-text-muted); font-size: 13px; margin: 4px 0 0; line-height: 1.5; }
+
+/* ── hero ─────────────────────────────────────────────────────────────── */
+.phj-hero {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px;
+  padding: 18px 20px; border-radius: var(--radius-card); border: 1px solid var(--phj-border);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 9%, var(--phj-surface-1)) 0%, var(--phj-surface-1) 70%);
+  box-shadow: var(--shadow-card);
+}
+.phj-who { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.phj-avatar {
+  width: 46px; height: 46px; border-radius: 50%; flex: none; display: grid; place-items: center;
+  background: var(--color-primary); color: var(--color-hero-text); font-family: var(--font-display); font-size: 18px; font-weight: 600;
+}
+.phj-who-text { min-width: 0; }
+.phj-eyebrow { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--phj-text-muted); font-weight: 600; margin-bottom: 2px; }
+.phj-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.phj-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 500;
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--phj-surface-1)); color: var(--color-primary);
+}
+.phj-chip-busy { background: color-mix(in srgb, var(--color-accent) 18%, var(--phj-surface-1)); color: var(--color-warning); }
+.phj-filters select {
+  padding: 8px 12px; border-radius: var(--radius-input); border: 1px solid var(--phj-border); background: var(--phj-surface-1); color: var(--phj-text-primary); font: inherit;
+}
+
+/* ── summary tiles ────────────────────────────────────────────────────── */
+.phj-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.phj-tile {
+  --tone: var(--color-primary);
+  display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: var(--radius-card); border: 1px solid var(--phj-border);
+  background: var(--phj-surface-1); box-shadow: var(--shadow-card); transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+.phj-tile:hover { transform: translateY(-1px); box-shadow: var(--shadow-dropdown); }
+.phj-tile-ico {
+  width: 38px; height: 38px; flex: none; border-radius: 11px; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--tone) 12%, var(--phj-surface-1)); color: var(--tone);
+}
+.phj-tile-v { font-family: var(--font-display); font-size: 30px; font-weight: 600; line-height: 1; }
+.phj-tile-l { color: var(--phj-text-secondary); font-size: 13px; margin-top: 3px; line-height: 1.25; }
+.phj-tone-good { --tone: var(--color-success); }
+.phj-tone-serious { --tone: var(--color-warning); }
+.phj-tone-critical { --tone: var(--color-error); }
+.phj-tone-info { --tone: var(--color-info); }
+.phj-tone-muted { --tone: var(--color-text-muted); }
+.phj-tile.phj-tone-critical, .phj-tile.phj-tone-serious { border-color: color-mix(in srgb, var(--tone) 35%, var(--phj-border)); }
+.phj-callout.phj-tone-critical { border-left: 3px solid var(--color-error); }
+
+/* ── cards, callouts ──────────────────────────────────────────────────── */
+.phj-card {
+  background: var(--phj-surface-1); border: 1px solid var(--phj-border); border-radius: var(--radius-card); box-shadow: var(--shadow-card);
+  padding: 18px 20px; display: grid; gap: 14px;
+}
+.phj-card-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.phj-card-sub { color: var(--phj-text-muted); font-size: 14px; margin: 2px 0 0; }
+.phj-callout {
+  background: color-mix(in srgb, var(--color-primary) 6%, var(--phj-surface-1)); border: 1px solid var(--phj-border);
+  border-left: 3px solid var(--color-primary); border-radius: 10px; padding: 10px 14px; margin: 0; font-size: 14px; line-height: 1.5;
+}
+
+/* ── tabs and segmented controls ──────────────────────────────────────── */
+.phj-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--phj-border); overflow-x: auto; }
+.phj-tabs button {
+  background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 10px 16px; cursor: pointer; font: inherit;
+  font-size: 14px; font-weight: 500; color: var(--phj-text-secondary); white-space: nowrap; transition: color var(--transition-fast);
+}
+.phj-tabs button:hover { color: var(--phj-text-primary); }
+.phj-tabs button.on { color: var(--color-primary); border-bottom-color: var(--color-primary); font-weight: 600; }
+.phj-seg {
+  display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px; background: color-mix(in srgb, var(--color-text) 6%, var(--phj-surface-1));
+}
+.phj-seg button {
+  background: transparent; border: 0; padding: 6px 12px; border-radius: 8px; color: var(--phj-text-secondary); cursor: pointer; font: inherit;
+  font-size: 14px; font-weight: 500; min-height: 30px; transition: background var(--transition-fast), color var(--transition-fast);
+}
+.phj-seg button:hover { color: var(--phj-text-primary); }
+.phj-seg button.on { background: var(--phj-surface-1); color: var(--color-primary); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+
+/* ── buttons, links, form ─────────────────────────────────────────────── */
+.phj-btn {
+  border: 1px solid var(--phj-border); background: var(--phj-surface-1); color: var(--phj-text-primary); border-radius: var(--radius-button);
+  padding: 8px 14px; cursor: pointer; font: inherit; font-size: 14px; font-weight: 500; transition: background var(--transition-fast);
+}
+.phj-btn:hover { background: color-mix(in srgb, var(--color-primary) 6%, var(--phj-surface-1)); }
+.phj-btn-primary { background: var(--color-primary); color: var(--color-hero-text); border-color: transparent; }
+.phj-btn-primary:hover { background: var(--color-primary-dark); }
+.phj-link { background: none; border: 0; color: var(--color-primary); cursor: pointer; padding: 0; font: inherit; font-size: 14px; font-weight: 500; }
+.phj-link:hover { text-decoration: underline; }
+.phj-form { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border-radius: 12px; background: color-mix(in srgb, var(--color-primary) 5%, var(--phj-surface-1)); border: 1px solid var(--phj-border); }
+.phj-form input { flex: 1 1 200px; padding: 9px 12px; border: 1px solid var(--phj-border); border-radius: var(--radius-input); background: var(--phj-surface-1); color: var(--phj-text-primary); font: inherit; }
+.phj-form input:focus { outline: 2px solid color-mix(in srgb, var(--color-primary) 40%, transparent); outline-offset: 1px; }
+
+/* ── legend ───────────────────────────────────────────────────────────── */
+.phj-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--phj-text-secondary); font-size: 13px; padding-top: 4px; }
+.phj-legend span { display: inline-flex; align-items: center; }
+.phj-legend .sw { display: inline-block; width: 16px; height: 8px; border-radius: 3px; margin-right: 6px; }
+.phj-legend .ln { display: inline-block; width: 18px; height: 3px; border-radius: 2px; margin-right: 6px; }
+.phj-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.phj-c-chronic { background: var(--phj-chronic); }
+.phj-c-acute { background: var(--phj-acute); }
+.phj-c-critical-t { color: var(--phj-status-critical); margin-right: 4px; }
+.phj-c-good-t { color: var(--phj-good-text); margin-right: 4px; }
+
+/* ── tables ───────────────────────────────────────────────────────────── */
+.phj-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.phj-table th {
+  text-align: left; color: var(--phj-text-muted); font-weight: 600; font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase;
+  border-bottom: 1px solid var(--phj-border); padding: 8px 10px; background: var(--color-table-header);
+}
+.phj-table td { border-bottom: 1px solid var(--phj-border); padding: 10px; vertical-align: middle; }
+.phj-table tbody tr:hover td { background: color-mix(in srgb, var(--color-primary) 4%, var(--phj-surface-1)); }
+.phj-age { color: var(--phj-text-secondary); white-space: nowrap; font-weight: 600; }
+.phj-pill {
+  display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--phj-border); border-radius: 999px; padding: 3px 12px;
+  font-size: 14px; font-weight: 500; background: var(--phj-surface-1);
+}
+.phj-pill-critical { color: var(--color-error); background: var(--color-error-light); border-color: transparent; }
+.phj-pill-warning { color: var(--color-warning); background: var(--color-warning-light); border-color: transparent; }
+.phj-pill-good { color: var(--color-success); background: var(--color-success-light); border-color: transparent; }
+.phj-status { white-space: nowrap; font-weight: 500; }
+.phj-ico { display: inline-block; width: 1.1em; text-align: center; font-weight: 700; }
+.phj-ico-given { color: var(--phj-good-text); }
+.phj-ico-overdue { color: var(--phj-status-critical); }
+.phj-ico-due { color: var(--color-warning); }
+.phj-ico-upcoming, .phj-ico-scheduled { color: var(--phj-text-muted); }
+
+/* ── empty state ──────────────────────────────────────────────────────── */
+.phj-empty { display: grid; justify-items: center; text-align: center; gap: 10px; padding: 34px 20px 30px; }
+.phj-empty-ico {
+  width: 64px; height: 64px; border-radius: 20px; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--phj-surface-1)); color: var(--color-primary);
+}
+.phj-empty h3 { font-family: var(--font-display); font-size: 18px; margin: 6px 0 0; }
+.phj-empty p { color: var(--phj-text-secondary); margin: 0; max-width: 460px; line-height: 1.55; font-size: 14px; }
+
+/* ── tooltips, skeleton ───────────────────────────────────────────────── */
+.phj-tt-h { font-weight: 600; margin-bottom: 3px; }
+.phj-tt-k { color: var(--phj-text-muted); }
+.phj-skeleton { border-radius: var(--radius-card); background: linear-gradient(90deg, var(--phj-grid), var(--phj-surface-1), var(--phj-grid)); background-size: 200% 100%; animation: phj-sh 1.4s infinite; }
+@keyframes phj-sh { to { background-position: -200% 0; } }
+
+@media (max-width: 640px) {
+  .phj-hero { padding: 14px; }
+  .phj-card { padding: 14px; }
+  .phj-table { font-size: 14px; }
+  .phj-tiles { grid-template-columns: repeat(2, 1fr); }
+  .phj-tabs button { padding: 10px 12px; }
+}

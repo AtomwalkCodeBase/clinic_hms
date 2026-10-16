@@ -40,8 +40,9 @@ import { DrugForm } from "./encounter/DrugForm";
 import { LabOrderSection } from "./encounter/LabOrderSection";
 import { PastConsultationTab } from "./encounter/PastConsultationTab";
 import { HistorySidebar } from "./encounter/HistorySidebar";
-import HealthTimeline from "../../components/timeline/HealthTimeline";
 import apiClient from "../../services/api.client";
+import HealthJourney from "../../components/healthJourney/HealthJourney";
+import { openDocumentWith } from "../../components/healthJourney/openDocument";
 import { AdmissionReferralModal } from "./encounter/AdmissionReferralModal";
 import { FollowUpModal } from "./encounter/FollowUpModal";
 import { DocumentViewerDrawer } from "./encounter/DocumentViewerDrawer";
@@ -49,7 +50,6 @@ import { ConsultPadQRModal } from "./encounter/ConsultPadQRModal";
 import { RecognisedTextModal } from "./encounter/RecognisedTextModal";
 
 // A source document of the timeline, through the staff endpoint (it applies the same hospital-sharing consent rule).
-const fetchTimelineDocument = (id) => apiClient.get(API_ENDPOINTS.PATIENTS.DOCUMENT(id));
 
 export default function EncounterPage() {
   const { id }   = useParams();
@@ -1434,8 +1434,10 @@ export default function EncounterPage() {
         )}
         {activeTab === "past" && <PastConsultationTab encounterId={id} />}
         {activeTab === "timeline" && (
-          <HealthTimeline endpoint={API_ENDPOINTS.RECORDS.STAFF_TIMELINE(enc.patient_pk)} params={{ include_hidden: 1 }}
-                          fetchDocument={fetchTimelineDocument} audience="staff" />
+          enc.patient_awpid
+            ? <HealthJourney key={enc.patient_awpid} http={apiClient} view="doctor" onOpenDocument={openDocumentWith(API_ENDPOINTS.PATIENTS.DOCUMENT)}
+                             children={[{ id: enc.patient_awpid, name: enc.patient_name }]} />
+            : <p style={{ color: "var(--color-text-secondary)" }}>This patient has no shared record yet.</p>
         )}
       </PageShell>
         </div>

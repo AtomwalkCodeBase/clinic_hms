@@ -38,12 +38,12 @@ from core.response import error as api_error, not_found as api_not_found, forbid
 
 from apps.hospital_master.billing.models import OptionList
 from apps.hospital_master.billing.option_list_views import DropdownListCreateView, DropdownDetailView
-from apps.atomwalk.documents.services import sync_encounter_to_hie
+from apps.atomwalk.documents.lib_documents import sync_encounter_to_hie
 from apps.hospital_master.opd.services import auto_generate_invoice
 
 from apps.hospital_master.opd.models import Appointment, OPDEncounter, Prescription, PrescriptionItem, PrescriptionFavourite
 from apps.hospital_master.opd.vitals_service import record_vitals
-from apps.atomwalk.documents.services import attach_vitals, recorded
+from apps.atomwalk.documents.lib_documents import attach_vitals, recorded
 from apps.hospital_master.opd.serializers import (
     AppointmentSerializer,
     AppointmentCreateSerializer,
@@ -1144,7 +1144,7 @@ def _store_handwriting_pdfs(enc, db, hospital_id, session_id):
         from apps.atomwalk.hospital_master.models import Hospital
         from apps.atomwalk.patients.models import ConsultSession
         from apps.atomwalk.documents.models import MedicalDocument
-        from apps.atomwalk.documents.services import create_issued_document
+        from apps.atomwalk.documents.lib_documents import create_issued_document
         from core import storage as blob_storage
 
         sess = ConsultSession.objects.using("default").filter(id=session_id).first()

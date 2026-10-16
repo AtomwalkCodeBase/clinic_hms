@@ -7,7 +7,7 @@
  *   user         — decoded JWT payload or null
  *   role         — current role string
  *   isLoading    — true while hydrating on first mount
- *   loginStaff   — async (email, password, subdomain) => void
+ *   loginStaff   — async (email, password, hospital_code) => void
  *   loginPatient — async (awpid, password) => void
  *   logout       — () => void
  */

@@ -1,8 +1,9 @@
 from django.db import models
 
-from core.storage import document_file_path, documents_storage
 from django.utils import timezone
 from django.contrib.auth import Users
+from apps.atomwalk.patients import Patient
+from apps.atomwalk.hospital_master import Hospital
 
 NOT_CLASSIFIED = "not_classified"
 DOCUMENT_TYPES = {
@@ -51,13 +52,40 @@ class DocumentBatch(models.Model):
         COMPLETED = "completed"
         COMPLETED_WITH_ERRORS = "completed_with_errors"
 
-    patient = models.ForeignKey("patients.Patient", on_delete=models.CASCADE)
+    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="d_batches")
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.PROCESSING)
+    total_files = models.PositiveIntegerField(default=0)
+    processed_files = models.PositiveIntegerField(default=0)
+    failed_files = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "document_batch"
+
+    def __str__(self):
+        return f"Batch {self.id} for Patient {self.patient.awpid} - Status: {self.status}"
+    
+    def refresh(self):
+        """
+        Refresh the batch's status and counts based on the associated documents.
+        """
+        self.total_files = self.d_documents.count()
+        self.processed_files = self.d_documents.filter(status__in=MedicalDocument.IN_PROGRESS).count()
+        self.failed_files = self.d_documents.filter(status=MedicalDocument.Status.FAILED).count()
+
+        if self.failed_files > 0:
+            self.status = self.Status.COMPLETED_WITH_ERRORS
+        elif self.processed_files == self.total_files:
+            self.status = self.Status.COMPLETED
+        else:
+            self.status = self.Status.PROCESSING
+
+        self.save()
+         
+
+def get_patient_file_path(instance, filename):
+    return f"patients/{instance.patient.awpid}/documents/{filename}"
 
 
 class MedicalDocument(models.Model):
@@ -69,38 +97,49 @@ class MedicalDocument(models.Model):
         REVIEW_REQUIRED = "review_required"
         FAILED = "failed"
 
+    class Source(models.TextChoices):
+            UPLOAD = "upload"
+            ENCOUNTER = "encounter"
+            ENCOUNTER_HANDWRITTEN_RX = "encounter_handwritten_rx"
+            LAB_REQUEST = "lab_request"
+            LAB_REPORT = "lab_report"
+    
     IN_PROGRESS = (Status.QUEUED, Status.EXTRACTING, Status.CLASSIFYING)
 
-    patient = models.ForeignKey("patients.Patient", on_delete=models.CASCADE)
-    batch = models.ForeignKey(DocumentBatch, null=True, blank=True, on_delete=models.SET_NULL, related_name="d_documents")
-    file = models.FileField(upload_to=document_file_path, storage=documents_storage, max_length=500)
-    file_name = models.CharField(max_length=100, blank=True)
-    mime_type = models.CharField(max_length=100, blank=True)
-    size = models.PositiveBigIntegerField(null=True, blank=True)
+    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_documents")
+    batch = models.ForeignKey(DocumentBatch, null=True, blank=True, on_delete=models.SET_NULL, related_name="b_documents")
+    file_name = models.FileField(upload_to=get_patient_file_path, blank=True, null=True)
     document_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=15, choices=Status.choices, default=Status.QUEUED, db_index=True)
-    error_message = models.TextField(blank=True)
-    document_type = models.CharField(max_length=30, choices=DOCUMENT_TYPE_CHOICES, default=NOT_CLASSIFIED)
-
-    class Source(models.TextChoices):
-        UPLOAD = "upload"
-        ENCOUNTER = "encounter"
-        ENCOUNTER_HANDWRITTEN_RX = "encounter_handwritten_rx"
-        LAB_REQUEST = "lab_request"
-        LAB_REPORT = "lab_report"
-
-    source_type = models.CharField(max_length=30, choices=Source.choices, default=Source.UPLOAD, db_index=True)
-    source_id = models.CharField(max_length=80, blank=True, db_index=True)
-    source_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL)
-    document_ref = models.CharField(max_length=40, blank=True)
-    uploaded_by = models.CharField(max_length=10, default="patient")
+    error_message = models.CharField(max_length=200, blank=True)
+    doc_classifiaction = models.CharField(max_length=30, choices=DOCUMENT_TYPE_CHOICES, default=NOT_CLASSIFIED)
+    source_type = models.CharField(max_length=30, choices=Source.choices, default=Source.UPLOAD)
+    source_id = models.UUIDField(null=True, blank=True)
+    source_hospital = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_documents")
+    document_ref_name = models.CharField(max_length=50, blank=True)
+    doc_name = models.CharField(max_length=50, blank=True)
+    created_by = models.CharField(max_length=10, default="patient")
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
+    
     class Meta:
         db_table = "medical_documents"
 
-
+    def __str__(self):
+        return f"Document {self.id} for Patient {self.patient.awpid} - Status: {self.status}"
+    
+    @property
+    def processing_status(self):
+        if self.status in self.IN_PROGRESS:
+            return "in_progress"
+        elif self.status == self.Status.COMPLETED:
+            return "completed"
+        elif self.status == self.Status.REVIEW_REQUIRED:
+            return "review_required"
+        elif self.status == self.Status.FAILED:
+            return "failed"
+        else:
+            return "unknown"
+    
 
 class DocumentExtraction(models.Model):
     class Status(models.TextChoices):
@@ -111,29 +150,37 @@ class DocumentExtraction(models.Model):
 
     document = models.OneToOneField(MedicalDocument, on_delete=models.CASCADE, related_name="d_extraction")
     extracted_text = models.TextField(blank=True)
-    engine = models.CharField(max_length=30, blank=True)
+    engine = models.CharField(max_length=1, choices=[("O", "OCR"), ("P", "PDF"), ("A", "AI")], default="P")
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING, db_index=True)
     normalised = models.JSONField(default=dict, blank=True)
+    warnings = models.JSONField(default=list, blank=True)
+    error = models.TextField(blank=True)
     processed_at = models.DateTimeField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
+        
     class Meta:
         db_table = "document_extraction"
 
+    def __str__(self):
+        return f"Extraction for Document {self.document.id} - Status: {self.status}"
+    
 
-class PatientDocumentClassification(models.Model):
+class DocumentClassification(models.Model):
     document = models.OneToOneField(MedicalDocument, on_delete=models.CASCADE, related_name="d_classification")
-    ai_document_type = models.CharField(max_length=50, null=True, blank=True)
+    ai_classifiaction = models.CharField(max_length=30, choices=DOCUMENT_TYPE_CHOICES, default=NOT_CLASSIFIED)
     classifier = models.CharField(max_length=30, default=CLASSIFIER_RULES)
     rule_score = models.FloatField(null=True, blank=True)
     second_best_score = models.FloatField(null=True, blank=True)
     score_margin = models.FloatField(null=True, blank=True)
     rule_matches = models.JSONField(null=True, blank=True)
-    human_document_type = models.CharField(max_length=50, null=True, blank=True)
+    human_classifiaction = models.CharField(max_length=30, choices=DOCUMENT_TYPE_CHOICES, default=NOT_CLASSIFIED)
     status = models.CharField(max_length=30, default=RULE_CLASSIFIED)
 
     class Meta:
-        db_table = "patient_document_classification"
+        db_table = "document_classification"
+
+    def __str__(self):
+        return f"Classification for Document {self.document.id} - Status: {self.status}"
+
 
 
 class BirthHistory(models.Model):
@@ -148,10 +195,10 @@ class BirthHistory(models.Model):
         (DELIVERY_UNKNOWN, "Unknown"),
     ]
 
-    patient = models.OneToOneField("patients.Patient", on_delete=models.CASCADE, related_name="p_birth_history")
+    patient = models.OneToOneField(Patient, on_delete=models.CASCADE, related_name="p_birth_history")
     document = models.ForeignKey(MedicalDocument, null=True, blank=True, on_delete=models.SET_NULL, 
                                  related_name="d_birth_history")
-    source_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL, 
+    source_hospital = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, 
                                             related_name="h_birth_history")
     source = models.CharField(max_length=10, choices=SOURCE_CHOICES, default="MANUAL")
     gestational_age_weeks = models.PositiveSmallIntegerField(null=True, blank=True)
@@ -163,21 +210,23 @@ class BirthHistory(models.Model):
     birth_complications = models.TextField(blank=True)
     congenital_conditions = models.TextField(blank=True)
     notes = models.TextField(blank=True)
-    recorded_by = models.ForeignKey("auth.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="u_birth_history")
-    recorded_at = models.DateTimeField(auto_now_add=True)
-    updated_by = models.ForeignKey("auth.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="u_birth_history_updated")
-    updated_at = models.DateTimeField(auto_now=True)
-
+    created_by = models.ForeignKey("auth.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="u_birth_history")
+    created_at = models.DateTimeField(auto_now_add=True)
+   
     class Meta:
         db_table = "birth_history"
+
+    def __str__(self):
+        return f"Birth History for Patient {self.patient.awpid}"
+
 
 
 class ClinicalEvent(models.Model):
     TYPES = [("DIAGNOSIS", "Diagnosis"), ("ADMISSION", "Admission"), ("PROCEDURE", "Procedure")]
 
-    patient = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_clinical_events")
-    document = models.ForeignKey("documents.MedicalDocument", null=True, blank=True, on_delete=models.s)
-    source_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL)
+    patient = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_clinical_events")
+    document = models.ForeignKey(MedicalDocument, null=True, blank=True, on_delete=models.SET_NULL, related_name="d_clinical_events")
+    source_hospital = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_clinical_events")
     event_date = models.DateField(null=True, blank=True, db_index=True)
     event_type = models.CharField(max_length=12, choices=TYPES, default="DIAGNOSIS")
     condition_text = models.TextField(blank=True)
@@ -190,32 +239,28 @@ class ClinicalEvent(models.Model):
     evidence = models.CharField(max_length=255, blank=True)
     source = models.CharField(max_length=10, choices=SOURCE_CHOICES, default="EXTRACTED")
     episode = models.ForeignKey("documents.HealthEpisode", null=True, blank=True, on_delete=models.SET_NULL, related_name="events")
+    remarks = models.CharField(max_length=255, blank=True)
     is_verified = models.BooleanField(default=False)
     is_rejected = models.BooleanField(default=False)
-    verified_by_id = models.IntegerField(null=True, blank=True)
+    verified_by = models.ForeignKey("auth.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="v_clinical_events")
     verified_at = models.DateTimeField(null=True, blank=True)
-
-    discharged_on = models.DateField(null=True, blank=True)
-    ward = models.CharField(max_length=10, blank=True)
-    is_critical = models.BooleanField(default=False)
-    critical_terms = models.JSONField(default=list, blank=True)
-    reason = models.CharField(max_length=255, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "clinical_event"
         indexes = [models.Index(fields=["patient", "event_date"])]
 
+    def __str__(self):
+        return f"Clinical Event {self.id} for Patient {self.patient.awpid} - Type: {self.event_type}"
+
 
 class GrowthMeasurement(models.Model):
-    patient = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE)
-    document = models.ForeignKey("documents.MedicalDocument", null=True, blank=True, on_delete=models.CASCADE)
-    appointment_id = models.UUIDField(null=True, blank=True, db_index=True)
-    source_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL)
+    patient = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_growth_measurements")
+    document = models.ForeignKey(MedicalDocument, null=True, blank=True, on_delete=models.CASCADE, related_name="d_growth_measurements")
+    source_hospital = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_growth_measurements")
     source = models.CharField(max_length=10, default="clinic")
-    recorded_by_user_id = models.UUIDField(null=True, blank=True)
+    source_id = models.UUIDField(null=True, blank=True)
     measured_on = models.DateField(db_index=True)
+    age_months = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     weight_kg = models.DecimalField(max_digits=6, decimal_places=3, null=True, blank=True)
     height_cm = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
     head_circumference_cm = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
@@ -229,16 +274,17 @@ class GrowthMeasurement(models.Model):
     reference_source = models.CharField(max_length=5, blank=True)
     is_rejected = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
+    created_by = models.ForeignKey("auth.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="u_growth_measurements")
+        
     class Meta:
         db_table = "growth_measurement"
-        constraints = [models.UniqueConstraint(fields=["appointment_id"], condition=models.Q(appointment_id__isnull=False),
-                                               name="uniq_growth_per_appointment")]
-
+    
+    def __str__(self):
+        return f"Growth Measurement {self.id} for Patient {self.patient.awpid} - Measured on: {self.measured_on}"
+    
 
 class HealthEpisode(models.Model):
-    patient = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE)
+    patient = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_health_episodes")
     key = models.CharField(max_length=80)
     condition_group = models.CharField(max_length=40, db_index=True)
     label = models.CharField(max_length=255)
@@ -255,7 +301,6 @@ class HealthEpisode(models.Model):
 
     class Meta:
         db_table = "health_episode"
-        constraints = [models.UniqueConstraint(fields=["patient", "key"], name="uniq_episode_per_patient_key")]
         indexes = [models.Index(fields=["patient", "start_date"])]
 
 
@@ -286,58 +331,52 @@ class ImmunizationRecord(models.Model):
         (STATUS_DECLINED, "Declined / not required"),
     ]
 
-    patient             = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE)
-    document            = models.ForeignKey("documents.MedicalDocument", null=True, blank=True, on_delete=models.CASCADE)
+    patient             = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE)
+    document            = models.ForeignKey(MedicalDocument, null=True, blank=True, on_delete=models.SET_NULL, related_name="d_immunization_records")
+    source_hospital     = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_immunization_records") 
+    scheduled_label     = models.CharField(max_length=50, blank=True)
+        
     vaccine_name        = models.CharField(max_length=100)
     vaccines            = models.JSONField(default=list, blank=True)
-    scheduled_label     = models.CharField(max_length=50, blank=True)
+    due_date            = models.DateField(null=True, blank=True)
     administered_date   = models.DateField(null=True, blank=True)
-    due_date             = models.DateField(null=True, blank=True)
-    reason               = models.TextField(blank=True)
-    dose_number          = models.PositiveIntegerField(null=True, blank=True)
-
+    remarkes            = models.CharField(max_length=200, blank=True)
+    dose_number         = models.PositiveIntegerField(null=True, blank=True)
     source              = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_CLINIC)
-    verification_status = models.CharField(max_length=20, choices=VERIFICATION_CHOICES, default=STATUS_VERIFIED, db_index=True)
-    verified_by_name    = models.CharField(max_length=200, blank=True)
-    verified_at         = models.DateTimeField(null=True, blank=True)
-    review_notes        = models.TextField(blank=True)
-
-    file_name           = models.CharField(max_length=255, blank=True)
-    mime_type            = models.CharField(max_length=100, blank=True)
-    file_data            = models.TextField(blank=True)
-
-    source_hospital      = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL)
-
     created_at           = models.DateTimeField(auto_now_add=True)
     updated_at           = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table  = "immunization_record"
-        indexes = [models.Index(fields=["patient", "verification_status"])]
         ordering  = ["administered_date"]
 
+    def __str__(self):
+        return f"Immunization Record {self.id} for Patient {self.patient.awpid} - Vaccine: {self.vaccine_name}" 
+    
 
 class LabResult(models.Model):
-    patient = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE)
-    document = models.ForeignKey("documents.MedicalDocument", null=True, blank=True, on_delete=models.CASCADE)
-    source_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL)
+    patient = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_lab_results")
+    document = models.ForeignKey(MedicalDocument, null=True, blank=True, on_delete=models.SET_NULL, related_name="d_lab_results")
+    source_hospital = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_lab_results")
     test_name = models.CharField(max_length=200, blank=True)
     analyte = models.CharField(max_length=40, blank=True, db_index=True)
     value = models.FloatField(null=True, blank=True)
     unit_raw = models.CharField(max_length=30, blank=True)
-    result_summary = models.TextField(blank=True)
     collected_on = models.DateField(null=True, blank=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
     age_band = models.CharField(max_length=12, blank=True)
     severity = models.CharField(max_length=10, choices=SEVERITY_CHOICES, default="NORMAL")
     direction = models.CharField(max_length=4, blank=True)
+    result_summary = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "lab_result"
 
-
+    def __str__(self):
+        return f"Lab Result {self.id} for Patient {self.patient.awpid} - Test: {self.test_name}"
+    
 class MilestoneRecord(models.Model):
     STATUS_ACHIEVED = "achieved"
     STATUS_NOT_YET  = "not_yet"
@@ -348,7 +387,7 @@ class MilestoneRecord(models.Model):
         (STATUS_CONCERN,  "Concern Flagged"),
     ]
 
-    patient          = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE)
+    patient          = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_milestone_records")
     domain           = models.CharField(max_length=20, choices=DOMAIN_CHOICES)
     milestone        = models.CharField(max_length=200)
     scheduled_label  = models.CharField(max_length=50, blank=True)

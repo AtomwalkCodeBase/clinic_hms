@@ -174,6 +174,7 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
     patient_name = serializers.SerializerMethodField()
     patient_uhid = serializers.SerializerMethodField()
     patient_pk   = serializers.SerializerMethodField()
+    patient_awpid = serializers.SerializerMethodField()
     appointment_type = serializers.SerializerMethodField()
     patient_age  = serializers.SerializerMethodField()
     patient_age_months = serializers.SerializerMethodField()
@@ -189,7 +190,7 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
         model = OPDEncounter
         fields = [
             "id", "appointment_id", "patient_id", "doctor_user_id",
-            "patient_name", "patient_uhid", "patient_pk", "appointment_type", "patient_age", "patient_age_months", "patient_gender",
+            "patient_name", "patient_uhid", "patient_pk", "patient_awpid", "appointment_type", "patient_age", "patient_age_months", "patient_gender",
             "is_dependent", "guardian_name", "guardian_relation",
             "patient_last_visit", "encounter_date", "chief_complaint",
             "status", "subjective", "objective", "assessment", "plan",
@@ -225,6 +226,10 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
         # pk) — the frontend needs this to call /patients/{pk}/history/.
         p = self._patient(obj)
         return p.id if p else None
+
+    def get_patient_awpid(self, obj):
+        p = self._patient(obj)
+        return p.awpid if p else None
 
     def get_appointment_type(self, obj):
         try:

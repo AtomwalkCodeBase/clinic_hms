@@ -30,6 +30,7 @@ from apps.atomwalk.hospital_master.models import Hospital, Subscription, Hospita
 from apps.atomwalk.hospital_master.services import create_hospital_database, run_hospital_migrations, drop_hospital_database
 from apps.atomwalk.hospital_master.services import TIER_FEATURE_DEFAULTS
 from apps.atomwalk.hospital_master.services import get_usage_counts
+from apps.atomwalk.hospital_master.services import parameters_of
 from apps.hospital_master.staff.models import StaffUser
 from apps.hospital_master.facility.models import Branch
 from apps.atomwalk.patients.models import StaffMobileIndex
@@ -79,15 +80,15 @@ def _hospital_to_dict(hospital):
     return {
         "id":         hospital.id,
         "name":       hospital.name,
-        "subdomain":  hospital.subdomain,
+        "hospital_code":  hospital.hospital_code,
         "db_name":    hospital.db_name,
         "city":       hospital.city,
         "state":      hospital.state,
         "gstin":      hospital.gstin,
-        "accreditations": hospital.accreditations,
-        "about":      hospital.about,
-        "latitude":   hospital.latitude,
-        "longitude":  hospital.longitude,
+        "accreditations": parameters_of(hospital).accreditations,
+        "about":      parameters_of(hospital).about,
+        "latitude":   parameters_of(hospital).latitude,
+        "longitude":  parameters_of(hospital).longitude,
         "is_active":  hospital.is_active,
         "created_at": hospital.created_at.isoformat(),
         "subscription": subscription,
@@ -217,25 +218,25 @@ class HospitalListCreateView(APIView):
         if tier not in TIER_FEATURE_DEFAULTS:
             return error(f"Invalid tier. Choose: {', '.join(TIER_FEATURE_DEFAULTS)}")
 
-        # ── Derive subdomain and db_name ─────────────────────────────────────
-        subdomain = (d.get("subdomain") or slugify(name)).strip().lower()
-        db_name = "aw_" + subdomain.replace("-", "_")
+        # ── Derive hospital_code and db_name ─────────────────────────────────────
+        hospital_code = (d.get("hospital_code") or slugify(name)).strip().lower()[:20]
+        db_name = "aw_" + hospital_code.replace("-", "_")
 
         city  = (d.get("city") or "").strip()
         state = (d.get("state") or "").strip()
         gstin = (d.get("gstin") or "").strip()
 
         # ── Uniqueness checks ─────────────────────────────────────────────────
-        if Hospital.objects.filter(subdomain=subdomain).exists():
-            return error(f"Subdomain '{subdomain}' is already taken.",
-                         errors={"subdomain": "Already exists."})
+        if Hospital.objects.filter(hospital_code=hospital_code).exists():
+            return error(f"Hospital code '{hospital_code}' is already taken.",
+                         errors={"hospital_code": "Already exists."})
         if Hospital.objects.filter(db_name=db_name).exists():
             return error(f"DB name '{db_name}' conflicts with an existing hospital.",
-                         errors={"subdomain": "Already exists."})
+                         errors={"hospital_code": "Already exists."})
 
         # ── Step 1: Create Hospital record ──────────────────────────────────────
         hospital = Hospital.objects.create(
-            name=name, subdomain=subdomain, db_name=db_name,
+            name=name, hospital_code=hospital_code, db_name=db_name,
             city=city, state=state, gstin=gstin, is_active=True,
         )
         logger.info("Hospital created: %s (id=%s)", name, hospital.id)
@@ -260,8 +261,8 @@ class HospitalListCreateView(APIView):
             # Unlike the DB-creation failure above, this step runs against a
             # database that DOES exist by now — leaving it and the Hospital/
             # Subscription rows behind (as this used to) permanently reserves
-            # the subdomain/db_name and makes every retry fail with
-            # "Subdomain already taken" instead of the real underlying error,
+            # the hospital_code/db_name and makes every retry fail with
+            # "Hospital code already taken" instead of the real underlying error,
             # with no way to retry short of a manual DB cleanup. Tear both
             # down so a retry (even with the same name) starts clean.
             drop_hospital_database(db_name)
@@ -287,12 +288,12 @@ class HospitalListCreateView(APIView):
             admin_staff.save(using=db_name)
             admin_employee_id = admin_staff.employee_id
 
-            # Write to atomwalk index — login uses mobile, not subdomain
+            # Write to atomwalk index — login uses mobile, not hospital_code
             StaffMobileIndex.objects.using("default").update_or_create(
                 mobile=admin_mobile,
                 defaults={"hospital_id": hospital.id},
             )
-            logger.info("hospital_admin created and indexed for hospital %s", subdomain)
+            logger.info("hospital_admin created and indexed for hospital %s", hospital_code)
 
             # Email is the only place the raw temp password goes — the
             # provisioning UI deliberately doesn't display it on screen (see
@@ -302,7 +303,7 @@ class HospitalListCreateView(APIView):
             # another way if the email bounces.
             from core.email import send_hospital_provisioned_email
             email_sent = send_hospital_provisioned_email(
-                to=admin_email, hospital_name=name, hospital_code=subdomain,
+                to=admin_email, hospital_name=name, hospital_code=hospital_code,
                 employee_id=admin_employee_id, admin_mobile=admin_mobile,
                 temp_password=temp_password,
             )
@@ -315,7 +316,7 @@ class HospitalListCreateView(APIView):
         response_data = {
             **_hospital_to_dict(hospital),
             "credentials": {
-                "subdomain":     subdomain,
+                "hospital_code":     hospital_code,
                 "admin_email":   admin_email,
                 "admin_mobile":  admin_mobile,
                 "employee_id":   admin_employee_id,
@@ -370,41 +371,49 @@ class HospitalDetailView(APIView):
         updated_fields = []
         actor_email = getattr(request.user, "email", "") or ""
 
-        # ── Hospital Code (subdomain) — separate from the plain profile
+        # ── Hospital Code (hospital_code) — separate from the plain profile
         # fields below because it needs validation + a uniqueness check, and
         # because it's login-relevant (see auth_app.views.StaffLoginView's
         # employee-ID path) rather than purely cosmetic. Safe to change any
         # time after creation — it's looked up live at login, and db_name
         # (fixed forever once the hospital DB is created) never derives from
         # it after the initial provisioning step.
-        if "subdomain" in d:
-            new_subdomain = slugify((d["subdomain"] or "").strip())
-            if not new_subdomain:
-                return error("Hospital Code is required.", errors={"subdomain": "Required."})
-            if not re.match(r"^[a-z0-9-]+$", new_subdomain):
+        if "hospital_code" in d:
+            new_hospital_code = slugify((d["hospital_code"] or "").strip())
+            if not new_hospital_code:
+                return error("Hospital Code is required.", errors={"hospital_code": "Required."})
+            if not re.match(r"^[a-z0-9-]+$", new_hospital_code):
                 return error("Hospital Code can only contain lowercase letters, numbers, and hyphens.",
-                             errors={"subdomain": "Invalid format."})
-            if Hospital.objects.exclude(pk=hospital.pk).filter(subdomain=new_subdomain).exists():
-                return error(f"Hospital Code '{new_subdomain}' is already taken.",
-                             errors={"subdomain": "Already exists."})
-            before_subdomain = hospital.subdomain
-            hospital.subdomain = new_subdomain
-            hospital.save(update_fields=["subdomain"])
-            updated_fields.append("subdomain")
-            if before_subdomain != new_subdomain:
-                _log_change(hospital, "subdomain_change", before_subdomain, new_subdomain, actor_email)
+                             errors={"hospital_code": "Invalid format."})
+            if Hospital.objects.exclude(pk=hospital.pk).filter(hospital_code=new_hospital_code).exists():
+                return error(f"Hospital Code '{new_hospital_code}' is already taken.",
+                             errors={"hospital_code": "Already exists."})
+            before_hospital_code = hospital.hospital_code
+            hospital.hospital_code = new_hospital_code
+            hospital.save(update_fields=["hospital_code"])
+            updated_fields.append("hospital_code")
+            if before_hospital_code != new_hospital_code:
+                _log_change(hospital, "subdomain_change", before_hospital_code, new_hospital_code, actor_email)
 
         # ── Profile fields — plain edits, no audit-log entry (that's reserved
         # for tier/status/active lifecycle changes; a name/city typo fix isn't
         # a "hospital lifecycle" event worth showing in that trail). ─────────
-        profile_fields = ["name", "city", "state", "gstin", "accreditations", "about"]
+        params = parameters_of(hospital)
         profile_updated = []
-        for field in profile_fields:
+        for field in ["name", "city", "state", "gstin"]:
             if field in d:
-                setattr(hospital, field, (d[field] or "").strip() if field != "about" else (d[field] or ""))
+                setattr(hospital, field, (d[field] or "").strip())
                 profile_updated.append(field)
         if profile_updated:
             hospital.save(update_fields=profile_updated)
+        parameter_updated = []
+        for field in ["accreditations", "about"]:
+            if field in d:
+                setattr(params, field, (d[field] or "").strip() if field != "about" else (d[field] or ""))
+                parameter_updated.append(field)
+        if parameter_updated:
+            params.save(update_fields=parameter_updated)
+        if profile_updated or parameter_updated:
             updated_fields.append("profile")
 
         # ── Coordinates — power the patient app's "hospitals near me"
@@ -420,7 +429,7 @@ class HospitalDetailView(APIView):
                     continue
                 raw = d[field]
                 if raw in (None, ""):
-                    setattr(hospital, field, None)
+                    setattr(params, field, None)
                     geo_updated.append(field)
                     continue
                 try:
@@ -429,10 +438,10 @@ class HospitalDetailView(APIView):
                     return error(f"{field.capitalize()} must be a number.", errors={field: "Invalid number."})
                 if not (lo <= value <= hi):
                     return error(f"{field.capitalize()} must be between {lo} and {hi}.", errors={field: "Out of range."})
-                setattr(hospital, field, value)
+                setattr(params, field, value)
                 geo_updated.append(field)
         if geo_updated:
-            hospital.save(update_fields=geo_updated)
+            params.save(update_fields=geo_updated)
             updated_fields.append("coordinates")
 
         if "is_active" in d:

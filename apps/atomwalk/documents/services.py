@@ -1,1411 +1,1155 @@
-"""Document pipeline, classification rules, timeline extraction, vitals, hospital write-through, episodes, growth references and schedule roadmaps."""
-import io
-import logging
-import os
-import uuid
-import re
+"""
+The pediatric health timeline's rules, in plain Python (no database): the LLM only reads facts out of a document's text; everything
+that judges them (chronic or acute, severity, episodes, recurrence, growth flags, vaccine status) is computed here from
+health_config.json, so the same documents and the same config always give the same timeline.
+"""
 import csv
+import json
+import logging
 import math
-from decimal import Decimal
-from apps.atomwalk.documents.models import Schedule
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
-from django.conf import settings
-from django.core.files.base import ContentFile
-from django.db import connections, transaction
-from django.db.models import Count, Q
-from django.utils.dateparse import parse_datetime
-from core import ocr, storage
-from core.file_validation import FileValidationError, validate_bytes
-from apps.atomwalk.patients.models import Patient
-from apps.atomwalk.documents.models import (
-    DocumentBatch,
-    DocumentExtraction,
-    MedicalDocument,
-    ClinicalEvent,
-    GrowthMeasurement,
-    Vitals,
-    HealthEpisode,
-    RecurrenceFlag,
-)
-from apps.atomwalk.documents.serializers import MAX_FILE_BYTES
-from django.core.exceptions import ObjectDoesNotExist
-from datetime import date, timedelta, datetime, time
+import re
+from bisect import bisect_left
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from django.utils import timezone
-from apps.atomwalk.documents import services as episodes
-from types import SimpleNamespace
-from apps.hospital_master.patients.models import HospitalPatient
-from core.response import error
+from typing import Callable, Dict, List, Optional
 
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
-UPLOAD_THREADS = 8    # files sent to S3 at the same time
-_UPLOAD_EXT = {"pdf", "jpg", "jpeg", "png"}
-_DECLARED_MIME = {"application/pdf", "image/jpeg", "image/png"}
-Status = MedicalDocument.Status
-# Two Celery queues, so one file never waits behind someone else's big upload: "instant" is for a single file,
-# "bulk" for several. Run one worker per queue (celery -A atomwalk worker -Q instant / -Q bulk).
-INSTANT_QUEUE = "instant"
-BULK_QUEUE = "bulk"
-MAX_SUBMIT = 100            # decisions in one submit call
-# ── upload ───────────────────────────────────────────────────────────────
-def _stored_name(filename):
-    """<random>.<ext> — never the uploader's file name (that is kept apart, in MedicalDocument.file_name)."""
-    ext = os.path.splitext(filename or "")[1].lower().lstrip(".")
-    return f"{uuid.uuid4().hex}.{ext if ext in _UPLOAD_EXT else 'bin'}"
-def _safe_delete(name: str) -> None:
-    """Only ever deletes inside documents/ or patients/ — a bug or a wrong path can't cost anything else in the bucket."""
-    if name and name.startswith(("documents/", "patients/")):
-        storage.delete(name)
-    elif name:
-        logger.warning("records: refusing to delete %r — not a documents/ or patients/ object", name)
-def save_upload(awpid, files):
-    """`files` = [(uploaded_file, raw_bytes)]. One batch per upload, however many files. The files go to S3
-    UPLOAD_THREADS at a time (one after another made a big upload wait for the sum of every transfer); if any
-    transfer fails, everything already sent is deleted and nothing is saved."""
-    patient = Patient.objects.using("default").get(awpid=awpid)
-    batch = DocumentBatch.objects.create(patient=patient)
-    docs = [MedicalDocument(patient=patient, batch=batch, file_name=(f.name or "")[:100], size=len(raw),
-                            uploaded_by="patient", status=Status.QUEUED)
-            for f, raw in files]
 
-    def send(i):
-        f, raw = files[i]
-        content = ContentFile(raw, name=_stored_name(f.name))
-        content.content_type = f.content_type if f.content_type in _DECLARED_MIME else "application/octet-stream"
-        docs[i].file.save(content.name, content, save=False)      # → S3: documents/<awpid>/<batch>/<name>
 
-    try:
-        with ThreadPoolExecutor(max_workers=min(UPLOAD_THREADS, len(files))) as pool:
-            list(pool.map(send, range(len(files))))
-        with transaction.atomic(using="default"):
-            MedicalDocument.objects.bulk_create(docs)
-    except Exception:
-        for d in docs:
-            _safe_delete(d.file.name if d.file else "")
-        batch.delete()
-        raise
-    return batch, list(MedicalDocument.objects.filter(batch=batch).order_by("id"))
-def start_processing(document_ids, queue=BULK_QUEUE):
-    """Queue each document's first stage on `queue`. If the queue can't be reached the document is marked failed -
-    the patient sees it and can retry - rather than left "queued" for ever."""
-    from apps.atomwalk.documents.tasks import extract_document_task
-    for document_id in document_ids:
-        try:
-            extract_document_task.apply_async(args=[document_id, queue], queue=queue)
-        except Exception:
-            logger.exception("records: couldn't queue document %s", document_id)
-            doc = MedicalDocument.objects.filter(pk=document_id, status=Status.QUEUED).first()
-            if doc:
-                fail_document(doc, "Couldn't start processing this file. Please try again.")
-def batch_summary(batch):
-    """The batch and its documents, for the patient to follow: counts by status, then each file."""
-    docs = list(batch.documents.select_related("classification").order_by("id"))
-    counts = {s: 0 for s in Status.values}
-    for d in docs:
-        counts[d.status] = counts.get(d.status, 0) + 1
-    finished = sum(counts.get(k, 0) for k in (Status.COMPLETED, Status.REVIEW_REQUIRED, Status.FAILED))
-    total = len(docs)
+# ── Configuration ───────────────────────────────────────────────────────────────────────────────────────
+
+DEFAULT_CONFIG_PATH = Path(__file__).with_name("health_config.json")
+GROWTH_REFERENCE_DIR = Path(__file__).with_name("growth_reference")
+
+
+def _resolve_path(path=None):
+    return Path(path or getattr(settings, "PEDIATRIC_HEALTH_CONFIG", None) or DEFAULT_CONFIG_PATH)
+
+
+def load_config(path=None):
+    return _read_config(str(_resolve_path(path)))
+
+
+@lru_cache(maxsize=4)
+def _read_config(path):
+    with open(path, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+    _validate(cfg)
+    return cfg
+
+
+def _validate(cfg):
+    required = ["age_bands", "lab_thresholds", "condition_groups",
+                "recurrence_rules", "growth", "immunization_schedule"]
+    missing = [k for k in required if k not in cfg]
+    if missing:
+        raise ValueError(f"pediatric_health_config missing keys: {missing}")
+    groups = {k for k in cfg["condition_groups"] if not k.startswith("_")}
+    unknown = [k for k in cfg["recurrence_rules"] if not k.startswith("_") and k not in groups]
+    if unknown:
+        raise ValueError(f"recurrence_rules reference unknown condition groups: {unknown}")
+
+
+# ── Clinical rules: age bands, condition groups, lab limits, critical words ─────────────────────────────
+
+SEVERITY_ORDER = {"NORMAL": 0, "MILD": 1, "ABNORMAL": 2, "CRITICAL": 3}
+
+
+# --------------------------------------------------------------------------- age
+def age_in_days(dob: date, on: date) -> int:
+    return (on - dob).days
+
+
+def age_in_months(dob: date, on: date) -> float:
+    """Fractional months using the WHO convention (30.4375 days per month)."""
+    return age_in_days(dob, on) / 30.4375
+
+
+def age_band(age_days: int, cfg=None) -> str:
+    cfg = cfg or load_config()
+    for band in cfg["age_bands"]:
+        if band["min_days"] <= age_days <= band["max_days"]:
+            return band["code"]
+    return cfg["age_bands"][-1]["code"]
+
+
+def format_age(age_days: int) -> str:
+    """Human label as pediatricians say it: '12 days', '7 months', '2 y 3 m'."""
+    if age_days < 0:
+        return "before birth"
+    if age_days == 0:
+        return "Birth"
+    if age_days <= 28:
+        return f"{age_days} day{'s' if age_days != 1 else ''}"
+    if age_days < 16 * 7 and age_days % 7 == 0:   # vaccine-style "6 weeks", "14 weeks"
+        return f"{age_days // 7} weeks"
+    months = int(age_days / 30.4375)
+    if months < 24:
+        return f"{months} month{'s' if months != 1 else ''}"
+    years, rem = divmod(months, 12)
+    return f"{years} y {rem} m" if rem else f"{years} y"
+
+
+# ------------------------------------------------------------ condition groups
+def _group_items(cfg):
+    return {k: v for k, v in cfg["condition_groups"].items() if not k.startswith("_")}
+
+
+def normalise_icd(code: Optional[str]) -> str:
+    if not code:
+        return ""
+    code = code.strip().upper().replace(" ", "")
+    # "J069" -> "J06.9"
+    if re.fullmatch(r"[A-Z]\d{3,4}", code):
+        code = f"{code[:3]}.{code[3:]}"
+    return code
+
+
+def condition_group_for_icd(icd10: Optional[str], cfg=None) -> Optional[str]:
+    """Longest matching ICD prefix wins (so 'K90.0' beats a broader 'K')."""
+    cfg = cfg or load_config()
+    code = normalise_icd(icd10)
+    if not code:
+        return None
+    best, best_len = None, -1
+    for group, spec in _group_items(cfg).items():
+        for prefix in spec["icd_prefixes"]:
+            p = prefix.upper()
+            if code.startswith(p) and len(p) > best_len:
+                best, best_len = group, len(p)
+    return best
+
+
+UNCERTAIN = re.compile(r"\?|\br/o\b|rule[ -]?out|suspect|probable|provisional|possible|likely|considered|differential|query", re.I)
+
+
+def is_uncertain(text: str) -> bool:
+    """A condition is provisional only when the report's own words hedge it ("? dengue", "r/o UTI", "suspected"); the LLM's
+    own guess at that is not trusted, so the same words always give the same answer."""
+    return bool(UNCERTAIN.search(text or ""))
+
+
+def condition_group_for_text(text: Optional[str], cfg=None) -> Optional[str]:
+    """The group whose alias words are in the condition's name (longest alias wins), for when the ICD code is missing or unknown."""
+    cfg = cfg or load_config()
+    name = (text or "").lower()
+    best, best_len = None, 0
+    for group, spec in _group_items(cfg).items():
+        for alias in spec.get("aliases", []):
+            if len(alias) > best_len and re.search(rf"\b{re.escape(alias.lower())}\b", name):
+                best, best_len = group, len(alias)
+    return best
+
+
+def classify_condition(icd10: Optional[str], cfg=None, text: str = "") -> dict:
+    """
+    -> {"group": "ASTHMA", "label": "Asthma", "category": "CHRONIC", "merge_days": None}
+    The group comes from the ICD code, else from the words of the condition's name. Unknown ones default to ACUTE
+    with their own ICD 3-char stem as the group, so they still get episode grouping; they are surfaced for config review.
+    """
+    cfg = cfg or load_config()
+    group = condition_group_for_icd(icd10, cfg) or condition_group_for_text(text, cfg)
+    if group:
+        spec = cfg["condition_groups"][group]
+        return {
+            "group": group,
+            "label": spec["label"],
+            "category": spec["category"],
+            "merge_days": spec.get("merge_days", cfg.get("default_acute_merge_days", 14)),
+            "known": True,
+        }
+    stem = normalise_icd(icd10)[:3] or "UNCODED"
     return {
-        "id": batch.id, "total_files": total, "created_at": batch.created_at,
-        "status": "processing" if finished < total else "completed",
-        "progress_percent": int(round(100.0 * finished / total)) if total else 100,
-        "counts": counts,
-        "documents": [{"id": d.id, "file_name": d.file_name, "size": d.size, "status": d.status,
-                       "processing_status": d.status, "doc_type": d.document_type, "method": method_of(d),
-                       "error": d.error_message} for d in docs],
+        "group": f"ICD_{stem}",
+        "label": None,
+        "category": "ACUTE",
+        "merge_days": cfg.get("default_acute_merge_days", 14),
+        "known": False,
     }
-# ── processing ───────────────────────────────────────────────────────────
-@contextmanager
-def _locked(document_id):
-    """True if this call got document_id's lock; released on exit. A Postgres advisory lock, so a live
-    worker and a redelivered task can never act on the same document at once."""
-    conn = connections["default"]
-    with conn.cursor() as cur:
-        cur.execute("SELECT pg_try_advisory_lock(%s)", [document_id])
-        got = cur.fetchone()[0]
-    try:
-        yield got
-    finally:
-        if got:
-            with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_unlock(%s)", [document_id])
-def _in_status(document_id, *statuses):
-    """The document, only if it is in one of `statuses`."""
-    return MedicalDocument.objects.filter(pk=document_id, status__in=statuses).first()
-def _end(doc, status, **fields):
-    """Move a document to a new state."""
-    doc.status = status
-    for k, v in fields.items():
-        setattr(doc, k, v)
-    doc.save()
-def fail_document(doc, message):
-    logger.warning("records: document %s failed: %s", doc.id, message)
-    _end(doc, Status.FAILED, error_message=str(message)[:2000])
-def fail_document_by_id(document_id, message):
-    """For the task, once its retries are used up."""
-    doc = _in_status(document_id, *MedicalDocument.IN_PROGRESS)
-    if doc:
-        fail_document(doc, message)
-def extract_document(document_id):
-    """Stage 1: file → content check → text. Returns True when the document is ready for classify_document.
-    A file that can never work (empty, too big, not a PDF/JPEG/PNG) is failed here; any other error is raised so
-    the Celery task retries it."""
-    with _locked(document_id) as got:
-        if not got:
-            return False
-        doc = _in_status(document_id, Status.QUEUED, Status.EXTRACTING, Status.CLASSIFYING)
-        if not doc:
-            return False
-        if doc.status == Status.CLASSIFYING:      # a retry after the text was saved: only the hand-off is left
-            return True
-        if doc.status != Status.EXTRACTING:
-            doc.status = Status.EXTRACTING
-            doc.save(update_fields=["status", "updated_at"])
-        doc.file.open("rb")
-        try:
-            raw = doc.file.read()
-        finally:
-            doc.file.close()
-        try:
-            if not raw:
-                raise ValueError("The file is empty.")
-            if len(raw) > MAX_FILE_BYTES:
-                raise ValueError("The file is over 250 MB.")
-            mime = validate_bytes(raw)          # real PDF / JPEG / PNG, by content — before any parser sees it
-            if mime.startswith("image/"):
-                size = ocr.image_size(raw)
-                if size is None:
-                    raise ValueError("This image could not be opened. It may be damaged.")
-                if min(size) < ocr.MIN_OCR_SIDE:
-                    raise ValueError(f"This image is only {size[0]}x{size[1]} pixels, too small to be a document. "
-                                     "Please upload it again.")
-        except FileValidationError as exc:
-            fail_document(doc, f"This file is not a valid PDF, JPEG or PNG: {exc}")
-            return False
-        except ValueError as exc:
-            fail_document(doc, exc)
-            return False
-        text, engine = extract_text(raw, mime)
-        DocumentExtraction.objects.update_or_create(document=doc, defaults={"extracted_text": text, "engine": engine})
-        doc.mime_type, doc.size, doc.status = mime, len(raw), Status.CLASSIFYING
-        doc.save(update_fields=["mime_type", "size", "status", "updated_at"])
-        return True
-def classify_document(document_id):
-    """Stage 2: the rule engine on the extracted text → the document's classification. A person's choice is never
-    overwritten. The document ends "completed", or "review_required" if the rules could not tell what it is."""
-    with _locked(document_id) as got:
-        if not got:
-            return
-        doc = _in_status(document_id, Status.CLASSIFYING)
-        if not doc:
-            return
-        result = classify_document_by_rules(text_of(doc))
-        classification = store_rule_result(doc, result)
-        review = classification.status == REVIEW_REQUIRED
-        _end(doc, Status.REVIEW_REQUIRED if review else Status.COMPLETED, error_message="")
-def reclassify_existing(limit=5000):
-    """Run today's rules again over documents the rules classified (never a person's choice, never a hospital-issued
-    document), using the text already extracted — no OCR. For after a keyword in classification.py was edited.
-    Returns {"checked", "changed", "classified", "unclassified"}."""
-    counts = {"checked": 0, "changed": 0, "classified": 0, "unclassified": 0}
-    docs = (MedicalDocument.objects
-            .filter(status__in=(Status.COMPLETED, Status.REVIEW_REQUIRED), source_hospital_id__isnull=True,
-                    classification__status__in=(RULE_CLASSIFIED, REVIEW_REQUIRED),
-                    extraction__isnull=False)
-            .order_by("id")[:limit])
-    for doc in docs:
-        before = doc.document_type
-        result = classify_document_by_rules(text_of(doc))
-        store_rule_result(doc, result)
-        doc.status = Status.REVIEW_REQUIRED if result["status"] == REVIEW_REQUIRED else Status.COMPLETED
-        doc.save(update_fields=["document_type", "status", "updated_at"])
-        counts["checked"] += 1
-        counts["changed"] += doc.document_type != before
-        counts["unclassified" if doc.document_type == NOT_CLASSIFIED else "classified"] += 1
-    return counts
-def correct_document(doc, document_type):
-    """A person files the document under `document_type` - one file at a time. It replaces whatever the rules said
-    and locks the document: once decided, nobody (not the patient, not an admin) can change it again.
-    Works on a failed document too: the file is still there, so it becomes a normal completed one."""
-    if is_confirmed(doc):
-        raise DocumentLocked("This document is confirmed and can't be changed.")
-    if doc.status in MedicalDocument.IN_PROGRESS:
-        raise ValueError("This file is still being read.")
-    store_human_choice(doc, document_type)
-    _end(doc, Status.COMPLETED, error_message="")
-# ── the review step: which uploads still wait for the patient's decision ─────
-def review_starts_at():
-    """When the review step began (settings.RECORDS_REVIEW_FROM, an ISO date-time). Everything uploaded before it is
-    already part of the patient's documents and never needs review; unset means the review step is off."""
-    raw = getattr(settings, "RECORDS_REVIEW_FROM", "") or ""
-    when = parse_datetime(raw) if raw else None
-    if when is not None and when.tzinfo is None:
-        from django.utils import timezone
-        when = timezone.make_aware(when)
-    return when
-def awaiting_review_q():
-    """Q for a patient's own uploads, made after the review step began, whose type nobody has confirmed yet."""
-    start = review_starts_at()
-    if start is None:
-        return Q(pk__in=[])
-    return (Q(uploaded_by="patient", source_hospital_id__isnull=True, created_at__gte=start)
-            & ~Q(classification__status__in=(HUMAN_CLASSIFIED, ISSUED)))
-def document_counts(awpid):
-    """What the My Documents dropdown and the badges need: {"total", "awaiting_review", "unclassified", "by_type"}.
-    Only finished, confirmed-or-grandfathered documents count towards the types; the files waiting for review are
-    counted apart."""
-    docs = MedicalDocument.objects.using("default").filter(patient__awpid=awpid)
-    awaiting = awaiting_review_q()
-    done = (Status.COMPLETED, Status.REVIEW_REQUIRED)
-    by_type = {code: 0 for code in CHOOSABLE_TYPES}
-    for row in docs.exclude(awaiting).filter(status__in=done).values("document_type").annotate(n=Count("id")):
-        if row["document_type"] in by_type:
-            by_type[row["document_type"]] = row["n"]
-    return {
-        "total": docs.exclude(awaiting).filter(status__in=done).count(),
-        "awaiting_review": docs.filter(awaiting, status__in=done).count(),
-        "unclassified": docs.exclude(awaiting).filter(status__in=done, document_type=NOT_CLASSIFIED).count(),
-        "by_type": by_type,
-    }
-def submit_decisions(awpid, decisions):
-    """The patient's final answer for a list of files: [{"document_id", "document_type"}]. Each file is checked on
-    its own - a bad one never stops the rest. Returns ({"submitted": [id], "rejected": [{"document_id", "reason"}]}).
-    A submitted file gets the person's type and is locked. Sending the same list again changes nothing."""
-    wanted = [d["document_id"] for d in decisions]
-    docs = {d.id: d for d in MedicalDocument.objects.using("default").filter(patient__awpid=awpid, pk__in=wanted)
-            .select_related("classification")}
-    submitted, rejected, seen = [], [], set()
 
-    def reject(doc_id, reason):
-        rejected.append({"document_id": doc_id, "reason": reason})
 
-    for decision in decisions:
-        doc_id, doc_type = decision["document_id"], decision["document_type"]
-        doc = docs.get(doc_id)
-        if doc_id in seen:
+# ------------------------------------------------------------------ lab values
+def resolve_analyte(test_name: str, cfg=None) -> Optional[str]:
+    cfg = cfg or load_config()
+    name = re.sub(r"[^a-z0-9 .\-]", "", (test_name or "").lower()).strip()
+    if not name:
+        return None
+    best, best_len = None, 0
+    for analyte, spec in cfg["lab_thresholds"].items():
+        if analyte.startswith("_"):
             continue
-        seen.add(doc_id)
-        if doc is None or doc.source_hospital_id or doc.uploaded_by == "staff":
-            reject(doc_id, "not_found")
-        elif doc_type not in CHOOSABLE_TYPES:
-            reject(doc_id, "invalid_type")
-        elif is_confirmed(doc):
-            reject(doc_id, "already_confirmed")
-        elif doc.status in MedicalDocument.IN_PROGRESS:
-            reject(doc_id, "still_processing")
-        elif doc.status == Status.FAILED:
-            reject(doc_id, "failed")
-        else:
-            try:
-                with transaction.atomic(using="default"):
-                    correct_document(doc, doc_type)
-                submitted.append(doc_id)
-            except DocumentLocked:
-                reject(doc_id, "already_confirmed")
-            except ValueError:
-                reject(doc_id, "still_processing")
-    return {"submitted": submitted, "rejected": rejected}
-def retry_document(doc):
-    """Put a file that failed back in the queue (the caller then queues it with start_processing)."""
-    if doc.status != Status.FAILED:
-        raise ValueError("Only a file that failed can be tried again.")
-    _end(doc, Status.QUEUED, error_message="")
-def can_discard(doc):
-    """A patient may remove an upload that failed, or one that has been read but whose type they have not confirmed yet
-    (the Needs Review and Ready to Submit lists). Never one still being read - the worker is using it - and never one
-    already confirmed, which is part of their records."""
-    if doc.status == Status.FAILED:
-        return True
-    if doc.status not in (Status.COMPLETED, Status.REVIEW_REQUIRED):
-        return False
-    return MedicalDocument.objects.using("default").filter(pk=doc.pk).filter(awaiting_review_q()).exists()
-def dismiss_document(doc):
-    """The patient removes an upload (see `can_discard`): its stored copy and its rows. A document that is being read
-    or is already confirmed is never deleted here, so nothing in the patient's records is ever lost. The batch is
-    brought in line with what is left (and removed when nothing is)."""
-    if not can_discard(doc):
-        raise ValueError("Only a file that failed, or one you haven't confirmed yet, can be removed.")
-    batch, name = doc.batch, (doc.file.name if doc.file else "")
-    doc.delete()
-    _safe_delete(name)
-    if batch:
-        if not batch.documents.exists():
-            batch.delete()
-def _queue_insights(document_id):
-    """Read a hospital-issued document for the timeline too (its text, then its insights), once its row is committed.
-    The hospital's save never fails because the queue is down: run_all() fills in what was missed."""
-    def queue():
-        try:
-            from apps.atomwalk.documents.tasks import insights_document_task
-            insights_document_task.apply_async(args=[document_id], queue=BULK_QUEUE)
-        except Exception:
-            logger.warning("records: couldn't queue insights for document %s", document_id, exc_info=True)
-    transaction.on_commit(queue, using="default")
-def create_issued_document(*, awpid, file_path, name, doc_type, source_hospital_id, source_type, source_id, mime_type="application/pdf",
-                           public_document_id="", document_date=None):
-    """A document a hospital made for the patient (signed prescription, lab report, handwriting): it is already in
-    the bucket at `file_path` and already has its type, from its source, so it skips the upload pipeline (no
-    classification) and is stored as completed. Its text and timeline insights are read in the background."""
-    doc = MedicalDocument(
-        patient=Patient.objects.using("default").get(awpid=awpid), file_name=(name or "")[:100],
-        mime_type=mime_type, uploaded_by="staff", source_hospital_id=source_hospital_id,
-        source_type=source_type, source_id=source_id,
-        document_ref=public_document_id, document_date=document_date, status=Status.COMPLETED)
-    doc.file = file_path
-    doc.save(using="default")
-    store_issued_type(doc, doc_type)
-    doc.save(using="default", update_fields=["document_type"])
-    _queue_insights(doc.pk)
-    return MedicalDocument.objects.using("default").get(pk=doc.pk)
-def extract_text(raw, mime):
-    """(text, engine). PDF text layer if it has one ("pdf_text"), otherwise RapidOCR on the image or the first PDF
-    pages ("ocr")."""
-    if mime == "application/pdf":
-        from pypdf import PdfReader
-        text = "\n".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(raw)).pages[:5]).strip()
-        if len(text) >= 40:
-            return text, "pdf_text"
-        return "\n".join(ocr.run(png).text for png in ocr.pdf_page_images(raw)).strip(), "ocr"
-    return ocr.run(raw).text.strip(), "ocr"
+        for alias in spec.get("aliases", []):
+            a = alias.lower()
+            # whole-word match; longest alias wins ("total bilirubin" over "bilirubin")
+            if re.search(rf"(^|\b){re.escape(a)}(\b|$)", name) and len(a) > best_len:
+                best, best_len = analyte, len(a)
+    return best
 
 
-from apps.atomwalk.documents.models import NOT_CLASSIFIED, DOCUMENT_TYPES, DOCUMENT_TYPE_CHOICES, CHOOSABLE_TYPES, RULE_CLASSIFIED, REVIEW_REQUIRED, HUMAN_CLASSIFIED, ISSUED, CLASSIFIER_RULES, CLASSIFIER_HUMAN, CLASSIFIER_HOSPITAL  # noqa: F401  (stored values, defined with the models)
+def evaluate_lab(analyte: str, value: float, age_days: int, cfg=None) -> dict:
+    """
+    -> {"severity": "CRITICAL"|"ABNORMAL"|"NORMAL", "direction": "LOW"|"HIGH"|None,
+        "band": "INFANT", "limits": {...}}
+    """
+    cfg = cfg or load_config()
+    spec = cfg["lab_thresholds"].get(analyte)
+    if spec is None or value is None:
+        return {"severity": "NORMAL", "direction": None, "band": None, "limits": {}}
+    band = age_band(age_days, cfg)
+    limits = spec.get(band) or spec.get("DEFAULT") or {}
+    sev, direction = "NORMAL", None
+    if "critical_low" in limits and value < limits["critical_low"]:
+        sev, direction = "CRITICAL", "LOW"
+    elif "critical_high" in limits and value > limits["critical_high"]:
+        sev, direction = "CRITICAL", "HIGH"
+    elif "low" in limits and value < limits["low"]:
+        sev, direction = "ABNORMAL", "LOW"
+    elif "high" in limits and value > limits["high"]:
+        sev, direction = "ABNORMAL", "HIGH"
+    return {"severity": sev, "direction": direction, "band": band, "limits": limits}
 
-# ── scoring ──────────────────────────────────────────────────────────────
-WEIGHTS = {"strong": 10, "medium": 3, "weak": 1}
-MIN_MARGIN = 5      # the winner must lead the runner-up by this many points
-DOCUMENT_RULES = {
-    "prescription": {
-        "strong": ["prescription", "e-prescription", "rx", "c/o", "chief complaints", "medication prescribed", "take medicine", "prescribed by"],
-        "medium": ["tablet", "tab", "capsule", "cap", "syrup", "syp", "injection", "inj", "mg", "ml", "dosage", "once daily", "twice daily",
-                   "once a day", "once in a day", "twice a day", "thrice a day", "three times a day", "dispense",
-                   "bd", "tds", "od", "hs", "qid", "sos", "before food", "after food", "before breakfast", "at night", "ointment",
-                   "cream", "lotion", "drops", "topical", "orally", "eye drops", "next visit", "review after", "adv"],
-        "weak": ["diagnosis", "advice", "follow up", "doctor", "dr", "timings"],
-    },
-    "lab_report": {
-        "strong": ["laboratory report", "lab report", "reference range", "specimen", "test result", "pathology", "pathologist",
-                   "biological reference interval", "reference interval", "bio. ref", "investigation", "test name"],
-        "medium": ["hemoglobin", "haemoglobin", "wbc", "rbc", "platelet", "glucose", "creatinine", "cholesterol", "blood sugar", "urine",
-                   "sample", "parameter", "observed value", "sample collected", "report date", "checked by", "end of report", "hba1c", "tsh",
-                   "bilirubin", "sgot", "sgpt", "triglycerides", "hdl", "ldl", "uric acid", "specific gravity", "pus cells", "widal", "dengue",
-                   "crp", "esr", "vitamin d", "sodium", "potassium", "troponin", "inr", "aptt", "culture", "sensitivity", "nabl", "serum"],
-        "weak": ["result", "unit", "range", "normal", "high", "low", "method"],
-    },
-    "imaging_report": {
-        "strong": ["radiology report", "imaging report", "x-ray", "xray", "mri", "ct scan", "ncct", "ultrasound", "usg", "sonography", "echocardiography",
-                   "mammography", "doppler", "radiologist", "radiodiagnosis", "clinical information", "accession", "modality", "bi-rads"],
-        "medium": ["impression", "findings", "contrast", "lesion", "scan", "technique", "comparison", "radiograph", "effusion", "standard protocol", "echo"],
-        "weak": ["normal", "view", "study"],
-    },
-    "discharge_summary": {
-        "strong": ["discharge summary", "date of discharge", "discharge date", "hospital course", "date of admission", "condition at discharge",
-                   "advice on discharge", "discharge medications", "discharge card", "ip no"],
-        "medium": ["admission date", "discharge medication", "discharged", "admission", "discharge", "ward", "procedure", "presenting complaints",
-                   "treatment given", "resident medical officer"],
-        "weak": ["diagnosis", "follow up", "admitted", "diet", "activity"],
-    },
-    "consultation_note": {
-        "strong": ["consultation note", "clinical notes", "opd note", "consultation summary", "history of present illness", "chief complaint",
-                   "visit type", "soap", "opd consultation", "progress note"],
-        "medium": ["examination", "assessment", "subjective", "objective", "systemic examination", "vitals", "afebrile", "past history", "hpi"],
-        "weak": ["complaint", "advice", "follow up", "plan", "review"],
-    },
-    "medical_bill": {
-        "strong": ["invoice", "tax invoice", "amount payable", "total amount", "bill no", "net payable", "amount in words",
-                   "receipt", "authorised signatory", "payment mode"],
-        "medium": ["gst", "gstin", "subtotal", "sub total", "discount", "quantity", "rate", "net amount", "qty", "mrp", "batch", "with thanks", "rupees", "charges"],
-        "weak": ["total", "amount", "paid"],
-    },
-    "vaccination_record": {
-        "strong": ["vaccination certificate", "vaccination record", "immunization record", "immunisation record", "vaccine", "immunization",
-                   "immunisation", "vaccination", "batch no", "next due", "date given"],
-        "medium": ["dose", "bcg", "opv", "dpt", "dtp", "dtwp", "mmr", "hepatitis b", "covid", "booster", "ipv", "hib", "rotavirus", "guardian",
-                   "covishield", "due at"],
-        "weak": ["vaccinated"],
-    },
-    "referral_letter": {
-        "strong": ["referral letter", "referred to", "refer to", "kindly see", "kind attention", "referral", "dear dr", "dear doctor", "for opinion",
-                   "yours sincerely"],
-        "medium": ["for further evaluation", "reason for referral", "kind opinion", "current medication", "presented with", "enclosed", "year-old"],
-        "weak": ["regards", "sincerely", "thank you", "sub"],
-    },
-    "medical_certificate": {
-        "strong": ["medical certificate", "fitness certificate", "to whom it may concern", "certified that", "certify", "sick leave", "medically fit",
-                   "fit to resume", "unfit"],
-        "medium": ["unfit for", "rest for", "recommended rest", "advised rest", "leave", "issued", "ref. no", "for the purpose", "recovered"],
-        "weak": ["certificate", "registration no"],
-    },
-    # "other" has no rules on purpose: only a person files a document there.
-}
-def _canon(keyword):
-    """What makes two keywords the same: letters and digits only, plural dropped ("x-ray" = "xray", "sub total" = "subtotal")."""
-    k = re.sub(r"[^a-z0-9]", "", keyword.lower())
-    return k[:-1] if len(k) > 3 and k.endswith("s") else k
-def _dedupe_levels(rules):
-    """A keyword counts once per type: if it is listed twice (at any level, spelt differently or as a plural), only the
-    strongest one stays."""
-    for levels in rules.values():
-        seen = set()
-        for level in ("strong", "medium", "weak"):
-            levels[level] = [k for k in levels.get(level, []) if not (_canon(k) in seen or seen.add(_canon(k)))]
-    return rules
-DOCUMENT_RULES = _dedupe_levels(DOCUMENT_RULES)
-# Patterns that are not words. A written dose such as 1-0-1 or 0-1-0 (morning-noon-night) is a clue for a prescription,
-# but only a medium one: a discharge summary lists doses too. Each digit is 0-3 and none touches another digit, so a date
-# like 11-09-2026 can not match.
-PATTERN_RULES = {
-    "prescription": [("medium", "1-0-1 dose pattern", re.compile(r"(?<![0-9])[0-3]\s*-\s*[0-3]\s*-\s*[0-3](?![0-9])"))],
-}
-# ── the engine (pure: no database) ───────────────────────────────────────
-def normalize_text(text):
-    """Lower-case, whitespace collapsed to single spaces."""
+
+# ----------------------------------------------------------- critical keywords
+def find_critical_keywords(text: str, cfg=None) -> list:
+    """Whole-word, case-insensitive. Skips negated mentions ('no ICU stay', 'not intubated')."""
+    cfg = cfg or load_config()
     if not text:
-        return ""
-    return re.sub(r"\s+", " ", text.lower()).strip()
-# A measurement unit such as mg/dL is not a dose, and a "Ref. Doctor" line is not a prescriber: neither should push a
-# lab report towards "prescription".
-_UNIT_RE = re.compile(r"(?<![a-z])(?:mg|ml|mcg|ug|ng|pg|g|u|iu|miu|uiu|mmol|meq)\s*/\s*(?:dl|l|ml|min|hr|cumm|kg|hpf)(?![a-z])")
-_REF_DOCTOR_RE = re.compile(r"(?<![a-z])ref(?:erred|\.)?\s*(?:by|doctor)\b[^\n]*")
-def prepare_text(text):
-    """What the rules read: lower-cased, units and "Ref. Doctor" lines taken out, whitespace collapsed."""
-    t = (text or "").lower()
-    t = _REF_DOCTOR_RE.sub(" ", t)
-    t = _UNIT_RE.sub(" xunitx ", t)
-    return normalize_text(t)
-_PATTERNS = {}
-def _pattern(keyword):
-    """Whole-word match: not glued to other letters (digits are fine, so "500mg" finds "mg"). The words of a phrase may
-    be separated by spaces, hyphens or nothing at all ("follow up" = "Follow-up" = "Followup"), and the last word may
-    be a plural ("prescription" = "Prescriptions")."""
-    if keyword not in _PATTERNS:
-        words = [re.escape(w) for w in re.split(r"[\s\-]+", keyword) if w]
-        body = r"[\s\-]*".join(words)
-        if keyword[-1].isalpha():
-            body += "s?"
-        _PATTERNS[keyword] = re.compile(r"(?<![a-z])" + body + r"(?![a-z])")
-    return _PATTERNS[keyword]
-def _squash(s):
-    return re.sub(r"[^a-z0-9]", "", s)
-def _found(keyword, text, squashed):
-    """Whole-word match; for a phrase, also tolerate OCR dropping the spaces ("ReferenceRange")."""
-    if _pattern(keyword).search(text):
-        return True
-    return " " in keyword and len(_squash(keyword)) > 5 and _squash(keyword) in squashed
-def calculate_document_scores(text):
-    """{type: {"score": int, "matched_rules": [{"keyword", "weight", "level"}]}} for every type that has """
-    text = prepare_text(text)
-    squashed = _squash(text)
-    scores = {}
-    for document_type, type_rules in DOCUMENT_RULES.items():
-        score, matched = 0, []
-        for level in ("strong", "medium", "weak"):
-            for keyword in type_rules.get(level, []):
-                if _found(keyword, text, squashed):
-                    score += WEIGHTS[level]
-                    matched.append({"keyword": keyword, "weight": WEIGHTS[level], "level": level})
-        for level, name, regex in PATTERN_RULES.get(document_type, []):
-            if regex.search(text):
-                score += WEIGHTS[level]
-                matched.append({"keyword": name, "weight": WEIGHTS[level], "level": level})
-        scores[document_type] = {"score": score, "matched_rules": matched}
-    return scores
-def classify_document_by_rules(text):
-    """The rules' verdict on `text`:
+        return []
+    lowered = text.lower()
+    hits = []
+    for term in cfg["critical_keywords"]["terms"]:
+        for m in re.finditer(rf"\b{re.escape(term.lower())}\b", lowered):
+            window = lowered[max(0, m.start() - 25):m.start()]
+            if re.search(r"\b(no|not|without|nil|denies|never)\b[^.;]*$", window):
+                continue
+            hits.append(term)
+            break
+    return sorted(set(hits))
 
-        document_type      the winning type, or "not_classified"
-        status             "rule_classified" or "review_required"
-        best_guess         the highest-scoring type ("" if nothing matched), even when it did not win
-        score / second_best_score / score_margin
-        matched_rules      what matched for the best-scoring type
+
+def max_severity(*severities) -> str:
+    vals = [s for s in severities if s]
+    return max(vals, key=lambda s: SEVERITY_ORDER.get(s, 0)) if vals else "NORMAL"
+
+
+# ── Episodes and recurrence ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class EventIn:
+    id: int
+    event_date: date
+    icd10: Optional[str]
+    condition_text: str = ""
+    severity: str = "NORMAL"
+    is_provisional: bool = False
+    document_id: Optional[int] = None
+    event_type: str = "DIAGNOSIS"
+
+
+@dataclass
+class Episode:
+    key: str
+    group: str
+    label: str
+    category: str
+    start: date
+    end: Optional[date]
+    last_seen: date
+    peak_severity: str
+    event_ids: List[int] = field(default_factory=list)
+    document_ids: List[int] = field(default_factory=list)
+    is_provisional: bool = True
+    known_group: bool = True
+
+    @property
+    def event_count(self):
+        return len(self.event_ids)
+
+    def as_dict(self):
+        return {
+            "key": self.key, "group": self.group, "label": self.label,
+            "category": self.category, "start": self.start.isoformat(),
+            "end": self.end.isoformat() if self.end else None,
+            "last_seen": self.last_seen.isoformat(),
+            "peak_severity": self.peak_severity, "event_count": self.event_count,
+            "event_ids": self.event_ids,
+            "document_ids": sorted(set(d for d in self.document_ids if d)),
+            "is_provisional": self.is_provisional, "known_group": self.known_group,
+        }
+
+
+def _absorb(ep: Episode, ev: EventIn):
+    ep.event_ids.append(ev.id)
+    if ev.document_id:
+        ep.document_ids.append(ev.document_id)
+    ep.last_seen = max(ep.last_seen, ev.event_date)
+    ep.peak_severity = max_severity(ep.peak_severity, ev.severity)
+    if not ev.is_provisional:
+        ep.is_provisional = False
+
+
+def build_episodes(events: List[EventIn], cfg=None) -> List[Episode]:
+    cfg = cfg or load_config()
+    events = sorted(events, key=lambda e: (e.event_date, e.id))
+    chronic: dict = {}
+    open_acute: dict = {}
+    episodes: List[Episode] = []
+
+    for ev in events:
+        cls = classify_condition(ev.icd10, cfg, ev.condition_text)
+        group = cls["group"]
+        label = cls["label"] or ev.condition_text or group
+
+        if cls["category"] == "CHRONIC":
+            ep = chronic.get(group)
+            if ep is None:
+                ep = Episode(key=f"{group}", group=group, label=label, category="CHRONIC",
+                             start=ev.event_date, end=None, last_seen=ev.event_date,
+                             peak_severity="NORMAL", known_group=cls["known"])
+                chronic[group] = ep
+                episodes.append(ep)
+            # A provisional first mention shouldn't fix the onset date once
+            # a confirmed mention arrives.
+            if ep.is_provisional and not ev.is_provisional:
+                ep.start = ev.event_date
+            _absorb(ep, ev)
+            continue
+
+        ep = open_acute.get(group)
+        gap = (ev.event_date - ep.last_seen).days if ep else None
+        if ep is None or gap > cls["merge_days"]:
+            ep = Episode(key=f"{group}:{ev.event_date.isoformat()}", group=group, label=label,
+                         category="ACUTE", start=ev.event_date, end=ev.event_date,
+                         last_seen=ev.event_date, peak_severity="NORMAL",
+                         known_group=cls["known"])
+            open_acute[group] = ep
+            episodes.append(ep)
+        _absorb(ep, ev)
+        ep.end = ep.last_seen
+
+    return sorted(episodes, key=lambda e: (e.start, e.group))
+
+
+# ------------------------------------------------------------------ recurrence
+def _add_months(d: date, months: int) -> date:
+    # month arithmetic without dateutil
+    y, m = divmod(d.month - 1 + months, 12)
+    y += d.year
+    m += 1
+    day = min(d.day, [31, 29 if y % 4 == 0 and (y % 100 or y % 400 == 0) else 28,
+                      31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1])
+    return date(y, m, day)
+
+
+def detect_recurrence(episodes: List[Episode], dob: date, as_of: date, cfg=None) -> List[dict]:
     """
-    scores = calculate_document_scores(text)
-    ranked = sorted(scores.items(), key=lambda item: (-item[1]["score"], item[0]))
-    best_type, best = ranked[0]
-    second = ranked[1][1]["score"] if len(ranked) > 1 else 0
-    margin = best["score"] - second
-    result = {"score": best["score"], "second_best_score": second, "score_margin": margin,
-              "matched_rules": best["matched_rules"]}
-    if best["score"] == 0:
-        return {**result, "document_type": NOT_CLASSIFIED, "status": REVIEW_REQUIRED, "best_guess": ""}
-    if margin < MIN_MARGIN:
-        return {**result, "document_type": NOT_CLASSIFIED, "status": REVIEW_REQUIRED, "best_guess": best_type}
-    return {**result, "document_type": best_type, "status": RULE_CLASSIFIED, "best_guess": best_type}
-# ── recording a verdict (the only code that writes classification state) ──
-def store_rule_result(document, result):
-    """Save the rules' verdict: the classification row and the document's current type. A person's choice is
-    never overwritten. Does not touch the document's pipeline status."""
-    from apps.atomwalk.documents.models import PatientDocumentClassification
-    classification, _ = PatientDocumentClassification.objects.using("default").get_or_create(document=document)
-    if classification.status in (HUMAN_CLASSIFIED, ISSUED):
-        return classification
-    classification.ai_document_type = result["best_guess"] or NOT_CLASSIFIED
-    classification.classifier = CLASSIFIER_RULES
-    classification.rule_score = result["score"]
-    classification.second_best_score = result["second_best_score"]
-    classification.score_margin = result["score_margin"]
-    classification.rule_matches = result["matched_rules"]
-    classification.status = result["status"]
-    classification.save()
-    document.document_type = result["document_type"]
-    return classification
-def store_human_choice(document, document_type):
-    """A person files the document under `document_type`. It replaces whatever the rules said."""
-    if document_type not in CHOOSABLE_TYPES:
-        raise ValueError("Choose one of the available document types.")
-    from apps.atomwalk.documents.models import PatientDocumentClassification
-    classification, _ = PatientDocumentClassification.objects.using("default").get_or_create(document=document)
-    classification.human_document_type = document_type
-    classification.status = HUMAN_CLASSIFIED
-    classification.save()
-    document.document_type = document_type
-    return classification
-def store_issued_type(document, document_type):
-    """A hospital-issued document brings its own type: no rules, no review."""
-    from apps.atomwalk.documents.models import PatientDocumentClassification
-    document_type = document_type if document_type in CHOOSABLE_TYPES else "other"
-    classification, _ = PatientDocumentClassification.objects.using("default").get_or_create(document=document)
-    classification.classifier = CLASSIFIER_HOSPITAL
-    classification.ai_document_type = None
-    classification.status = ISSUED
-    classification.save()
-    document.document_type = document_type
-    return classification
-# ── the review flow: what a patient may choose, and what is final ──────────
-class DocumentLocked(ValueError):
-    """The document is confirmed (a person or the hospital decided its type): nothing may change it any more."""
-def document_type_choices():
-    """[{"code", "label"}] - what a person may file a document under (the one list every app reads)."""
-    return [{"code": code, "label": DOCUMENT_TYPES[code]} for code in CHOOSABLE_TYPES]
-# ── reading a document's classification (the model carries no shortcuts for these) ──
-def _classification(document):
-    try:
-        return document.classification
-    except ObjectDoesNotExist:
-        return None
-def method_of(document):
-    """How the type was decided: "rule" (the keyword rules), "staff" (a person, or the hospital that issued the
-    document), "" (not classified)."""
-    c = _classification(document)
-    if c is None:
-        return ""
-    if c.status in (HUMAN_CLASSIFIED, ISSUED):
-        return "staff"
-    return "rule" if c.classifier == CLASSIFIER_RULES else ""
-def score_of(document):
-    c = _classification(document)
-    return c.rule_score if c else None
-def is_confirmed(document):
-    """True once a person (or the hospital that issued it) has decided the type - the document is then locked."""
-    c = _classification(document)
-    return bool(c and c.status in (HUMAN_CLASSIFIED, ISSUED))
-def suggested_type_of(document):
-    """The type the rules filed it under, or None if they could not tell (or a person has already decided)."""
-    c = _classification(document)
-    if c and c.status == RULE_CLASSIFIED and c.ai_document_type not in (None, "", NOT_CLASSIFIED):
-        return c.ai_document_type
-    return None
-def best_guess_of(document):
-    """For a document no type fit: the type the rules came closest to (else "")."""
-    c = _classification(document)
-    if document.document_type == NOT_CLASSIFIED and c and c.ai_document_type not in (None, "", NOT_CLASSIFIED):
-        return c.ai_document_type
-    return ""
-def text_of(document):
-    try:
-        return document.extraction.extracted_text
-    except ObjectDoesNotExist:
-        return ""
-
-
-logger = logging.getLogger(__name__)
-EXTRACTOR_VERSION = "medspacy-1"
-VERSION = 3
-VOCABULARY = Path(__file__).with_name("vocabulary.csv")
-_MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
-# 14/03/2026 (day first) · 2026-03-14 · 14 Mar 2026
-_DATE = re.compile(r"(?P<d>\d{1,2})[/.-](?P<m>\d{1,2})[/.-](?P<y>\d{4})"
-                   r"|(?P<y2>\d{4})-(?P<m2>\d{2})-(?P<d2>\d{2})"
-                   r"|(?P<d3>\d{1,2})[ -](?P<mon>[A-Za-z]{3})[a-z]*[ ,-]+(?P<y3>\d{4})")
-_BIRTH = re.compile(r"\bdob\b|d\.o\.b|date of birth|\bborn\b", re.I)       # a birth date is never the event's date
-_UNCERTAIN = re.compile(r"suspect|unconfirmed|not confirmed|possible|probable|rule out|r/o|\bquery\b", re.I)
-_RESOLVED = re.compile(r"resolved|recovered|settled|subsided|completed the (?:prescribed )?course", re.I)
-_VACCINE = re.compile(r"vaccin|immuni[sz]|booster|birth dose|\bBCG\b|\bOPV\b|\bDPT\b|\bMMR\b", re.I)   # "Hepatitis B - birth dose" is a vaccine, not a diagnosis
-_STRENGTH = re.compile(r"\d+(?:\.\d+)?\s?(?:mg|mcg|g|ml|iu)\b", re.I)
-_FREQUENCY = re.compile(r"\b(?:OD|BD|BID|TDS|TID|QID|HS|SOS|\d-\d-\d|once daily|twice daily|thrice daily)\b", re.I)
-_GLUED = re.compile(r"(?<=[A-Za-z]{3})(?=\d{2,}(?:mg|mcg|ml|g)?)", re.I)   # OCR joins a drug and its dose: "Aldactone25MG"
-_PRODUCT = re.compile(r"\s*(?:syrup|syp|tablets?|tab|capsules?|cap|drops|lozenges?|cream|gel|ointment|spray|lotion|inhaler)", re.I)   # "Cough Syrup" is a product, not a cough
-@lru_cache(maxsize=1)
-def _vocabulary():
-    """{word: (name, kind, nature)} from vocabulary.csv. A row's name and each of its synonyms are words."""
-    with VOCABULARY.open(encoding="utf-8", newline="") as f:
-        return {word.lower(): (row["name"], row["kind"], row["nature"] or "unknown")
-                for row in csv.DictReader(f) for word in [row["name"], *filter(None, row["synonyms"].split("|"))]}
-@lru_cache(maxsize=1)
-def _pipeline():
-    """The medSpaCy pipeline that finds the vocabulary's words and flags negated / family / suspected / historical."""
-    import spacy
-    from loguru import logger as pyrush_log
-    from medspacy.target_matcher import TargetRule
-    pyrush_log.disable("PyRuSH")                     # its sentence splitter logs every token at debug level
-    nlp = spacy.blank("en")
-    for name in ("medspacy_pyrush", "medspacy_target_matcher", "medspacy_context"):
-        nlp.add_pipe(name)
-    nlp.get_pipe("medspacy_target_matcher").add([TargetRule(word, kind) for word, (_, kind, _) in _vocabulary().items()])
-    return nlp
-def _dates_in(line):
-    found = []
-    for m in _DATE.finditer(line):
-        g = m.groupdict()
-        try:
-            if g["d"]:
-                found.append(date(int(g["y"]), int(g["m"]), int(g["d"])))
-            elif g["y2"]:
-                found.append(date(int(g["y2"]), int(g["m2"]), int(g["d2"])))
-            else:
-                found.append(date(int(g["y3"]), _MONTHS.index(g["mon"].lower()) + 1, int(g["d3"])))
-        except ValueError:                           # 31/02/2026, or three letters that are not a month
-            pass
-    latest = date.today() + timedelta(days=366)     # a misread year ("2614") is no date; a follow-up next month is
-    return [d for d in found if date(1900, 1, 1) <= d <= latest]
-def _line_dates(line):
-    return [] if _BIRTH.search(line) else _dates_in(line)
-def _dose(rest):
-    """"500 mg BD" from what follows a medication on its line (up to the next comma), or None."""
-    parts = [m.group(0) for m in (_STRENGTH.search(rest), _FREQUENCY.search(rest)) if m]
-    return " ".join(parts) or None
-def build_insights(text, fixed_date=None):
-    """The insights JSON for one document's text. `fixed_date` is a hospital document's own date, given to every finding."""
-    nlp = _pipeline()
-    text = _GLUED.sub(" ", text)
-    header = next((d for line in text.splitlines() for d in _line_dates(line)), None)
-    entries = []
-    for ent in nlp(text).ents:
-        start = text.rfind("\n", 0, ent.start_char) + 1
-        end = text.find("\n", ent.end_char)
-        end = len(text) if end < 0 else end
-        line = text[start:end].strip()
-        if ent.label_ != "medication" and _PRODUCT.match(text[ent.end_char:end]):
+    Returns one entry per condition group that has an episode or a rule:
+    {
+      "group", "label", "is_recurrent", "triggered_on", "rule": {"min_count","window_months"},
+      "episodes_last_12m", "expected_per_year", "context": "typical for age" | ...,
+      "clinical_hint", "episode_keys": [...]
+    }
+    Only groups with at least one confirmed acute episode are returned.
+    """
+    cfg = cfg or load_config()
+    rules = {k: v for k, v in cfg["recurrence_rules"].items() if not k.startswith("_")}
+    by_group: dict = {}
+    for ep in episodes:
+        if ep.category != "ACUTE" or ep.is_provisional:
             continue
-        if ent.label_ == "condition" and _VACCINE.search(line):
-            continue
-        sentence = ent.sent.text
-        on_line = _line_dates(line)
-        when = fixed_date or (on_line[0] if on_line else header)
-        entries.append({
-            "date": when.isoformat() if when else None, "word": ent._.target_rule.literal.lower(), "evidence": line[:300],
-            "dose": _dose(re.split(r"[,;]", text[ent.end_char:end])[0]) if ent.label_ == "medication" else None,
-            "negated": ent._.is_negated, "family": ent._.is_family,
-            "uncertain": bool(ent._.is_uncertain or _UNCERTAIN.search(sentence)),
-            "when": "resolved" if _RESOLVED.search(sentence) else "history" if ent._.is_historical else "planned" if ent._.is_hypothetical else "current",
+        by_group.setdefault(ep.group, []).append(ep)
+
+    one_year_ago = as_of - timedelta(days=365)
+    out = []
+    for group, eps in by_group.items():
+        eps.sort(key=lambda e: e.start)
+        rule = rules.get(group, {})
+        age_max = rule.get("age_max_days")
+        considered = [e for e in eps
+                      if age_max is None or age_in_days(dob, e.start) <= age_max]
+        starts = [e.start for e in considered]
+
+        triggered_on, trig_rule, trig_keys = None, None, []
+        for win in rule.get("windows", []):
+            n, months = win["min_count"], win["window_months"]
+            for i, s in enumerate(starts):
+                window_end = _add_months(s, months)
+                j = bisect_left(starts, window_end)  # episodes with start < window_end
+                if j - i >= n:
+                    hit_date = starts[i + n - 1]  # the episode that completed the count
+                    if triggered_on is None or hit_date < triggered_on:
+                        triggered_on, trig_rule = hit_date, win
+                        trig_keys = [e.key for e in considered[i:i + n]]
+                    break
+
+        last_12m = sum(1 for e in eps if e.start >= one_year_ago)
+        expected = None
+        if "expected_per_year" in rule:
+            age_now_days = age_in_days(dob, as_of)
+            exp = rule["expected_per_year"]
+            expected = exp["under_5y"] if age_now_days < 1826 else exp["over_5y"]
+
+        if triggered_on:
+            context = "recurrent"
+        elif expected is not None and last_12m <= expected:
+            context = "typical for age"
+        else:
+            context = None
+
+        out.append({
+            "group": group,
+            "label": eps[0].label,
+            "is_recurrent": triggered_on is not None,
+            "triggered_on": triggered_on.isoformat() if triggered_on else None,
+            "rule": trig_rule,
+            "episodes_total": len(eps),
+            "episodes_last_12m": last_12m,
+            "expected_per_year": expected,
+            "context": context,
+            "clinical_hint": rule.get("clinical_hint") if triggered_on else None,
+            "episode_keys": trig_keys,
         })
-    return {"version": VERSION, "entries": entries}
-def _read_file(doc):
-    doc.file.open("rb")
-    try:
-        return doc.file.read()
-    finally:
-        doc.file.close()
-def _text_of(doc):
-    """The document's extracted text. A hospital-issued document skipped the upload pipeline, so it has none yet:
-    read it from its file now, the same way an upload is read."""
-    try:
-        return doc.extraction.extracted_text
-    except DocumentExtraction.DoesNotExist:
-        text, engine = extract_text(_read_file(doc), doc.mime_type or "application/pdf")
-        DocumentExtraction.objects.create(document=doc, extracted_text=text, engine=engine)
-        return text
-def run_insights(document_id):
-    """Read one document (extracting its text first if it has none) and save its insights."""
-    doc = MedicalDocument.objects.get(pk=document_id)
-    hospital_date = (doc.document_date or doc.created_at.date()) if doc.source_hospital_id else None
-    insights = build_insights(_text_of(doc), hospital_date)
-    DocumentExtraction.objects.filter(document=doc).update(
-        normalised=insights, status=DocumentExtraction.Status.DONE, processed_at=timezone.now(), error="", extractor_version=EXTRACTOR_VERSION)
-    _write_events(doc, insights)
-def _write_events(doc, insights):
-    """The conditions found in a document become clinical events of its patient (and the patient's episodes are rebuilt).
-    A person's verdict on an event (verified or rejected) is never overwritten by a new reading."""
-    events = ClinicalEvent.objects.using("default")
-    events.filter(document=doc, source="EXTRACTED", is_verified=False, is_rejected=False).delete()
-    vocab = _vocabulary()
-    for e in insights["entries"]:
-        name, kind, nature = vocab.get(e["word"], (None, None, None))
-        if kind != "condition" or e["negated"] or e["family"] or not e["date"]:
-            continue
-        if events.filter(document=doc, condition_text=name, event_date=e["date"]).exists():
-            continue                                    # already there, or a person has dealt with it
-        events.create(patient=doc.patient, document=doc, event_date=e["date"], event_type="DIAGNOSIS", condition_text=name,
-                      condition_group=name.upper()[:40], category=nature.upper() if nature in ("acute", "chronic") else "",
-                      is_provisional=e["uncertain"], evidence=e["evidence"][:255], source="EXTRACTED",
-                      source_hospital_id=doc.source_hospital_id)
-    episodes.rebuild(doc.patient)
-def run_all(redo=False):
-    """Insights for every finished document that has none yet, hospital-issued ones included (redo=True: for all, e.g.
-    after adding rows to vocabulary.csv). Returns how many were done."""
-    docs = MedicalDocument.objects.filter(status__in=(MedicalDocument.Status.COMPLETED, MedicalDocument.Status.REVIEW_REQUIRED))
-    if not redo:
-        docs = docs.filter(Q(extraction__isnull=True) | ~Q(extraction__status=DocumentExtraction.Status.DONE))
-    done = 0
-    for document_id in list(docs.values_list("id", flat=True)):
-        try:
-            run_insights(document_id)
-            done += 1
-        except Exception:
-            logger.warning("records: insights for document %s failed", document_id, exc_info=True)
-    return done
-def build_timeline(awpid, *, audience="patient", hospital_id=None, start=None, end=None, kind=None, name=None, nature=None, when=None, include_hidden=False):
-    """{"days": [{"date", "entries"}], "undated": [entries]} for a patient's confirmed documents, newest day first.
-
-    Each stored word is looked up in vocabulary.csv for its name, kind and acute / chronic (a word no longer in the
-    vocabulary is skipped). One finding per date and name: a repeat in the same or another report only adds a source,
-    and it is hidden (negated, family, suspected) only if every mention is. `start`/`end` are ISO dates, `name` is
-    part of a name; undated findings are left out when a date range is asked for.
-
-    `audience`: "patient" leaves medications out (a list of past drugs does nothing for the patient, and the
-    Prescriptions page has them); "staff" (a doctor or nurse) includes them, with their dose and frequency.
-    `hospital_id`: only the documents that hospital issued, for staff when the patient has not agreed to
-    cross-hospital sharing."""
-    from apps.atomwalk.hospital_master.models import Hospital
-    vocab = _vocabulary()
-    docs = list(MedicalDocument.objects.filter(patient__awpid=awpid, extraction__status=DocumentExtraction.Status.DONE,
-                                               status__in=(MedicalDocument.Status.COMPLETED, MedicalDocument.Status.REVIEW_REQUIRED))
-                .exclude(awaiting_review_q()).select_related("extraction"))
-    if hospital_id is not None:
-        docs = [d for d in docs if d.source_hospital_id == int(hospital_id)]
-    hospitals = dict(Hospital.objects.using("default").filter(id__in={d.source_hospital_id for d in docs if d.source_hospital_id})
-                     .values_list("id", "name"))             # the hospital behind a hospital-issued document
-    merged = {}
-    for d in docs:
-        for e in d.extraction.normalised["entries"]:
-            if e["word"] not in vocab:
-                continue
-            canonical, word_kind, word_nature = vocab[e["word"]]
-            if audience == "patient" and word_kind == "medication":
-                continue
-            m = merged.setdefault((e["date"], canonical), {
-                "date": e["date"], "name": canonical, "kind": word_kind, "nature": word_nature, "negated": True, "family": True,
-                "uncertain": True, "whens": set(), "evidence": e["evidence"], "dose": None, "sources": {}})
-            for flag in ("negated", "family", "uncertain"):
-                m[flag] = m[flag] and e[flag]
-            m["whens"].add(e["when"])
-            m["dose"] = m["dose"] or e.get("dose")
-            if e["when"] == "resolved":
-                m["evidence"] = e["evidence"]            # "… resolved" says more than the heading before it
-            m["sources"].setdefault(d.id, {"document_id": d.id, "file_name": d.file_name, "document_type": d.document_type, "evidence": e["evidence"],
-                                           "hospital": hospitals.get(d.source_hospital_id, "")})
-    for m in merged.values():
-        whens = m.pop("whens")
-        m["when"] = "resolved" if "resolved" in whens else "current" if "current" in whens else sorted(whens)[0]
-        m["sources"] = list(m["sources"].values())
-        if m["uncertain"]:
-            m["nature"] = "unknown"                      # "asthma is suspected" is not a chronic condition
-    kept = [m for m in merged.values()
-            if (include_hidden or not (m["negated"] or m["family"] or m["uncertain"]))
-            and (not kind or m["kind"] == kind) and (not name or name.lower() in m["name"])
-            and (not nature or m["nature"] == nature) and (not when or m["when"] == when)]
-    dated = [m for m in kept if m["date"] and (not start or m["date"] >= start) and (not end or m["date"] <= end)]
-    days = {}
-    for m in sorted(dated, key=lambda m: m["date"], reverse=True):
-        days.setdefault(m["date"], []).append(m)
-    return {"days": [{"date": d, "entries": es} for d, es in days.items()],
-            "undated": [] if (start or end) else [m for m in kept if not m["date"]]}
+    return sorted(out, key=lambda r: (not r["is_recurrent"], r["group"]))
 
 
-VITAL_SIGNS = ("systolic_bp", "diastolic_bp", "pulse_rate", "temperature", "spo2", "respiratory_rate", "blood_sugar_rbs", "nurse_notes")
-GROWTH = ("height_cm", "weight_kg", "head_circumference_cm")
-ADULT_GROWTH = ("height_cm", "weight_kg")                    # an adult's height and weight are kept with the other vitals
-def _number(value):
-    return float(value) if value is not None else None
-def _merged(vitals, growth):
-    """One object with every field of a visit's vitals, whichever table it came from."""
-    one = SimpleNamespace(id=None, recorded_at=None, recorded_by_user_id=None, bmi=None, nurse_notes="",
-                          **{f: None for f in VITAL_SIGNS + GROWTH if f != "nurse_notes"})
-    for row in (growth, vitals):                               # vitals last: its note and time win
-        if row is None:
-            continue
-        for f in VITAL_SIGNS + GROWTH:
-            if hasattr(row, f) and getattr(row, f) not in (None, ""):
-                setattr(one, f, getattr(row, f))
-        one.recorded_by_user_id = row.recorded_by_user_id or one.recorded_by_user_id
-        one.recorded_at = getattr(row, "recorded_at", None) or timezone.make_aware(datetime.combine(row.measured_on, time(12, 0)))
-        one.id = row.id
-    one.bmi = bmi(one)
-    return one
-def save_visit(patient, appointment_id, hospital_id, user_id, data, *, is_minor):
-    """
-    Store what the nurse recorded for a visit. `patient` is the atomwalk patient (or None), `data` the validated fields.
-    A child's height, weight and head size go to growth_measurement; everything else, and an adult's height and weight,
-    to vitals. Returns the visit's vitals as one object.
-    """
-    common = {"patient": patient, "source_hospital_id": hospital_id, "recorded_by_user_id": user_id}
-    kept = VITAL_SIGNS if is_minor else VITAL_SIGNS + ADULT_GROWTH
-    Vitals.objects.using("default").update_or_create(
-        appointment_id=appointment_id, defaults={**common, **{f: data[f] for f in kept if f in data}})
-    if is_minor:
-        growth = {f: data[f] for f in GROWTH if f in data}
-        rows = GrowthMeasurement.objects.using("default").filter(appointment_id=appointment_id)
-        if any(v is not None for v in growth.values()):
-            GrowthMeasurement.objects.using("default").update_or_create(
-                appointment_id=appointment_id, defaults={**common, "measured_on": timezone.localdate(), **growth})
-        elif growth:
-            rows.delete()                                      # the nurse cleared them
-    return visit_vitals(appointment_id)
-def visits_vitals(appointment_ids):
-    """{appointment id: that visit's vitals as one object} for the visits that have any."""
-    ids = list(appointment_ids)
-    vitals = {v.appointment_id: v for v in Vitals.objects.using("default").filter(appointment_id__in=ids)}
-    growth = {g.appointment_id: g for g in GrowthMeasurement.objects.using("default").filter(appointment_id__in=ids)}
-    return {i: _merged(vitals.get(i), growth.get(i)) for i in set(vitals) | set(growth)}
-def visit_vitals(appointment_id):
-    return visits_vitals([appointment_id]).get(appointment_id)
-def attach_vitals(appointments):
-    """Load the vitals of a page of appointments in two queries instead of one per appointment (Appointment.vitals)."""
-    appointments = list(appointments)
-    found = visits_vitals(a.id for a in appointments)
-    for a in appointments:
-        a.__dict__["vitals"] = found.get(a.id)
-    return appointments
-def recorded(appointment_ids):
-    """Which of these appointments have vitals recorded."""
-    ids = list(appointment_ids)
-    done = set(Vitals.objects.using("default").filter(appointment_id__in=ids).values_list("appointment_id", flat=True))
-    return done | set(GrowthMeasurement.objects.using("default").filter(appointment_id__in=ids).values_list("appointment_id", flat=True))
-def history_readings(awpid, limit=20):
-    """
-    A patient's latest readings, newest first, one per visit, in the shape the history screens and the emergency summary
-    read (bp_systolic, resp_rate ... head_circumference_cm). Another hospital's id is never part of it.
-    """
-    by_visit, loose = {}, []
-    for row in list(Vitals.objects.using("default").filter(patient__awpid=awpid).order_by("-recorded_at")[:limit]) + \
-            list(GrowthMeasurement.objects.using("default").filter(patient__awpid=awpid, is_rejected=False).order_by("-measured_on")[:limit]):
-        (by_visit.setdefault(row.appointment_id, []) if row.appointment_id else loose).append(row)
-    readings = [_reading(*pair) for pair in ((r, None) for r in loose)]
-    readings += [_reading(*[next((r for r in rows if isinstance(r, cls)), None) for cls in (Vitals, GrowthMeasurement)])
-                 for rows in by_visit.values()]
-    return sorted(readings, key=lambda r: r["recorded_at"], reverse=True)[:limit]
-def _reading(vitals, growth):
-    one = _merged(vitals, growth)
-    return {"recorded_at": one.recorded_at, "source": (vitals or growth).source, "bp_systolic": one.systolic_bp,
-            "bp_diastolic": one.diastolic_bp, "pulse_rate": one.pulse_rate, "spo2": one.spo2, "temperature": one.temperature,
-            "weight_kg": one.weight_kg, "height_cm": one.height_cm, "head_circumference_cm": one.head_circumference_cm,
-            "resp_rate": one.respiratory_rate, "blood_sugar_mgdl": one.blood_sugar_rbs}
-def growth_points(awpid, *, hospital_id=None, include_other=True):
-    """
-    The points of a growth chart, one per day, oldest first: {"date", height_cm, weight_kg, head_circumference_cm, bmi,
-    "source"}. With a `hospital_id` (the staff view) a reading is "this_hospital" or "other_hospital", and other
-    hospitals' readings are left out unless `include_other` and only count on days this hospital has none. Without it (the
-    patient's own view) the source is the reading's own: clinic or home.
-    """
-    points = {}
-    rows = [(g.measured_on, g, g.head_circumference_cm) for g in
-            GrowthMeasurement.objects.using("default").filter(patient__awpid=awpid, is_rejected=False)]
-    rows += [(v.recorded_at.date(), v, None) for v in
-             Vitals.objects.using("default").filter(patient__awpid=awpid) if v.height_cm or v.weight_kg]
-    for day, row, head in sorted(rows, key=lambda r: r[0]):
-        if not (row.height_cm or row.weight_kg or head):
-            continue
-        if hospital_id is None:
-            source = row.source
-        elif row.source_hospital_id == hospital_id:
-            source = "this_hospital"
-        elif include_other:
-            source = "other_hospital"
-        else:
-            continue
-        point = {"date": str(day), "height_cm": _number(row.height_cm), "weight_kg": _number(row.weight_kg),
-                 "head_circumference_cm": _number(head), "bmi": _number(bmi(row)), "source": source}
-        if str(day) not in points or (source == "this_hospital" and points[str(day)]["source"] != "this_hospital"):
-            points[str(day)] = point
-    return sorted(points.values(), key=lambda p: p["date"])
-__all__ = ["save_visit", "visit_vitals", "visits_vitals", "attach_vitals", "recorded", "history_readings", "growth_points"]
+# ── Growth: z-scores, percentiles, flags ────────────────────────────────────────────────────────────────
+
+INDICATORS = {"weight_kg": "wfa", "height_cm": "lhfa", "head_circ_cm": "hcfa"}
 
 
-logger = logging.getLogger(__name__)
-def sync_encounter_to_hie(encounter, db, patient, hospital_id=None):
-    """
-    Copy this encounter's diagnoses to the shared clinical events so other hospitals can see this patient's
-    cross-provider history. Never blocks sign-off: all failures are logged and swallowed.
+@dataclass
+class LMSTable:
+    ages: List[float]
+    L: List[float]
+    M: List[float]
+    S: List[float]
 
-    `hospital_id` is the atomwalk id of the hospital writing the rows (request.hospital_id);
-    when omitted (seed commands) it is resolved from `db` — see resolve_source_hospital_id.
-    """
-    if patient is None or not getattr(patient, "awpid", None):
-        logger.warning("HIE sync skipped for encounter %s: no patient/awpid.", encounter.id)
-        return
-
-    from apps.atomwalk.documents.models import ClinicalEvent
-    from apps.atomwalk.patients.models import Patient
-    from apps.atomwalk.hospital_master.services import resolve_source_hospital_id
-    from apps.atomwalk.documents import services as episodes
-    from apps.atomwalk.documents.services import condition_group
-
-    shared = Patient.objects.using("default").filter(awpid=patient.awpid).first()
-    if shared is None:
-        logger.warning("HIE sync skipped for encounter %s: %s has no shared patient.", encounter.id, patient.awpid)
-        return
-    source_hospital_id = hospital_id or resolve_source_hospital_id(db)
-    seen_on = getattr(getattr(encounter, "appointment", None), "scheduled_date", None) or date.today()
-
-    # OPDEncounter.diagnoses is a JSON list of {code, description}
-    for diag in (encounter.diagnoses or []):
-        try:
-            ClinicalEvent.objects.using("default").update_or_create(
-                patient=shared, source_hospital_id=source_hospital_id, event_type="DIAGNOSIS", icd10=diag.get("code", ""),
-                defaults={"condition_text": diag.get("description", ""), "clinical_status": "active", "event_date": seen_on,
-                          "condition_group": condition_group(diag.get("code"), diag.get("description")), "source": "HOSPITAL"},
-            )
-        except Exception:
-            logger.exception("HIE ClinicalEvent write failed for encounter=%s", encounter.id)
-    try:
-        episodes.rebuild(shared)
-    except Exception:
-        logger.exception("Episodes rebuild failed for encounter=%s", encounter.id)
+    def at(self, age_m: float):
+        """Linear interpolation of L, M, S at a fractional age in months."""
+        if age_m < self.ages[0] or age_m > self.ages[-1]:
+            return None
+        i = bisect_left(self.ages, age_m)
+        if self.ages[i] == age_m or i == 0:
+            return self.L[i], self.M[i], self.S[i]
+        a0, a1 = self.ages[i - 1], self.ages[i]
+        t = (age_m - a0) / (a1 - a0)
+        lerp = lambda arr: arr[i - 1] + t * (arr[i] - arr[i - 1])  # noqa: E731
+        return lerp(self.L), lerp(self.M), lerp(self.S)
 
 
-EPISODE_GAP_DAYS = 30
-RECURRENCE_EPISODES = 3
-RECURRENCE_MONTHS = 12
-_SEVERITY = ["NORMAL", "MILD", "ABNORMAL", "CRITICAL"]
-def condition_group(code, text):
-    """What counts as "the same condition": the ICD-10 category (J06.9 -> J06), else the condition's name."""
-    return (code or "").strip().upper()[:3] or (text or "").strip().upper()[:40]
-def _episodes_of(events):
-    """Split one condition's events (oldest first) into episodes: a list of event lists."""
-    if events[0].category == "CHRONIC":
-        return [events]
-    episodes = [[events[0]]]
-    for event in events[1:]:
-        if (event.event_date - episodes[-1][-1].event_date).days > EPISODE_GAP_DAYS:
-            episodes.append([event])
-        else:
-            episodes[-1].append(event)
-    return episodes
-def rebuild(patient, today=None):
-    """Recompute the patient's episodes and recurrence flags from their events."""
-    today = today or date.today()
-    events = list(ClinicalEvent.objects.using("default")
-                  .filter(patient=patient, is_rejected=False, event_date__isnull=False).exclude(condition_group="")
-                  .order_by("event_date", "id"))
-    by_group = {}
-    for event in events:
-        by_group.setdefault(event.condition_group, []).append(event)
-
-    kept = set()
-    for group, group_events in by_group.items():
-        for episode_events in _episodes_of(group_events):
-            first, last = episode_events[0], episode_events[-1]
-            chronic = first.category == "CHRONIC"
-            key = group if chronic else f"{group}:{first.event_date}"
-            kept.add(key)
-            episode, _ = HealthEpisode.objects.using("default").update_or_create(patient=patient, key=key, defaults={
-                "condition_group": group, "label": first.condition_text[:255] or group, "category": first.category or "ACUTE",
-                "start_date": first.event_date, "end_date": None if chronic else last.event_date, "last_seen": last.event_date,
-                "peak_severity": max((e.severity for e in episode_events), key=_SEVERITY.index), "event_count": len(episode_events),
-                "is_provisional": all(e.is_provisional for e in episode_events)})
-            ClinicalEvent.objects.using("default").filter(pk__in=[e.pk for e in episode_events]).update(episode=episode)
-    HealthEpisode.objects.using("default").filter(patient=patient).exclude(key__in=kept).delete()
-    _flag_recurrences(patient, today)
-def _flag_recurrences(patient, today):
-    since = today - timedelta(days=30 * RECURRENCE_MONTHS)
-    counts = {}
-    for episode in HealthEpisode.objects.using("default").filter(patient=patient, category="ACUTE", start_date__gte=since):
-        counts.setdefault(episode.condition_group, []).append(episode)
-    flags = RecurrenceFlag.objects.using("default")
-    repeating = {g: es for g, es in counts.items() if len(es) >= RECURRENCE_EPISODES}
-    for group, group_episodes in repeating.items():
-        flags.update_or_create(patient=patient, condition_group=group, defaults={
-            "label": group_episodes[0].label, "triggered_on": max(e.start_date for e in group_episodes),
-            "rule": {"episodes": RECURRENCE_EPISODES, "months": RECURRENCE_MONTHS}, "episodes_last_12m": len(group_episodes),
-            "clinical_hint": f"{len(group_episodes)} episodes in {RECURRENCE_MONTHS} months"})
-    flags.filter(patient=patient).exclude(condition_group__in=repeating).delete()
-def rebuild_all():
-    """Every patient that has events (after a change to the rules above)."""
-    from apps.atomwalk.patients.models import Patient
-    ids = ClinicalEvent.objects.using("default").values_list("patient_id", flat=True).distinct()
-    for patient in Patient.objects.using("default").filter(pk__in=[i for i in ids if i]):
-        rebuild(patient)
-_episodes_all__ = ["rebuild", "rebuild_all", "condition_group"]
+def load_lms_csv(path: Path) -> LMSTable:
+    ages, L, M, S = [], [], [], []
+    with open(path, newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            ages.append(float(row["age_months"]))
+            L.append(float(row["L"]))
+            M.append(float(row["M"]))
+            S.append(float(row["S"]))
+    order = sorted(range(len(ages)), key=ages.__getitem__)
+    return LMSTable([ages[i] for i in order], [L[i] for i in order],
+                    [M[i] for i in order], [S[i] for i in order])
 
 
-PATIENT_NOT_FOUND = "Patient not found."
-def get_patient(request, pk):
-    """This hospital's patient row, or None."""
-    return HospitalPatient.objects.using(request.hospital_db).filter(pk=pk).first()
-def text(data, key):
-    """A request field as stripped text ('' when missing)."""
-    return (data.get(key) or "").strip()
-def staff_name(request, fallback="Staff"):
-    """Who is doing this, for the 'recorded by' columns."""
-    return getattr(request.user, "full_name", None) or getattr(request.user, "email", fallback)
-def parse_date(value, field, label, *, allow_future=False):
-    """
-    (date, None) for a YYYY-MM-DD value between 1900 and today (or later when allow_future); a blank value gives
-    (None, None); anything else gives (None, a 400 response to return as it is).
-    """
-    if not value:
-        return None, None
-    try:
-        parsed = datetime.strptime(str(value), "%Y-%m-%d").date()
-    except (ValueError, TypeError):
-        return None, error(f"{label} must be a valid date.", errors={field: "Enter a valid date."})
-    if parsed.year < 1900 or (parsed > date.today() and not allow_future):
-        return None, error(f"{label} ({parsed.isoformat()}) doesn't look right — please check the date.",
-                           errors={field: "Check the date — it is out of range."})
-    return parsed, None
+@lru_cache(maxsize=32)
+def get_table(indicator: str, sex: str, source: str, ref_dir: str = None) -> Optional[LMSTable]:
+    base = Path(ref_dir) if ref_dir else GROWTH_REFERENCE_DIR
+    path = base / f"{indicator}_{sex}_{source}.csv"
+    return load_lms_csv(path) if path.exists() else None
 
 
-# measurement -> sex -> [(age_months, L, M, S), ...] sorted by age
-REFERENCE_TABLES = {
-    "weight": {
-        "M": [
-            (0, 0.3487, 3.3464, 0.1460), (1, 0.2297, 4.4709, 0.1340), (2, 0.1970, 5.5675, 0.1239),
-            (3, 0.1738, 6.3762, 0.1173), (6, 0.1257, 7.9340, 0.1096), (9, 0.0917, 8.9014, 0.1088),
-            (12, 0.0644, 9.6479, 0.1092), (18, 0.0211, 10.9385, 0.1112), (24, -0.0137, 12.1515, 0.1143),
-            (36, -0.0689, 14.3429, 0.1212), (48, -0.1131, 16.3489, 0.1276), (60, -0.1506, 18.3366, 0.1352),
-        ],
-        "F": [
-            (0, 0.3809, 3.2322, 0.1417), (1, 0.1714, 4.1873, 0.1372), (2, 0.0962, 5.1282, 0.1300),
-            (3, 0.0402, 5.8458, 0.1262), (6, -0.0756, 7.2970, 0.1220), (9, -0.1507, 8.2254, 0.1220),
-            (12, -0.2024, 8.9481, 0.1227), (18, -0.2637, 10.2315, 0.1231), (24, -0.2941, 11.4775, 0.1239),
-            (36, -0.3201, 13.8503, 0.1292), (48, -0.3361, 16.0697, 0.1388), (60, -0.3518, 18.2193, 0.1482),
-        ],
-    },
-    # 0-24mo from the length-for-age (recumbent) table, 24-60mo from the
-    # height-for-age (standing) table — see module docstring for why.
-    "height": {
-        "M": [
-            (0, 1, 49.8842, 0.0379), (1, 1, 54.7244, 0.0356), (2, 1, 58.4249, 0.0342),
-            (3, 1, 61.4292, 0.0333), (6, 1, 67.6236, 0.0316), (9, 1, 71.9687, 0.0312),
-            (12, 1, 75.7488, 0.0314), (18, 1, 82.2587, 0.0328), (24, 1, 87.8161, 0.0348),
-            (36, 1, 96.0835, 0.0386), (48, 1, 103.3273, 0.0406), (60, 1, 109.9638, 0.0421),
-        ],
-        "F": [
-            (0, 1, 49.1477, 0.0379), (1, 1, 53.6872, 0.0364), (2, 1, 57.0673, 0.0357),
-            (3, 1, 59.8029, 0.0352), (6, 1, 65.7311, 0.0345), (9, 1, 70.1435, 0.0344),
-            (12, 1, 74.0150, 0.0348), (18, 1, 80.7079, 0.0360), (24, 1, 86.4153, 0.0373),
-            (36, 1, 95.0515, 0.0401), (48, 1, 102.7312, 0.0419), (60, 1, 109.4233, 0.0435),
-        ],
-    },
-    "head_circumference": {
-        "M": [
-            (0, 1, 34.4618, 0.0369), (1, 1, 37.2759, 0.0313), (2, 1, 39.1285, 0.0300),
-            (3, 1, 40.5135, 0.0292), (6, 1, 43.3306, 0.0282), (9, 1, 44.9998, 0.0279),
-            (12, 1, 46.0661, 0.0279), (18, 1, 47.3711, 0.0280), (24, 1, 48.2515, 0.0282),
-            (36, 1, 49.4612, 0.0287), (48, 1, 50.2115, 0.0291), (60, 1, 50.7375, 0.0295),
-        ],
-        "F": [
-            (0, 1, 33.8787, 0.0350), (1, 1, 36.5463, 0.0321), (2, 1, 38.2521, 0.0317),
-            (3, 1, 39.5328, 0.0314), (6, 1, 42.1995, 0.0309), (9, 1, 43.8300, 0.0305),
-            (12, 1, 44.8965, 0.0303), (18, 1, 46.2424, 0.0299), (24, 1, 47.1822, 0.0296),
-            (36, 1, 48.5099, 0.0291), (48, 1, 49.3321, 0.0288), (60, 1, 49.9229, 0.0285),
-        ],
-    },
-}
-MEASUREMENTS = ("weight", "height", "head_circumference")
-def _lms(measurement, sex, age_months):
-    """The (L, M, S) coefficients for this child, or None when the table doesn't cover them (WHO covers 0-60 months, M or F)."""
-    table = REFERENCE_TABLES.get(measurement, {}).get(sex)
-    if not table or age_months is None or not 0 <= age_months <= 60:
+def table_for(indicator: str, sex: str, age_m: float, cfg=None, ref_dir=None):
+    cfg = cfg or load_config()
+    source = "who" if age_m <= cfg["growth"]["who_max_months"] else "iap"
+    return get_table(indicator, sex, source, ref_dir), source
+
+
+# ----------------------------------------------------------------- LMS maths
+def lms_value(L: float, M: float, S: float, z: float) -> float:
+    """Measurement value at a given z (used for drawing reference curves)."""
+    if abs(L) < 1e-9:
+        return M * math.exp(S * z)
+    return M * (1 + L * S * z) ** (1 / L)
+
+
+def lms_z(x: float, L: float, M: float, S: float, restricted: bool = False) -> float:
+    if abs(L) < 1e-9:
+        z = math.log(x / M) / S
+    else:
+        z = ((x / M) ** L - 1) / (L * S)
+    if restricted and abs(z) > 3:
+        # WHO restricted application for weight-based indicators: beyond +/-3 the
+        # distance is measured in units of the SD between z=2 and z=3.
+        sd3 = lms_value(L, M, S, 3 if z > 0 else -3)
+        sd2 = lms_value(L, M, S, 2 if z > 0 else -2)
+        sd23 = abs(sd3 - sd2)
+        z = (3 + (x - sd3) / sd23) if z > 0 else (-3 + (x - sd3) / sd23)
+    return z
+
+
+def z_to_percentile(z: float) -> float:
+    return 50 * (1 + math.erf(z / math.sqrt(2)))
+
+
+def flag_for_z(z: Optional[float], cfg=None) -> Optional[str]:
+    if z is None:
         return None
-    for (a0, *c0), (a1, *c1) in zip(table, table[1:]):
-        if a0 <= age_months <= a1:
-            frac = (age_months - a0) / (a1 - a0)
-            return tuple(x0 + frac * (x1 - x0) for x0, x1 in zip(c0, c1))
-    return tuple(table[-1][1:])
-def get_percentile(measurement, sex, age_months, value):
-    """
-    {"z_score", "percentile" (0-100)} for one measurement, or None when it can't be scored (no value, age outside
-    0-60 months, sex not M or F). measurement: "weight" (kg), "height" or "head_circumference" (cm).
-    """
-    lms = _lms(measurement, sex, age_months)
-    if value is None or lms is None:
-        return None
-    L, M, S = lms
-    value = float(value)
-    z = (((value / M) ** L) - 1) / (L * S) if L != 0 else math.log(value / M) / S
-    z = max(-5, min(5, z))                         # a wildly out-of-range reading shouldn't blow up the percentile
-    return {"z_score": round(z, 2), "percentile": round(0.5 * (1 + math.erf(z / math.sqrt(2))) * 100, 1)}
-_MEASURED = {"weight": "weight_kg", "height": "height_cm", "head_circumference": "head_circumference_cm"}
-def add_percentiles(series, gender, date_of_birth, *, only_source=None):
-    """
-    Add a "percentiles" dict to each reading in `series` (dicts with "date" as YYYY-MM-DD, weight_kg, height_cm,
-    head_circumference_cm, "source") taken before the child turned 5. `only_source` limits it to readings from that
-    source. Returns whether any reading got a percentile.
-    """
-    if gender not in ("M", "F") or not date_of_birth:
-        return False
-    found = False
-    for point in series:
-        if only_source and point["source"] != only_source:
-            continue
-        taken = date.fromisoformat(point["date"])
-        months = (taken.year - date_of_birth.year) * 12 + (taken.month - date_of_birth.month)
-        if not 0 <= months <= 60:
-            continue
-        point["percentiles"] = {}
-        for name in MEASUREMENTS:
-            result = get_percentile(name, gender, months, point[_MEASURED[name]])
-            if result:
-                point["percentiles"][name] = result
-                found = True
-    return found
-
-
-# slack before "upcoming" flips to "due_now", so a slightly early visit does not look due yet
-DUE_LEAD_DAYS = 14
-# for a rule with no max_age_days: how long after min_age_days "due_now" lasts before it becomes "past_window"
-PAST_WINDOW_GRACE_DAYS = 90
-def rule_get(rule, key):
-    """A rule may be a model instance or a plain dict."""
-    if isinstance(rule, dict):
-        return rule.get(key)
-    return getattr(rule, "item" if key in ("vaccine_name", "milestone") else key, None)
-def timing_for(age_days, min_age_days, max_age_days):
-    if age_days is None or min_age_days is None:
-        return None
-    if age_days < min_age_days - DUE_LEAD_DAYS:
-        return "upcoming"
-    past_from = max_age_days if max_age_days is not None else min_age_days + PAST_WINDOW_GRACE_DAYS
-    return "past_window" if age_days >= past_from else "due_now"
-def same_name(a, b):
-    return (a or "").strip().lower() == (b or "").strip().lower()
-def merge(rules, records, *, date_of_birth, same_slot, matched, open_slot):
-    """
-    One entry per rule, in rule order, then the records that matched no rule (extra=True).
-      same_slot(rule, record) -> bool   does this record fill this slot (each record fills at most one)
-      matched(rule_or_None, record)     the entry for a slot with a record (rule is None for an extra record)
-      open_slot(rule, timing)           the entry for a slot with no record
-    """
-    age_days = (date.today() - date_of_birth).days if date_of_birth else None
-    used, roadmap = set(), []
-    for rule in rules:
-        record = next((r for r in records if r.id not in used and same_slot(rule, r)), None)
-        if record:
-            used.add(record.id)
-            roadmap.append(matched(rule, record))
-        else:
-            timing = timing_for(age_days, rule_get(rule, "min_age_days"), rule_get(rule, "max_age_days"))
-            roadmap.append(open_slot(rule, timing))
-    roadmap += [matched(None, r) for r in records if r.id not in used]
-    return roadmap
-def rules_for(noun, hospital_id=None):
-    """
-    The rules to build a roadmap from, in display order: `noun` is "vaccination" or "milestone". A hospital's staff pass
-    their hospital_id and get that hospital's active schedule; with no hospital_id (the patient portal, which spans
-    hospitals) or when the hospital has none set, the system "Default Schedule" template is used.
-    """
-    from apps.atomwalk.hospital_master.models import Hospital
-
-    schedules = Schedule.objects.using("default").filter(kind=noun)
-    schedule = None
-    if hospital_id:
-        hospital = Hospital.objects.using("default").filter(pk=hospital_id).first()
-        schedule_id = getattr(hospital, f"active_{noun}_schedule_id", None)
-        schedule = schedules.filter(pk=schedule_id, active=True).first() if schedule_id else None
-    if not schedule:
-        schedule = schedules.filter(owner_hospital_id__isnull=True, is_template=True, active=True).order_by("id").first()
-    return list(schedule.rules.order_by("sort_order")) if schedule else []
-
-
-def _serialize_matched(rule, record):
-    status = "completed" if record.verification_status == record.STATUS_VERIFIED else record.verification_status
-    return {
-        "vaccine_name": record.vaccine_name,
-        "scheduled_label": rule_get(rule, "scheduled_label") if rule else record.scheduled_label,
-        "administered_date": str(record.administered_date) if record.administered_date else None,
-        "due_date": str(record.due_date) if record.due_date else None,
-        "reason": record.reason,
-        "dose_number": record.dose_number,
-        "status": status,
-        "timing": None,                       # a real record already settled this slot
-        "source": record.source,
-        "verification_status": record.verification_status,
-        "record_id": record.id,
-        "has_certificate": bool(record.file_data),
-        "recorded_by": recorded_by(record),    # "staff" or "patient" (a parent's upload)
-        "verified_by_name": record.verified_by_name,
-        "extra": rule is None,                # a record that fits no slot of the schedule
-    }
-def build_roadmap(awpid, date_of_birth, rules, *, viewer_hospital_id=None, hie_consent=True):
-    """
-    `rules`: a queryset or list of VaccinationScheduleRule (or dicts with vaccine_name, scheduled_label, min_age_days,
-    max_age_days), in display order; the caller picks the schedule (see rules_for in roadmap.py).
-
-    `hie_consent=False` drops records from OTHER hospitals than viewer_hospital_id. Two kinds stay visible anyway:
-    records never attributed to a hospital (source_hospital_id is None), and "pending_review" ones, because any
-    hospital's staff must be able to review a parent's upload. Only the staff roadmap passes False; the patient
-    portal never filters.
-    """
-    from apps.atomwalk.documents.models import ImmunizationRecord
-
-    records = ImmunizationRecord.objects.using("default").filter(patient__awpid=awpid)
-    if not hie_consent:
-        from django.db.models import Q
-        records = records.filter(Q(source_hospital_id__isnull=True) | Q(source_hospital_id=viewer_hospital_id)
-                                 | Q(verification_status=ImmunizationRecord.STATUS_PENDING))
-
-    def open_slot(rule, timing):
-        return {
-            "vaccine_name": rule_get(rule, "vaccine_name"), "scheduled_label": rule_get(rule, "scheduled_label"),
-            "administered_date": None, "due_date": None, "reason": "", "dose_number": None,
-            "status": "unknown", "timing": timing, "source": None, "verification_status": None,
-            "record_id": None, "has_certificate": False, "recorded_by": None, "verified_by_name": None, "extra": False,
-        }
-
-    return merge(
-        list(rules), list(records.order_by("administered_date")), date_of_birth=date_of_birth,
-        same_slot=lambda rule, r: (r.scheduled_label == rule_get(rule, "scheduled_label")
-                                   and same_name(r.vaccine_name, rule_get(rule, "vaccine_name"))),
-        matched=_serialize_matched, open_slot=open_slot)
-def summarize_roadmap(roadmap):
-    """
-    Counts for "N of M completed". Only the schedule's own slots count (not `extra` records).
-    `next_recommended` is the first unknown slot that is due now.
-    stats: completed; upcoming (unknown, window not open yet); needs_review (pending_review, or unknown and due now /
-    past window: an open question for the parent or doctor); outside (records, extra or not, not given at a clinic).
-    """
-    slots = [item for item in roadmap if not item.get("extra")]
-    unknown = [i for i in slots if i["status"] == "unknown"]
-    completed = sum(1 for i in slots if i["status"] == "completed")
-    return {
-        "completed_count": completed,
-        "total_count": len(slots),
-        "next_recommended": next((i for i in unknown if i.get("timing") == "due_now"), None),
-        "stats": {
-            "completed": completed,
-            "upcoming": sum(1 for i in unknown if i.get("timing") == "upcoming"),
-            "needs_review": sum(1 for i in slots if i["status"] == "pending_review")
-                            + sum(1 for i in unknown if i.get("timing") in ("due_now", "past_window")),
-            "outside": sum(1 for i in roadmap if i.get("source") not in (None, "clinic")),
-        },
-    }
-
-
-def _milestone_roadmap_serialize_matched(rule, record):
-    return {
-        "domain": record.domain,
-        "milestone": record.milestone,
-        "scheduled_label": rule_get(rule, "scheduled_label") if rule else record.scheduled_label,
-        "achieved_date": str(record.achieved_date) if record.achieved_date else None,
-        "assessed_date": str(record.assessed_date) if record.assessed_date else None,
-        "status": record.status,
-        "timing": None,                      # a real assessment already settled this slot
-        "notes": record.notes,
-        "record_id": record.id,
-        "recorded_by_name": record.recorded_by_name,
-        "extra": rule is None,
-    }
-def milestone_roadmap_build_roadmap(awpid, date_of_birth, rules, *, viewer_hospital_id=None, hie_consent=True):
-    """
-    The child's real MilestoneRecord rows laid over a schedule's rules (see roadmap.py). `rules` is a queryset or
-    list of MilestoneScheduleRule (or dicts with domain, milestone, scheduled_label, min_age_days, max_age_days),
-    already in display order. `hie_consent=False` drops records logged at a hospital other than viewer_hospital_id;
-    there is no cross-hospital review step for milestones, so nothing is exempt.
-    """
-    from apps.atomwalk.documents.models import MilestoneRecord
-
-    records = MilestoneRecord.objects.using("default").filter(patient__awpid=awpid)
-    if not hie_consent:
-        from django.db.models import Q
-        records = records.filter(Q(source_hospital_id__isnull=True) | Q(source_hospital_id=viewer_hospital_id))
-
-    def open_slot(rule, timing):
-        return {
-            "domain": rule_get(rule, "domain"), "milestone": rule_get(rule, "milestone"),
-            "scheduled_label": rule_get(rule, "scheduled_label"), "achieved_date": None, "assessed_date": None,
-            "status": "unassessed", "timing": timing, "notes": "", "record_id": None, "recorded_by_name": None,
-            "extra": False,
-        }
-
-    return merge(
-        list(rules), list(records.order_by("assessed_date")), date_of_birth=date_of_birth,
-        same_slot=lambda rule, r: (r.scheduled_label == rule_get(rule, "scheduled_label")
-                                   and r.domain == rule_get(rule, "domain")
-                                   and same_name(r.milestone, rule_get(rule, "milestone"))),
-        matched=_milestone_roadmap_serialize_matched, open_slot=open_slot)
-def milestone_roadmap_summarize_roadmap(roadmap):
-    """Counts for "N of M achieved": only the schedule's own slots count (not `extra` assessments)."""
-    slots = [item for item in roadmap if not item.get("extra")]
-    unassessed = [i for i in slots if i["status"] == "unassessed"]
-    achieved = sum(1 for i in slots if i["status"] == "achieved")
-    return {
-        "achieved_count": achieved,
-        "total_count": len(slots),
-        "next_recommended": next((i for i in unassessed if i.get("timing") == "due_now"), None),
-        "stats": {
-            "achieved": achieved,
-            "upcoming": sum(1 for i in unassessed if i.get("timing") == "upcoming"),
-            "needs_review": sum(1 for i in slots if i["status"] == "concern")
-                            + sum(1 for i in unassessed if i.get("timing") in ("due_now", "past_window")),
-            "not_yet": sum(1 for i in slots if i["status"] == "not_yet"),
-        },
-    }
-
-
-def vaccination_rule_dict(rule):
-    return {
-        "id": rule.id,
-        "vaccine_name": rule.item,
-        "dose_number": rule.dose_number,
-        "scheduled_label": rule.scheduled_label,
-        "min_age_days": rule.min_age_days,
-        "max_age_days": rule.max_age_days,
-        "mandatory": rule.mandatory,
-        "sort_order": rule.sort_order,
-    }
-def milestone_rule_dict(rule):
-    return {
-        "id": rule.id,
-        "domain": rule.domain,
-        "milestone": rule.item,
-        "scheduled_label": rule.scheduled_label,
-        "min_age_days": rule.min_age_days,
-        "max_age_days": rule.max_age_days,
-        "mandatory": rule.mandatory,
-        "sort_order": rule.sort_order,
-    }
-def schedule_dict(schedule, active_id=None, rule_count=None):
-    return {
-        "id": schedule.id,
-        "name": schedule.name,
-        "description": schedule.description,
-        "is_template": schedule.is_template,
-        "active": schedule.active,
-        "owner_hospital_id": schedule.owner_hospital_id,
-        "is_active_for_this_hospital": active_id is not None and schedule.id == active_id,
-        "rule_count": rule_count if rule_count is not None else schedule.rules.count(),
-    }
-def template_dict(schedule, rule_count=None, hospitals_using=None):
-    return {
-        "id": schedule.id,
-        "name": schedule.name,
-        "description": schedule.description,
-        "active": schedule.active,
-        "created_at": schedule.created_at.isoformat(),
-        "updated_at": schedule.updated_at.isoformat(),
-        "rule_count": rule_count if rule_count is not None else schedule.rules.count(),
-        "hospitals_using": hospitals_using,
-    }
-
-
-def bmi(row):
-    if row.weight_kg and row.height_cm and row.height_cm > 0:
-        return Decimal(f"{float(row.weight_kg) / ((float(row.height_cm) / 100) ** 2):.1f}")
+    flags = (cfg or load_config())["growth"]["flags"]
+    if z <= flags["SEVERE_LOW"]["z_max"]:
+        return "SEVERE_LOW"
+    if z <= flags["LOW"]["z_max"]:
+        return "LOW"
+    if z >= flags["SEVERE_HIGH"]["z_min"]:
+        return "SEVERE_HIGH"
+    if z >= flags["HIGH"]["z_min"]:
+        return "HIGH"
     return None
 
 
-def recorded_by(record):
-    return "patient" if record.source == record.SOURCE_SELF_REPORTED else "staff"
+# --------------------------------------------------------------- per reading
+def score_measurement(dob: date, sex: str, measured_on: date, values: Dict[str, Optional[float]],
+                      cfg=None, ref_dir=None) -> dict:
+    """
+    values: {"weight_kg": 9.1, "height_cm": 74.0, "head_circ_cm": 45.2}
+    -> {"age_months": 9.4, "weight_kg": {"value", "z", "percentile", "flag", "source"}, ...}
+    """
+    cfg = cfg or load_config()
+    age_m = age_in_months(dob, measured_on)
+    out = {"age_months": round(age_m, 2)}
+    for field_name, indicator in INDICATORS.items():
+        x = values.get(field_name)
+        if x is None:
+            continue
+        table, source = table_for(indicator, sex, age_m, cfg, ref_dir)
+        lms = table.at(age_m) if table else None
+        if lms is None:
+            out[field_name] = {"value": x, "z": None, "percentile": None, "flag": None,
+                               "source": None}
+            continue
+        z = lms_z(x, *lms, restricted=(indicator == "wfa"))
+        out[field_name] = {
+            "value": x, "z": round(z, 2), "percentile": round(z_to_percentile(z), 1),
+            "flag": flag_for_z(z, cfg), "source": source,
+        }
+    return out
 
 
-def batch_counts(batch):
-    counts = dict(batch.documents.values_list("status").annotate(n=Count("id")))
-    total = sum(counts.values())
-    processed = counts.get(MedicalDocument.Status.COMPLETED, 0) + counts.get(MedicalDocument.Status.REVIEW_REQUIRED, 0)
-    failed = counts.get(MedicalDocument.Status.FAILED, 0)
-    status = "processing" if processed + failed < total else "completed_with_errors" if failed else "completed"
-    return {"total_files": total, "processed_files": processed, "failed_files": failed, "status": status}
+def detect_faltering(scored: List[dict], cfg=None) -> List[dict]:
+    """
+    scored: chronologically sorted [{"measured_on": date, "weight_kg": {"z": ...}}, ...]
+    A drop of >= faltering_drop_z in weight-for-age z within faltering_window_months
+    between any two readings is reported once per starting reading.
+    """
+    cfg = cfg or load_config()
+    drop = cfg["growth"]["faltering_drop_z"]
+    window_m = cfg["growth"]["faltering_window_months"]
+    pts = [(r["measured_on"], r["age_months"], r["weight_kg"]["z"])
+           for r in scored if r.get("weight_kg") and r["weight_kg"].get("z") is not None]
+    alerts, last_alert_end = [], None
+    for i, (d0, a0, z0) in enumerate(pts):
+        if last_alert_end and d0 < last_alert_end:
+            continue
+        for d1, a1, z1 in pts[i + 1:]:
+            if a1 - a0 > window_m:
+                break
+            if z0 - z1 >= drop:
+                alerts.append({"from": d0.isoformat(), "to": d1.isoformat(),
+                               "z_from": z0, "z_to": z1, "drop": round(z0 - z1, 2)})
+                last_alert_end = d1
+                break
+    return alerts
+
+
+# ----------------------------------------------------------- reference curves
+def reference_curves(indicator: str, sex: str, max_months: float,
+                     zs=(-3, -2, 0, 2, 3), step: float = 1.0, cfg=None, ref_dir=None) -> dict:
+    """Points for drawing WHO/IAP bands under the child's own line."""
+    cfg = cfg or load_config()
+    curves = {str(z): [] for z in zs}
+    age = 0.0
+    while age <= max_months + 1e-9:
+        table, _ = table_for(indicator, sex, age, cfg, ref_dir)
+        lms = table.at(age) if table else None
+        if lms:
+            for z in zs:
+                curves[str(z)].append([round(age, 2), round(lms_value(*lms, z), 2)])
+        age += step
+    return curves
+
+
+# ── Immunization status ─────────────────────────────────────────────────────────────────────────────────
+
+UPCOMING_WINDOW_DAYS = 60
+EARLY_TOLERANCE_DAYS = 4  # IAP allows a short grace before the minimum age
+
+
+def resolve_vaccines(text: str, cfg=None) -> List[str]:
+    """'Pentavalent-2' -> ['DTwP/DTaP', 'Hib', 'Hepatitis B']"""
+    cfg = cfg or load_config()
+    sched = cfg["immunization_schedule"]
+    name = (text or "").lower()
+    found = set()
+    for combo, parts in sched.get("combination_vaccines", {}).items():
+        if combo.startswith("_"):
+            continue
+        if re.search(rf"\b{re.escape(combo)}\b", name):
+            found.update(parts)
+    for vaccine, aliases in sched["vaccine_aliases"].items():
+        for alias in aliases:
+            if re.search(rf"(^|[^a-z]){re.escape(alias)}([^a-z]|$)", name):
+                found.add(vaccine)
+                break
+    return sorted(found)
+
+
+def immunization_status(dob: date, given: List[dict], as_of: date, cfg=None) -> dict:
+    """
+    given: [{"vaccine_text": "Penta 1", "given_on": date, "document_id": 12, "id": 5}, ...]
+    -> {
+         "rows": [{code, vaccine, dose, due_on, due_age, status, given_on, delay_days, document_id}],
+         "extra_doses": [...], "unresolved": [...],
+         "summary": {"given", "overdue", "due", "upcoming", "coverage_pct"}
+       }
+    """
+    cfg = cfg or load_config()
+    doses = sorted(cfg["immunization_schedule"]["doses"], key=lambda d: (d["vaccine"], d["due_days"]))
+
+    # vaccine -> sorted unique [(date, record)]
+    shots: dict = {}
+    unresolved = []
+    for rec in given:
+        vaccines = resolve_vaccines(rec.get("vaccine_text", ""), cfg)
+        if not vaccines or not rec.get("given_on"):
+            unresolved.append(rec)
+            continue
+        for v in vaccines:
+            shots.setdefault(v, {})[rec["given_on"]] = rec
+    shots = {v: sorted(d.items()) for v, d in shots.items()}
+
+    rows, extra = [], []
+    by_vaccine: dict = {}
+    for d in doses:
+        by_vaccine.setdefault(d["vaccine"], []).append(d)
+
+    for vaccine, sched_doses in by_vaccine.items():
+        queue = list(shots.get(vaccine, []))
+        for d in sched_doses:
+            due_on = dob + timedelta(days=d["due_days"])
+            overdue_on = due_on + timedelta(days=d["grace_days"])
+            row = {
+                "code": d["code"], "vaccine": vaccine, "dose": d["dose"],
+                "due_on": due_on.isoformat(), "due_age": format_age(d["due_days"]),
+                "status": None, "given_on": None, "delay_days": None,
+                "document_id": None, "early": False, "late": False,
+            }
+            # skip shots clearly given before this dose's window (they belong to an earlier dose
+            # that is not in the schedule, e.g. pulse-polio OPV)
+            while queue and (queue[0][0] - due_on).days < -EARLY_TOLERANCE_DAYS - 28:
+                extra.append({"vaccine": vaccine, "given_on": queue[0][0].isoformat()})
+                queue.pop(0)
+            if queue:
+                g_date, rec = queue.pop(0)
+                row.update(status="GIVEN", given_on=g_date.isoformat(),
+                           delay_days=max(0, (g_date - due_on).days),
+                           late=g_date > overdue_on,
+                           document_id=rec.get("document_id"),
+                           early=(g_date - due_on).days < -EARLY_TOLERANCE_DAYS)
+            elif as_of > overdue_on:
+                row["status"] = "OVERDUE"
+                row["delay_days"] = (as_of - due_on).days
+            elif as_of >= due_on:
+                row["status"] = "DUE"
+            elif (due_on - as_of).days <= UPCOMING_WINDOW_DAYS:
+                row["status"] = "UPCOMING"
+            else:
+                row["status"] = "SCHEDULED"
+            rows.append(row)
+        for g_date, _ in queue:
+            extra.append({"vaccine": vaccine, "given_on": g_date.isoformat()})
+
+    rows.sort(key=lambda r: (r["due_on"], r["vaccine"]))
+    count = lambda s: sum(1 for r in rows if r["status"] == s)  # noqa: E731
+    due_so_far = sum(1 for r in rows if date.fromisoformat(r["due_on"]) <= as_of)
+    given_of_due = sum(1 for r in rows if r["status"] == "GIVEN"
+                       and date.fromisoformat(r["due_on"]) <= as_of)
+    return {
+        "source": cfg["immunization_schedule"].get("source"),
+        "rows": rows,
+        "extra_doses": extra,
+        "unresolved": [{"vaccine_text": u.get("vaccine_text"), "id": u.get("id")} for u in unresolved],
+        "summary": {
+            "given": count("GIVEN"), "overdue": count("OVERDUE"), "due": count("DUE"),
+            "upcoming": count("UPCOMING"),
+            "coverage_pct": round(100 * given_of_due / due_so_far, 1) if due_so_far else None,
+        },
+    }
+
+
+def next_due(status: dict) -> Optional[dict]:
+    pending = [r for r in status["rows"] if r["status"] in ("OVERDUE", "DUE", "UPCOMING")]
+    return pending[0] if pending else None
+
+
+# ── Timeline payload ────────────────────────────────────────────────────────────────────────────────────
+
+def _overlaps(start: date, end: Optional[date], p_from: date, p_to: date) -> bool:
+    return start <= p_to and (end or p_to) >= p_from
+
+
+def _age_fields(dob: date, d: date) -> dict:
+    days = age_in_days(dob, d)
+    return {"age_days": days, "age_label": format_age(days)}
+
+
+def build_timeline(*, dob: date, sex: str, p_from: date, p_to: date,
+                   episodes: List[Episode], events_by_id: dict, recurrence: List[dict],
+                   growth_points: List[dict], growth_alerts: List[dict],
+                   immunization: dict, admissions: List[dict], critical_labs: List[dict],
+                   birth_history: Optional[dict], audience: str = "guardian",
+                   cfg=None) -> dict:
+    """
+    events_by_id: {event_id: {"date": date, "severity": str, "document_id": int,
+                              "condition_text": str, "is_verified": bool}}
+    growth_points: [{"measured_on": date, "age_months", "weight_kg": {...}, "height_cm": {...},
+                     "head_circ_cm": {...}, "document_id"}]
+    admissions: [{"admitted_on": date, "discharged_on": date|None, "ward": str, "document_id",
+                  "reason": str|None, "is_critical": bool}]
+    critical_labs: [{"date": date, "analyte", "value", "direction", "severity", "document_id"}]
+    """
+    cfg = cfg or load_config()
+    labels = cfg.get("patient_labels", {})
+    lbl = (lambda code: labels.get(code, code)) if audience == "guardian" else (lambda code: code)
+    recurrent_groups = {r["group"]: r for r in recurrence}
+    in_period = lambda d: p_from <= d <= p_to  # noqa: E731
+
+    lanes = []
+
+    # 1. birth baseline (always shown, regardless of period)
+    if birth_history:
+        lanes.append({"id": "birth", "type": "birth", "label": "Birth",
+                      "items": [{"date": dob.isoformat(), **birth_history}]})
+
+    # 2. growth
+    pts = [p for p in growth_points if in_period(p["measured_on"])]
+    if pts:
+        series = {"weight_kg": [], "height_cm": [], "head_circ_cm": []}
+        for p in pts:
+            for k in series:
+                m = p.get(k)
+                if m and m.get("value") is not None:
+                    series[k].append({"date": p["measured_on"].isoformat(),
+                                      "age_months": p["age_months"], "value": m["value"],
+                                      "z": m["z"], "percentile": m["percentile"],
+                                      "flag": m["flag"], "document_id": p.get("document_id")})
+        lanes.append({"id": "growth", "type": "growth", "label": "Growth", "series": series,
+                      "alerts": [a for a in growth_alerts
+                                 if p_from.isoformat() <= a["to"] <= p_to.isoformat()]})
+
+    # 3. immunization
+    imm_items = []
+    for r in immunization.get("rows", []):
+        d = date.fromisoformat(r["given_on"] or r["due_on"])
+        if in_period(d) or r["status"] in ("OVERDUE", "DUE"):
+            imm_items.append({**r, "date": d.isoformat(), "status_label": lbl(r["status"])})
+    if imm_items:
+        lanes.append({"id": "immunization", "type": "immunization", "label": "Vaccines",
+                      "items": imm_items, "summary": immunization.get("summary")})
+
+    # 4. conditions - chronic first, then acute groups (recurrent ones first)
+    def episode_events(ep):
+        evs = []
+        for eid in ep.event_ids:
+            e = events_by_id.get(eid)
+            if e and in_period(e["date"]):
+                evs.append({"id": eid, "date": e["date"].isoformat(), "severity": e["severity"],
+                            "severity_label": lbl(e["severity"]), "document_id": e.get("document_id"),
+                            "text": e.get("condition_text"), "verified": e.get("is_verified", False),
+                            **_age_fields(dob, e["date"])})
+        return evs
+
+    chronic_lanes, acute_by_group = [], {}
+    for ep in episodes:
+        if ep.is_provisional and audience == "guardian":
+            continue
+        if not _overlaps(ep.start, ep.end, p_from, p_to):
+            continue
+        item = {**ep.as_dict(), "events": episode_events(ep),
+                "onset_age": format_age(age_in_days(dob, ep.start)),
+                "peak_severity_label": lbl(ep.peak_severity)}
+        if ep.category == "CHRONIC":
+            chronic_lanes.append({"id": f"chronic:{ep.group}", "type": "chronic", "label": ep.label,
+                                  "category_label": lbl("CHRONIC"), "episode": item})
+        else:
+            acute_by_group.setdefault(ep.group, {"label": ep.label, "episodes": []})["episodes"].append(item)
+
+    lanes.extend(chronic_lanes)
+    acute_lanes = []
+    for group, data in acute_by_group.items():
+        rec = recurrent_groups.get(group, {})
+        acute_lanes.append({
+            "id": f"acute:{group}", "type": "acute", "label": data["label"],
+            "is_recurrent": rec.get("is_recurrent", False),
+            "recurrence": rec or None,
+            "category_label": lbl("RECURRENT") if rec.get("is_recurrent") else lbl("ACUTE"),
+            "episodes": data["episodes"],
+        })
+    acute_lanes.sort(key=lambda l: (not l["is_recurrent"], -len(l["episodes"]), l["label"]))
+    lanes.extend(acute_lanes)
+
+    # 5. hospital stays + critical labs
+    stays = [a for a in admissions
+             if _overlaps(a["admitted_on"], a.get("discharged_on"), p_from, p_to)]
+    crit = [c for c in critical_labs if in_period(c["date"])]
+    if stays or crit:
+        items = [{"kind": "ADMISSION", "start": a["admitted_on"].isoformat(),
+                  "end": a["discharged_on"].isoformat() if a.get("discharged_on") else None,
+                  "ward": a["ward"], "reason": a.get("reason"), "is_critical": a["is_critical"],
+                  "label": lbl("CRITICAL") if a["is_critical"] else "Hospital stay",
+                  "document_id": a.get("document_id"), **_age_fields(dob, a["admitted_on"])}
+                 for a in stays]
+        items += [{"kind": "LAB", "start": c["date"].isoformat(), "end": None,
+                   "analyte": c["analyte"], "value": c["value"], "direction": c["direction"],
+                   "label": lbl("CRITICAL_LAB"), "is_critical": True,
+                   "document_id": c.get("document_id"), **_age_fields(dob, c["date"])}
+                  for c in crit]
+        lanes.append({"id": "hospital", "type": "hospital", "label": "Hospital & critical",
+                      "items": sorted(items, key=lambda i: i["start"])})
+
+    # summary for the count cards
+    confirmed = [e for e in episodes if not e.is_provisional
+                 and _overlaps(e.start, e.end, p_from, p_to)]
+    summary = {
+        "chronic_conditions": sum(1 for e in confirmed if e.category == "CHRONIC"),
+        "acute_episodes": sum(1 for e in confirmed if e.category == "ACUTE"),
+        "recurrent_conditions": sum(1 for r in recurrence if r["is_recurrent"]),
+        "hospital_stays": len(stays),
+        "critical_events": sum(1 for a in stays if a["is_critical"]) + len(crit),
+        "growth_flags": sum(1 for p in pts for k in ("weight_kg", "height_cm", "head_circ_cm")
+                            if p.get(k) and p[k].get("flag")),
+        "vaccines_overdue": immunization.get("summary", {}).get("overdue", 0),
+        "vaccine_coverage_pct": immunization.get("summary", {}).get("coverage_pct"),
+    }
+    # reassurance notes for parents: only worth saying when the count looks high
+    typical = [r for r in recurrence
+               if r.get("context") == "typical for age" and r["episodes_last_12m"] >= 3]
+    notes = [f"{r['episodes_last_12m']} episodes of {r['label'].lower()} in the last year "
+             f"- this is typical for the child's age" for r in typical]
+
+    return {
+        "patient": {"dob": dob.isoformat(), "sex": sex,
+                    "age_label": format_age(age_in_days(dob, p_to))},
+        "period": {"from": p_from.isoformat(), "to": p_to.isoformat()},
+        "audience": audience,
+        "summary": summary,
+        "notes": notes,
+        "lanes": lanes,
+    }
+
+
+# ── Extraction of facts from a document's text (LLM) and their clean-up ─────────────────────────────────
+
+MAX_CHUNK_CHARS = 9000
+EXTRACTOR_VERSION = "peds-extract-1.0"
+
+DOC_TYPE_HINTS = {
+    "PRESCRIPTION": "Usually has weight (for dosing), sometimes height/head circumference, "
+                    "a diagnosis line (Dx / Imp / Diagnosis / c/o) and medicines. Vaccines may be noted.",
+    "LAB": "Mostly lab values. Extract every result with its unit and collection date. "
+           "Diagnoses are rare - only extract if the report states one explicitly.",
+    "DISCHARGE_SUMMARY": "Has admission/discharge dates, final diagnosis, course in hospital "
+                         "(ICU/PICU/NICU stay, ventilation), and for newborns the birth history.",
+    "BILL": "Use only for admission dates and ward type (ICU/PICU/NICU charges). "
+            "Do not infer diagnoses from billed items.",
+    "VACCINATION_CARD": "A table of vaccines with dates given. Extract every row that has a date.",
+    "OTHER": "Extract whatever of the schema is clearly present.",
+}
+
+SYSTEM_PROMPT = """You extract structured clinical facts from Indian pediatric medical documents.
+Return ONLY one JSON object, no prose, matching exactly this schema:
+{
+  "document_date": "YYYY-MM-DD or null",
+  "birth_history": {"gestation_weeks": number|null, "birth_weight_kg": number|null,
+                    "nicu_admission": true|false|null, "nicu_days": number|null,
+                    "delivery": "NVD|LSCS|instrumental|null", "notes": "short text or null"} | null,
+  "measurements": [{"measured_on": "YYYY-MM-DD|null", "weight": number|null, "weight_unit": "kg|g|lb",
+                    "height": number|null, "height_unit": "cm|m|in",
+                    "head_circ": number|null, "head_circ_unit": "cm|in"}],
+  "diagnoses": [{"condition": "full name", "icd10_guess": "e.g. J06.9 or null",
+                 "is_provisional": true|false, "is_current_patient_condition": true|false,
+                 "evidence": "<= 12 words copied from the text"}],
+  "admission": {"admitted_on": "YYYY-MM-DD|null", "discharged_on": "YYYY-MM-DD|null",
+                "ward": "WARD|ICU|PICU|NICU|null", "evidence": "<= 12 words"} | null,
+  "labs": [{"test_name": "as written", "value": number, "unit": "as written",
+            "collected_on": "YYYY-MM-DD|null"}],
+  "vaccines": [{"vaccine_text": "as written incl. dose no.", "given_on": "YYYY-MM-DD|null"}]
+}
+Rules:
+- Indian dates are DD/MM/YYYY. Convert to YYYY-MM-DD.
+- Expand abbreviations: URTI, LRTI, AGE (acute gastroenteritis), AOM, WALRI, BA (bronchial asthma),
+  UTI, TOF, VSD, ASD, PDA, CP, NS (nephrotic syndrome), FTT, IDA, SAM/MAM, "K/C/O" = known case of.
+- Febrile seizure / febrile convulsion is NOT epilepsy. Wheeze / WALRI is NOT asthma unless asthma is written.
+- "?", "r/o", "suspected", "probable", "provisional" => is_provisional true.
+- EXCLUDE negated findings ("no h/o seizures"), family history ("mother asthmatic") and ruled-out
+  conditions - set is_current_patient_condition false if unsure, never invent.
+- Do NOT classify chronic/acute or severity. Do NOT add facts not present in the text.
+- Use empty arrays / null when absent."""
+
+
+def build_user_prompt(doc_type: str, text: str, patient_dob: Optional[date]) -> str:
+    hint = DOC_TYPE_HINTS.get(doc_type, DOC_TYPE_HINTS["OTHER"])
+    dob = patient_dob.isoformat() if patient_dob else "unknown"
+    return (f"Document type: {doc_type}\nHint: {hint}\nChild's date of birth: {dob}\n"
+            f"--- DOCUMENT TEXT ---\n{text}\n--- END ---")
+
+
+# ------------------------------------------------------------------ LLM call
+def ask_llm(system: str, user: str, timeout: int = 180) -> str:
+    """The same prompt to the company LLM api (settings.LLM_API_URL, token auth, {"user_prompt": ...} in, the answer text
+    out) or, for local testing with LLM_API_STYLE=ollama, to a local Ollama (/api/chat, no token). The api takes one
+    prompt, so the instructions go in front of the document. A 503 from the company api means its GPU is off."""
+    import requests
+
+    prompt = f"{system}\n\n{user}"
+    if settings.LLM_API_STYLE == "ollama":
+        resp = requests.post(
+            settings.LLM_API_URL,
+            json={"model": settings.LLM_API_MODEL, "messages": [{"role": "user", "content": prompt}], "stream": False, "format": "json"},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()["message"]["content"]
+    resp = requests.post(
+        settings.LLM_API_URL,
+        json={"user_prompt": prompt},
+        headers={"Authorization": f"Token {settings.LLM_API_TOKEN}"},
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    if isinstance(body, dict):
+        if body.get("error"):
+            raise ValueError(f"LLM api error: {body['error']}")
+        body = next((body[k] for k in ("response", "answer", "text", "content", "result", "output", "reply", "message") if k in body), json.dumps(body))
+    return body if isinstance(body, str) else json.dumps(body)
+
+
+def _parse_json(raw: str) -> dict:
+    raw = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.S).strip()
+    raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.M).strip()
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end < 0:
+        raise ValueError("LLM returned no JSON object")
+    return json.loads(raw[start:end + 1])
+
+
+def _chunks(text: str, size: int = MAX_CHUNK_CHARS):
+    if len(text) <= size:
+        return [text]
+    parts, buf = [], ""
+    for para in re.split(r"\n\s*\n", text):
+        if len(buf) + len(para) > size and buf:
+            parts.append(buf)
+            buf = ""
+        buf += para + "\n\n"
+    if buf.strip():
+        parts.append(buf)
+    return parts
+
+
+def _merge(results):
+    merged = {"document_date": None, "birth_history": None, "measurements": [],
+              "diagnoses": [], "admission": None, "labs": [], "vaccines": []}
+    for r in results:
+        merged["document_date"] = merged["document_date"] or r.get("document_date")
+        merged["birth_history"] = merged["birth_history"] or r.get("birth_history")
+        merged["admission"] = merged["admission"] or r.get("admission")
+        for k in ("measurements", "diagnoses", "labs", "vaccines"):
+            merged[k].extend(r.get(k) or [])
+    return merged
+
+
+# ------------------------------------------------------------ normalisation
+_DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%d/%m/%y", "%d-%b-%Y", "%d %b %Y")
+
+
+def parse_date(value) -> Optional[date]:
+    if not value or not isinstance(value, str):
+        return None
+    v = value.strip()
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(v, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _num(v) -> Optional[float]:
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    m = re.search(r"-?\d+(\.\d+)?", str(v).replace(",", ""))
+    return float(m.group()) if m else None
+
+
+def normalise_weight(value, unit) -> Optional[float]:
+    v = _num(value)
+    if v is None:
+        return None
+    unit = (unit or "kg").lower()
+    if unit.startswith("g") or v > 200:          # 3250 -> grams
+        v = v / 1000
+    elif unit.startswith("lb"):
+        v = v * 0.45359237
+    return round(v, 3)
+
+
+def normalise_length(value, unit) -> Optional[float]:
+    v = _num(value)
+    if v is None:
+        return None
+    unit = (unit or "cm").lower()
+    if unit in ("m", "mtr", "metre", "meter") or (v < 2.5 and unit != "in"):
+        v = v * 100
+    elif unit in ("in", "inch", "inches"):
+        v = v * 2.54
+    return round(v, 1)
+
+
+def normalise_lab_value(analyte: str, value, unit: str) -> Optional[float]:
+    v = _num(value)
+    if v is None:
+        return None
+    u = (unit or "").lower().replace(" ", "")
+    if analyte in ("PLATELETS_PER_UL", "WBC_PER_UL"):
+        if "lakh" in u:
+            v *= 100000
+        elif any(t in u for t in ("10^3", "10³", "x10e3", "thou", "k/")) or (v < 1000 and analyte == "PLATELETS_PER_UL"):
+            v *= 1000
+    elif analyte == "HEMOGLOBIN_G_DL" and ("g/l" in u and "dl" not in u):
+        v /= 10
+    elif analyte == "GLUCOSE_MG_DL" and "mmol" in u:
+        v *= 18.016
+    return round(v, 2)
+
+
+def _in_range(v, rng):
+    return v is not None and rng[0] <= v <= rng[1]
+
+
+def normalise(raw: dict, dob: Optional[date], upload_date: date, cfg=None) -> dict:
+    """Clean LLM output. Drops implausible values and records why in `warnings`."""
+    cfg = cfg or load_config()
+    ranges = cfg["growth"]["plausible_ranges"]
+    warnings = []
+    today = date.today()
+
+    def valid_date(d):
+        if d is None:
+            return None
+        if d > today or (dob and d < dob):
+            warnings.append(f"date out of range: {d}")
+            return None
+        return d
+
+    doc_date = valid_date(parse_date(raw.get("document_date")))
+    date_source = "DOCUMENT" if doc_date else "UPLOAD"
+    doc_date = doc_date or upload_date
+
+    out = {"document_date": doc_date, "date_source": date_source, "birth_history": None,
+           "measurements": [], "diagnoses": [], "admission": None, "labs": [],
+           "vaccines": [], "warnings": warnings}
+
+    bh = raw.get("birth_history") or None
+    if bh and (any(bh.get(k) is not None for k in ("gestation_weeks", "birth_weight_kg")) or bh.get("nicu_admission") is True):
+        gw = _num(bh.get("gestation_weeks"))
+        bw = normalise_weight(bh.get("birth_weight_kg"), "kg")
+        out["birth_history"] = {
+            "gestation_weeks": gw if gw and 22 <= gw <= 44 else None,
+            "birth_weight_kg": bw if bw and 0.4 <= bw <= 6.5 else None,
+            "nicu_admission": bh.get("nicu_admission"),
+            "nicu_days": int(_num(bh.get("nicu_days"))) if _num(bh.get("nicu_days")) is not None else None,
+            "delivery": bh.get("delivery"),
+            "notes": (bh.get("notes") or "")[:250] or None,
+        }
+
+    for m in raw.get("measurements") or []:
+        rec = {
+            "measured_on": valid_date(parse_date(m.get("measured_on"))) or doc_date,
+            "weight_kg": normalise_weight(m.get("weight"), m.get("weight_unit")),
+            "height_cm": normalise_length(m.get("height"), m.get("height_unit")),
+            "head_circ_cm": normalise_length(m.get("head_circ"), m.get("head_circ_unit")),
+        }
+        for k in ("weight_kg", "height_cm", "head_circ_cm"):
+            if rec[k] is not None and not _in_range(rec[k], ranges[k]):
+                warnings.append(f"implausible {k}={rec[k]} dropped")
+                rec[k] = None
+        if any(rec[k] is not None for k in ("weight_kg", "height_cm", "head_circ_cm")):
+            out["measurements"].append(rec)
+
+    for d in raw.get("diagnoses") or []:
+        if not d.get("is_current_patient_condition", True):
+            continue
+        cond = (d.get("condition") or "").strip()
+        if not cond:
+            continue
+        out["diagnoses"].append({
+            "condition_text": cond[:255],
+            "icd10": (d.get("icd10_guess") or "").strip().upper()[:10] or None,
+            "is_provisional": is_uncertain(f"{cond} {d.get('evidence') or ''}"),
+            "evidence": (d.get("evidence") or "")[:255],
+        })
+
+    adm = raw.get("admission") or None
+    if adm and (adm.get("admitted_on") or adm.get("ward")):
+        out["admission"] = {
+            "admitted_on": valid_date(parse_date(adm.get("admitted_on"))) or doc_date,
+            "discharged_on": valid_date(parse_date(adm.get("discharged_on"))),
+            "ward": (adm.get("ward") or "WARD").upper(),
+            "evidence": (adm.get("evidence") or "")[:255],
+        }
+
+    for lab in raw.get("labs") or []:
+        analyte = resolve_analyte(lab.get("test_name", ""), cfg)
+        if not analyte:
+            continue  # only configured analytes matter for the timeline
+        val = normalise_lab_value(analyte, lab.get("value"), lab.get("unit"))
+        if val is None:
+            continue
+        out["labs"].append({
+            "analyte": analyte, "test_name": (lab.get("test_name") or "")[:100],
+            "value": val, "unit_raw": (lab.get("unit") or "")[:30],
+            "collected_on": valid_date(parse_date(lab.get("collected_on"))) or doc_date,
+        })
+
+    for v in raw.get("vaccines") or []:
+        given = valid_date(parse_date(v.get("given_on")))
+        if v.get("vaccine_text") and given:
+            out["vaccines"].append({"vaccine_text": v["vaccine_text"][:100], "given_on": given})
+
+    return out
+
+
+def extract_document(text: str, doc_type: str, dob: Optional[date], upload_date: date,
+                     llm: Optional[Callable[[str, str], str]] = None, cfg=None) -> dict:
+    cfg = cfg or load_config()
+    llm = llm or ask_llm
+    results = []
+    for chunk in _chunks(text or ""):
+        raw = llm(SYSTEM_PROMPT, build_user_prompt(doc_type, chunk, dob))
+        try:
+            results.append(_parse_json(raw))
+        except (ValueError, json.JSONDecodeError) as exc:
+            logger.warning("extraction JSON parse failed: %s", exc)
+    if not results:
+        raise ValueError("no parseable extraction output")
+    return normalise(_merge(results), dob, upload_date, cfg)
+
+
+def lab_severity(lab: dict, dob: date, cfg=None) -> dict:
+    age_days = (lab["collected_on"] - dob).days
+    return evaluate_lab(lab["analyte"], lab["value"], age_days, cfg)

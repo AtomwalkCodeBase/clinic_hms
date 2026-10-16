@@ -223,7 +223,7 @@ class BirthHistorySerializer(serializers.ModelSerializer):
             "id", "patient", "gestational_age_weeks", "birth_weight_kg",
             "delivery_mode", "delivery_mode_display", "multiple_birth",
             "nicu_admission", "nicu_days", "birth_complications",
-            "congenital_conditions", "apgar_score_1min", "apgar_score_5min",
+            "congenital_conditions",
             "notes", "recorded_by", "recorded_at", "updated_by", "updated_at",
         ]
         read_only_fields = ["id", "patient", "recorded_by", "recorded_at", "updated_by", "updated_at"]

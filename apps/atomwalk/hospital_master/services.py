@@ -9,6 +9,14 @@ from apps.hospital_master.facility.models import Branch
 
 
 logger = logging.getLogger(__name__)
+
+
+def parameters_of(hospital):
+    from apps.atomwalk.hospital_master.models import HospitalParameters
+
+    return HospitalParameters.objects.using("default").get_or_create(hospital=hospital)[0]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Hospital DB Provisioning
 #

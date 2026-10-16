@@ -34,7 +34,7 @@ class EncounterSignSideEffectsTests(TestCase):
         a full hospital DB fixture, by calling the helper with a patient that
         has no awpid (the guaranteed-skip path).
         """
-        from apps.atomwalk.documents.services import sync_encounter_to_hie
+        from apps.atomwalk.documents.lib_documents import sync_encounter_to_hie
 
         class FakeEncounter:
             id = "test-encounter-id"
@@ -56,7 +56,7 @@ class EncounterSignSideEffectsTests(TestCase):
         Encounters commonly have no vitals recorded yet or no prescription
         (e.g. advice-only visit) — sync_encounter_to_hie must not assume either exists.
         """
-        from apps.atomwalk.documents.services import sync_encounter_to_hie
+        from apps.atomwalk.documents.lib_documents import sync_encounter_to_hie
 
         class FakeAppointment:
             @property
@@ -100,12 +100,13 @@ class EncounterSignWorkflowTests(HospitalDBTestCase):
         from apps.hospital_master.facility.models import Branch, NextNumber
         from apps.hospital_master.staff.models import DoctorProfile, StaffUser
         from apps.hospital_master.patients.models import HospitalPatient
-        from apps.atomwalk.hospital_master.models import Hospital
+        from apps.atomwalk.hospital_master.models import Hospital, HospitalParameters
 
         db = self.hospital_alias
         self.hospital = Hospital.objects.using("default").create(
-            name="Sign Hospital", subdomain="sign-h", db_name=db, default_tax_rate=_Decimal("10"),
+            name="Sign Hospital", hospital_code="sign-h", db_name=db,
         )
+        HospitalParameters.objects.using("default").create(hospital=self.hospital, default_tax_rate=_Decimal("10"))
         self.branch = Branch.objects.using(db).create(name="Main")
         self.doctor = StaffUser.objects.using(db).create(
             email="dr.sign@example.test", role="doctor", phone="9000000020", branch=self.branch,

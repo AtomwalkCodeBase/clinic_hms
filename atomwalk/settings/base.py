@@ -410,6 +410,17 @@ CONSULT_PAD_LLM_MODEL = config("CONSULT_PAD_LLM_MODEL", default="qwen/qwen3.8-27
 # Falls back to GROQ_API_KEY so an existing Groq key already in .env just works.
 CONSULT_PAD_LLM_KEY   = config("CONSULT_PAD_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
 
+# ── Pediatric health timeline (apps/atomwalk/documents/services.py) ─────────────
+# The company LLM api only reads facts out of a document's text; the rules judge them.
+# The rules, thresholds and schedules are in documents/health_config.json (override the path with
+# PEDIATRIC_HEALTH_CONFIG); the WHO growth tables are CSV files in documents/growth_reference/.
+LLM_API_URL = config("LLM_API_URL", default="https://atomwalk.com/llm_api/ask/")
+LLM_API_TOKEN = config("LLM_API_TOKEN", default="")
+# "company" (default, production) or "ollama" for a local test: LLM_API_URL=http://localhost:11434/api/chat, LLM_API_MODEL=<an installed model>
+LLM_API_STYLE = config("LLM_API_STYLE", default="company")
+LLM_API_MODEL = config("LLM_API_MODEL", default="")
+PEDIATRIC_HEALTH_CONFIG = config("PEDIATRIC_HEALTH_CONFIG", default="") or None
+
 # All three sweep settings (instant-upload file limit, per-run dispatch limit, and how often the
 # sweep runs) are Platform Admin-editable at runtime — apps.atomwalk.models.SweepConfig, via
 # apps/platform_admin/classification_rule_views.py. No env vars, no restart, for any of them: the

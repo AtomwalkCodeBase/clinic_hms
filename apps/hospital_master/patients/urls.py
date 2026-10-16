@@ -13,7 +13,6 @@ from apps.hospital_master.patients.views import (
     PatientLabResultDetailView,
 )
 from apps.atomwalk.documents.views import (
-    PatientGrowthView,
     PatientVaccinationListCreateView,
     PatientVaccinationVerifyView,
     PatientVaccinationOrderView,
@@ -35,7 +34,6 @@ urlpatterns = [
     path("<int:pk>/",          PatientDetailView.as_view(),          name="patient-detail"),
     path("<int:pk>/history/",  PatientHistoryView.as_view(),         name="patient-history"),
     path("<int:pk>/allergies/",PatientAllergyListCreateView.as_view(),name="patient-allergies"),
-    path("<int:pk>/growth/",   PatientGrowthView.as_view(),          name="patient-growth"),
     path("<int:pk>/vaccinations/", PatientVaccinationListCreateView.as_view(), name="patient-vaccinations"),
     path("<int:pk>/vaccinations/order/",      PatientVaccinationOrderView.as_view(),      name="patient-vaccination-order"),
     path("<int:pk>/vaccinations/decline/",    PatientVaccinationDeclineView.as_view(),    name="patient-vaccination-decline"),

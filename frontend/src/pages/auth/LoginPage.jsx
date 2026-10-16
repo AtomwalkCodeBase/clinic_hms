@@ -2,8 +2,8 @@
  * pages/auth/LoginPage.jsx
  * -------------------------
  * Unified login page with three tabs:
- *   - Staff Login    (email + password + hospital subdomain)
- *   - Platform Admin (username + password, no subdomain)
+ *   - Staff Login    (email + password + hospital hospital_code)
+ *   - Platform Admin (username + password, no hospital_code)
  *   - Patient Login  (AWPID + password)
  *
  * Premium split-screen layout: dark hero brand panel on the left,
@@ -144,10 +144,10 @@ export default function LoginPage() {
   const [mobile,   setMobile]   = useState("");
   const [password, setPassword] = useState("");
   // Employee-ID login (enterprise hospitals with an HR/payroll ID scheme) —
-  // needs the hospital's subdomain too, since employee IDs aren't globally
+  // needs the hospital's hospital_code too, since employee IDs aren't globally
   // unique the way mobile numbers are. See docs/onboarding_auth_rbac_architecture.md 3.1.2.
   const [useEmployeeId, setUseEmployeeId] = useState(false);
-  const [subdomain,     setSubdomain]     = useState("");
+  const [hospital_code,     setHospitalCode]     = useState("");
   const [employeeId,    setEmployeeId]    = useState("");
 
   // Platform admin
@@ -179,7 +179,7 @@ export default function LoginPage() {
     setFieldErrors({});
     setLoading(true);
     try {
-      const credentials = useEmployeeId ? { subdomain, employeeId } : mobile;
+      const credentials = useEmployeeId ? { hospital_code, employeeId } : mobile;
       const result = await loginStaff(credentials, password);
       toastSuccess("Signed in successfully.");
       if (result.must_change_password) {
@@ -449,9 +449,9 @@ export default function LoginPage() {
                 {useEmployeeId ? (
                   <>
                     <label style={labelStyle}>Hospital Code</label>
-                    <Field icon={IconBadge} error={fieldErrors.subdomain}>
-                      <input style={bareInput} value={subdomain}
-                        onChange={e => setSubdomain(e.target.value)}
+                    <Field icon={IconBadge} error={fieldErrors.hospital_code}>
+                      <input style={bareInput} value={hospital_code}
+                        onChange={e => setHospitalCode(e.target.value)}
                         placeholder="e.g. apollo-delhi" required />
                     </Field>
 

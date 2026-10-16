@@ -2,13 +2,19 @@
 from django.urls import include, path
 from apps.atomwalk.documents.views import (
     BatchDetailView,
-    StaffTimelineView,
     SubmitView,
-    TimelineView,
     TypesView,
     UploadView,
 )
-from apps.atomwalk.documents.views import DocumentViewView
+from apps.atomwalk.documents.views import (
+    ClinicalEventView,
+    DocumentViewView,
+    PatientGrowthView,
+    PatientHealthTimelineView,
+    PatientImmunizationView,
+    PatientRebuildView,
+    RecurrenceAckView,
+)
 from apps.atomwalk.documents.views import (
     MilestoneScheduleActivateView,
     MilestoneScheduleDetailView,
@@ -24,8 +30,16 @@ records_urlpatterns = [
     path("upload/", UploadView.as_view(), name="records-upload"),
     path("batches/<int:batch_id>/", BatchDetailView.as_view(), name="records-batch"),
     path("submit/", SubmitView.as_view(), name="records-submit"),
-    path("timeline/", TimelineView.as_view(), name="records-timeline"),
-    path("patients/<int:pk>/timeline/", StaffTimelineView.as_view(), name="records-staff-timeline"),
+]
+
+
+peds_urlpatterns = [
+    path("patients/<str:awpid>/health-timeline/", PatientHealthTimelineView.as_view(), name="health-timeline"),
+    path("patients/<str:awpid>/growth/", PatientGrowthView.as_view(), name="growth"),
+    path("patients/<str:awpid>/immunization/", PatientImmunizationView.as_view(), name="immunization"),
+    path("patients/<str:awpid>/rebuild/", PatientRebuildView.as_view(), name="rebuild"),
+    path("events/<int:event_id>/", ClinicalEventView.as_view(), name="event"),
+    path("recurrence/<int:flag_id>/acknowledge/", RecurrenceAckView.as_view(), name="recurrence-ack"),
 ]
 
 
@@ -46,6 +60,7 @@ schedule_urlpatterns = [
 
 urlpatterns = [
     path("records/", include(records_urlpatterns)),
+    path("peds/", include(peds_urlpatterns)),
     path("view-report/", include(view_report_urlpatterns)),
     path("org/", include(schedule_urlpatterns)),
 ]

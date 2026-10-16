@@ -1,6 +1,6 @@
 """Tests of the patient portal, consult pad and record sharing."""
 import uuid
-from apps.atomwalk.documents.services import batch_counts
+from apps.atomwalk.documents.lib_documents import batch_counts
 from unittest import mock
 from django.test import TestCase, override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate, APIClient
@@ -12,7 +12,7 @@ from apps.atomwalk.patients.models import OTPCode, Patient, ConsultSession, Reco
 from core.authentication import MockUser
 from core.utils.hashing import hash_mobile, normalize_mobile
 from django.urls import NoReverseMatch, reverse
-from apps.atomwalk.documents.services import CHOOSABLE_TYPES
+from apps.atomwalk.documents.lib_documents import CHOOSABLE_TYPES
 from apps.atomwalk.documents.models import DocumentBatch, MedicalDocument, PatientDocumentClassification
 from apps.atomwalk.documents.tests import identity, make_doc, reload
 from datetime import timedelta

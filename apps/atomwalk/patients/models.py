@@ -5,7 +5,7 @@ from core.utils.tokens import new_pad_token
 
 class Patient(models.Model):
     awpid               = models.CharField(max_length=30, unique=True, db_index=True)
-    full_name           = models.CharField(max_length=200)
+    full_name           = models.CharField(max_length=100)
     date_of_birth       = models.DateField(null=True, blank=True)
     gender              = models.CharField(max_length=10, blank=True)
 
@@ -18,11 +18,11 @@ class Patient(models.Model):
     preferred_language  = models.CharField(max_length=10, default="en")
 
     password      = models.CharField(max_length=128, blank=True)
-    photo         = models.TextField(blank=True)
+    photo         = models.ImageField(blank=True)
     is_active     = models.BooleanField(default=True)
     last_login    = models.DateTimeField(null=True, blank=True)
 
-    emergency_contact_name     = models.CharField(max_length=200, blank=True)
+    emergency_contact_name     = models.CharField(max_length=100, blank=True)
     emergency_contact_phone    = models.CharField(max_length=15, blank=True)
     emergency_contact_relation = models.CharField(max_length=30, blank=True)
 

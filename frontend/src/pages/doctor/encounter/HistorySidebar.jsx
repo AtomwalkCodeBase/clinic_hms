@@ -24,9 +24,8 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   // cross-hospital ones (gated on hie_consent, same as the rest of this
   // sidebar); vaccinations merges real records with the default schedule so
   // a nurse/doctor sees exactly what's due, not just what's been logged.
-  const { data: growthData, isLoading: growthLoading } = useApi(
-    patientPk ? API_ENDPOINTS.PATIENTS.GROWTH(patientPk) : null, { skip: !patientPk }
-  );
+  const growthData = null;
+  const growthLoading = false;
   const { data: vaxData, isLoading: vaxLoading, refetch: refetchVax } = useApi(
     patientPk ? API_ENDPOINTS.PATIENTS.VACCINATIONS(patientPk) : null, { skip: !patientPk }
   );

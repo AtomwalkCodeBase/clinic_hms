@@ -1,12 +1,13 @@
 from apps.hospital_master.staff.views import HospitalSettingsView
-from apps.atomwalk.hospital_master.models import Hospital
+from apps.atomwalk.hospital_master.models import Hospital, HospitalParameters
 from core.testing import HospitalDBTestCase, requires_hospital_db
 
 
 @requires_hospital_db
 class HospitalSettingsAccessTests(HospitalDBTestCase):
     def get(self, role):
-        hospital = Hospital.objects.using("default").create(name="T", subdomain="t", db_name="x", fee_ownership="hospital")
+        hospital = Hospital.objects.using("default").create(name="T", hospital_code="t", db_name="x")
+        HospitalParameters.objects.using("default").create(hospital=hospital, fee_ownership="hospital")
         return self.call_view(HospitalSettingsView.as_view(), "get", "/api/v1/org/settings/",
                               user_id=1, role=role, hospital_id=hospital.id)
 

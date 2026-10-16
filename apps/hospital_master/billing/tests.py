@@ -148,10 +148,9 @@ class RecomputeInvoiceTotalsTests(HospitalDBTestCase):
 class HospitalDefaultTaxRateTests(HospitalDBTestCase):
     def test_reads_the_hospitals_configured_rate(self):
         from apps.hospital_master.billing.services import hospital_default_tax_rate
-        from apps.atomwalk.hospital_master.models import Hospital
-        t = Hospital.objects.using("default").create(
-            name="H", subdomain="h-tax", db_name="h_tax", default_tax_rate=Decimal("5.00"),
-        )
+        from apps.atomwalk.hospital_master.models import Hospital, HospitalParameters
+        t = Hospital.objects.using("default").create(name="H", hospital_code="h-tax", db_name="h_tax")
+        HospitalParameters.objects.using("default").create(hospital=t, default_tax_rate=Decimal("5.00"))
         self.assertEqual(hospital_default_tax_rate(t.id), Decimal("5.00"))
 
     def test_unknown_or_missing_hospital_is_zero(self):

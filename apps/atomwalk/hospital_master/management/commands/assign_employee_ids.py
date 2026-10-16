@@ -12,7 +12,7 @@ DOC-001, DOC-002, ... for doctors, NUR-001... for nurses, FD-001... for
 front desk, LAB-001... for lab techs, PHR-001... for pharmacists, ADM-001...
 for hospital admins, and STF-001... for anyone with a custom role. The
 "hospital code" you log in with alongside the employee ID is the hospital's
-own subdomain (e.g. novacare-flagship) — printed in the output table below,
+own hospital_code (e.g. novacare-flagship) — printed in the output table below,
 so there's nothing else to look up.
 
 Idempotent and additive: only fills in staff who currently have
@@ -90,7 +90,7 @@ class Command(BaseCommand):
         existing = out_path.read_text(encoding="utf-8") if out_path.exists() else (
             "# Employee ID Login Codes\n\n"
             "Login as staff with **hospital code + employee ID + password** instead of "
-            "a mobile number — hospital code is the subdomain shown under each hospital below.\n"
+            "a mobile number — hospital code is the hospital_code shown under each hospital below.\n"
         )
         stamp = f"\n\n<!-- assign_employee_ids run: {timezone.now().strftime('%d-%b-%Y %H:%M')} -->\n"
         out_path.write_text(existing + stamp + "".join(sections), encoding="utf-8")
@@ -100,7 +100,7 @@ class Command(BaseCommand):
         db = hospital.db_name
         ensure_hospital_db(db)
 
-        self.stdout.write(f"\n{'=' * 70}\n  {hospital.name} ({hospital.subdomain})\n{'=' * 70}")
+        self.stdout.write(f"\n{'=' * 70}\n  {hospital.name} ({hospital.hospital_code})\n{'=' * 70}")
 
         # Seed next-available sequence number per prefix from whatever's
         # already assigned, so a re-run (or staff added by hand with their
@@ -142,11 +142,11 @@ class Command(BaseCommand):
         all_rows = sorted(already_rows + rows, key=lambda r: (r[0], r[2]))
         if not all_rows:
             self.stdout.write(self.style.WARNING("  No staff to list."))
-            return f"\n## {hospital.name}\n\nHospital code (subdomain): `{hospital.subdomain}`\n\n_No staff found._\n"
+            return f"\n## {hospital.name}\n\nHospital code: `{hospital.hospital_code}`\n\n_No staff found._\n"
 
         lines = [
             f"\n## {hospital.name}\n\n",
-            f"Hospital code (subdomain): `{hospital.subdomain}`  |  Password: unchanged from however each account was created\n\n",
+            f"Hospital code: `{hospital.hospital_code}`  |  Password: unchanged from however each account was created\n\n",
             "| Role | Name | Employee ID | Mobile (fallback login) |\n",
             "|---|---|---|---|\n",
         ]

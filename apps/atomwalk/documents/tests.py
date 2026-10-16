@@ -3,11 +3,11 @@ import uuid
 import datetime
 import base64
 import datetime as dt
-from apps.atomwalk.documents.services import batch_counts, bmi
-from apps.atomwalk.documents import services
-from apps.atomwalk.documents import services as rules
-from apps.atomwalk.documents import services as c
-from apps.atomwalk.documents import services as cls
+from apps.atomwalk.documents.lib_documents import batch_counts, bmi
+from apps.atomwalk.documents import lib_documents as services
+from apps.atomwalk.documents import lib_documents as rules
+from apps.atomwalk.documents import lib_documents as c
+from apps.atomwalk.documents import lib_documents as cls
 from apps.atomwalk.documents.models import (
     DocumentExtraction,
     MedicalDocument,
@@ -43,32 +43,30 @@ from apps.atomwalk.documents.views import (
     SubmitView,
     TypesView,
     UploadView,
-    StaffTimelineView,
-    TimelineView,
 )
 from apps.atomwalk.documents.tasks import classify_document_task, extract_document_task
 from types import SimpleNamespace
 from apps.hospital_master.patients.models import HospitalPatient, Allergy
-from apps.atomwalk.documents import services as extract
+from apps.atomwalk.documents import lib_documents as extract
 from apps.hospital_master.lab.models import LabReport, LabRequest, LabTest
 from apps.hospital_master.lab.views import LabRequestAttachDocumentView
 from apps.hospital_master.opd.models import Appointment, OPDEncounter
-from apps.atomwalk.documents.services import sync_encounter_to_hie
+from apps.atomwalk.documents.lib_documents import sync_encounter_to_hie
 from apps.hospital_master.facility.models import Branch
 from apps.hospital_master.staff.models import StaffUser
-from apps.atomwalk.hospital_master.models import Hospital
+from apps.atomwalk.hospital_master.models import Hospital, HospitalParameters
 from decimal import Decimal
-from apps.atomwalk.documents import services as vitals
-from apps.atomwalk.documents import services as episodes
+from apps.atomwalk.documents import lib_documents as vitals
+from apps.atomwalk.documents import lib_documents as episodes
 from datetime import timedelta
-from apps.atomwalk.documents import services as who
+from apps.atomwalk.documents import lib_documents as who
 from apps.atomwalk.documents import views as views
 from apps.atomwalk.documents import views as vax_views
 from apps.atomwalk.documents import views as ped_views
-from apps.atomwalk.documents import services as roadmap
+from apps.atomwalk.documents import lib_documents as roadmap
 from apps.atomwalk.documents import urls as org_urls
-from apps.atomwalk.documents.services import build_roadmap, summarize_roadmap
-from apps.atomwalk.documents.services import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
+from apps.atomwalk.documents.lib_documents import build_roadmap, summarize_roadmap
+from apps.atomwalk.documents.lib_documents import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
 from apps.platform_admin import urls as platform_urls
 from apps.atomwalk.patients.services import create_account
 
@@ -403,7 +401,7 @@ class TypesTests(TestCase):
         self.assertEqual(len(data), 10)
 @RESOLVE_RECORDS
 @mock.patch("apps.atomwalk.documents.views.start_processing")
-@mock.patch("apps.atomwalk.documents.services.storage")
+@mock.patch("apps.atomwalk.documents.lib_documents.storage")
 @mock.patch("core.storage.put_bytes", side_effect=lambda key, data, mime_type: key)
 class UploadModeTests(TestCase):
     databases = {"default"}
@@ -459,7 +457,7 @@ class SubmitTests(TestCase):
         self.assertEqual((data["submitted"], data["rejected"]), ([doc.id], []))
         doc = reload(doc)
         self.assertEqual((doc.document_type, cls.method_of(doc), cls.is_confirmed(doc)), ("prescription", "staff", True))
-        classification = doc.classification
+        classification = doc.d_classification
         self.assertEqual((classification.status, classification.human_document_type, classification.document.document_type,
                           classification.ai_document_type), ("human_classified", "prescription", "prescription", "lab_report"))
 
@@ -642,7 +640,7 @@ class ExtractDocumentTests(TestCase):
     databases = {"default"}
 
     @mock.patch("apps.atomwalk.documents.tasks.classify_document_task.apply_async")
-    @mock.patch("apps.atomwalk.documents.services.extract_text", return_value=("hemoglobin glucose", "pdf_text"))
+    @mock.patch("apps.atomwalk.documents.lib_documents.extract_text", return_value=("hemoglobin glucose", "pdf_text"))
     def test_success_saves_the_text_and_type_and_queues_classification(self, _extract, delay, _get):
         doc = make_doc(status=S.QUEUED)
         extract_document_task(doc.id)
@@ -653,7 +651,7 @@ class ExtractDocumentTests(TestCase):
         delay.assert_called_once_with(args=[doc.id, "bulk"], queue="bulk")
 
     @mock.patch("apps.atomwalk.documents.tasks.classify_document_task.apply_async")
-    @mock.patch("apps.atomwalk.documents.services.extract_text", return_value=("text", "ocr"))
+    @mock.patch("apps.atomwalk.documents.lib_documents.extract_text", return_value=("text", "ocr"))
     def test_the_file_is_read_through_the_file_field(self, _extract, _delay, get):
         doc = make_doc(status=S.QUEUED)
         extract_document_task(doc.id)
@@ -684,7 +682,7 @@ class ExtractDocumentTests(TestCase):
         Image.new("LA", (1, 1)).save(buf, "PNG")          # the placeholder that once killed the worker with 4 GB of OCR
         get.return_value = buf.getvalue()
         doc = make_doc(status=S.QUEUED)
-        with mock.patch("apps.atomwalk.documents.services.extract_text") as extract:
+        with mock.patch("apps.atomwalk.documents.lib_documents.extract_text") as extract:
             extract_document_task(doc.id)
         self.assertEqual(row(doc).status, S.FAILED)
         self.assertIn("1x1 pixels", row(doc).error_message)
@@ -694,13 +692,13 @@ class ExtractDocumentTests(TestCase):
     @mock.patch("apps.atomwalk.documents.tasks.classify_document_task.apply_async")
     def test_a_file_over_the_limit_fails(self, delay, _get):
         doc = make_doc(status=S.QUEUED)
-        with mock.patch("apps.atomwalk.documents.services.MAX_FILE_BYTES", 10):
+        with mock.patch("apps.atomwalk.documents.lib_documents.MAX_FILE_BYTES", 10):
             extract_document_task(doc.id)
         self.assertEqual((row(doc).status, row(doc).error_message), (S.FAILED, "The file is over 250 MB."))
         delay.assert_not_called()
 
     @mock.patch("apps.atomwalk.documents.tasks.classify_document_task.apply_async")
-    @mock.patch("apps.atomwalk.documents.services.extract_text", side_effect=RuntimeError("OCR crashed"))
+    @mock.patch("apps.atomwalk.documents.lib_documents.extract_text", side_effect=RuntimeError("OCR crashed"))
     def test_an_unexpected_error_is_raised_so_celery_retries_and_the_document_stays_in_progress(self, _extract, delay, _get):
         doc = make_doc(status=S.QUEUED)
         with self.assertRaises(RuntimeError):
@@ -709,7 +707,7 @@ class ExtractDocumentTests(TestCase):
         delay.assert_not_called()
 
     @mock.patch("apps.atomwalk.documents.tasks.classify_document_task.apply_async")
-    @mock.patch("apps.atomwalk.documents.services.extract_text", side_effect=RuntimeError("OCR crashed"))
+    @mock.patch("apps.atomwalk.documents.lib_documents.extract_text", side_effect=RuntimeError("OCR crashed"))
     def test_when_the_retries_are_used_up_the_document_is_failed_for_the_patient_to_retry(self, _extract, delay, _get):
         doc = make_doc(status=S.QUEUED)
         extract_document_task.apply(args=(doc.id,), retries=extract_document_task.max_retries)   # the last attempt
@@ -718,7 +716,7 @@ class ExtractDocumentTests(TestCase):
         delay.assert_not_called()
 
     @mock.patch("apps.atomwalk.documents.tasks.classify_document_task.apply_async")
-    @mock.patch("apps.atomwalk.documents.services.extract_text")
+    @mock.patch("apps.atomwalk.documents.lib_documents.extract_text")
     def test_only_a_document_still_in_the_pipeline_is_touched(self, extract, delay, get):
         for status in (S.COMPLETED, S.FAILED, S.REVIEW_REQUIRED):
             doc = make_doc(status=status)
@@ -729,7 +727,7 @@ class ExtractDocumentTests(TestCase):
         delay.assert_not_called()
 
     @mock.patch("apps.atomwalk.documents.tasks.classify_document_task.apply_async")
-    @mock.patch("apps.atomwalk.documents.services.extract_text")
+    @mock.patch("apps.atomwalk.documents.lib_documents.extract_text")
     def test_a_retry_after_the_text_was_saved_only_repeats_the_hand_off(self, extract, delay, get):
         doc = make_doc(status=S.CLASSIFYING, text="already read")
         extract_document_task(doc.id)
@@ -738,7 +736,7 @@ class ExtractDocumentTests(TestCase):
         delay.assert_called_once_with(args=[doc.id, "bulk"], queue="bulk")
 
     @mock.patch("apps.atomwalk.documents.tasks.classify_document_task.apply_async")
-    @mock.patch("apps.atomwalk.documents.services.extract_text", return_value=("text", "ocr"))
+    @mock.patch("apps.atomwalk.documents.lib_documents.extract_text", return_value=("text", "ocr"))
     def test_identical_files_are_both_kept(self, _extract, _delay, _get):
         """There is no duplicate detection any more: the same file twice is two documents."""
         a, b = make_doc(status=S.QUEUED), make_doc(status=S.QUEUED)
@@ -790,7 +788,7 @@ class ClassifyDocumentTests(TestCase):
             self.assertEqual(row(doc).status, status)
             self.assertFalse(PatientDocumentClassification.objects.filter(document=doc).exists())
 
-    @mock.patch("apps.atomwalk.documents.services.classify_document_by_rules", side_effect=RuntimeError("boom"))
+    @mock.patch("apps.atomwalk.documents.lib_documents.classify_document_by_rules", side_effect=RuntimeError("boom"))
     def test_an_error_is_retried_and_fails_the_document_once_the_retries_are_used_up(self, _rules):
         doc = make_doc(status=S.CLASSIFYING, text=RX)
         with self.assertRaises(RuntimeError):
@@ -803,7 +801,7 @@ class ClassifyDocumentTests(TestCase):
 class WholePipelineTests(TestCase):
     databases = {"default"}
 
-    @mock.patch("apps.atomwalk.documents.services.extract_text", return_value=(RX, "ocr"))
+    @mock.patch("apps.atomwalk.documents.lib_documents.extract_text", return_value=(RX, "ocr"))
     def test_a_queued_document_ends_completed_with_its_text_and_classification(self, _extract, _get):
         batch = DocumentBatch.objects.create(patient=identity())
         doc = make_doc(status=S.QUEUED, batch=batch)
@@ -832,7 +830,7 @@ class StartProcessingTests(TestCase):
         delay.assert_called_once_with(args=[a.id, "instant"], queue="instant")
 
     @mock.patch("apps.atomwalk.documents.tasks.classify_document_task.apply_async")
-    @mock.patch("apps.atomwalk.documents.services.extract_text", return_value=("text", "ocr"))
+    @mock.patch("apps.atomwalk.documents.lib_documents.extract_text", return_value=("text", "ocr"))
     @mock.patch("core.storage.get_bytes", return_value=PDF)
     def test_the_classify_step_stays_on_the_queue_of_its_extract_step(self, _get, _extract, classify):
         doc = make_doc(status=S.QUEUED)
@@ -924,214 +922,12 @@ class BatchCounterTests(TestCase):
         self.assertEqual((batch_counts(batch)["processed_files"], batch_counts(batch)["status"]), (3, "completed_with_errors"))
 
 
-VISIT = """Date: 14/03/2026
-DOB: 02/05/1990
-Chief complaints: fever x 2 days. No cough.
-Past history: known case of DM2 since 5 yrs. Father has hypertension.
-Rx: Tab Metformin 500 mg BD, Tab Dolo 650 mg SOS
-Lab done on 10 Mar 2026: anemia
-"""
-def entries(text, fixed_date=None):
-    return extract.build_insights(text, fixed_date)["entries"]
-def find(items, word):
-    return next(e for e in items if e["word"] == word)
-class ExtractTests(SimpleTestCase):
-    def test_every_word_gets_the_date_written_in_the_document(self):
-        items = entries(VISIT)
-        self.assertEqual("2026-03-14", find(items, "fever")["date"])
-        self.assertNotIn("1990-05-02", {e["date"] for e in items})           # a date of birth is not an event
-
-    def test_a_date_on_the_same_line_wins_over_the_document_date(self):
-        self.assertEqual("2026-03-10", find(entries(VISIT), "anemia")["date"])
-
-    def test_a_patient_upload_with_no_date_is_undated_not_placed_on_the_upload_day(self):
-        self.assertIsNone(find(entries("Patient has fever."), "fever")["date"])
-
-    def test_a_misread_year_is_not_a_date(self):
-        self.assertIsNone(find(entries("Date: 21 Sep 2614" + chr(10) + "Fever."), "fever")["date"])
-
-    def test_a_hospital_document_gives_every_word_its_own_date(self):
-        items = entries(VISIT, datetime.date(2025, 5, 1))
-        self.assertEqual({"2025-05-01"}, {e["date"] for e in items})
-
-    def test_the_word_is_stored_as_written_and_the_vocabulary_says_what_it_is(self):
-        self.assertIn("dolo", {e["word"] for e in entries(VISIT)})
-        self.assertEqual(("paracetamol", "medication", "unknown"), extract._vocabulary()["dolo"])
-        self.assertEqual(("type 2 diabetes", "condition", "chronic"), extract._vocabulary()["dm2"])
-
-    def test_a_medication_keeps_its_dose_and_frequency_and_the_next_drug_does_not_take_them(self):
-        items = entries(VISIT)
-        self.assertEqual(("500 mg BD", "650 mg SOS"), (find(items, "metformin")["dose"], find(items, "dolo")["dose"]))
-        self.assertIsNone(find(items, "fever")["dose"])
-
-    def test_negated_family_and_history_are_flagged(self):
-        items = entries(VISIT)
-        self.assertTrue(find(items, "cough")["negated"])
-        self.assertTrue(find(items, "hypertension")["family"])
-        self.assertEqual("history", find(items, "dm2")["when"])
-        self.assertEqual("current", find(items, "fever")["when"])
-
-    def test_a_suspected_condition_is_flagged(self):
-        self.assertTrue(find(entries("Date: 10/01/2025" + chr(10) + "Asthma is suspected but not confirmed."), "asthma")["uncertain"])
-
-    def test_a_resolved_finding_is_marked_resolved(self):
-        items = entries("Date: 08/11/2023" + chr(10) + "Fever and cough resolved.")
-        self.assertEqual({"resolved"}, {e["when"] for e in items})
-
-    def test_a_disease_name_on_a_vaccine_line_is_not_a_diagnosis(self):
-        self.assertEqual([], entries("Date: 26/02/2022" + chr(10) + "Hepatitis B - birth dose - given on 16-Jan-2022"))
-
-    def test_the_word_birth_does_not_hide_the_date_on_its_line(self):
-        fever = find(entries("Date: 26/02/2022" + chr(10) + "Fever noted at the birth check on 16-Jan-2022"), "fever")
-        self.assertEqual("2022-01-16", fever["date"])
-
-    def test_a_product_name_is_not_a_symptom(self):
-        words = [e["word"] for e in entries("Date: 14/03/2026" + chr(10) + "Cough Syrup (200ml)" + chr(10) + "Patient has cough.")]
-        self.assertEqual(["cough"], words)
-@override_settings(RECORDS_REVIEW_FROM="2000-01-01T00:00:00+00:00")
-class TimelineEndpointTests(TestCase):
-    databases = {"default"}
-
-    def setUp(self):
-        self.jan = self.confirmed("Date: 10/01/2026" + chr(10) + "Diabetes. Fever.")
-        self.jun = self.confirmed("Date: 20/06/2026" + chr(10) + "Diabetes. Cough. No headache.")
-
-    def confirmed(self, text, **fields):
-        doc = make_doc("AWP-T1", status="completed", document_type="lab_report", by="human", text=text, **fields)
-        extract.run_insights(doc.id)
-        return doc
-
-    def get(self, **params):
-        with RESOLVE_RECORDS:
-            return call(TimelineView, "get", data=params)
-
-    def body(self, **params):
-        return self.get(**params).data["data"]
-
-    def days(self, **params):
-        return self.body(**params)["days"]
-
-    def names(self, **params):
-        return [e["name"] for d in self.days(**params) for e in d["entries"]]
-
-    def test_findings_are_grouped_by_date_newest_first(self):
-        self.assertEqual(["2026-06-20", "2026-01-10"], [d["date"] for d in self.days()])
-
-    def test_the_date_range_and_the_name_filter_narrow_it_down(self):
-        self.assertEqual(["2026-06-20"], [d["date"] for d in self.days(**{"from": "2026-03-01"})])
-        self.assertEqual(["2026-01-10"], [d["date"] for d in self.days(to="2026-03-01")])
-        self.assertEqual(["diabetes mellitus"] * 2, self.names(name="diabet"))
-
-    def test_acute_or_chronic_comes_from_the_vocabulary(self):
-        self.assertEqual(["diabetes mellitus"] * 2, self.names(nature="chronic"))
-        self.assertEqual({"fever", "cough"}, set(self.names(kind="symptom")))
-        self.assertEqual({"acute"}, {e["nature"] for d in self.days(kind="symptom") for e in d["entries"]})
-
-    def test_a_negated_mention_is_hidden_unless_asked_for(self):
-        self.assertNotIn("headache", self.names())
-        self.assertIn("headache", self.names(include_hidden="1"))
-
-    def test_an_upload_the_patient_has_not_confirmed_is_not_on_the_timeline(self):
-        doc = make_doc("AWP-T1", status="completed", document_type="lab_report", by="rules", text="Date: 01/02/2026" + chr(10) + "Malaria.")
-        extract.run_insights(doc.id)
-        self.assertNotIn("malaria", self.names())
-
-    def test_each_finding_lists_the_reports_it_comes_from(self):
-        source = self.days()[0]["entries"][0]["sources"][0]
-        self.assertEqual(("lab_report", self.jun.id), (source["document_type"], source["document_id"]))
-
-    def test_a_source_says_which_hospital_issued_it_and_a_patient_upload_has_none(self):
-        self.assertEqual("", self.days()[0]["entries"][0]["sources"][0]["hospital"])
-
-    def test_the_same_finding_in_two_reports_on_one_day_shows_once_with_both_sources(self):
-        self.confirmed("Date: 20/06/2026" + chr(10) + "Diabetes.")
-        entry = next(e for d in self.days() for e in d["entries"] if d["date"] == "2026-06-20" and e["name"] == "diabetes mellitus")
-        self.assertEqual(2, len(entry["sources"]))
-        self.assertEqual(2, self.names().count("diabetes mellitus"))          # one on 20 June, one on 10 January
-
-    def test_a_condition_that_resolved_is_marked_resolved_and_never_chronic(self):
-        self.confirmed("Date: 20/05/2024" + chr(10) + "ANEMIA FOLLOW-UP" + chr(10) + "Iron deficiency anemia resolved.")
-        entry = self.days(name="anemia")[0]["entries"][0]
-        self.assertEqual(("resolved", "unknown"), (entry["when"], entry["nature"]))
-
-    def test_a_suspected_condition_is_hidden_unless_asked_for(self):
-        self.confirmed("Date: 10/02/2026" + chr(10) + "Asthma is suspected but not confirmed.")
-        self.assertEqual([], self.days(name="asthma"))
-        self.assertEqual("unknown", self.days(name="asthma", include_hidden="1")[0]["entries"][0]["nature"])
-
-    def test_a_finding_with_no_date_is_listed_apart(self):
-        self.confirmed("Patient has fever.")
-        self.assertEqual(["fever"], [e["name"] for e in self.body()["undated"]])
-        self.assertEqual([], self.body(**{"from": "2020-01-01"})["undated"])
-
-    def test_a_hospital_document_is_read_from_its_file_and_dated_by_the_hospital(self):
-        doc = make_doc("AWP-T1", status="completed", document_type="prescription", by="issued", uploaded_by="staff",
-                       source_hospital_id="3", document_date=datetime.date(2025, 5, 1))
-        with mock.patch.object(extract, "_read_file", return_value=b"%PDF"), \
-                mock.patch.object(extract, "extract_text", return_value=("Date: 01/01/2020" + chr(10) + "Fever, cough.", "pdf_text")):
-            extract.run_insights(doc.id)
-        self.assertTrue(DocumentExtraction.objects.filter(document=doc).exists())
-        self.assertIn("2025-05-01", [d["date"] for d in self.days(name="fever")])
-
-    def test_a_word_no_longer_in_the_vocabulary_is_skipped(self):
-        with mock.patch.object(extract, "_vocabulary", return_value={}):
-            self.assertEqual({"days": [], "undated": []}, extract.build_timeline("AWP-T1"))
-
-    def test_the_patient_does_not_get_the_medications(self):
-        self.confirmed("Date: 10/03/2026" + chr(10) + "Tab Metformin 500 mg BD.")
-        self.assertNotIn("metformin", self.names())
-
-    def test_a_doctor_gets_the_medications_with_their_dose(self):
-        self.confirmed("Date: 10/03/2026" + chr(10) + "Tab Metformin 500 mg BD.")
-        days = extract.build_timeline("AWP-T1", audience="staff")["days"]
-        metformin = next(e for d in days for e in d["entries"] if e["name"] == "metformin")
-        self.assertEqual(("medication", "500 mg BD"), (metformin["kind"], metformin["dose"]))
-
-    def test_without_the_patients_consent_a_doctor_gets_only_this_hospitals_documents(self):
-        make_doc("AWP-T1", status="completed", document_type="prescription", by="issued", uploaded_by="staff", source_hospital_id="3",
-                 document_date=datetime.date(2025, 5, 1), text="Tab Metformin 500 mg BD.")
-        extract.run_all(redo=True)
-        names = lambda **kw: {e["name"] for d in extract.build_timeline("AWP-T1", audience="staff", **kw)["days"] for e in d["entries"]}
-        self.assertIn("diabetes mellitus", names())                          # the patient's own uploads, with consent
-        self.assertEqual({"metformin"}, names(hospital_id=3))                  # only what hospital 3 issued
-        self.assertEqual(set(), names(hospital_id=4))
-
-    def staff_get(self, role="doctor", consent=True):
-        """The doctor's endpoint for a patient of hospital 3 (the hospital lookup is faked: there is no hospital database here)."""
-        request = APIRequestFactory().get("/x/", {"include_hidden": "1"})
-        request.hospital_db, request.hospital_id = "default", 3
-        force_authenticate(request, user=MockUser({"user_id": 2, "role": role}))
-        patient = SimpleNamespace(pk=1, awpid="AWP-T1", hie_consent_given=consent)
-        with mock.patch.object(HospitalPatient, "objects") as objects, mock.patch("core.audit.log_action") as audit:
-            objects.using.return_value.filter.return_value.first.return_value = patient
-            return StaffTimelineView.as_view()(request, pk=1), audit
-
-    def test_the_doctors_endpoint_returns_the_medications_and_says_whether_the_patient_consented(self):
-        self.confirmed("Date: 10/03/2026" + chr(10) + "Tab Metformin 500 mg BD.")
-        response, audit = self.staff_get(consent=True)
-        data = response.data["data"]
-        self.assertEqual((200, True), (response.status_code, data["consent_given"]))
-        self.assertIn("metformin", [e["name"] for d in data["days"] for e in d["entries"]])
-        audit.assert_called_once()
-
-    def test_without_consent_the_doctors_endpoint_hides_other_sources_and_says_so(self):
-        self.confirmed("Date: 10/03/2026" + chr(10) + "Tab Metformin 500 mg BD.")
-        data = self.staff_get(consent=False)[0].data["data"]
-        self.assertEqual((False, []), (data["consent_given"], data["days"]))      # none of these documents came from hospital 3
-
-    def test_only_a_doctor_or_nurse_may_use_the_doctors_endpoint(self):
-        self.assertEqual(403, self.staff_get(role="patient")[0].status_code)
-
-    def test_a_bad_date_is_refused(self):
-        self.assertEqual(400, self.get(**{"from": "yesterday"}).status_code)
-
-
 def pdf(name="report.pdf", size=None):
     body = PDF if size is None else b"%PDF" + b"x" * (size - 4)
     return SimpleUploadedFile(name, body, content_type="application/pdf")
 @mock.patch("apps.atomwalk.documents.views.resolve_target_awpid_and_dob", return_value=("AWP-T1", None, None))
 @mock.patch("apps.atomwalk.documents.views.start_processing")
-@mock.patch("apps.atomwalk.documents.services.storage")            # the delete of an uploaded file
+@mock.patch("apps.atomwalk.documents.lib_documents.storage")            # the delete of an uploaded file
 @mock.patch("core.storage.put_bytes", side_effect=lambda key, data, mime_type: key)      # the FileField's S3 write
 class UploadViewTests(TestCase):
     databases = {"default"}
@@ -1298,7 +1094,7 @@ class BatchDetailViewTests(TestCase):
         batch = DocumentBatch.objects.create(patient=identity("AWP-OTHER"))
         self.assertEqual(self.get(batch.id).status_code, 404)
 @mock.patch("apps.atomwalk.documents.views.start_processing")
-@mock.patch("apps.atomwalk.documents.services.storage")
+@mock.patch("apps.atomwalk.documents.lib_documents.storage")
 @mock.patch("core.storage.put_bytes", side_effect=lambda key, data, mime_type: key)
 class UploadForWhomTests(TestCase):
     """"Who is this for?" on the phone sends patient_awpid with the upload. The family link is checked for real here (the
@@ -1337,8 +1133,8 @@ class UploadForWhomTests(TestCase):
         start.assert_not_called()
 
 
-def _hospital(db_name, subdomain, name):
-    return Hospital.objects.using("default").create(name=name, subdomain=subdomain, db_name=db_name)
+def _hospital(db_name, hospital_code, name):
+    return Hospital.objects.using("default").create(name=name, hospital_code=hospital_code, db_name=db_name)
 class ProvenanceFixtureMixin:
     def make_fixture(self):
         db = self.hospital_alias
@@ -1503,103 +1299,6 @@ class VisitVitalsTests(TestCase):
         self.save({"height_cm": Decimal("170"), "weight_kg": Decimal("70")}, minor=False)
         (point,) = vitals.growth_points("AW-V1", hospital_id=1)
         self.assertEqual((point["height_cm"], point["weight_kg"], point["bmi"]), (170.0, 70.0, 24.2))
-
-
-TODAY = dt.date(2026, 6, 30)
-def event(patient, group, on, *, category="ACUTE", severity="NORMAL", **fields):
-    return ClinicalEvent.objects.create(patient=patient, condition_group=group, condition_text=group.lower(), event_date=on,
-                                        category=category, severity=severity, **fields)
-class EpisodeTests(TestCase):
-    databases = {"default"}
-
-    def setUp(self):
-        self.patient = identity("AWP-EP")
-
-    def rebuild(self):
-        episodes.rebuild(self.patient, today=TODAY)
-        return list(HealthEpisode.objects.filter(patient=self.patient).order_by("start_date"))
-
-    def test_a_chronic_condition_is_one_ongoing_episode(self):
-        event(self.patient, "ASTHMA", dt.date(2024, 1, 5), category="CHRONIC")
-        event(self.patient, "ASTHMA", dt.date(2026, 3, 1), category="CHRONIC", severity="MILD")
-        (episode,) = self.rebuild()
-        self.assertEqual((episode.key, episode.start_date, episode.last_seen, episode.end_date, episode.event_count, episode.peak_severity),
-                         ("ASTHMA", dt.date(2024, 1, 5), dt.date(2026, 3, 1), None, 2, "MILD"))
-
-    def test_an_acute_condition_starts_a_new_episode_after_a_gap(self):
-        event(self.patient, "URTI", dt.date(2026, 1, 1))
-        event(self.patient, "URTI", dt.date(2026, 1, 10))          # the same illness
-        event(self.patient, "URTI", dt.date(2026, 3, 1))           # a new one
-        first, second = self.rebuild()
-        self.assertEqual((first.key, first.event_count, first.end_date), ("URTI:2026-01-01", 2, dt.date(2026, 1, 10)))
-        self.assertEqual((second.key, second.event_count), ("URTI:2026-03-01", 1))
-        self.assertEqual(ClinicalEvent.objects.get(event_date=dt.date(2026, 3, 1)).episode_id, second.id)
-
-    def test_three_episodes_in_a_year_raise_a_recurrence_flag_fewer_do_not(self):
-        for month in (1, 3):
-            event(self.patient, "URTI", dt.date(2026, month, 1))
-        self.rebuild()
-        self.assertFalse(RecurrenceFlag.objects.exists())
-        event(self.patient, "URTI", dt.date(2026, 5, 1))
-        self.rebuild()
-        flag = RecurrenceFlag.objects.get()
-        self.assertEqual((flag.condition_group, flag.episodes_last_12m), ("URTI", 3))
-
-    def test_old_episodes_do_not_count_towards_recurrence(self):
-        for day in (dt.date(2024, 1, 1), dt.date(2024, 3, 1), dt.date(2024, 5, 1)):
-            event(self.patient, "URTI", day)
-        self.rebuild()
-        self.assertFalse(RecurrenceFlag.objects.exists())
-
-    def test_a_rejected_event_is_left_out_and_rebuilding_twice_changes_nothing(self):
-        event(self.patient, "URTI", dt.date(2026, 1, 1))
-        event(self.patient, "URTI", dt.date(2026, 1, 5), is_rejected=True)
-        self.assertEqual([e.event_count for e in self.rebuild()], [1])
-        self.assertEqual([e.event_count for e in self.rebuild()], [1])
-        self.assertEqual(HealthEpisode.objects.count(), 1)
-
-    def test_an_episode_whose_events_are_gone_is_removed(self):
-        gone = event(self.patient, "URTI", dt.date(2026, 1, 1))
-        self.rebuild()
-        gone.delete()
-        self.assertEqual(self.rebuild(), [])
-
-    def test_the_group_is_the_icd_category_or_else_the_name(self):
-        self.assertEqual(episodes.condition_group("J06.9", "Acute URI"), "J06")
-        self.assertEqual(episodes.condition_group("", "Asthma"), "ASTHMA")
-@override_settings(RECORDS_REVIEW_FROM="2000-01-01T00:00:00+00:00")
-class ExtractedEventTests(TestCase):
-    databases = {"default"}
-
-    def read(self, text, **fields):
-        doc = make_doc("AWP-EX", status="completed", document_type="lab_report", by="human", text=text, **fields)
-        extract.run_insights(doc.id)
-        return doc
-
-    def test_a_condition_in_a_document_becomes_a_clinical_event_of_the_patient(self):
-        doc = self.read("Date: 10/01/2026" + chr(10) + "Diabetes. Fever.")
-        events = ClinicalEvent.objects.filter(document=doc)
-        found = events.get(condition_text="diabetes mellitus")
-        self.assertEqual((found.patient.awpid, found.event_date, found.source, found.category), ("AWP-EX", dt.date(2026, 1, 10), "EXTRACTED", "CHRONIC"))
-        self.assertTrue(HealthEpisode.objects.filter(patient=found.patient, condition_group="DIABETES MELLITUS").exists())
-
-    def test_symptoms_and_denied_conditions_are_not_events(self):
-        doc = self.read("Date: 10/01/2026" + chr(10) + "Fever. No diabetes.")
-        self.assertFalse(ClinicalEvent.objects.filter(document=doc).exists())
-
-    def test_reading_again_keeps_one_event_and_a_persons_verdict(self):
-        doc = self.read("Date: 10/01/2026" + chr(10) + "Diabetes.")
-        ClinicalEvent.objects.filter(document=doc).update(is_rejected=True)
-        extract.run_insights(doc.id)
-        events = ClinicalEvent.objects.filter(document=doc)
-        self.assertEqual([e.is_rejected for e in events], [True])        # not brought back, not duplicated
-
-    def test_a_finished_reading_marks_the_extraction_done(self):
-        doc = self.read("Date: 10/01/2026" + chr(10) + "Diabetes.")
-        self.assertEqual(doc.extraction.status, "done")
-        self.assertEqual(doc.extraction.extractor_version, extract.EXTRACTOR_VERSION)
-        with mock.patch.object(extract, "_vocabulary", return_value={}):
-            self.assertEqual(extract.build_timeline("AWP-EX"), {"days": [], "undated": []})
 
 
 V = ImmunizationRecord
@@ -1834,7 +1533,7 @@ class PortalPediatricTests(TestCase):
     def test_the_milestone_roadmap_shows_an_assessment(self):
         slot = ScheduleRule.objects.using("default").filter(schedule__kind="milestone").first()          # a slot of the seeded default schedule
         MilestoneRecord.objects.using("default").create(
-            patient=self.kid, domain=slot.domain, milestone=slot.milestone, scheduled_label=slot.scheduled_label,
+            patient=self.kid, domain=slot.domain, milestone=slot.item, scheduled_label=slot.scheduled_label,
             status="achieved", achieved_date=dt.date.today(), assessed_date=dt.date.today())
         data = self.call(views.PortalMilestoneListView, query="?patient_awpid=AW-KID").data["data"]
         self.assertEqual(sum(1 for r in data["roadmap"] if r["status"] == "achieved"), 1)
@@ -1848,7 +1547,7 @@ class PortalPediatricTests(TestCase):
         resp = self.upload(vaccine_name=" Polio ", administered_date="2025-03-04", scheduled_label="6 weeks")
         self.assertEqual(resp.status_code, 200)
         record = V.objects.using("default").get()
-        self.assertEqual((record.patient.awpid, record.vaccine_name, record.source, record.verification_status, record.recorded_by),
+        self.assertEqual((record.patient.awpid, record.vaccine_name, record.source, record.verification_status, services.recorded_by(record)),
                          ("AW-KID", "Polio", V.SOURCE_SELF_REPORTED, V.STATUS_PENDING, "patient"))
 
     def test_an_upload_needs_a_name_and_a_plausible_date(self):
@@ -1926,7 +1625,7 @@ class PediatricStaffTests(HospitalDBTestCase):
         from apps.atomwalk.hospital_master.models import Hospital
 
         db = self.hospital_alias
-        self.hospital = Hospital.objects.using("default").create(name="Peds H", subdomain="peds-h", db_name=db)
+        self.hospital = Hospital.objects.using("default").create(name="Peds H", hospital_code="peds-h", db_name=db)
         self.branch = Branch.objects.using(db).create(name="Main")
         self.child = HospitalPatient.objects.using(db).create(
             awpid="AW-KID-1", uhid="UHID-K1", branch=self.branch, full_name="Kid One", gender="F",
@@ -1962,37 +1661,6 @@ class PediatricStaffTests(HospitalDBTestCase):
             self.assertEqual(resp.status_code, expected, role)
         resp = self.call(VitalsView, "post", role="nurse", data={"weight_kg": "12", "height_cm": "85"}, pk=self.appt.pk)
         self.assertLess(resp.status_code, 300, getattr(resp, "data", None))
-
-    # ── growth ────────────────────────────────────────────────────────────────
-    def test_growth_shows_this_hospitals_readings_with_percentiles_for_a_young_child(self):
-        self.add_vitals(height_cm=Decimal("85"), weight_kg=Decimal("12"))
-        data = self.call(vax_views.PatientGrowthView, "get").data["data"]
-        self.assertTrue(data["is_minor"])
-        point = data["series"][0]
-        self.assertEqual((point["source"], point["height_cm"], point["weight_kg"]), ("this_hospital", 85.0, 12.0))
-        self.assertIn("weight", point["percentiles"])
-        self.assertTrue(data["percentile_available"])
-
-    def test_growth_hides_other_hospitals_readings_until_the_patient_consents(self):
-        GrowthMeasurement.objects.using("default").create(
-            patient=self.shared, measured_on=dt.date.today() - timedelta(days=30), weight_kg=Decimal("11"),
-            source_hospital_id=self.hospital.id + 1)
-        self.assertEqual(self.call(vax_views.PatientGrowthView, "get").data["data"]["series"], [])
-        type(self.child).objects.using(self.hospital_alias).filter(pk=self.child.pk).update(hie_consent_given=True)
-        series = self.call(vax_views.PatientGrowthView, "get").data["data"]["series"]
-        self.assertEqual([p["source"] for p in series], ["other_hospital"])
-        self.assertNotIn("percentiles", series[0])
-
-    def test_growth_for_an_adult_has_no_percentiles(self):
-        type(self.child).objects.using(self.hospital_alias).filter(pk=self.child.pk).update(
-            date_of_birth=dt.date.today() - timedelta(days=365 * 40))
-        self.add_vitals(height_cm=Decimal("170"), weight_kg=Decimal("70"))
-        data = self.call(vax_views.PatientGrowthView, "get").data["data"]
-        self.assertFalse(data["is_minor"])
-        self.assertFalse(data["percentile_available"])
-
-    def test_growth_for_an_unknown_patient_is_not_found(self):
-        self.assertEqual(self.call(vax_views.PatientGrowthView, "get", pk=999999).status_code, 404)
 
     # ── vaccinations: roadmap and logging ─────────────────────────────────────
     def test_the_roadmap_lists_the_schedule_and_marks_a_recorded_dose_completed(self):
@@ -2144,9 +1812,9 @@ class PediatricStaffTests(HospitalDBTestCase):
         self.assertEqual(self.call(view, "post", role="nurse", data=body).status_code, 403)
         self.assertEqual(self.call(view, "post", role="front_desk", data=body).status_code, 201)
         self.assertEqual(self.call(view, "post", data=body).status_code, 400)        # already exists
-        self.assertEqual(self.call(view, "patch", data={"apgar_score_5min": 9}).status_code, 200)
+        self.assertEqual(self.call(view, "patch", data={"nicu_days": 9}).status_code, 200)
         shared = BirthHistory.objects.using("default").get(patient__awpid=self.child.awpid)
-        self.assertEqual((shared.gestational_age_weeks, shared.apgar_score_5min, shared.source_hospital_id), (38, 9, self.hospital.id))
+        self.assertEqual((shared.gestational_age_weeks, shared.nicu_days, shared.source_hospital_id), (38, 9, self.hospital.id))
         self.assertEqual(self.call(view, "get").data["data"]["gestational_age_weeks"], 38)
 
     def test_birth_history_changes_are_written_to_the_audit_log(self):
@@ -2198,14 +1866,14 @@ class PediatricStaffTests(HospitalDBTestCase):
 
 class ShapeTests(SimpleTestCase):
     def test_vaccination_rule(self):
-        rule = SimpleNamespace(id=1, vaccine_name="BCG", dose_number=1, scheduled_label="At birth", min_age_days=0,
+        rule = SimpleNamespace(id=1, item="BCG", dose_number=1, scheduled_label="At birth", min_age_days=0,
                                max_age_days=30, mandatory=True, sort_order=1)
         self.assertEqual(vaccination_rule_dict(rule), {
             "id": 1, "vaccine_name": "BCG", "dose_number": 1, "scheduled_label": "At birth",
             "min_age_days": 0, "max_age_days": 30, "mandatory": True, "sort_order": 1})
 
     def test_milestone_rule(self):
-        rule = SimpleNamespace(id=2, domain="motor", milestone="Sits", scheduled_label="6 months", min_age_days=150,
+        rule = SimpleNamespace(id=2, domain="motor", item="Sits", scheduled_label="6 months", min_age_days=150,
                                max_age_days=210, mandatory=False, sort_order=3)
         self.assertEqual(set(milestone_rule_dict(rule)), {"id", "domain", "milestone", "scheduled_label",
                                                          "min_age_days", "max_age_days", "mandatory", "sort_order"})
@@ -2252,11 +1920,11 @@ class PlatformTemplateListTests(TestCase):
         self.assertIn("WHO milestones", [t["name"] for t in resp.data["data"]])
 
 
-# per kind: (kind, view-name stem, hospital column, the rule key holding the name, the kind-specific rule key + value)
+# per kind: (kind, view-name stem, the rule key holding the name, the kind-specific rule key + value)
 KINDS = {
-    "vaccination": dict(stem="Vaccination", column="active_vaccination_schedule_id", name_key="vaccine_name",
+    "vaccination": dict(stem="Vaccination", name_key="vaccine_name",
                         extra={"dose_number": 2}),
-    "milestone": dict(stem="Milestone", column="active_milestone_schedule_id", name_key="milestone",
+    "milestone": dict(stem="Milestone", name_key="milestone",
                       extra={"domain": "gross_motor"}),
 }
 def rule(kind, name, **kw):
@@ -2266,7 +1934,8 @@ class ScheduleEndpointTests(TestCase):
     databases = {"default"}
 
     def setUp(self):
-        self.hospital = Hospital.objects.using("default").create(name="T", subdomain="t", db_name="x", fee_ownership="hospital")
+        self.hospital = Hospital.objects.using("default").create(name="T", hospital_code="t", db_name="x")
+        HospitalParameters.objects.using("default").create(hospital=self.hospital, fee_ownership="hospital")
 
     def call(self, view, method, data=None, role="hospital_admin", pk=None):
         request = getattr(APIRequestFactory(), method)("/x/", data, format="json")
@@ -2339,10 +2008,9 @@ class ScheduleEndpointTests(TestCase):
     def test_a_template_in_use_cannot_be_deleted_but_an_unused_one_can(self):
         for kind in KINDS:
             with self.subTest(kind):
+                in_use = services.default_schedule(kind).pk              # every hospital without a schedule of its own uses it
+                self.assertEqual(self.platform(kind, "delete", pk=in_use, detail=True).status_code, 400)
                 pk = self.make_template(kind)
-                Hospital.objects.using("default").filter(pk=self.hospital.pk).update(**{KINDS[kind]["column"]: pk})
-                self.assertEqual(self.platform(kind, "delete", pk=pk, detail=True).status_code, 400)
-                Hospital.objects.using("default").filter(pk=self.hospital.pk).update(**{KINDS[kind]["column"]: None})
                 self.assertEqual(self.platform(kind, "delete", pk=pk, detail=True).status_code, 200)
                 self.assertFalse(Schedule.objects.filter(pk=pk).exists())
 
@@ -2357,7 +2025,7 @@ class ScheduleEndpointTests(TestCase):
                 clone_id = resp.data["data"]["id"]
                 clone = Schedule.objects.get(pk=clone_id)
                 self.assertEqual((clone.kind, clone.owner_hospital_id, clone.is_template), (kind, self.hospital.id, False))
-                self.assertEqual(getattr(Hospital.objects.using("default").get(pk=self.hospital.pk), KINDS[kind]["column"]), clone_id)
+                self.assertEqual(services.active_schedule(kind, self.hospital.id).pk, clone_id)
                 detail = self.as_staff(kind, "get", pk=clone_id, suffix="ScheduleDetailView").data["data"]
                 self.assertEqual([r[key] for r in detail["rules"]], ["A", "B"])
                 self.assertEqual(detail["rules"][0][next(iter(KINDS[kind]["extra"]))], next(iter(KINDS[kind]["extra"].values())))
@@ -2395,7 +2063,9 @@ class ScheduleEndpointTests(TestCase):
                 template = self.make_template(kind)
                 resp = self.as_staff(kind, "post", pk=template, suffix="ScheduleActivateView")
                 self.assertEqual(resp.status_code, 200, resp.data)
-                self.assertEqual(getattr(Hospital.objects.using("default").get(pk=self.hospital.pk), KINDS[kind]["column"]), template)
+                active = services.active_schedule(kind, self.hospital.id)
+                self.assertEqual((active.owner_hospital_id, active.name, active.pk != template),
+                                 (self.hospital.id, Schedule.objects.get(pk=template).name, True))
                 other = Schedule.objects.create(kind=kind, name="theirs", owner_hospital=ensure_hospital(self.hospital.id + 1000))
                 self.assertEqual(self.as_staff(kind, "post", pk=other.id, suffix="ScheduleActivateView").status_code, 400)
                 self.assertEqual(self.as_staff(kind, "get", pk=other.id, suffix="ScheduleDetailView").status_code, 404)

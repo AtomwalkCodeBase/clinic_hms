@@ -34,8 +34,12 @@ export const API_ENDPOINTS = {
 
   RECORDS: {
     UPLOAD: `${API_V1}/records/upload/`,   // multipart, apps/records
-    TIMELINE: `${API_V1}/records/timeline/`,
-    STAFF_TIMELINE: (patientPk) => `${API_V1}/records/patients/${patientPk}/timeline/`,   // the same, for a doctor or nurse              // conditions / symptoms / medications by date
+    HEALTH_TIMELINE:  (awpid) => `${API_V1}/peds/patients/${awpid}/health-timeline/`,
+    GROWTH:           (awpid) => `${API_V1}/peds/patients/${awpid}/growth/`,
+    IMMUNIZATION:     (awpid) => `${API_V1}/peds/patients/${awpid}/immunization/`,
+    REBUILD_TIMELINE: (awpid) => `${API_V1}/peds/patients/${awpid}/rebuild/`,
+    REVIEW_EVENT:     (eventId)   => `${API_V1}/peds/events/${eventId}/`,
+    ACKNOWLEDGE_RECURRENCE: (flagId) => `${API_V1}/peds/recurrence/${flagId}/acknowledge/`,
   },
   PLATFORM: {
     HOSPITALS:          `${API_V1}/platform/hospitals/`,
@@ -111,7 +115,6 @@ export const API_ENDPOINTS = {
     HISTORY:    (id) => `${API_V1}/patients/${id}/history/`,
     DOCUMENT:   (id) => `${API_V1}/patients/documents/${id}/`,
     LAB_RESULT: (id) => `${API_V1}/patients/lab-results/${id}/`,
-    GROWTH:            (id) => `${API_V1}/patients/${id}/growth/`,
     VACCINATIONS:      (id) => `${API_V1}/patients/${id}/vaccinations/`,
     VACCINATION_VERIFY:(id) => `${API_V1}/patients/vaccinations/${id}/verify/`,
     VACCINATION_ORDER:     (id) => `${API_V1}/patients/${id}/vaccinations/order/`,

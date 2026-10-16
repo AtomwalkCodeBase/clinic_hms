@@ -15,15 +15,16 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework.throttling import ScopedRateThrottle
-from apps.atomwalk.documents.services import rules_for
+from apps.atomwalk.documents.lib_documents import rules_for
 from core.permissions import IsPatient
 from core.response import success, error, not_found
 from core.pagination import paginate_list, paginate_queryset
+from apps.atomwalk.hospital_master.services import parameters_of
 from apps.atomwalk.patients.services import resolve_target_awpid_and_dob
 from apps.atomwalk.hospital_master.services import ensure_hospital_db
 from core.file_validation import validate_data_uri, FileValidationError
 from core.geo import haversine_km, parse_lat_lng
-from apps.atomwalk.documents import services as doc_rules
+from apps.atomwalk.documents import lib_documents as doc_rules
 from core import storage as blob_storage
 from apps.atomwalk.hospital_master.models import Hospital
 from apps.atomwalk.patients.models import (
@@ -37,8 +38,8 @@ from apps.atomwalk.patients.models import (
 from core.emergency_access import decode_emergency_token, EmergencyTokenError
 from apps.atomwalk.documents.models import LabResult, ImmunizationRecord, MedicalDocument
 from core.utils.age import age_years_months as _age_years_months
-from apps.atomwalk.documents.services import DOCUMENT_TYPES
-from apps.atomwalk.documents.services import awaiting_review_q
+from apps.atomwalk.documents.lib_documents import DOCUMENT_TYPES
+from apps.atomwalk.documents.lib_documents import awaiting_review_q
 from collections import Counter
 from apps.atomwalk.patients.services import accounts, accounts_with_mobile, awpid_of, privacy_for_awpid, pending_stale, device_matches, is_live, lapse_if_due, seconds_left, set_password, check_password
 
@@ -181,24 +182,25 @@ def _hospital_card(t, lat=None, lng=None):
     it) — either way that's "unknown", not "far away", so callers sort
     None to the end rather than treating it as infinitely close/far.
     """
+    params = parameters_of(t)
     distance_km = None
-    if lat is not None and t.latitude is not None and t.longitude is not None:
-        distance_km = round(haversine_km(lat, lng, t.latitude, t.longitude), 1)
+    if lat is not None and params.latitude is not None and params.longitude is not None:
+        distance_km = round(haversine_km(lat, lng, params.latitude, params.longitude), 1)
     return {
         "hospital_id": t.id,
         "name": t.name,
         "city": t.city or "",
         "state": t.state or "",
-        "accreditations": [a.strip() for a in (t.accreditations or "").split(",") if a.strip()],
-        "about": t.about or "",
-        "logo": blob_storage.signed_url(t.logo),
+        "accreditations": [a.strip() for a in (params.accreditations or "").split(",") if a.strip()],
+        "about": params.about or "",
+        "logo": blob_storage.signed_url(params.logo),
         "distance_km": distance_km,
         # Raw coordinates, for "Get Directions" / map-preview links on the
         # frontend — None when the platform admin hasn't set them yet.
         # Deliberately alongside distance_km rather than replacing it: this
         # is the only place the frontend ever sees a hospital's location.
-        "latitude": t.latitude,
-        "longitude": t.longitude,
+        "latitude": params.latitude,
+        "longitude": params.longitude,
     }
 def _sort_by_distance(cards):
     cards.sort(key=lambda c: c["distance_km"] if c["distance_km"] is not None else float("inf"))
@@ -406,17 +408,18 @@ class PortalSearchView(APIView):
                     p.staff_id: p for p in
                     DoctorProfile.objects.using(db).filter(staff_id__in=staff_by_id.keys())
                 }
+                params = parameters_of(hospital)
                 hospital_distance_km = None
-                if lat is not None and hospital.latitude is not None and hospital.longitude is not None:
-                    hospital_distance_km = round(haversine_km(lat, lng, hospital.latitude, hospital.longitude), 1)
+                if lat is not None and params.latitude is not None and params.longitude is not None:
+                    hospital_distance_km = round(haversine_km(lat, lng, params.latitude, params.longitude), 1)
                 for sid, staff in staff_by_id.items():
                     card = _doctor_card(staff, profiles_by_staff.get(sid))
                     card["hospital_id"] = hospital.id
                     card["hospital"] = hospital.name
                     card["hospital_city"] = hospital.city or ""
                     card["distance_km"] = hospital_distance_km
-                    card["hospital_latitude"] = hospital.latitude
-                    card["hospital_longitude"] = hospital.longitude
+                    card["hospital_latitude"] = params.latitude
+                    card["hospital_longitude"] = params.longitude
                     doctors.append(card)
             except Exception as exc:
                 logger.warning("portal search: skipped %s (%s)", db, exc)
@@ -538,11 +541,12 @@ class PortalDoctorListView(APIView):
             # empty list instead of a 500.
             logger.warning("portal doctors: hospital db %s unreachable", hospital.db_name, exc_info=True)
             doctors = []
+        params = parameters_of(hospital)
         return Response({
             "results": doctors,
             "hospital": {
-                "hospital_id": hospital.id, "name": hospital.name, "logo": blob_storage.signed_url(hospital.logo),
-                "latitude": hospital.latitude, "longitude": hospital.longitude,
+                "hospital_id": hospital.id, "name": hospital.name, "logo": blob_storage.signed_url(params.logo),
+                "latitude": params.latitude, "longitude": params.longitude,
             },
         })
 class PortalDoctorDetailView(APIView):
@@ -569,11 +573,12 @@ class PortalDoctorDetailView(APIView):
 
         profile = DoctorProfile.objects.using(hospital.db_name).filter(staff_id=staff.id).first()
         data = _doctor_card(staff, profile)
+        params = parameters_of(hospital)
         data["hospital"] = {
             "hospital_id": hospital.id, "name": hospital.name, "city": hospital.city or "",
-            "accreditations": [a.strip() for a in (hospital.accreditations or "").split(",") if a.strip()],
-            "logo": blob_storage.signed_url(hospital.logo),
-            "latitude": hospital.latitude, "longitude": hospital.longitude,
+            "accreditations": [a.strip() for a in (params.accreditations or "").split(",") if a.strip()],
+            "logo": blob_storage.signed_url(params.logo),
+            "latitude": params.latitude, "longitude": params.longitude,
         }
 
         # Which payment modes this hospital currently accepts (hospital admin
@@ -969,8 +974,8 @@ class PortalBookView(APIView):
             "floor": room_fields.get("floor") or None,
             # For the confirmation screen's "Get Directions" / map preview —
             # same fields _hospital_card() exposes, None if not set yet.
-            "latitude": hospital.latitude,
-            "longitude": hospital.longitude,
+            "latitude": parameters_of(hospital).latitude,
+            "longitude": parameters_of(hospital).longitude,
         }, status=201)
 # ── My records (prescriptions, tests, advice from consults) ─────────────────
 
@@ -989,7 +994,7 @@ class PortalMyRecordsView(APIView):
     def get(self, request):
         from apps.hospital_master.patients.models import HospitalPatient
         from apps.hospital_master.opd.models import Appointment, OPDEncounter, Prescription
-        from apps.atomwalk.documents.services import visit_vitals
+        from apps.atomwalk.documents.lib_documents import visit_vitals
 
         acct = accounts().get(pk=request.user.id)
 
@@ -1347,14 +1352,15 @@ class PortalMyBookingsView(APIView):
                 # somewhere instead of just presenting as "missing token".
                 logger.debug("PortalMyBookingsView: live status lookup failed for booking_id=%s db=%s", b.id, b.hospital.db_name, exc_info=True)
             hospital = b.hospital
+            params = parameters_of(hospital) if hospital else None
             results.append({
                 "id": b.id,
                 "hospital_id": b.hospital_id,
                 "hospital": hospital.name if hospital else "",
                 "hospital_city": (hospital.city if hospital else "") or "",
                 "hospital_state": (hospital.state if hospital else "") or "",
-                "hospital_latitude": hospital.latitude if hospital else None,
-                "hospital_longitude": hospital.longitude if hospital else None,
+                "hospital_latitude": params.latitude if params else None,
+                "hospital_longitude": params.longitude if params else None,
                 "doctor": b.doctor_name,
                 "doctor_photo": doctor_photo,
                 "doctor_specialisation": doctor_specialisation,
@@ -1551,7 +1557,7 @@ def _events(doc):
     return events
 def _choosable_types():
     """What a patient may file a report under: the fixed document types (apps/records/classification.py)."""
-    from apps.atomwalk.documents.services import CHOOSABLE_TYPES
+    from apps.atomwalk.documents.lib_documents import CHOOSABLE_TYPES
     return list(CHOOSABLE_TYPES)
 def _own_document(request, doc_id):
     """(doc, None) if the caller (or a linked family member) owns it, else (None, error)."""
@@ -1583,12 +1589,12 @@ class PortalDocumentListCreateView(APIView):
         qs = (MedicalDocument.objects.using("default")
               .filter(patient__awpid=target_awpid)
               .exclude(id__in=linked_hw_ids)
-              .select_related("classification")
+              .select_related("d_classification")
               .order_by("-created_at"))
         statuses = [s for s in (request.query_params.get("status") or "").split(",") if s]
         if statuses:
             qs = qs.filter(status__in=statuses)
-        from apps.atomwalk.documents import services as records_services
+        from apps.atomwalk.documents import lib_documents as records_services
         review = (request.query_params.get("review") or "confirmed").lower()
         if review == "pending":
             qs = qs.filter(records_services.awaiting_review_q())
@@ -1606,7 +1612,7 @@ class PortalDocumentCountsView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.atomwalk.documents import services as records_services
+        from apps.atomwalk.documents import lib_documents as records_services
         awpid, _dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
@@ -1625,7 +1631,7 @@ class PortalDocumentDetailView(APIView):
     permission_classes = [IsPatient]
 
     def delete(self, request, doc_id):
-        from apps.atomwalk.documents import services
+        from apps.atomwalk.documents import lib_documents as services
         doc, err = _own_document(request, doc_id)
         if err:
             return err
@@ -1659,7 +1665,7 @@ class PortalDocumentDetailView(APIView):
         })
 
     def patch(self, request, doc_id):
-        from apps.atomwalk.documents import services
+        from apps.atomwalk.documents import lib_documents as services
         doc, err = _own_document(request, doc_id)
         if err:
             return err
@@ -2517,9 +2523,9 @@ class PortalHealthTimelineView(APIView):
         from apps.hospital_master.patients.models import HospitalPatient
         from apps.hospital_master.opd.models import Appointment, OPDEncounter
         from apps.hospital_master.lab.models import LabRequest
-        from apps.atomwalk.documents.services import history_readings
+        from apps.atomwalk.documents.lib_documents import history_readings
         from apps.atomwalk.documents.models import MedicalDocument
-        from apps.atomwalk.documents.services import build_roadmap
+        from apps.atomwalk.documents.lib_documents import build_roadmap
 
         target_awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
@@ -2683,7 +2689,7 @@ class PortalNotificationsView(APIView):
         across every active hospital the same way PortalMyRecordsView does,
         since a patient's hospitals aren't known in advance.
       - Vaccination-due reminders — NOT stored anywhere. Computed live from
-        apps.atomwalk.documents.services.build_roadmap() every time this is
+        apps.atomwalk.documents.lib_documents.build_roadmap() every time this is
         called, because due-ness is just today's date vs. the patient's age
         against the schedule — persisting it would just be a second copy
         that could silently go stale (e.g. after a dose gets logged).
@@ -2697,7 +2703,7 @@ class PortalNotificationsView(APIView):
     def get(self, request):
         from apps.hospital_master.patients.models import HospitalPatient
         from apps.hospital_master.notifications.models import NotificationLog
-        from apps.atomwalk.documents.services import build_roadmap
+        from apps.atomwalk.documents.lib_documents import build_roadmap
 
         target_awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
@@ -3006,8 +3012,6 @@ def _birth_history(awpid):
         "nicu_days": bh.nicu_days,
         "birth_complications": bh.birth_complications,
         "congenital_conditions": bh.congenital_conditions,
-        "apgar_score_1min": bh.apgar_score_1min,
-        "apgar_score_5min": bh.apgar_score_5min,
     }
 def _milestone_concerns(awpid):
     """
@@ -3015,7 +3019,7 @@ def _milestone_concerns(awpid):
     the only milestone information an ER doctor treating an unfamiliar
     child actually needs in an emergency (a full achieved/not-yet roadmap is
     a well-child-visit concern, not an acute-care one; see
-    apps.atomwalk.documents.services for that fuller view, used by the
+    apps.atomwalk.documents.lib_documents for that fuller view, used by the
     doctor's own consultation screen and the parent's portal). Sourced
     straight from MilestoneRecord — no schedule merge needed here,
     just "what has a clinician actually flagged."

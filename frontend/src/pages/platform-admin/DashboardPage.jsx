@@ -104,7 +104,7 @@ function ProvisionModal({ onClose, onProvisioned }) {
               {result.credentials && (
                 <>
                   <div style={{ marginTop: 10, borderTop: "1px solid var(--color-border)", paddingTop: 10 }}>
-                    <strong>Hospital Code:</strong> {result.credentials.subdomain}
+                    <strong>Hospital Code:</strong> {result.credentials.hospital_code}
                   </div>
                   <div><strong>Admin Mobile:</strong> {result.credentials.admin_mobile}</div>
                   {result.credentials.admin_email && (
@@ -257,10 +257,10 @@ function HospitalCard({ hospital, onTierChange }) {
   const [toggling, setToggling] = useState(false);
   const [tierPick, setTierPick] = useState(hospital.subscription?.license_tier || "starter");
   const [statusPick, setStatusPick] = useState(hospital.subscription?.status || "trial");
-  const [subdomainPick, setSubdomainPick] = useState(hospital.subdomain || "");
+  const [hospitalCodePick, setHospitalCodePick] = useState(hospital.hospital_code || "");
   const [savingTier, setSavingTier] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
-  const [savingSubdomain, setSavingSubdomain] = useState(false);
+  const [savingHospitalCode, setSavingHospitalCode] = useState(false);
   const [auditLog, setAuditLog] = useState(null);
   const [auditLoading, setAuditLoading] = useState(false);
 
@@ -319,19 +319,19 @@ function HospitalCard({ hospital, onTierChange }) {
     }
   }
 
-  async function applySubdomain() {
-    const cleaned = subdomainPick.trim().toLowerCase();
-    if (!cleaned || cleaned === hospital.subdomain) return;
-    setSavingSubdomain(true);
+  async function applyHospitalCode() {
+    const cleaned = hospitalCodePick.trim().toLowerCase();
+    if (!cleaned || cleaned === hospital.hospital_code) return;
+    setSavingHospitalCode(true);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { subdomain: cleaned });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { hospital_code: cleaned });
       toastSuccess(`Hospital Code changed to "${cleaned}".`);
       setAuditLog(null);
       onTierChange();
     } catch (err) {
       toastApiError(err, "Failed to change Hospital Code.");
     } finally {
-      setSavingSubdomain(false);
+      setSavingHospitalCode(false);
     }
   }
 
@@ -405,12 +405,12 @@ function HospitalCard({ hospital, onTierChange }) {
             <div>
               <div className="stat-label" style={{ marginBottom: 6 }}>Hospital Code</div>
               <div style={{ display: "flex", gap: 6 }}>
-                <input value={subdomainPick}
-                  onChange={e => setSubdomainPick(e.target.value.toLowerCase())}
+                <input value={hospitalCodePick}
+                  onChange={e => setHospitalCodePick(e.target.value.toLowerCase())}
                   style={{ ...selectStyle, width: 150, fontFamily: "monospace" }} />
-                <button onClick={applySubdomain} disabled={savingSubdomain || !subdomainPick.trim() || subdomainPick.trim().toLowerCase() === hospital.subdomain}
+                <button onClick={applyHospitalCode} disabled={savingHospitalCode || !hospitalCodePick.trim() || hospitalCodePick.trim().toLowerCase() === hospital.hospital_code}
                   className="btn-outline" style={{ fontSize: 12, padding: "6px 14px" }}>
-                  {savingSubdomain ? "…" : "Apply"}
+                  {savingHospitalCode ? "…" : "Apply"}
                 </button>
               </div>
               <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 4, maxWidth: 220 }}>

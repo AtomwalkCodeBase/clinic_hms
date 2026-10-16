@@ -13,6 +13,12 @@ FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 # Looser CORS for local dev
 CORS_ALLOW_ALL_ORIGINS = True
 
+# The threaded dev server runs every request on a new thread, so a connection kept for CONN_MAX_AGE seconds is left open by
+# a thread that is already gone - polling pages (My Reports refreshes every 4 s) then pile up idle connections until Postgres
+# refuses new ones ("too many clients"). Close each connection at the end of the request in development.
+DATABASES["default"]["CONN_MAX_AGE"] = 0
+HOSPITAL_DB_CONFIG_TEMPLATE["CONN_MAX_AGE"] = 0
+
 # Show SQL queries in shell
 LOGGING = {
     "version": 1,

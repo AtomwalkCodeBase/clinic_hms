@@ -8,20 +8,20 @@ class StaffLoginSerializer(serializers.Serializer):
       1. {mobile, password} — hospital resolved via the atomwalk-wide
          StaffMobileIndex, no hospital selection needed (mobile numbers are
          globally unique across every hospital on the platform).
-      2. {subdomain, employee_id, password} — for hospitals that use
+      2. {hospital_code, employee_id, password} — for hospitals that use
          employee IDs. Employee IDs are only unique WITHIN a hospital (two
          hospitals can both have "EMP-001"), so this path needs a hospital
          hint the mobile path doesn't — see StaffLoginView.
     Exactly one of the two shapes must be provided.
     """
     mobile      = serializers.CharField(required=False, allow_blank=True)
-    subdomain   = serializers.CharField(required=False, allow_blank=True)
+    hospital_code   = serializers.CharField(required=False, allow_blank=True)
     employee_id = serializers.CharField(required=False, allow_blank=True)
     password    = serializers.CharField(write_only=True)
 
     def validate(self, data):
         has_mobile = bool(data.get("mobile"))
-        has_employee_login = bool(data.get("subdomain")) and bool(data.get("employee_id"))
+        has_employee_login = bool(data.get("hospital_code")) and bool(data.get("employee_id"))
         if not has_mobile and not has_employee_login:
             raise serializers.ValidationError(
                 "Provide a mobile number, or your hospital code and employee ID."
@@ -30,7 +30,7 @@ class StaffLoginSerializer(serializers.Serializer):
 
 
 class PlatformLoginSerializer(serializers.Serializer):
-    """Platform admin logs in with username or email + password (no subdomain)."""
+    """Platform admin logs in with username or email + password (no hospital_code)."""
     username = serializers.CharField()  # accepts username OR email
     password = serializers.CharField(write_only=True)
 

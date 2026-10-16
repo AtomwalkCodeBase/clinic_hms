@@ -30,7 +30,7 @@ class AuthenticationTests(HospitalDBTestCase):
     def setUp(self):
         super().setUp()
         db = self.hospital_alias
-        self.hospital = Hospital.objects.using("default").create(name="Auth H", subdomain="auth-h", db_name=db)
+        self.hospital = Hospital.objects.using("default").create(name="Auth H", hospital_code="auth-h", db_name=db)
         self.sub = Subscription.objects.using("default").create(
             hospital=self.hospital, license_tier="starter", status="active",
         )
