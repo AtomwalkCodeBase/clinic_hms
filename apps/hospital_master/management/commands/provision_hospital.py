@@ -30,7 +30,7 @@ from apps.hospital_master.services import create_hospital_database, run_hospital
 # Re-exported for backwards compatibility — apps/atomwalk/management/commands/
 # seed_full_demo.py imports TIER_FEATURE_DEFAULTS from this module. The real
 # definition now lives in apps/hospitals/constants.py (single source of truth,
-# also used by apps/platform_admin/views.py) so the two copies can't drift.
+# also used by apps/hospital_master/platform_views.py) so the two copies can't drift.
 from apps.hospital_master.services import TIER_FEATURE_DEFAULTS
 
 

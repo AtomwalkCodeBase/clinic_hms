@@ -1,5 +1,5 @@
 """
-apps/platform_admin/views.py
+apps/hospital_master/platform_views.py
 -----------------------------
 API views accessible only to the Atomwalk platform admin (is_platform=True).
 
@@ -373,7 +373,7 @@ class HospitalDetailView(APIView):
 
         # ── Hospital Code (hospital_code) — separate from the plain profile
         # fields below because it needs validation + a uniqueness check, and
-        # because it's login-relevant (see auth_app.views.StaffLoginView's
+        # because it's login-relevant (see core.auth.views.StaffLoginView's
         # employee-ID path) rather than purely cosmetic. Safe to change any
         # time after creation — it's looked up live at login, and db_name
         # (fixed forever once the hospital DB is created) never derives from

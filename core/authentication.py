@@ -113,7 +113,7 @@ class JWTHospitalAuthentication(BaseAuthentication):
 
         # ── Subscription lifecycle enforcement ──────────────────────────────
         # Only hospital staff carry a hospital_id (platform admins and patients
-        # don't — see auth_app/views.py's three login payloads), so this only
+        # don't — see core/auth/views.py's three login payloads), so this only
         # ever runs for staff requests. Checked fresh every request, not
         # cached in the JWT, so a platform-admin suspension or a tier change
         # takes effect on the staff member's very next request.

@@ -1,5 +1,5 @@
 """
-apps/auth_app/tests.py
+core/auth/tests.py
 ------------------------
 DB-independent tests for token issuance/shape. Full login-flow tests (staff/
 platform/patient) need a live atomwalk DB + a provisioned hospital DB, so
@@ -11,7 +11,7 @@ import jwt
 from django.conf import settings
 from django.test import TestCase
 
-from apps.auth_app.views import _make_tokens, StaffLoginView, PlatformLoginView, PatientLoginView, LogoutView
+from core.auth.views import _make_tokens, StaffLoginView, PlatformLoginView, PatientLoginView, LogoutView
 
 
 class TokenIssuanceTests(TestCase):

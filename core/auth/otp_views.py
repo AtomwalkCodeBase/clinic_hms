@@ -1,5 +1,5 @@
 """
-apps/auth_app/otp_views.py
+core/auth/otp_views.py
 ----------------------------
 OTP request/verify endpoints shared by every pre-authentication OTP flow:
 staff password reset, patient password reset, patient self-registration,
@@ -332,7 +332,7 @@ class PatientOTPLoginView(APIView):
         acct.last_login = timezone.now()
         acct.save(using="default", update_fields=["last_login"])
 
-        from apps.auth_app.views import _make_tokens
+        from core.auth.views import _make_tokens
         jwt_payload = {
             "user_id":     acct.id,
             "email":       acct.email,

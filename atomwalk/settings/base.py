@@ -31,7 +31,7 @@ FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 # JWT_SIGNING_KEY: deliberately separate from SECRET_KEY. SECRET_KEY also
 # backs Django's own session cookies, CSRF tokens, and password-reset token
 # hashing — sharing it with the auth JWTs (used for every API request via
-# core/middleware.py + apps/auth_app/views.py's jwt.encode/decode calls)
+# core/middleware.py + core/auth/views.py's jwt.encode/decode calls)
 # means a leak of either compromises both, and neither can be rotated
 # independently. Falls back to SECRET_KEY only in DEBUG so local dev doesn't
 # need a second env var; production must set it explicitly.
@@ -104,9 +104,6 @@ LOCAL_APPS = [
     "apps.lab",
     "apps.pharmacy",
     "apps.billing",
-    # API-only apps (no tables)
-    "apps.auth_app",
-    "apps.platform_admin",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -249,7 +246,7 @@ REST_FRAMEWORK = {
     "EXCEPTION_HANDLER": "core.exceptions.custom_exception_handler",
     # No rate limiting existed anywhere (including login) before this. Global
     # defaults are a safety net; auth endpoints get a tighter "login" scope
-    # via ScopedRateThrottle (see apps/auth_app/views.py).
+    # via ScopedRateThrottle (see core/auth/views.py).
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
@@ -290,7 +287,7 @@ REST_FRAMEWORK = {
 }
 
 # ── JWT ──────────────────────────────────────────────────────────────────────
-# Lifetimes of the access/refresh tokens issued by apps/auth_app/views.py::_make_tokens. (These
+# Lifetimes of the access/refresh tokens issued by core/auth/views.py::_make_tokens. (These
 # used to be a SIMPLE_JWT dict for a library that is not actually used, and _make_tokens ignored
 # them and hard-coded 60 minutes / 7 days — the defaults here are the same values.)
 JWT_ACCESS_TOKEN_LIFETIME = timedelta(
@@ -419,7 +416,7 @@ PEDIATRIC_HEALTH_CONFIG = config("PEDIATRIC_HEALTH_CONFIG", default="") or None
 
 # All three sweep settings (instant-upload file limit, per-run dispatch limit, and how often the
 # sweep runs) are Platform Admin-editable at runtime — apps.models.SweepConfig, via
-# apps/platform_admin/classification_rule_views.py. No env vars, no restart, for any of them: the
+# apps/hospital_master/classification_rule_views.py. No env vars, no restart, for any of them: the
 # interval is DB-backed (django_celery_beat's DatabaseScheduler below), kept in sync by
 # SweepConfig.save() creating/updating its PeriodicTask + IntervalSchedule rows.
 

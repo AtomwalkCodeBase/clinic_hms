@@ -37,7 +37,7 @@ from django.db import IntegrityError, connection, transaction
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 from apps.patients.views import PortalDocumentCountsView, PortalDocumentDetailView, PortalDocumentListCreateView
-from apps.platform_admin.classification_rule_views import DocumentCorrectView
+from apps.hospital_master.classification_rule_views import DocumentCorrectView
 from apps.documents.views import (
     BatchDetailView,
     SubmitView,
@@ -67,7 +67,7 @@ from apps.documents import lib_documents as roadmap
 from apps.documents import urls as org_urls
 from apps.documents.lib_documents import build_roadmap, summarize_roadmap
 from apps.documents.lib_documents import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
-from apps.platform_admin import urls as platform_urls
+from apps.hospital_master import platform_urls
 from apps.patients.services import create_account
 
 

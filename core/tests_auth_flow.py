@@ -13,7 +13,7 @@ from django.conf import settings
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from apps.auth_app.views import LogoutView, TokenRefreshView, _make_tokens
+from core.auth.views import LogoutView, TokenRefreshView, _make_tokens
 from apps.hospital_setup.models import Branch
 from apps.hospital_setup.models import StaffUser
 from apps.patients.models import BlacklistedToken

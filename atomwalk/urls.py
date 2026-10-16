@@ -34,8 +34,8 @@ def health(request):
 urlpatterns = [
     path("health/",              health),
     path("django-admin/",        admin.site.urls),
-    path("api/v1/auth/",         include("apps.auth_app.urls")),
-    path("api/v1/platform/",     include("apps.platform_admin.urls")),
+    path("api/v1/auth/",         include("core.auth.urls")),
+    path("api/v1/platform/",     include("apps.hospital_master.platform_urls")),
     path("api/v1/opd/",          include("apps.opd.urls")),
     path("api/v1/ipd/",          include("apps.ipd.urls")),  # Phase 1 — admission intake only
     path("api/v1/patients/",     include("apps.opd.patient_urls")),

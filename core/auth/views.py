@@ -1,5 +1,5 @@
 """
-apps/auth_app/views.py
+core/auth/views.py
 -----------------------
 Authentication endpoints for all user types.
 
@@ -33,7 +33,7 @@ from apps.patients.models import StaffMobileIndex
 
 logger = logging.getLogger(__name__)
 
-from apps.auth_app.serializers import (
+from core.auth.serializers import (
     StaffLoginSerializer,
     PlatformLoginSerializer,
     SetupPasswordSerializer,
@@ -384,7 +384,7 @@ class ChangePasswordView(APIView):
 
 # ── Forgot Password (staff) ───────────────────────────────────────────────────
 # The old DOB-based verification (mobile + date of birth) has been replaced
-# by OTP verification — see apps/auth_app/otp_views.py
+# by OTP verification — see core/auth/otp_views.py
 # (OTPRequestView/OTPVerifyView with purpose="password_reset_staff", then
 # StaffForgotPasswordResetView to consume the resulting action_token). DOB
 # was a weak factor (often known to family/colleagues, and many staff never

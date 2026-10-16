@@ -16,7 +16,7 @@ def resolve_doctor_consultation_fee(db, doctor_user_id, appointment_type=None):
     """
     encounter.doctor_user_id is a UUIDField, but the value actually stored
     in it is the StaffUser's plain integer pk — Django's UUIDField silently
-    wraps a plain int via uuid.UUID(int=value) (see e.g. auth_app.views'
+    wraps a plain int via uuid.UUID(int=value) (see e.g. core.auth.views'
     "user_id": staff.id, saved straight into these UUID columns). Unwrap
     either form back to the integer pk so DoctorProfile can be looked up.
 

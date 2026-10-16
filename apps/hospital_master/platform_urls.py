@@ -1,5 +1,5 @@
 from django.urls import path
-from apps.platform_admin.views import (
+from apps.hospital_master.platform_views import (
     HospitalListCreateView,
     HospitalDetailView,
     HospitalAuditLogView,
@@ -17,7 +17,7 @@ from apps.documents.views import (
     MilestoneTemplateListCreateView,
     MilestoneTemplateDetailView,
 )
-from apps.platform_admin.classification_rule_views import DocumentReportView, DocumentCorrectView, ReclassifyView
+from apps.hospital_master.classification_rule_views import DocumentReportView, DocumentCorrectView, ReclassifyView
 
 urlpatterns = [
     path("records/report/",         DocumentReportView.as_view(), name="platform-records-report"),

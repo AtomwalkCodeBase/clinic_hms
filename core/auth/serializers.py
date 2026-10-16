@@ -1,4 +1,4 @@
-"""apps/auth_app/serializers.py — Login and auth serializers."""
+"""core/auth/serializers.py — Login and auth serializers."""
 from rest_framework import serializers
 
 

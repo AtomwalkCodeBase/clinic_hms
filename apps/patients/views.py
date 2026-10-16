@@ -83,7 +83,7 @@ class PortalRegisterView(APIView):
     Requires a verified `action_token` from
     POST /api/v1/auth/otp/verify/ (purpose="registration_patient") proving
     the caller actually received an OTP at the EMAIL address they're
-    registering — see apps/auth_app/otp_views.py. Email-based for now since
+    registering — see core/auth/otp_views.py. Email-based for now since
     verifying via mobile requires a paid SMS gateway that isn't wired up yet
     (see core/sms.py). The email used to create the account is taken from
     the TOKEN (what was actually verified), not from the request body, so a
@@ -2804,7 +2804,7 @@ class PortalNotificationMarkReadView(APIView):
         return success(data={"read": True})
 # PortalForgotPasswordView (the old mobile/AWPID + date-of-birth
 # verification) has been replaced by OTP verification — see
-# apps/auth_app/otp_views.py (OTPRequestView/OTPVerifyView with
+# core/auth/otp_views.py (OTPRequestView/OTPVerifyView with
 # purpose="password_reset_patient", then PatientForgotPasswordResetView to
 # consume the resulting action_token). This endpoint was also never
 # actually reachable from the frontend (API_ENDPOINTS.PORTAL.FORGOT_PASSWORD

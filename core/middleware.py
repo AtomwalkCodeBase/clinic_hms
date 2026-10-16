@@ -36,7 +36,7 @@ EXEMPT_PREFIXES = (
     "/api/v1/auth/login/",
     "/api/v1/auth/token/refresh/",
     "/api/v1/auth/setup-password/",  # invite token in body, not Bearer
-    "/api/v1/auth/otp/",             # OTP request/verify — pre-auth by definition (apps/auth_app/otp_views.py)
+    "/api/v1/auth/otp/",             # OTP request/verify — pre-auth by definition (core/auth/otp_views.py)
     "/api/v1/auth/forgot-password/", # staff+patient OTP reset (action_token in body, not Bearer)
     "/api/v1/portal/register/",      # patient self-signup + registration OTP (request/verify use /auth/otp/ above)
     "/api/v1/emergency/",            # Emergency QR summary (apps/hospital_patients/emergency_views.py) — scanned by a

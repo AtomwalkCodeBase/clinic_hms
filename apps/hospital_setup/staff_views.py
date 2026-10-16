@@ -430,7 +430,7 @@ class StaffDetailView(APIView):
                 )
 
         # Refuse to role-change away the last active hospital_admin — see the
-        # matching check in apps/platform_admin/views.py for the deactivate
+        # matching check in apps/hospital_master/platform_views.py for the deactivate
         # case (this view's DELETE, below, does the deactivate check).
         # Checks acts_as too — a custom role bundling "hospital_admin" counts
         # as an effective admin here just like a literal one, on both sides
@@ -1328,9 +1328,9 @@ class HospitalSettingsView(APIView):
         return success(data={
             "fee_ownership": params.fee_ownership,
             # Read-only here — staff need this to log in with Employee ID
-            # instead of mobile (see auth_app.views.StaffLoginView), but it's
+            # instead of mobile (see core.auth.views.StaffLoginView), but it's
             # not exposed for editing on this endpoint; see
-            # platform_admin.views.HospitalDetailView for that.
+            # hospital_master.platform_views.HospitalDetailView for that.
             "hospital_code": hospital.hospital_code,
             # ── Billing config ──────────────────────────────────────────
             "registration_fee_enabled": params.registration_fee_enabled,

@@ -6,8 +6,8 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate, APIClient
 from apps.patients.views import PortalRegisterView, PortalProfileView, PortalDocumentDetailView, PortalDocumentListCreateView
 from django.core.exceptions import FieldDoesNotExist
-from apps.auth_app.otp_views import OTPRequestView
-from apps.auth_app.views import PatientLoginView
+from core.auth.otp_views import OTPRequestView
+from core.auth.views import PatientLoginView
 from apps.patients.models import OTPCode, Patient, ConsultSession, RecordsShareRequest
 from core.authentication import MockUser
 from core.utils.hashing import hash_mobile, normalize_mobile
@@ -91,7 +91,7 @@ class MobileIsOnlyStoredScrambledTests(TestCase):
         self.assertEqual((data["mobile"], data["mobile_on_file"]), ("", True))
 
     def test_a_code_for_someone_who_typed_their_awpid_goes_to_their_email(self):
-        with mock.patch("apps.auth_app.otp_views._send_code", return_value=True) as send:
+        with mock.patch("core.auth.otp_views._send_code", return_value=True) as send:
             resp = self.post(OTPRequestView, {"purpose": OTPCode.PURPOSE_LOGIN_PATIENT, "identifier": "AWPID-LOGIN1"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(send.call_args.args[0], "asha@example.com")
@@ -99,7 +99,7 @@ class MobileIsOnlyStoredScrambledTests(TestCase):
 
     def test_an_account_with_no_email_is_asked_to_use_its_mobile_instead(self):
         accounts().filter(pk=self.acct.pk).update(email="")
-        with mock.patch("apps.auth_app.otp_views._send_code", return_value=True) as send:
+        with mock.patch("core.auth.otp_views._send_code", return_value=True) as send:
             resp = self.post(OTPRequestView, {"purpose": OTPCode.PURPOSE_LOGIN_PATIENT, "identifier": "AWPID-LOGIN1"})
         self.assertEqual(resp.status_code, 400)
         send.assert_not_called()

@@ -15,7 +15,7 @@ Flow, the same for every purpose:
                        token") — NOT the raw ability to reset a password or
                        create an account directly. This mirrors the
                        signed-JWT "token_type" convention of the
-                       staff setup-password token (apps.auth_app.views)
+                       staff setup-password token (core.auth.views)
                        rather than inventing a second convention.
   3. decode_action_token() — the next-step endpoint (reset-password,
                        complete-registration, patient-otp-login, confirm
