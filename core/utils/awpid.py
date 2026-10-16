@@ -58,7 +58,7 @@ def generate_unique_awpid() -> str:
     Raises:
         RuntimeError if unable to generate a unique ID after max retries (extremely unlikely).
     """
-    from apps.atomwalk.patients.models import Patient
+    from apps.patients.models import Patient
 
     for attempt in range(1, _MAX_RETRIES + 1):
         candidate = generate_awpid()

@@ -75,7 +75,7 @@ def detect_channel(identifier: str) -> str:
 
 def resend_cooldown_remaining(purpose: str, identifier: str) -> int:
     """Seconds until another OTP may be requested for this purpose+identifier. 0 = allowed now."""
-    from apps.atomwalk.patients.models import OTPCode
+    from apps.patients.models import OTPCode
     last = (
         OTPCode.objects.using("default")
         .filter(purpose=purpose, identifier=identifier)
@@ -95,8 +95,8 @@ def create_otp(purpose, identifier, target_type="", target_id=None, target_db=""
     this with core.email.send_otp_email / core.sms.send_otp_sms.
     Returns (otp_row, raw_code, channel).
     """
-    from apps.atomwalk.patients.models import OTPCode
-    from apps.atomwalk.hospital_master.models import Hospital
+    from apps.patients.models import OTPCode
+    from apps.hospital_master.models import Hospital
 
     remaining = resend_cooldown_remaining(purpose, identifier)
     if remaining > 0:
@@ -123,7 +123,7 @@ def verify_otp(purpose, identifier, submitted_code):
     this purpose+identifier. Raises OTPError with a user-facing message on
     any failure. On success, marks the row used and returns it.
     """
-    from apps.atomwalk.patients.models import OTPCode
+    from apps.patients.models import OTPCode
 
     otp = (
         OTPCode.objects.using("default")

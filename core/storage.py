@@ -71,7 +71,7 @@ def hospital_folder(hospital) -> str:
     storage_folder already went through sanitize_folder_name() at write
     time (see HospitalSettingsView.patch()) — no re-sanitizing needed here.
     """
-    from apps.atomwalk.hospital_master.services import parameters_of
+    from apps.hospital_master.services import parameters_of
 
     return parameters_of(hospital).storage_folder or hospital.db_name
 

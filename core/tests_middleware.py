@@ -77,7 +77,7 @@ class HospitalResolutionTests(TestCase):
         self.assertNotIn("aw_hospital_mw", settings.DATABASES)
 
     def test_an_active_hospitals_alias_is_registered_and_selected(self):
-        from apps.atomwalk.hospital_master.models import Hospital
+        from apps.hospital_master.models import Hospital
         Hospital.objects.using("default").create(name="MW", hospital_code="mw", db_name="aw_hospital_mw")
         resp = self.call(db_name="aw_hospital_mw")
         self.assertEqual(resp.status_code, 200)
@@ -85,7 +85,7 @@ class HospitalResolutionTests(TestCase):
         self.assertEqual(self.seen, ["aw_hospital_mw"])
 
     def test_an_inactive_hospital_is_rejected(self):
-        from apps.atomwalk.hospital_master.models import Hospital
+        from apps.hospital_master.models import Hospital
         Hospital.objects.using("default").create(name="MW", hospital_code="mw", db_name="aw_hospital_mw", is_active=False)
         self.assertEqual(self.call(db_name="aw_hospital_mw").status_code, 401)
 
@@ -97,7 +97,7 @@ class HospitalResolutionTests(TestCase):
                 self.assertEqual(self.seen, ["default"])
 
     def test_the_alias_does_not_leak_into_the_next_request(self):
-        from apps.atomwalk.hospital_master.models import Hospital
+        from apps.hospital_master.models import Hospital
         Hospital.objects.using("default").create(name="MW", hospital_code="mw", db_name="aw_hospital_mw")
         self.call(db_name="aw_hospital_mw")
         self.seen.clear()

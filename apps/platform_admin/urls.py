@@ -11,7 +11,7 @@ from apps.platform_admin.views import (
     PlatformUserListView,
     PlanListView,
 )
-from apps.atomwalk.documents.views import (
+from apps.documents.views import (
     VaccinationTemplateListCreateView,
     VaccinationTemplateDetailView,
     MilestoneTemplateListCreateView,
@@ -38,7 +38,7 @@ urlpatterns = [
 
     # System-level vaccination schedule templates (owner_hospital_id=None,
     # is_template=True) — cloned by hospital admins via
-    # apps.atomwalk.documents.views (VaccinationScheduleListCreateView).
+    # apps.documents.views (VaccinationScheduleListCreateView).
     path("vaccination-templates/", VaccinationTemplateListCreateView.as_view(), name="platform-vaccination-template-list-create"),
     path("vaccination-templates/<int:pk>/", VaccinationTemplateDetailView.as_view(), name="platform-vaccination-template-detail"),
 

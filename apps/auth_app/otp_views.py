@@ -27,7 +27,7 @@ whole point of the check is telling the user they already have an account.
 import logging
 
 
-from apps.atomwalk.hospital_master.services import ensure_hospital_db
+from apps.hospital_master.services import ensure_hospital_db
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 from rest_framework.throttling import ScopedRateThrottle
@@ -39,9 +39,9 @@ from core.otp import (
 )
 from core.email import send_otp_email
 from core.sms import send_otp_sms
-from apps.atomwalk.patients.models import OTPCode
-from apps.atomwalk.patients.models import Patient
-from apps.atomwalk.patients.services import accounts, accounts_with_mobile, set_password
+from apps.patients.models import OTPCode
+from apps.patients.models import Patient
+from apps.patients.services import accounts, accounts_with_mobile, set_password
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ PURPOSE_LABELS = {
 # Purposes OTPRequestView resolves itself — contact_change_patient's
 # *request* step is authenticated (identifier is derived from the caller's
 # own account, never accepted from the body) and lives in
-# apps.atomwalk.patients.views.PortalMobileChangeRequestOTPView instead.
+# apps.patients.views.PortalMobileChangeRequestOTPView instead.
 _HANDLED_PURPOSES = {
     OTPCode.PURPOSE_PASSWORD_RESET_STAFF,
     OTPCode.PURPOSE_PASSWORD_RESET_PATIENT,
@@ -73,8 +73,8 @@ _VERIFIABLE_PURPOSES = _HANDLED_PURPOSES | {OTPCode.PURPOSE_CONTACT_CHANGE_PATIE
 
 def _resolve_staff_target(identifier):
     """Mobile or email, matching StaffLoginView's own identifier resolution. Returns (staff_id, db_name) or None."""
-    from apps.atomwalk.patients.models import StaffMobileIndex
-    from apps.hospital_master.staff.models import StaffUser
+    from apps.patients.models import StaffMobileIndex
+    from apps.staff.models import StaffUser
 
     try:
         if "@" in identifier:
@@ -253,7 +253,7 @@ class StaffForgotPasswordResetView(APIView):
         db_name = payload.get("target_db")
         staff_id = payload.get("target_id")
         ensure_hospital_db(db_name)
-        from apps.hospital_master.staff.models import StaffUser
+        from apps.staff.models import StaffUser
         try:
             staff = StaffUser.objects.using(db_name).get(pk=staff_id, is_active=True)
         except StaffUser.DoesNotExist:
@@ -297,9 +297,9 @@ class PatientForgotPasswordResetView(APIView):
         acct.save(using="default", update_fields=["password"])
 
         # Atomwalk-level (cross-hospital) security event — logged, not written
-        # to a new table. apps.hospital_master.staff.AuditLog is per-hospital and patients have
+        # to a new table. apps.staff.AuditLog is per-hospital and patients have
         # no hospital context; a second/duplicate audit table was tried once
-        # already in this codebase (apps.hospital_master.compliance.AccessLog) and removed
+        # already in this codebase (apps.compliance.AccessLog) and removed
         # for exactly that reason — see apps/compliance/models.py's
         # docstring. A log line is the correct-weight solution here.
         logger.info("Patient password reset via OTP: account_id=%s awpid=%s", acct.id, acct.awpid)

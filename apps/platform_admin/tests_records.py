@@ -3,8 +3,8 @@ from django.urls import NoReverseMatch, reverse
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.platform_admin.classification_rule_views import DocumentCorrectView, DocumentReportView, ReclassifyView
-from apps.atomwalk.documents.models import MedicalDocument
-from apps.atomwalk.documents.tests import make_doc
+from apps.documents.models import MedicalDocument
+from apps.documents.tests import make_doc
 from core.authentication import MockUser
 
 

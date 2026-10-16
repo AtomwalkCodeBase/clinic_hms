@@ -64,6 +64,6 @@ class HospitalDBTransactionTestCase(HospitalDBMixin, TransactionTestCase):
 
 def ensure_hospital(pk):
     """A hospital row with this id (tests that stamp a fact with "hospital 3" need hospital 3 to exist, now that it is a link)."""
-    from apps.atomwalk.hospital_master.models import Hospital
+    from apps.hospital_master.models import Hospital
     return Hospital.objects.using("default").get_or_create(
         id=int(pk), defaults={"name": f"Hospital {pk}", "hospital_code": f"hospital-{pk}", "db_name": f"hospital_db_{pk}"})[0]

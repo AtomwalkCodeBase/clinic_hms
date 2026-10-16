@@ -14,13 +14,13 @@ from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.auth_app.views import LogoutView, TokenRefreshView, _make_tokens
-from apps.hospital_master.facility.models import Branch
-from apps.hospital_master.staff.models import StaffUser
-from apps.atomwalk.patients.models import BlacklistedToken
-from apps.atomwalk.hospital_master.models import Subscription, Hospital
+from apps.facility.models import Branch
+from apps.staff.models import StaffUser
+from apps.patients.models import BlacklistedToken
+from apps.hospital_master.models import Subscription, Hospital
 from core.authentication import JWTHospitalAuthentication
 from core.testing import HospitalDBTestCase, requires_hospital_db
-from apps.atomwalk.patients.services import accounts, create_account
+from apps.patients.services import accounts, create_account
 
 FAR_FUTURE = "2099-01-01T00:00:00Z"
 

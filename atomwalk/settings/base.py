@@ -89,25 +89,25 @@ THIRD_PARTY_APPS = [
     "corsheaders",
     "django_filters",
     "drf_spectacular",
-    "django_celery_beat",   # DB-backed Beat schedule; kept in sync by apps.atomwalk.models.SweepConfig
+    "django_celery_beat",   # DB-backed Beat schedule; kept in sync by apps.models.SweepConfig
 ]
 
 LOCAL_APPS = [
     # apps whose tables live in the Atomwalk database
-    "apps.atomwalk.patients",
-    "apps.atomwalk.documents",
-    "apps.atomwalk.hospital_master",
+    "apps.patients",
+    "apps.documents",
+    "apps.hospital_master",
     # apps whose tables live in each hospital's own database
-    "apps.hospital_master.staff",
-    "apps.hospital_master.facility",
-    "apps.hospital_master.patients",
-    "apps.hospital_master.opd",
-    "apps.hospital_master.ipd",
-    "apps.hospital_master.lab",
-    "apps.hospital_master.pharmacy",
-    "apps.hospital_master.billing",
-    "apps.hospital_master.compliance",
-    "apps.hospital_master.notifications",
+    "apps.staff",
+    "apps.facility",
+    "apps.hospital_patients",
+    "apps.opd",
+    "apps.ipd",
+    "apps.lab",
+    "apps.pharmacy",
+    "apps.billing",
+    "apps.compliance",
+    "apps.notifications",
     # API-only apps (no tables)
     "apps.auth_app",
     "apps.platform_admin",
@@ -227,7 +227,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # ── Custom User Model ────────────────────────────────────────────────────────
 # Using Django's built-in User for platform admin (Django admin panel).
-# Per-hospital staff use apps.hospital_master.staff.StaffUser, which extends AbstractUser separately.
+# Per-hospital staff use apps.staff.StaffUser, which extends AbstractUser separately.
 # AUTH_USER_MODEL is intentionally NOT overridden — StaffUser is a standalone model.
 
 # ── DRF ─────────────────────────────────────────────────────────────────────
@@ -410,7 +410,7 @@ CONSULT_PAD_LLM_MODEL = config("CONSULT_PAD_LLM_MODEL", default="qwen/qwen3.8-27
 # Falls back to GROQ_API_KEY so an existing Groq key already in .env just works.
 CONSULT_PAD_LLM_KEY   = config("CONSULT_PAD_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
 
-# ── Pediatric health timeline (apps/atomwalk/documents/services.py) ─────────────
+# ── Pediatric health timeline (apps/documents/services.py) ─────────────
 # The company LLM api only reads facts out of a document's text; the rules judge them.
 # The rules, thresholds and schedules are in documents/health_config.json (override the path with
 # PEDIATRIC_HEALTH_CONFIG); the WHO growth tables are CSV files in documents/growth_reference/.
@@ -422,7 +422,7 @@ LLM_API_MODEL = config("LLM_API_MODEL", default="")
 PEDIATRIC_HEALTH_CONFIG = config("PEDIATRIC_HEALTH_CONFIG", default="") or None
 
 # All three sweep settings (instant-upload file limit, per-run dispatch limit, and how often the
-# sweep runs) are Platform Admin-editable at runtime — apps.atomwalk.models.SweepConfig, via
+# sweep runs) are Platform Admin-editable at runtime — apps.models.SweepConfig, via
 # apps/platform_admin/classification_rule_views.py. No env vars, no restart, for any of them: the
 # interval is DB-backed (django_celery_beat's DatabaseScheduler below), kept in sync by
 # SweepConfig.save() creating/updating its PeriodicTask + IntervalSchedule rows.

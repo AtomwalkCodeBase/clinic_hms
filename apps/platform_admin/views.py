@@ -26,14 +26,14 @@ from rest_framework.permissions import IsAuthenticated
 from core.permissions import IsPlatformAdmin
 from core.response import success, created, error, not_found
 from core.pagination import paginate_list
-from apps.atomwalk.hospital_master.models import Hospital, Subscription, HospitalAuditLog
-from apps.atomwalk.hospital_master.services import create_hospital_database, run_hospital_migrations, drop_hospital_database
-from apps.atomwalk.hospital_master.services import TIER_FEATURE_DEFAULTS
-from apps.atomwalk.hospital_master.services import get_usage_counts
-from apps.atomwalk.hospital_master.services import parameters_of
-from apps.hospital_master.staff.models import StaffUser
-from apps.hospital_master.facility.models import Branch
-from apps.atomwalk.patients.models import StaffMobileIndex
+from apps.hospital_master.models import Hospital, Subscription, HospitalAuditLog
+from apps.hospital_master.services import create_hospital_database, run_hospital_migrations, drop_hospital_database
+from apps.hospital_master.services import TIER_FEATURE_DEFAULTS
+from apps.hospital_master.services import get_usage_counts
+from apps.hospital_master.services import parameters_of
+from apps.staff.models import StaffUser
+from apps.facility.models import Branch
+from apps.patients.models import StaffMobileIndex
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ def _usage_counts(hospital):
     """
     Live doctor/branch/staff counts from the hospital's own database, for
     comparing against Subscription.max_doctors/max_branches/max_staff on the
-    platform-admin UI. Thin wrapper over apps.atomwalk.hospital_master.services.get_usage_counts
+    platform-admin UI. Thin wrapper over apps.hospital_master.services.get_usage_counts
     (the same helper the write-time limit checks use) — best-effort: a
     hospital DB that's unreachable or not yet migrated (e.g. mid-provisioning)
     shouldn't break the whole hospital list, so any failure here just reports
@@ -274,7 +274,7 @@ class HospitalListCreateView(APIView):
         admin_employee_id = None
         email_sent = False
         try:
-            from apps.hospital_master.staff.services import next_employee_id
+            from apps.staff.services import next_employee_id
             admin_staff = StaffUser(
                 phone=admin_mobile,
                 email=admin_email,
@@ -417,7 +417,7 @@ class HospitalDetailView(APIView):
             updated_fields.append("profile")
 
         # ── Coordinates — power the patient app's "hospitals near me"
-        # (apps.atomwalk.patients.views, core.geo.haversine_km). Sent as
+        # (apps.patients.views, core.geo.haversine_km). Sent as
         # numbers, not the free-text profile fields above: validated to
         # real-world lat/lng ranges so a typo can't quietly break every
         # distance sort. Either key alone clears just that one field
@@ -536,8 +536,8 @@ class PlatformStatsView(APIView):
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request):
-        from apps.hospital_master.patients.models import HospitalPatient
-        from apps.hospital_master.opd.models import Appointment
+        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import Appointment
 
         hospitals = list(Hospital.objects.all())
         today = date.today()
@@ -589,8 +589,8 @@ class HospitalOverviewView(APIView):
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request, pk):
-        from apps.hospital_master.patients.models import HospitalPatient
-        from apps.hospital_master.opd.models import Appointment
+        from apps.hospital_patients.models import HospitalPatient
+        from apps.opd.models import Appointment
 
         try:
             hospital = Hospital.objects.get(pk=pk)
@@ -704,7 +704,7 @@ class HospitalStaffDetailView(APIView):
                     "hospital_admin first.",
                 )
 
-        # ── Subscription limit check (fails CLOSED — see apps.atomwalk.hospital_master.services) ──
+        # ── Subscription limit check (fails CLOSED — see apps.hospital_master.services) ──
         # Reactivating a deactivated staff member, or role-changing an active
         # one across the doctor/non-doctor line, both put a new person into a
         # capacity bucket (max_doctors / max_staff) without freeing a slot
@@ -731,7 +731,7 @@ class HospitalStaffDetailView(APIView):
             (was_active and final_active and old_resource != new_resource)
         )
         if needs_limit_check:
-            from apps.atomwalk.hospital_master.services import check_limit, LimitCheckFailed
+            from apps.hospital_master.services import check_limit, LimitCheckFailed
             try:
                 check_limit(hospital, hospital.db_name, new_resource)
             except LimitCheckFailed as exc:
