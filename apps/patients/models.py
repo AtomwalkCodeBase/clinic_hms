@@ -1,10 +1,15 @@
+import os
+import uuid
+
 from django.db import models
 
+from core.storage import documents_storage
 from core.utils.tokens import new_pad_token
 
 
 def get_patient_photo_path(instance, filename):
-    return f"patients/{instance.awpid}/photo/{filename}"
+    ext = os.path.splitext(filename)[1].lower()
+    return f"patients/{instance.awpid}/photo/{uuid.uuid4().hex}{ext}"
 
 
 class Patient(models.Model):
@@ -25,7 +30,7 @@ class Patient(models.Model):
     preferred_language  = models.CharField(max_length=10, default="en")
 
     password      = models.CharField(max_length=128, blank=True)
-    photo         = models.ImageField(upload_to=get_patient_photo_path, blank=True)
+    photo         = models.ImageField(storage=documents_storage, upload_to=get_patient_photo_path, blank=True)
     is_active     = models.BooleanField(default=True)
     last_login    = models.DateTimeField(null=True, blank=True)
 
