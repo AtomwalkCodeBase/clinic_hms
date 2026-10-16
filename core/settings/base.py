@@ -194,6 +194,7 @@ REST_FRAMEWORK = {
         "consult_pad": "20/min",
         "records_share": "90/min",
         "view_report": "20/min",
+        "preview": "600/min",
     },
 }
 

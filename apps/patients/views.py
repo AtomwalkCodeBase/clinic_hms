@@ -1299,6 +1299,57 @@ def _own_document(request, doc_id):
     if not doc:
         return None, error("Document not found.", status=404)
     return doc, None
+class PortalDocumentPreviewView(APIView):
+    """GET /api/v1/portal/documents/<id>/preview/?page=1&width=300 - a small JPEG of one page of the patient's own document."""
+    permission_classes = [IsPatient]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "preview"
+
+    def get(self, request, doc_id):
+        import hashlib
+        from django.http import HttpResponse, HttpResponseNotModified
+        from core.utils.file_validation import validate_bytes
+        from apps.documents import previews
+
+        doc, err = _own_document(request, doc_id)
+        if err:
+            return err
+        try:
+            page = int(request.query_params.get("page") or 1)
+        except ValueError:
+            return error("page must be a number.")
+        width = previews.clamp_width(request.query_params.get("width"))
+        if page < 1:
+            return error("No such page.", status=404)
+
+        etag = '"%s"' % hashlib.md5(f"{doc.id}:{doc.file_name.name}:{page}:{width}".encode()).hexdigest()
+        cache = {"ETag": etag, "Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"}
+        if request.META.get("HTTP_IF_NONE_MATCH") == etag:
+            resp = HttpResponseNotModified()
+            for k, v in cache.items():
+                resp[k] = v
+            return resp
+
+        try:
+            raw = blob_storage.get_bytes(doc.file_name.name)
+        except Exception:
+            logger.warning("preview: reading document %s failed", doc.id, exc_info=True)
+            return error("This file could not be read.", status=422)
+        if len(raw) > previews.MAX_BYTES:
+            return error("This file is too large to preview.", status=422)
+        try:
+            mime = validate_bytes(raw)
+            data = previews.render_preview(raw, mime, page, width)
+        except FileValidationError:
+            return error("This kind of file can't be previewed.", status=422)
+        except previews.NoSuchPage:
+            return error("No such page.", status=404)
+        except previews.PreviewUnavailable as exc:
+            return error(str(exc), status=422)
+        resp = HttpResponse(data, content_type="image/jpeg")
+        for k, v in cache.items():
+            resp[k] = v
+        return resp
 class PortalDocumentListCreateView(APIView):
     """GET /api/v1/portal/documents/?status=queued,extracting&review=pending|confirmed|all&doc_type=lab_report"""
     permission_classes = [IsPatient]
