@@ -97,7 +97,7 @@ class Migration(migrations.Migration):
                 ('chief_complaint', models.TextField(blank=True)),
                 ('status', models.CharField(choices=[('scheduled', 'Scheduled'), ('waiting', 'Waiting'), ('vitals_done', 'Vitals done'), ('in_progress', 'In progress'), ('done', 'Done'), ('cancelled', 'Cancelled'), ('no_show', 'No show')], db_index=True, default='scheduled', max_length=15)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('booked_by', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='p_bookings_made', to='patients.patient')),
+                ('booked_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='p_bookings_made', to='patients.patient')),
                 ('hospital', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='h_bookings', to='hospital_master.hospital')),
                 ('patient', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='p_bookings', to='patients.patient')),
             ],

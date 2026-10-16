@@ -65,7 +65,7 @@ class PatientBooking(models.Model):
         ("scheduled", "Scheduled"), ("waiting", "Waiting"), ("vitals_done", "Vitals done"),
         ("in_progress", "In progress"), ("done", "Done"), ("cancelled", "Cancelled"), ("no_show", "No show"),
     ]
-    booked_by       = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_bookings_made")
+    booked_by       = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.SET_NULL, related_name="p_bookings_made")
     patient         = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_bookings")
     hospital        = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_bookings")
     appointment_id  = models.UUIDField(db_index=True)
