@@ -15,14 +15,13 @@ def get_patient_photo_path(instance, filename):
 class Patient(models.Model):
     GENDER_CHOICES = [("M", "Male"), ("F", "Female"), ("O", "Other")]
     BLOOD_GROUP_CHOICES = [(g, g) for g in ("A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-")]
+    CREATED_BY_CHOICES = [("patient", "Patient"), ("hospital", "Hospital")]
 
     awpid               = models.CharField(max_length=30, unique=True)
     full_name           = models.CharField(max_length=100)
     date_of_birth       = models.DateField(null=True, blank=True)
     gender              = models.CharField(max_length=1, choices=GENDER_CHOICES, blank=True)
-
     mobile              = models.CharField(max_length=10, unique=True, null=True, blank=True)
-
     guardian_mobile     = models.CharField(max_length=15, blank=True, db_index=True)
     is_dependent        = models.BooleanField(default=False)
     email               = models.EmailField(blank=True)
@@ -38,6 +37,8 @@ class Patient(models.Model):
     emergency_contact_phone    = models.CharField(max_length=15, blank=True)
     emergency_contact_relation = models.CharField(max_length=30, blank=True)
 
+    created_by          = models.CharField(max_length=10, choices=CREATED_BY_CHOICES, default="patient")
+    created_hospital    = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL, related_name="h_patients")
     created_at          = models.DateTimeField(auto_now_add=True)
 
     class Meta:

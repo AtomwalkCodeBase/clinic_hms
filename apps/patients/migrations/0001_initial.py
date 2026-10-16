@@ -49,7 +49,9 @@ class Migration(migrations.Migration):
                 ('emergency_contact_name', models.CharField(blank=True, max_length=100)),
                 ('emergency_contact_phone', models.CharField(blank=True, max_length=15)),
                 ('emergency_contact_relation', models.CharField(blank=True, max_length=30)),
+                ('created_by', models.CharField(choices=[('patient', 'Patient'), ('hospital', 'Hospital')], default='patient', max_length=10)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('created_hospital', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='h_patients', to='hospital_master.hospital')),
             ],
             options={
                 'db_table': 'patient',

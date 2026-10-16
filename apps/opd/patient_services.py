@@ -130,6 +130,7 @@ class PatientService:
                             "awpid": generate_unique_awpid(),
                             "full_name": data.get("guardian_name", "") or "Guardian",
                             "preferred_language": data.get("preferred_language", "en"),
+                            "created_by": "hospital", "created_hospital_id": hospital_id,
                         },
                     )
                 guardian_awpid = guardian_identity.awpid
@@ -146,6 +147,7 @@ class PatientService:
                 email=data.get("email", ""),
                 blood_group=data.get("blood_group", ""),
                 preferred_language=data.get("preferred_language", "en"),
+                created_by="hospital", created_hospital_id=hospital_id,
             )
         else:
             mobile_raw  = data.get("mobile", "")
@@ -164,6 +166,7 @@ class PatientService:
                         "email":              data.get("email", ""),
                         "blood_group":        data.get("blood_group", ""),
                         "preferred_language": data.get("preferred_language", "en"),
+                        "created_by": "hospital", "created_hospital_id": hospital_id,
                     },
                 )
 
@@ -290,6 +293,7 @@ class PatientService:
                 mobile=None,
                 is_dependent=False,
                 preferred_language=data.get("preferred_language", "en"),
+                created_by="hospital", created_hospital_id=getattr(request, "hospital_id", None),
             )
 
         uhid, _ = get_next_number(branch_id=branch.id, entity="uhid", using=db_name)
@@ -342,7 +346,8 @@ class PatientService:
     def resolve_dependent_identity(guardian_awpid: str, guardian_mobile, full_name: str,
                                     date_of_birth, gender: str = "", relationship: str = "other",
                                     email: str = "", blood_group: str = "",
-                                    preferred_language: str = "en"):
+                                    preferred_language: str = "en", created_by: str = "patient",
+                                    created_hospital_id=None):
         """
         Find-or-create a dependent's Patient under a guardian.
 
@@ -403,6 +408,7 @@ class PatientService:
                     email=email,
                     blood_group=blood_group,
                     preferred_language=preferred_language,
+                    created_by=created_by, created_hospital_id=created_hospital_id,
                 )
             # Covers all three paths above uniformly: brand-new identity (no
             # relationship exists yet), still-linked identity (already

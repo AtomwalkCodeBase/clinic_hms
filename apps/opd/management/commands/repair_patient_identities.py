@@ -38,7 +38,8 @@ def restore_identities(db_name, apply=False):
         Patient.objects.using("default").create(
             awpid=patient.awpid, full_name=patient.full_name, date_of_birth=patient.date_of_birth,
             gender=(patient.gender or "")[:1].upper(), is_dependent=patient.is_dependent, mobile=mobile,
-            email=patient.email or "", blood_group=patient.blood_group or "")
+            email=patient.email or "", blood_group=patient.blood_group or "",
+            created_by="hospital")
     return missing
 
 
