@@ -68,7 +68,7 @@ class Migration(migrations.Migration):
                 ('active', models.BooleanField(default=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
-                ('owner_hospital', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='hospital_master.hospital')),
+                ('owner_hospital', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='h_schedules', to='hospital_master.hospital')),
             ],
             options={
                 'db_table': 'immunization_schedules',
@@ -94,8 +94,8 @@ class Migration(migrations.Migration):
                 ('nurse_notes', models.TextField(blank=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
-                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='patients.patient')),
-                ('source_hospital', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='hospital_master.hospital')),
+                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='p_vitals', to='patients.patient')),
+                ('source_hospital', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='h_vitals', to='hospital_master.hospital')),
             ],
             options={
                 'db_table': 'vitals',
@@ -127,8 +127,8 @@ class Migration(migrations.Migration):
                 ('is_active', models.BooleanField(default=True)),
                 ('recorded_at', models.DateTimeField()),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='patients.patient')),
-                ('source_hospital', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='hospital_master.hospital')),
+                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='p_shared_allergies', to='patients.patient')),
+                ('source_hospital', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='h_shared_allergies', to='hospital_master.hospital')),
             ],
             options={
                 'db_table': 'shared_allergy',
@@ -167,7 +167,7 @@ class Migration(migrations.Migration):
                 ('acknowledged_at', models.DateTimeField(blank=True, null=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
-                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='patients.patient')),
+                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='p_recurrence_flags', to='patients.patient')),
             ],
             options={
                 'db_table': 'recurrence_flag',
@@ -206,7 +206,7 @@ class Migration(migrations.Migration):
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
                 ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='patients.patient')),
-                ('source_hospital', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='hospital_master.hospital')),
+                ('source_hospital', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='h_milestone_records', to='hospital_master.hospital')),
             ],
             options={
                 'db_table': 'milestone_records',
@@ -259,7 +259,7 @@ class Migration(migrations.Migration):
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
                 ('document', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='documents.medicaldocument')),
-                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='patients.patient')),
+                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='p_immunization_records', to='patients.patient')),
                 ('source_hospital', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, to='hospital_master.hospital')),
             ],
             options={

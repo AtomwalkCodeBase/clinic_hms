@@ -117,7 +117,7 @@ class OTPCode(models.Model):
     target_type = models.CharField(max_length=10, blank=True)
     target_id   = models.IntegerField(null=True, blank=True)
 
-    hospital    = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.CASCADE)
+    hospital    = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.CASCADE, related_name="h_otp_codes")
 
     attempts    = models.PositiveSmallIntegerField(default=0)
     is_used     = models.BooleanField(default=False)
@@ -140,7 +140,7 @@ class EmergencyAccessLog(models.Model):
         (EVENT_PRIVACY,    "Shared-records privacy changed"),
     ]
 
-    patient    = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE)
+    patient    = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_emergency_access_logs")
     event      = models.CharField(max_length=24, choices=EVENT_CHOICES)
 
     generated_by = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.SET_NULL, related_name="p_generated_access_logs")
@@ -165,8 +165,8 @@ class ConsultSession(models.Model):
     ]
 
     token           = models.CharField(max_length=64, unique=True, db_index=True, default=new_pad_token)
-    patient         = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE)
-    hospital          = models.ForeignKey("hospital_master.Hospital", on_delete=models.CASCADE)
+    patient         = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_consult_sessions")
+    hospital          = models.ForeignKey("hospital_master.Hospital", on_delete=models.CASCADE, related_name="h_consult_sessions")
     encounter_id    = models.UUIDField(db_index=True)
     doctor_user_id  = models.UUIDField(null=True, blank=True)
 
@@ -225,7 +225,7 @@ class RecordsShareRequest(models.Model):
 
     pairing     = models.CharField(max_length=12, blank=True)
 
-    patient     = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE)
+    patient     = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_records_share_requests")
     status      = models.CharField(max_length=12, choices=STATUS_CHOICES,
                                    default=STATUS_PENDING, db_index=True)
 
@@ -261,7 +261,7 @@ class RecordsShareRequest(models.Model):
 class RecordsPrivacy(models.Model):
     SECTIONS = ("summary", "vitals", "diagnoses", "vaccinations")
 
-    patient           = models.OneToOneField("patients.Patient", null=True, blank=True, on_delete=models.CASCADE)
+    patient           = models.OneToOneField("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_records_privacy")
     hide_all          = models.BooleanField(default=False)
     hidden_doc_ids    = models.JSONField(default=list, blank=True)
     hidden_categories = models.JSONField(default=list, blank=True)
@@ -278,7 +278,7 @@ class StaffMobileIndex(models.Model):
     mobile    = models.CharField(max_length=15, unique=True, db_index=True)
 
     email     = models.EmailField(max_length=254, unique=True, null=True, blank=True, db_index=True)
-    hospital = models.ForeignKey("hospital_master.Hospital", on_delete=models.CASCADE)
+    hospital = models.ForeignKey("hospital_master.Hospital", on_delete=models.CASCADE, related_name="h_staff_mobile_index")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

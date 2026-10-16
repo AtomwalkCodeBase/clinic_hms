@@ -102,7 +102,7 @@ class HospitalAuditLog(models.Model):
         ("subdomain_change", "Hospital Code Change"),
     ]
 
-    hospital       = models.ForeignKey(Hospital, on_delete=models.CASCADE)
+    hospital       = models.ForeignKey(Hospital, on_delete=models.CASCADE, related_name="h_audit_logs")
     action       = models.CharField(max_length=20, choices=ACTION_CHOICES)
     actor_email  = models.CharField(max_length=255, blank=True)
     before_value = models.CharField(max_length=100, blank=True)

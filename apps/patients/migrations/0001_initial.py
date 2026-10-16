@@ -64,7 +64,7 @@ class Migration(migrations.Migration):
                 ('mobile', models.CharField(db_index=True, max_length=15, unique=True)),
                 ('email', models.EmailField(blank=True, db_index=True, max_length=254, null=True, unique=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('hospital', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='hospital_master.hospital')),
+                ('hospital', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='h_staff_mobile_index', to='hospital_master.hospital')),
             ],
             options={
                 'db_table': 'staff_mobile_index',
@@ -81,7 +81,7 @@ class Migration(migrations.Migration):
                 ('hidden_sections', models.JSONField(blank=True, default=list)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('patient', models.OneToOneField(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='patients.patient')),
+                ('patient', models.OneToOneField(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='p_records_privacy', to='patients.patient')),
             ],
             options={
                 'db_table': 'records_privacy',
@@ -115,7 +115,7 @@ class Migration(migrations.Migration):
                 ('ip_address', models.GenericIPAddressField(blank=True, null=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('generated_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='p_generated_access_logs', to='patients.patient')),
-                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='patients.patient')),
+                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='p_emergency_access_logs', to='patients.patient')),
             ],
             options={
                 'db_table': 'emergency_access_log',
@@ -143,7 +143,7 @@ class Migration(migrations.Migration):
                 ('share_all', models.BooleanField(default=False)),
                 ('pending_download_id', models.IntegerField(blank=True, null=True)),
                 ('code_attempts', models.PositiveSmallIntegerField(default=0)),
-                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='patients.patient')),
+                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='p_records_share_requests', to='patients.patient')),
             ],
             options={
                 'db_table': 'records_share_request',
@@ -179,7 +179,7 @@ class Migration(migrations.Migration):
                 ('is_used', models.BooleanField(default=False)),
                 ('expires_at', models.DateTimeField(db_index=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('hospital', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='hospital_master.hospital')),
+                ('hospital', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='h_otp_codes', to='hospital_master.hospital')),
             ],
             options={
                 'db_table': 'otp_code',
@@ -203,8 +203,8 @@ class Migration(migrations.Migration):
                 ('updated_at', models.DateTimeField(auto_now=True)),
                 ('expires_at', models.DateTimeField(blank=True, null=True)),
                 ('signed_at', models.DateTimeField(blank=True, null=True)),
-                ('hospital', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='hospital_master.hospital')),
-                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to='patients.patient')),
+                ('hospital', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='h_consult_sessions', to='hospital_master.hospital')),
+                ('patient', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='p_consult_sessions', to='patients.patient')),
             ],
             options={
                 'db_table': 'consult_session',

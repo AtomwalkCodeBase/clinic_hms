@@ -92,7 +92,7 @@ class Migration(migrations.Migration):
                 ('before_value', models.CharField(blank=True, max_length=100)),
                 ('after_value', models.CharField(blank=True, max_length=100)),
                 ('created_at', models.DateTimeField(auto_now_add=True, db_index=True)),
-                ('hospital', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='hospital_master.hospital')),
+                ('hospital', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='h_audit_logs', to='hospital_master.hospital')),
             ],
             options={
                 'db_table': 'hospital_audit_log',

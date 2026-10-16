@@ -330,7 +330,7 @@ class ImmunizationRecord(models.Model):
         (STATUS_DECLINED, "Declined / not required"),
     ]
 
-    patient             = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE)
+    patient             = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_immunization_records")
     document            = models.ForeignKey(MedicalDocument, null=True, blank=True, on_delete=models.SET_NULL, related_name="d_immunization_records")
     source_hospital     = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_immunization_records") 
     scheduled_label     = models.CharField(max_length=50, blank=True)
@@ -396,7 +396,7 @@ class MilestoneRecord(models.Model):
     notes            = models.TextField(blank=True)
 
     recorded_by_name = models.CharField(max_length=200, blank=True)
-    source_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL)
+    source_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL, related_name="h_milestone_records")
 
     created_at       = models.DateTimeField(auto_now_add=True)
     updated_at       = models.DateTimeField(auto_now=True)
@@ -408,7 +408,7 @@ class MilestoneRecord(models.Model):
 
 
 class RecurrenceFlag(models.Model):
-    patient = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE)
+    patient = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_recurrence_flags")
     condition_group = models.CharField(max_length=40)
     label = models.CharField(max_length=255)
     triggered_on = models.DateField()
@@ -426,12 +426,12 @@ class RecurrenceFlag(models.Model):
 
 
 class SharedAllergy(models.Model):
-    patient           = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE)
+    patient           = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_shared_allergies")
     substance         = models.CharField(max_length=200)
     reaction          = models.TextField(blank=True)
     severity          = models.CharField(max_length=20, blank=True)
     is_active         = models.BooleanField(default=True)
-    source_hospital  = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL)
+    source_hospital  = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL, related_name="h_shared_allergies")
     recorded_at       = models.DateTimeField()
     created_at        = models.DateTimeField(auto_now_add=True)
 
@@ -453,9 +453,9 @@ class SharedPrescriptionItem(models.Model):
 
 
 class Vitals(models.Model):
-    patient = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE)
+    patient = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_vitals")
     appointment_id = models.UUIDField(null=True, blank=True, db_index=True)
-    source_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL)
+    source_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL, related_name="h_vitals")
     source = models.CharField(max_length=20, default="clinic")
     recorded_at = models.DateTimeField(default=timezone.now, db_index=True)
     recorded_by_user_id = models.UUIDField(null=True, blank=True)
@@ -503,7 +503,7 @@ class Schedule(models.Model):
     kind            = models.CharField(max_length=15, choices=KIND_CHOICES)
     name            = models.CharField(max_length=200)
     description     = models.TextField(blank=True)
-    owner_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.CASCADE)
+    owner_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.CASCADE, related_name="h_schedules")
     is_template     = models.BooleanField(default=False)
     active          = models.BooleanField(default=True)
     created_at      = models.DateTimeField(auto_now_add=True)
