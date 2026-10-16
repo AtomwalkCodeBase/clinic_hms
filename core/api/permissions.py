@@ -1,26 +1,4 @@
-"""
-core/api/permissions.py
--------------------
-Reusable DRF permission classes for Atomwalk HMS.
-
-Two types of permission:
-  1. Role-based  — IsDoctor, IsNurse, IsFrontDesk, etc.
-  2. Tier-based  — RequireTier('pro') factory
-
-Usage in views:
-    permission_classes = [IsAuthenticated, IsDoctor]
-    permission_classes = [IsAuthenticated, IsFrontDesk, RequireTier('growth')]
-
-Role-based checks pass for either of two things: the user's literal `role`
-claim equals the role in question (the fast path — true for the 6 system
-roles StaffUser.role can be), OR the user's `role` is "custom" and that role
-key appears in their `acts_as` claim (a hospital-defined Role — see
-apps.hospital_setup.rbac.resolve_acts_as — that was explicitly built to act as that
-identity, e.g. a solo-clinic "does everything" role). See _acts_as() below.
-Platform admin and patient are never reachable via a custom Role (they're
-not staff-side system roles), so IsPlatformAdmin/IsPatient stay pure literal
-checks.
-"""
+"""core/api/permissions.py"""
 
 from rest_framework.permissions import BasePermission
 
@@ -108,10 +86,6 @@ class IsHospitalStaff(BasePermission):
             return False
         role = getattr(request.user, "role", None)
         # role="custom" is always hospital staff by definition — a custom
-        # Role only ever exists inside a hospital DB and only ever gets
-        # assigned to a StaffUser there, so there's no acts_as-emptiness
-        # case where this should be False the way there is for the more
-        # specific Is* checks above.
         return role in self.STAFF_ROLES or role == "custom"
 
 
@@ -123,33 +97,14 @@ class IsDoctorOrNurse(BasePermission):
 
 
 class IsDoctorOrFrontDesk(BasePermission):
-    """
-    Doctor + front desk share write access to pediatric Birth History —
-    front desk can capture it at registration (parent often has the details
-    on hand right then), and the pediatrician can add/correct it later at
-    consultation. See apps.opd.models.BirthHistory.
-    """
+    """Doctor + front desk share write access to pediatric Birth History —"""
     message = "Access restricted to front desk staff and doctors."
     def has_permission(self, request, view):
         return request.user.is_authenticated and _acts_as(request.user, ROLE_DOCTOR, ROLE_FRONT_DESK)
 
 
 def RequireTier(minimum_tier: str):
-    """
-    Factory — returns a DRF permission class enforcing a minimum license tier.
-
-    Args:
-        minimum_tier: One of 'starter', 'growth', 'pro', 'enterprise'.
-
-    Usage:
-        permission_classes = [IsAuthenticated, IsDoctor, RequireTier('pro')]
-
-    Prefer RequireFeature() below for gating an actual module (lab, pharmacy,
-    etc.) — feat_* flags are the real per-hospital source of truth (see
-    hospitals.Subscription docstring) and can be overridden per hospital
-    independent of tier, which a tier-name comparison can't express. This is
-    kept for the rarer case of gating on tier itself.
-    """
+    """Factory — returns a DRF permission class enforcing a minimum license tier."""
     if minimum_tier not in TIER_ORDER:
         raise ValueError(f"Invalid tier '{minimum_tier}'. Must be one of: {TIER_ORDER}")
 
@@ -171,18 +126,7 @@ def RequireTier(minimum_tier: str):
 
 
 def RequireFeature(flag_name: str):
-    """
-    Factory — returns a DRF permission class enforcing a boolean feature gate
-    on the hospital's Subscription (e.g. 'feat_lab', 'feat_pharmacy').
-
-    request.user.subscription is populated by JWTHospitalAuthentication for any
-    hospital-staff request (see core/api/authentication.py) — None for platform
-    admin or patient requests, which this permission always denies (those
-    endpoints should be using role-based permissions instead, not this one).
-
-    Usage:
-        permission_classes = [IsAuthenticated, IsHospitalStaff, RequireFeature('feat_lab')]
-    """
+    """Factory — returns a DRF permission class enforcing a boolean feature gate"""
     class FeaturePermission(BasePermission):
         message = (
             f"This hospital's plan doesn't include this feature ({flag_name}). "

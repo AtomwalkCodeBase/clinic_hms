@@ -19,13 +19,6 @@ if SENTRY_DSN:
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="app.atomwalk.com").split(",")
 
 # Any real cloud deployment (AWS ALB, Nginx, Cloudflare, ...) terminates TLS
-# at the proxy/load balancer and talks plain HTTP to this app internally.
-# Without telling Django which header to trust for "was this HTTPS?", every
-# request looks insecure to Django, and SECURE_SSL_REDIRECT below causes an
-# infinite redirect loop the instant this goes live behind a real LB — the
-# proxy forwards HTTP, Django redirects to HTTPS, the LB terminates that and
-# forwards HTTP again. Must match whatever header your specific proxy sets
-# (ALB and most others use X-Forwarded-Proto by default).
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 SECURE_SSL_REDIRECT = config("SECURE_SSL_REDIRECT", default=True, cast=bool)
@@ -36,11 +29,6 @@ SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 
 # Needed because the frontend SPA is served from a different origin than the
-# API (e.g. app.atomwalk.com vs api.atomwalk.com) — only actually exercised
-# by session/cookie-based requests (Django admin login), since the API
-# itself uses JWT bearer auth and isn't CSRF-protected the same way. Empty
-# by default so a misconfigured/missing env var fails safe (no origins
-# trusted) rather than accidentally trusting everything.
 CSRF_TRUSTED_ORIGINS = [o for o in config("CSRF_TRUSTED_ORIGINS", default="").split(",") if o]
 
 LOGGING = {

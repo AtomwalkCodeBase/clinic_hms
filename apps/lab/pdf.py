@@ -1,13 +1,4 @@
-"""
-apps/lab/pdf.py
----------------
-Renders a lab report to a printable PDF for the My Reports vault when the
-lab uploaded no file of its own (only result_summary + parameter rows).
-Same reportlab pattern as apps/opd/pdf.py.
-
-Kept deliberately simple — this is a patient-facing copy of an already
-released result, not the lab's own report format.
-"""
+"""apps/lab/pdf.py"""
 
 import io
 

@@ -46,19 +46,7 @@ from apps.documents import lib_documents as records
 logger = logging.getLogger(__name__)
 
 class UploadView(APIView):
-    """
-    POST /api/v1/records/upload/   multipart: files=<file> (repeat for more), mode=instant|bulk, patient_awpid=<optional>
-
-    mode "instant" takes exactly one file and is queued on its own fast lane; "bulk" takes up to 50 and is queued on
-    the bulk lane, so a single file never waits behind someone's big upload. Left out, it is "instant" for one file
-    and "bulk" for several. The mode is only used to pick the queue; it is not stored.
-
-    Only the sizes are checked here (no empty file, none over 250 MB, 50 files and 250 MB at most). One DocumentBatch
-    per upload; every file is stored in S3 under patients/<awpid>/… with a "queued" MedicalDocument, and every file
-    is handed to Celery at once. Returns 202 with the batch id; follow it with GET /api/v1/records/batches/<id>/.
-    Each document moves queued → extracting → classifying → completed | review_required | failed — the content
-    check happens in the extraction job.
-    """
+    """POST /api/v1/records/upload/   multipart: files=<file> (repeat for more), mode=instant|bulk, patient_awpid=<optional>"""
     permission_classes = [IsPatient]
     parser_classes = [MultiPartParser]
 
@@ -91,8 +79,7 @@ class UploadView(APIView):
 
 
 class BatchDetailView(APIView):
-    """GET /api/v1/records/batches/<id>/ — the batch, its counts by status, then each of its documents.
-    The patient (or the family member they act for) can only read their own batches."""
+    """GET /api/v1/records/batches/<id>/ — the batch, its counts by status, then each of its documents."""
     permission_classes = [IsPatient]
 
     def get(self, request, batch_id):
@@ -106,8 +93,7 @@ class BatchDetailView(APIView):
 
 
 class TypesView(APIView):
-    """GET /api/v1/records/types/ - the categories a document can be filed under (the one list every app reads).
-    {"types": [{"code", "label"}]}"""
+    """GET /api/v1/records/types/ - the categories a document can be filed under (the one list every app reads)."""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -115,14 +101,7 @@ class TypesView(APIView):
 
 
 class SubmitView(APIView):
-    """
-    POST /api/v1/records/submit/   {"decisions": [{"document_id": 1, "document_type": "lab_report"}]}   (1 to 100)
-
-    The patient's final answer. Each file is checked on its own (yours, finished reading, not already confirmed, a
-    valid type); the ones that pass get the person's type and are locked for good - nobody can change them again.
-    Returns {"submitted": [ids], "rejected": [{"document_id", "reason"}], "counts": {"awaiting_review"}}. Sending the
-    same list twice is safe: confirmed files are skipped.
-    """
+    """POST /api/v1/records/submit/   {"decisions": [{"document_id": 1, "document_type": "lab_report"}]}   (1 to 100)"""
     permission_classes = [IsPatient]
 
     def post(self, request):
@@ -140,15 +119,7 @@ class SubmitView(APIView):
         return success(data=result)
 # ------------------------------------------------------------------- view-report   
 class DocumentViewView(APIView):
-    """
-    GET /api/v1/view-report/<token>/
-
-    Verifies the signed token (bare, or the "/view-report/<token>" shape a
-    generic scanner hands back unchanged), resolves the MedicalDocument it
-    points to, and returns a signed file URL. Any invalid/malformed/unknown
-    token returns a patient-safe 400/404 — this is reachable by anyone with a
-    camera, never a stack trace.
-    """
+    """GET /api/v1/view-report/<token>/"""
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_classes = [ScopedRateThrottle]
@@ -201,8 +172,7 @@ def _whole_number(value, key):
         raise _InvalidRule(f"{key.replace('_', ' ').capitalize()} must be a whole number of 0 or more.")
     return number
 def _checked_numbers(rd, current=None):
-    """The numeric fields given in `rd` as whole numbers, checked against each other (the maximum age may not be below the
-    minimum). `current` is the existing rule when editing, so a change to one age is checked against the other."""
+    """The numeric fields given in `rd` as whole numbers, checked against each other (the maximum age may not be below the"""
     numbers = {k: _whole_number(rd[k], k) for k in _NUMBERS if rd.get(k) not in (None, "")}
     low = numbers.get("min_age_days", getattr(current, "min_age_days", None))
     high = numbers["max_age_days"] if "max_age_days" in numbers else (None if "max_age_days" in rd else getattr(current, "max_age_days", None))
@@ -244,8 +214,7 @@ VACCINATION = _Kind("vaccination", "vaccine_name", "dose_number", 1,
 MILESTONE = _Kind("milestone", "milestone", "domain", None,
                   milestone_rule_dict, "Milestone schedule template created.")
 def _edit(kind, schedule, d):
-    """Apply a PATCH body to a schedule and its rules. Returns how many rule changes were made. Raises _InvalidRule, before
-    anything is saved, when a rule's numbers are wrong."""
+    """Apply a PATCH body to a schedule and its rules. Returns how many rule changes were made. Raises _InvalidRule, before"""
     rules_in = [rd for rd in (d["rules"] if isinstance(d.get("rules"), list) else []) if isinstance(rd, dict)]
     existing = {str(r.id): r for r in schedule.s_rules.all()}
     checked = {}
@@ -478,10 +447,7 @@ def _given_json(record):
     return {"id": record.id, "vaccine_name": record.vaccine_name, "administered_date": str(record.administered_date),
             "verification_status": record.verification_status, "has_certificate": bool(record.file_data)}
 def _certificate(patient, data, vaccine_name):
-    """
-    The optional scanned certificate sent with a dose: (file_name, mime_type, stored_key, error_response).
-    No file sent -> three empty strings. A bad file -> error_response is ready to return.
-    """
+    """The optional scanned certificate sent with a dose: (file_name, mime_type, stored_key, error_response)."""
     file_data = data.get("file_data") or ""
     if not file_data:
         return "", "", "", None
@@ -610,11 +576,7 @@ class PatientVaccinationDeclineView(APIView):
         return success(data={"id": record.id, "vaccine_name": record.vaccine_name,
                              "verification_status": record.verification_status}, message="Vaccine marked as not required.")
 class PatientVaccinationAdministerView(APIView):
-    """
-    Nurse or doctor marks a dose given today (or on administered_date).
-    Body: {record_id?} to close an existing record (typically a doctor's order) in place, else {vaccine_name,
-    scheduled_label?} to log a new one; administered_date?, dose_number?, file_data?.
-    """
+    """Nurse or doctor marks a dose given today (or on administered_date)."""
     permission_classes = [IsDoctorOrNurse]
 
     def post(self, request, pk):
@@ -817,11 +779,7 @@ class PortalMilestoneListView(APIView):
                              "stats": summary["stats"]})
 # ── vaccination uploads ───────────────────────────────────────────────────────────────────────────────────────────
 class PortalVaccinationUploadView(APIView):
-    """
-    Body: {vaccine_name, administered_date, scheduled_label?, patient_awpid?, file_data?}.
-    A parent reports a dose given outside the network, optionally with a certificate photo. It always lands as
-    "pending_review": only a doctor or nurse verifying it (PatientVaccinationVerifyView) makes it count as verified.
-    """
+    """Body: {vaccine_name, administered_date, scheduled_label?, patient_awpid?, file_data?}."""
     permission_classes = [IsPatient]
 
     def post(self, request):
@@ -881,10 +839,7 @@ class PortalVaccinationFileView(APIView):
                              "file_name": record.file_name, "mime_type": record.mime_type})
 # ── family ────────────────────────────────────────────────────────────────────────────────────────────────────────
 class PortalFamilyListCreateView(APIView):
-    """
-    POST body: {full_name, date_of_birth, gender?, relationship?}. A member added here and one added by a hospital's
-    front desk under the same guardian resolve to the same AWPID (matched on name and date of birth).
-    """
+    """POST body: {full_name, date_of_birth, gender?, relationship?}. A member added here and one added by a hospital's"""
     permission_classes = [IsPatient]
 
     def get(self, request):

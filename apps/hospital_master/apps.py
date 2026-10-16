@@ -11,7 +11,7 @@ class HospitalMasterConfig(AppConfig):
     name = "apps.hospital_master"
     label = "hospital_master"
     verbose_name = "Hospital master"
-    database = "atomwalk"    # which database the tables of this app live in (read by core/db_router.py)
+    database = "atomwalk"
 
     def ready(self):
         from django.db.models.signals import post_migrate
@@ -41,14 +41,7 @@ class HospitalMasterConfig(AppConfig):
 
 
 def _bootstrap_platform_admin(sender, **kwargs):
-    """
-    After migrations run, ensure a Django superuser exists for the admin panel.
-
-    Required env vars:
-        DJANGO_SUPERUSER_USERNAME   (default: 'admin')
-        DJANGO_SUPERUSER_EMAIL
-        DJANGO_SUPERUSER_PASSWORD
-    """
+    """After migrations run, ensure a Django superuser exists for the admin panel."""
     try:
         username = os.environ.get("DJANGO_SUPERUSER_USERNAME", "admin").strip()
         email = os.environ.get("DJANGO_SUPERUSER_EMAIL", "").strip()

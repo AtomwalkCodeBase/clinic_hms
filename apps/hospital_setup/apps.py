@@ -6,4 +6,4 @@ class HospitalSetupConfig(AppConfig):
     name = "apps.hospital_setup"
     label = "hospital_setup"
     verbose_name = "Hospital set-up"
-    database = "hospital"    # which database the tables of this app live in (read by core/db_router.py)
+    database = "hospital"

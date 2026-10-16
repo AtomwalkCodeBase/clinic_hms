@@ -1,28 +1,11 @@
-"""
-apps/opd/qr.py
-----------
-One place to turn a short string into a web-ready QR code PNG.
-
-Every QR the app shows the user is server-rendered with the `qrcode`
-library (already a project dependency) rather than pulling in a frontend
-QR package. This helper returns a base64 `data:` URI ready to drop straight
-into an <img src>.
-
-`apps/billing/pdf.py::_qr_image` is deliberately NOT this — that one returns
-a PIL image for embedding into a ReportLab invoice PDF, not a data URI for
-the browser.
-"""
+"""apps/opd/qr.py"""
 
 import base64
 import io
 
 
 def render_qr_data_uri(text: str, *, box_size: int = 6, border: int = 2) -> str:
-    """
-    Render `text` as a QR PNG and return "data:image/png;base64,...".
-    box_size/border default to the same values the emergency-QR screen has
-    always used, so codes stay a familiar size across the app.
-    """
+    """Render `text` as a QR PNG and return "data:image/png;base64,..."."""
     import qrcode
 
     qr = qrcode.QRCode(box_size=box_size, border=border)

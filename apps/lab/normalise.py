@@ -1,19 +1,4 @@
-"""
-apps/lab/normalise.py
------------------
-Every file that enters My Reports is stored as a PDF. Hospital-issued
-documents and patient-uploaded PDFs pass through untouched; a JPEG or PNG the
-patient uploads or photographs is converted here to a single-page PDF —
-EXIF-rotated, metadata stripped, transparency flattened to white.
-
-Pillow's own PDF encoder is used (one page sized to the image). A JPEG is
-embedded as-is; a large opaque PNG is downscaled and re-encoded so the PDF
-stays small. The longest edge is capped so a 12 MP phone photo does not
-produce a 10 MB PDF.
-
-Failure here is not fatal to an upload: callers catch the exception and store
-the original bytes instead (see PortalDocumentListCreateView.post).
-"""
+"""apps/lab/normalise.py"""
 
 import io
 
@@ -23,13 +8,7 @@ _MAX_EDGE = 2600  # px — enough to stay legible for a full A4 scan
 
 
 def to_pdf(raw: bytes, mime_type: str) -> tuple:
-    """
-    Return (pdf_bytes, "application/pdf").
-
-    - application/pdf  -> returned unchanged.
-    - image/jpeg, image/png -> a single-page PDF, EXIF orientation applied,
-      no metadata carried over, transparency composited onto white.
-    """
+    """Return (pdf_bytes, "application/pdf")."""
     if mime_type == "application/pdf":
         return raw, "application/pdf"
 

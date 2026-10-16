@@ -12,8 +12,6 @@ class StockSerializer(serializers.ModelSerializer):
                   "expiry_date", "quantity", "reorder_level", "unit_cost", "mrp", "is_low"]
         read_only_fields = ["id"]
         # StockListView.post deliberately tops up an existing (drug, branch, batch) via
-        # get_or_create; the auto-added unique_together validator rejected exactly that
-        # case with a 400 before the view ever ran.
         validators = []
 
     def get_is_low(self, obj):

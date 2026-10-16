@@ -1,39 +1,4 @@
-"""
-Management command: assign_employee_ids
-
-Populates StaffUser.employee_id for staff who don't have one yet, so login
-can use the {hospital code, employee ID, password} path (StaffLoginView /
-StaffLoginSerializer) instead of a mobile number or email — easier to hand
-out and remember for a demo or a front-desk cheat sheet.
-
-employee_id is only unique WITHIN a hospital (see StaffUser.employee_id's own
-docstring), so this assigns role-prefixed, per-hospital sequential IDs:
-DOC-001, DOC-002, ... for doctors, NUR-001... for nurses, FD-001... for
-front desk, LAB-001... for lab techs, PHR-001... for pharmacists, ADM-001...
-for hospital admins, and STF-001... for anyone with a custom role. The
-"hospital code" you log in with alongside the employee ID is the hospital's
-own hospital_code (e.g. novacare-flagship) — printed in the output table below,
-so there's nothing else to look up.
-
-Idempotent and additive: only fills in staff who currently have
-employee_id=None. Never touches, renumbers, or reassigns an employee_id
-that's already set (by this command or by hand), so it's safe to re-run
-after adding new staff — they'll just get the next number in their role's
-sequence.
-
-Usage:
-  # One hospital:
-  python manage.py assign_employee_ids --hospital aw_novacare_flagship --settings=core.settings.development
-
-  # Every active hospital on the platform in one pass:
-  python manage.py assign_employee_ids --all --settings=core.settings.development
-
-Also writes EMPLOYEE_LOGIN_CODES.md (same directory convention as
-INVESTOR_DEMO_CREDENTIALS.md) with one section per hospital processed,
-appending to the file rather than overwriting it — running this for one
-hospital today and another tomorrow builds up one combined reference
-instead of each run erasing the last.
-"""
+"""Management command: assign_employee_ids"""
 from pathlib import Path
 
 from django.conf import settings
@@ -103,8 +68,6 @@ class Command(BaseCommand):
         self.stdout.write(f"\n{'=' * 70}\n  {hospital.name} ({hospital.hospital_code})\n{'=' * 70}")
 
         # Seed next-available sequence number per prefix from whatever's
-        # already assigned, so a re-run (or staff added by hand with their
-        # own employee_id) never collides with an existing one.
         next_seq = {}
         for eid in StaffUser.objects.using(db).exclude(employee_id__isnull=True).exclude(employee_id="").values_list("employee_id", flat=True):
             prefix, _, num = eid.rpartition("-")
@@ -128,7 +91,6 @@ class Command(BaseCommand):
                 self.stdout.write(f"  {staff.employee_id}  {staff.get_full_name()} ({staff.role})")
 
         # Also list staff who already had an employee_id, so the printed
-        # table/doc is a complete login sheet, not just what changed today.
         already = (
             StaffUser.objects.using(db).filter(is_active=True)
             .exclude(employee_id__isnull=True).exclude(employee_id="")

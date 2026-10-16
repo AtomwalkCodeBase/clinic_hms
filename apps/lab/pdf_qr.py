@@ -1,16 +1,4 @@
-"""
-apps/lab/pdf_qr.py
---------------
-Overlay a QR code onto page 1 of an existing PDF.
-
-Prescriptions are rendered by us (apps/opd/pdf.py) so their QR is drawn at
-generation time. Lab reports are usually a file the lab *uploaded*, so there
-is no generation step to hook — this stamps the "scan to save in My Reports"
-QR onto that uploaded PDF instead.
-
-Best-effort: any failure (not a PDF, pypdf/qrcode missing, encrypted file)
-returns the original bytes unchanged.
-"""
+"""apps/lab/pdf_qr.py"""
 
 import io
 import logging

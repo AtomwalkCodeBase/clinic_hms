@@ -109,7 +109,7 @@ class AppointmentSerializer(serializers.ModelSerializer):
 
 
 class AppointmentCreateSerializer(serializers.ModelSerializer):
-    patient_id = serializers.UUIDField()      # declared: DRF would otherwise treat the foreign key's column as read-only
+    patient_id = serializers.UUIDField()
 
     class Meta:
         model = Appointment
@@ -133,10 +133,7 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
 
 
 class AppointmentTypeSerializer(serializers.ModelSerializer):
-    """Generic read/write serializer for the appointment-type catalog.
-    `value` is exposed read-only — it's what Appointment.appointment_type
-    actually stores (opd/followup/emergency, lowercase), distinct from the
-    display label, same reasoning as apps.lab.SampleTypeSerializer."""
+    """Generic read/write serializer for the appointment-type catalog."""
     name = serializers.CharField(source="label")
 
     class Meta:
@@ -223,7 +220,6 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
 
     def get_patient_pk(self, obj):
         # Patient's real numeric id (obj.patient_id is Patient.uuid, not the
-        # pk) — the frontend needs this to call /patients/{pk}/history/.
         p = self._patient(obj)
         return p.id if p else None
 
@@ -265,8 +261,6 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
 
     def get_patient_last_visit(self, obj):
         # Most recent OTHER completed visit for this patient at this hospital
-        # (excludes the current encounter's own appointment) — real data,
-        # used for the "Last visit: ..." line in the clinical summary header.
         p = self._patient(obj)
         db = getattr(obj._state, "db", None) or self.context.get("db")
         if not p or not db:
@@ -302,8 +296,6 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
 class OPDEncounterCreateSerializer(serializers.ModelSerializer):
     vitals = VitalsSerializer(required=False)
     # Accept either 'appointment' or 'appointment_id' from the frontend.
-    # Both must be declared explicitly — DRF treats FK attnames like
-    # 'appointment_id' as read-only otherwise, silently dropping the value.
     appointment    = serializers.UUIDField(write_only=True, required=False)
     appointment_id = serializers.UUIDField(required=False)
 
@@ -345,9 +337,7 @@ class PrescriptionFavouriteSerializer(serializers.ModelSerializer):
 
 
 class FollowUpActionSerializer(serializers.Serializer):
-    """POST body for FollowUpActionView. A doctor picks exactly one path per
-    consultation — hand it to a nurse to book now, or send the patient a
-    reminder to book later (see OPDEncounter model docstring fields)."""
+    """POST body for FollowUpActionView. A doctor picks exactly one path per"""
     mode = serializers.ChoiceField(choices=["nurse", "reminder"])
     note = serializers.CharField(max_length=255, required=False, allow_blank=True)
     follow_up_in_days = serializers.IntegerField(required=False, allow_null=True)
@@ -363,9 +353,7 @@ class FollowUpActionSerializer(serializers.Serializer):
 
 
 class FollowupNurseWorklistItemSerializer(serializers.Serializer):
-    """Read-only row shape for the nurse's 'Follow-ups to Book' worklist —
-    plain Serializer (not a ModelSerializer) since it's assembled from a
-    joined dict in the view, same convention as MonitoringListView."""
+    """Read-only row shape for the nurse's 'Follow-ups to Book' worklist —"""
     encounter_id = serializers.CharField()
     patient_name = serializers.CharField()
     patient_uhid = serializers.CharField()

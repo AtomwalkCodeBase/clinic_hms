@@ -1,13 +1,4 @@
-"""
-Config loader for the pediatric health timeline.
-
-Loaded once at process start (Atomwalk convention: JSON config loaded at startup).
-Path resolution order:
-  1. explicit argument
-  2. settings.PEDIATRIC_HEALTH_CONFIG (if Django is configured)
-  3. env PEDIATRIC_HEALTH_CONFIG
-  4. <this package>/config/pediatric_health_config.json
-"""
+"""Config loader for the pediatric health timeline."""
 
 import json
 from functools import lru_cache

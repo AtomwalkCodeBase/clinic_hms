@@ -623,7 +623,6 @@ function VaccinationTimeline({ patientAwpid, vax, vaxLoading, refetchVax, upload
 // Tab definitions — id maps to the rendered panel below.
 // The "vaccinations" tab is only shown for patients under 18.
 const ALL_TABS = [
-  { id: "vaccinations",    label: "Vaccinations",    icon: Syringe,   pediatricOnly: true },
   { id: "milestones",      label: "Milestones",      icon: Baby,      pediatricOnly: true },
   { id: "health-timeline", label: "Insights Timeline", icon: Activity,  pediatricOnly: false },
   { id: "vaccine-record",  label: "Vaccine Record",   icon: Syringe,   pediatricOnly: true },
@@ -688,7 +687,7 @@ function InsightsPanel({ awpid, name, section }) {
 export default function PatientRecordsPage() {
   const [searchParams] = useSearchParams();
   const { selectedPatient, selectPatient, familyMembers } = usePatientContext();
-  const [activeTab, setActiveTab] = useState("vaccinations");
+  const [activeTab, setActiveTab] = useState("health-timeline");
   const [tabInitialized, setTabInitialized] = useState(false);
 
   useEffect(() => {

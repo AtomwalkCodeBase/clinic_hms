@@ -1,39 +1,14 @@
-"""
-apps/opd/tests.py
--------------------
-DB-backed tests for the OPD encounter sign-off flow — the highest-risk path
-in the app, since it fans out into billing (auto-invoice) and the atomwalk
-(HIE write-through) as side effects that must never block the sign-off
-itself even if they fail.
-
-These require a real Postgres reachable via the DATABASES config (atomwalk +
-at least one hospital DB) — they were written and reviewed in an environment
-without a live Postgres available, so they have NOT been executed here.
-Run `python manage.py test apps.opd` against a real dev DB before trusting
-this file; treat it as a first draft of coverage, not a verified pass.
-"""
+"""apps/opd/tests.py"""
 
 
 from django.test import TestCase
 
 
 class EncounterSignSideEffectsTests(TestCase):
-    """
-    NOTE: uses the 'default' (atomwalk) DB via TestCase's automatic
-    transactional wrapping. A full run also needs a hospital DB fixture —
-    see apps/hospitals/utils.py::create_hospital_database for how one is
-    provisioned in this project; wire that into setUp() once a test hospital
-    DB alias is available in CI (see .github/workflows/ci.yml).
-    """
+    """NOTE: uses the 'default' (atomwalk) DB via TestCase's automatic"""
 
     def test_sign_never_raises_even_if_hie_write_fails(self):
-        """
-        sync_encounter_to_hie must swallow failures — signing an encounter must
-        succeed even if the atomwalk DB is unreachable or a shared table
-        write fails. This directly exercises that contract without needing
-        a full hospital DB fixture, by calling the helper with a patient that
-        has no awpid (the guaranteed-skip path).
-        """
+        """sync_encounter_to_hie must swallow failures — signing an encounter must"""
         from apps.documents.lib_vitals import sync_encounter_to_hie
 
         class FakeEncounter:
@@ -52,10 +27,7 @@ class EncounterSignSideEffectsTests(TestCase):
         sync_encounter_to_hie(FakeEncounter(), "default", FakePatientNoAwpid())
 
     def test_sign_hie_sync_handles_missing_vitals_and_prescription_gracefully(self):
-        """
-        Encounters commonly have no vitals recorded yet or no prescription
-        (e.g. advice-only visit) — sync_encounter_to_hie must not assume either exists.
-        """
+        """Encounters commonly have no vitals recorded yet or no prescription"""
         from apps.documents.lib_vitals import sync_encounter_to_hie
 
         class FakeAppointment:
@@ -73,15 +45,12 @@ class EncounterSignSideEffectsTests(TestCase):
                 raise Exception("no related Prescription row — OneToOne DoesNotExist")
 
         class FakePatient:
-            awpid = None  # still short-circuits before hitting the DB — see test above
+            awpid = None
 
         sync_encounter_to_hie(FakeEncounter(), "default", FakePatient())
 
 
 # ── Sign-off characterization (hospital DB) ────────────────────────────────────
-# Pins what EncounterSignView does today so the billing / HIE code it calls can be
-# moved and changed safely. Needs the hospital_test alias:
-#   python manage.py test apps.opd --settings=core.settings.test   (skipped otherwise)
 
 import datetime as _dt
 import uuid as _uuid

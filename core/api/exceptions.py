@@ -1,10 +1,4 @@
-"""
-core/api/exceptions.py
-------------------
-Custom exception handler for Atomwalk HMS.
-Wraps all DRF exceptions in our standard { success, message, errors } shape.
-Register in settings: REST_FRAMEWORK.EXCEPTION_HANDLER = 'core.api.exceptions.custom_exception_handler'
-"""
+"""core/api/exceptions.py"""
 
 import logging
 from rest_framework.views import exception_handler
@@ -13,10 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 def custom_exception_handler(exc, context):
-    """
-    Intercepts every DRF exception and returns a standardized error response.
-    Unhandled exceptions (500s) are logged and returned as generic server errors.
-    """
+    """Intercepts every DRF exception and returns a standardized error response."""
     # Call DRF's default handler first
     response = exception_handler(exc, context)
 

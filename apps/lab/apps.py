@@ -6,7 +6,7 @@ class LabConfig(AppConfig):
     name = "apps.lab"
     label = "lab"
     verbose_name = "Laboratory"
-    database = "hospital"    # which database the tables of this app live in (read by core/db_router.py)
+    database = "hospital"
 
     def ready(self):
         import apps.lab.signals  # noqa: F401 — registers signal handlers

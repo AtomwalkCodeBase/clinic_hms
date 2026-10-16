@@ -1,17 +1,4 @@
-"""
-Management command: repair_patient_identities
-
-Every hospital patient row must have a shared identity (patient) with the same AWPID; the documents, bookings and
-family links all point at the identity. This finds hospital patients that have none and restores it from the hospital's own
-row (name, date of birth, sex, dependent flag, and the mobile's scrambled form when no one else already has it).
-It only adds missing identities; it never changes or deletes anything. A dependent restored this way has no guardian link,
-because the hospital row does not say who the guardian was.
-
-Usage:
-  python manage.py repair_patient_identities                 # report only
-  python manage.py repair_patient_identities --apply         # restore the missing identities
-  python manage.py repair_patient_identities --db aw_x --apply
-"""
+"""Management command: repair_patient_identities"""
 from django.core.management.base import BaseCommand
 
 from apps.opd.models import HospitalPatient

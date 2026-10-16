@@ -13,11 +13,6 @@ class BranchSerializer(serializers.ModelSerializer):
 
     def validate_phone(self, value):
         # Branch.phone is optional (blank=True) — only enforce the format
-        # when something was actually entered, same 10-digit convention used
-        # for every other phone field in the app (patient mobile, staff
-        # mobile, etc.). A plain RegexValidator on the model field would
-        # also fire on an empty string, which is why this is a method
-        # validator instead.
         if value and not re.match(r"^\d{10}$", value):
             raise serializers.ValidationError("Enter a valid 10-digit phone number.")
         return value
@@ -46,8 +41,6 @@ class RoomSerializer(serializers.ModelSerializer):
     floor_name      = serializers.CharField(source="floor_obj.name", read_only=True, default="")
     department_name = serializers.CharField(source="department.name", read_only=True, default="")
     # Live count of active beds under this room — for a bed-based room type
-    # this is what "3 of 5 beds" is built from on the frontend; always 0 for
-    # a non-bed-based (OPD) room.
     bed_count       = serializers.SerializerMethodField()
 
     class Meta:
@@ -76,10 +69,7 @@ class BedSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "room_name", "branch_id", "floor_id", "floor_name", "current_admission", "reservation"]
 
     def get_reservation(self, obj):
-        """Who this bed is being HELD for, while status=reserved — distinct
-        from get_current_admission below (which only ever looks at ACTIVE
-        occupancy). Same local-import exception as get_current_admission,
-        for the same reason (apps.hospital_setup sits below apps.ipd)."""
+        """Who this bed is being HELD for, while status=reserved — distinct"""
         if obj.status != Bed.STATUS_RESERVED or not obj.reserved_for_admission_id:
             return None
         from apps.ipd.models import Admission
@@ -98,21 +88,7 @@ class BedSerializer(serializers.ModelSerializer):
         }
 
     def get_current_admission(self, obj):
-        """Who's actually in this bed right now, for the hospital-admin Beds
-        table — a bed's `status` alone only says "occupied", not by whom or
-        since when. `apps.ipd.Admission.bed` (related_name="admissions") is
-        cleared back to null the moment ReleaseBedView frees a bed — but
-        DischargeAdmissionView deliberately does NOT clear it (the record
-        keeps which bed a discharged patient was actually in, for history
-        and billing), so this reverse relation can hold a DISCHARGED
-        admission alongside the live one; excluding CANCELLED/DISCHARGED/
-        DISCHARGE_INITIATED is what actually narrows it down to "the"
-        current occupant. Imported locally (not at module level) since
-        apps.hospital_setup sits below apps.ipd in the app hierarchy — apps.ipd
-        imports apps.hospital_setup.models, not the other way around — and this keeps
-        that direction a runtime-only exception scoped to this one lookup
-        rather than a module-level dependency.
-        """
+        """Who's actually in this bed right now, for the hospital-admin Beds"""
         from apps.ipd.models import Admission
 
         admission = (

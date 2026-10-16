@@ -17,28 +17,14 @@ def parameters_of(hospital):
     return HospitalParameters.objects.using("default").get_or_create(hospital=hospital)[0]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Hospital DB Provisioning
-#
-# Note: AWPID generation lives in core/utils/awpid.py (generate_unique_awpid,
-# format AWPID-YYYYMMDD-XXXXXXXX) — that's the one actually called from
-# apps/opd/patient_services.py. An earlier, differently-formatted AWPID
-# generator (AWP-YYYYMMDD-NNNNNN) used to live in this file too; it had no
-# callers anywhere in the codebase and was removed to avoid two competing
-# ID formats existing side by side.
-# ─────────────────────────────────────────────────────────────────────────────
 
 def build_hospital_db_name(slug: str) -> str:
     """Convert slug to a safe PostgreSQL DB name."""
     safe = re.sub(r"[^a-z0-9_]", "_", slug.lower())
     return f"aw_hospital_{safe}"
 def _make_db_config(name: str) -> dict:
-    """
-    Build a fully-normalised database config dict.
-    Manually applies all defaults that Django's DatabaseWrapper accesses
-    via direct key lookup (not .get()), mirroring what ConnectionHandler
-    .ensure_defaults() does internally in Django 4.x.
-    """
+    """Build a fully-normalised database config dict."""
     t = settings.HOSPITAL_DB_CONFIG_TEMPLATE
     return {
         "ENGINE":           t.get("ENGINE", "django.db.backends.postgresql"),
@@ -57,28 +43,14 @@ def _make_db_config(name: str) -> dict:
     }
 _alias_lock = threading.Lock()
 def ensure_hospital_db(db_name):
-    """
-    Make sure `db_name` is a configured Django database alias, registering it from the
-    hospital template if it is not. The one place that mutates settings.DATABASES — the
-    request path (JWT middleware, login, OTP, portal, compliance), Celery workers and the
-    management commands all call this instead of repeating the snippet. Idempotent and
-    guarded by a lock so two threads registering the same hospital can't race.
-    """
+    """Make sure `db_name` is a configured Django database alias, registering it from the"""
     if db_name in settings.DATABASES:
         return
     with _alias_lock:
         if db_name not in settings.DATABASES:
             settings.DATABASES[db_name] = _make_db_config(db_name)
 def resolve_source_hospital_id(db_alias) -> int:
-    """
-    Atomwalk id of the hospital whose database `db_alias` is — the value the write-through
-    code stamps into `source_hospital_id`. For code that has no request to read
-    `request.hospital_id` from (model signals, helpers).
-
-    core.api.middleware only sets the DB alias on the thread-local, never a hospital id, so the
-    old `getattr(_thread_local, "hospital_id", 0)` was always 0 outside the seed commands
-    (which do set it, and still win here). 0 means "unknown".
-    """
+    """Atomwalk id of the hospital whose database `db_alias` is — the value the write-through"""
     from core.db_router import _thread_local
     from apps.hospital_master.models import Hospital
 
@@ -89,26 +61,7 @@ def resolve_source_hospital_id(db_alias) -> int:
         return 0
     return Hospital.objects.using("default").filter(db_name=db_alias).values_list("id", flat=True).first() or 0
 def create_hospital_database(db_name: str):
-    """
-    Create a new PostgreSQL database for a hospital.
-    Must be called outside any transaction block.
-
-    Always starts from a guaranteed-empty database: if a database with this
-    name already exists, it is dropped and recreated rather than reused.
-    A pre-existing DB here is never a legitimate "already provisioned"
-    hospital (this function only runs as part of provisioning a brand-new
-    Hospital row) — it's leftover cruft from an earlier attempt that failed
-    partway through migrations, e.g. before drop_hospital_database() cleanup
-    existed, or that crashed in a way the caller's exception handler
-    couldn't fully unwind. Reusing such a DB silently is dangerous: it
-    would already have SOME migrations applied and recorded, and running
-    the full migrate against that half-migrated state is exactly how
-    errors like "Related model 'app.model' cannot be resolved" happen —
-    Django applies whatever remaining migrations it thinks are pending,
-    but the historical state they expect doesn't match what's actually in
-    the database. Guaranteeing a clean slate here removes that whole class
-    of bug.
-    """
+    """Create a new PostgreSQL database for a hospital."""
     sys_db_config = _make_db_config("postgres")
 
     conn_alias = f"_sys_{db_name}"
@@ -131,8 +84,6 @@ def create_hospital_database(db_name: str):
                     db_name,
                 )
                 # Terminate any lingering connections first, same as
-                # drop_hospital_database() — DROP DATABASE fails outright
-                # while anything still holds a connection open to it.
                 cursor.execute(
                     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                     "WHERE datname = %s AND pid <> pg_backend_pid()", [db_name]
@@ -144,14 +95,7 @@ def create_hospital_database(db_name: str):
         connections[conn_alias].close()
         del settings.DATABASES[conn_alias]
 def drop_hospital_database(db_name: str):
-    """
-    Drop a hospital's PostgreSQL database — used to clean up after a failed
-    provisioning attempt (e.g. create_hospital_database() succeeded but
-    run_hospital_migrations() then failed partway through, leaving a real but
-    half-migrated database behind). Best-effort: logs and swallows errors
-    rather than raising, since this itself runs from inside another
-    exception handler and must not mask the original failure.
-    """
+    """Drop a hospital's PostgreSQL database — used to clean up after a failed"""
     sys_db_config = _make_db_config("postgres")
     conn_alias = f"_sys_drop_{db_name}"
     settings.DATABASES[conn_alias] = sys_db_config
@@ -162,9 +106,6 @@ def drop_hospital_database(db_name: str):
         conn.connection.autocommit = True
         with conn.connection.cursor() as cursor:
             # Terminate any lingering connections to the target DB first —
-            # DROP DATABASE fails outright if anything (even this same
-            # process's own hospital-DB alias, if migrate registered one)
-            # still holds a connection open to it.
             cursor.execute(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                 "WHERE datname = %s AND pid <> pg_backend_pid()", [db_name]
@@ -183,18 +124,13 @@ def drop_hospital_database(db_name: str):
         connections[conn_alias].close()
         del settings.DATABASES[conn_alias]
 def run_hospital_migrations(db_name: str):
-    """
-    Run Django migrations for hospital apps against the new hospital DB.
-    Called after create_hospital_database().
-    """
+    """Run Django migrations for hospital apps against the new hospital DB."""
     from django.core.management import call_command
 
     # Ensure DB is registered with all required keys
     ensure_hospital_db(db_name)
 
     # Run all migrations against the hospital DB.
-    # The DB router's allow_migrate returns True for non-atomwalk apps on non-default DBs,
-    # so this will only apply hospital-app migrations.
     call_command(
         "migrate",
         database=db_name,
@@ -206,7 +142,6 @@ def run_hospital_migrations(db_name: str):
 
 logger = logging.getLogger(__name__)
 # Roles counted against max_staff. Doctors are deliberately excluded here —
-# they're counted against max_doctors instead (see check_limit below).
 _NON_DOCTOR_ROLES = ["hospital_admin", "nurse", "front_desk", "lab_tech", "pharmacist"]
 LIMIT_LABELS = {
     "doctors":  "doctor",
@@ -222,13 +157,6 @@ def get_usage_counts(db_name):
     ).count()
 
     # Custom-role staff (a hospital-defined Role — see apps.hospital_setup.rbac) count
-    # against whichever bucket their acts_as implies. "doctor" wins if
-    # present: one login = one hire, so a solo-clinic role that acts as
-    # doctor+nurse+front_desk only consumes 1 doctor slot, not a doctor slot
-    # AND a staff slot for the same person — matching how a literal doctor
-    # already counts as exactly 1 regardless of how many things they do.
-    # Small in-Python pass rather than a JSONField query since this list is
-    # normally empty/tiny (custom roles are an enterprise add-on).
     custom_staff = StaffUser.objects.using(db_name).filter(
         role="custom", is_active=True
     ).select_related("custom_role")
@@ -247,16 +175,7 @@ class LimitCheckFailed(Exception):
         self.message = message
         self.status = status
 def check_limit(hospital, db_name, resource, increment=1):
-    """
-    Raises LimitCheckFailed if adding `increment` more of `resource`
-    ("doctors" | "branches" | "staff") would exceed the hospital's
-    subscription limit. Returns None (silently) if within limits.
-
-    Fails CLOSED: any error resolving the subscription or counting current
-    usage blocks the request (status=503, retryable) instead of allowing
-    it through — a hard cap that can be silently bypassed by an unrelated
-    DB error isn't actually a hard cap.
-    """
+    """Raises LimitCheckFailed if adding `increment` more of `resource`"""
     from apps.hospital_master.models import Subscription
 
     try:

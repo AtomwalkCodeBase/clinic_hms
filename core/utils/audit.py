@@ -1,15 +1,4 @@
-"""
-core/utils/audit.py
---------------
-Single entry point for writing audit log entries. Never raises — an audit
-write failure must not break the request it's auditing.
-
-Usage:
-    from core.utils.audit import log_action
-    log_action(request, db, action="encounter.sign",
-               resource_type="OPDEncounter", resource_id=str(enc.id),
-               patient_id=enc.patient_id)
-"""
+"""core/utils/audit.py"""
 
 import logging
 
@@ -17,12 +6,7 @@ logger = logging.getLogger(__name__)
 
 
 def log_action(request, db, action, resource_type="", resource_id="", patient_id=None, metadata=None):
-    """
-    Write one AuditLog row to the given hospital db. `request` is used to pull
-    the actor identity (request.user, set by JWTHospitalAuthentication) and
-    client IP — both optional, so this degrades gracefully outside a request
-    (e.g. management commands can pass request=None).
-    """
+    """Write one AuditLog row to the given hospital db. `request` is used to pull"""
     try:
         from apps.hospital_setup.models import AuditLog
 

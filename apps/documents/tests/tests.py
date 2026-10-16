@@ -76,8 +76,7 @@ def identity(awpid="AWP-T1"):
     return Patient.objects.get_or_create(awpid=awpid, defaults={"full_name": "Test Patient"})[0]
 def make_doc(awpid="AWP-T1", *, status="queued", document_type=NOT_CLASSIFIED, by=None, text=None, batch=None,
              name="doc.pdf", **fields):
-    """A MedicalDocument in `status` and of `document_type`. `by` records how the type was decided
-    ("rules", "human" or "issued"); `text` stores the extracted text."""
+    """A MedicalDocument in `status` and of `document_type`. `by` records how the type was decided"""
     if fields.get("source_hospital_id") is not None:
         fields["source_hospital_id"] = int(fields["source_hospital_id"])
         ensure_hospital(fields["source_hospital_id"])
@@ -183,7 +182,6 @@ class EngineTests(SimpleTestCase):
 
     def test_a_winner_must_lead_by_the_margin(self):
         # prescription 26 (rx, prescription, tablet, syrup) against medical_bill 23 (invoice, tax invoice, gst):
-        # it leads by 3, which is under MIN_MARGIN, so nobody wins
         result = classification_rules.classify_document_by_rules("rx prescription tablet syrup invoice tax invoice gst")
         self.assertEqual((result["score"], result["second_best_score"], result["score_margin"]), (26, 23, 3))
         self.assertLess(result["score_margin"], classification_rules.MIN_MARGIN)
@@ -677,7 +675,7 @@ class ExtractDocumentTests(TestCase):
         import io
         from PIL import Image
         buf = io.BytesIO()
-        Image.new("LA", (1, 1)).save(buf, "PNG")          # the placeholder that once killed the worker with 4 GB of OCR
+        Image.new("LA", (1, 1)).save(buf, "PNG")
         get.return_value = buf.getvalue()
         doc = make_doc(status=S.QUEUED)
         with mock.patch("apps.documents.lib_documents.extract_text") as extract:
@@ -1095,8 +1093,7 @@ class BatchDetailViewTests(TestCase):
 @mock.patch("apps.documents.lib_documents.storage")
 @mock.patch("core.storage.put_bytes", side_effect=lambda key, data, mime_type: key)
 class UploadForWhomTests(TestCase):
-    """"Who is this for?" on the phone sends patient_awpid with the upload. The family link is checked for real here (the
-    tests above stub it out): a linked family member's upload is filed under them, anyone else's is refused."""
+    """"Who is this for?" on the phone sends patient_awpid with the upload. The family link is checked for real here (the"""
     databases = {"default"}
 
     def setUp(self):

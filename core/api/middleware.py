@@ -1,25 +1,4 @@
-"""
-core/api/middleware.py
-------------------
-JWTHospitalMiddleware — runs on every request before the view.
-
-What it does:
-  1. Reads the Authorization: Bearer <token> header.
-  2. Decodes and validates the JWT (using the same secret as SimpleJWT).
-  3. Pulls db_name, hospital_id, role, license_tier, is_platform from claims.
-  4. Calls set_hospital_db(db_name) to point the ORM router at the right DB.
-  5. Attaches decoded claims directly to request so views and permissions
-     can read them without touching the token again.
-
-Public endpoints (login, refresh, health) skip JWT validation — they are
-listed in EXEMPT_PREFIXES.
-
-Security notes:
-  - Token signature is verified with JWT_SECRET_KEY from settings.
-  - Expired tokens return 401 immediately.
-  - If db_name in the token does not exist as a configured DATABASES alias,
-    the request is rejected with 401 to prevent data leakage.
-"""
+"""core/api/middleware.py"""
 
 import logging
 from django.conf import settings
@@ -36,29 +15,22 @@ EXEMPT_PREFIXES = (
     "/api/v1/auth/login/",
     "/api/v1/auth/token/refresh/",
     "/api/v1/auth/setup-password/",  # invite token in body, not Bearer
-    "/api/v1/auth/otp/",             # OTP request/verify — pre-auth by definition (core/auth/otp_views.py)
+    "/api/v1/auth/otp/",
     "/api/v1/auth/forgot-password/", # staff+patient OTP reset (action_token in body, not Bearer)
-    "/api/v1/portal/register/",      # patient self-signup + registration OTP (request/verify use /auth/otp/ above)
-    "/api/v1/emergency/",            # Emergency QR summary (apps/hospital_patients/emergency_views.py) — scanned by a
+    "/api/v1/portal/register/",
+    "/api/v1/emergency/",
                                       # doctor's phone with no Atomwalk login at all; auth is the signed token
-                                      # in the URL itself (apps/patients/emergency_access.py), not a Bearer header.
-    "/api/v1/consult-pad/",          # Consultation-scratchpad pad (apps/hospital_patients/consult_pad_views.py) —
+    "/api/v1/consult-pad/",
                                       # same story as /emergency/ above: scanned on a phone with no session;
-                                      # the 43-char random token in the URL is the credential.
-    "/api/v1/records-share/",        # "Records Access" break-glass — the doctor's laptop half. Public
+    "/api/v1/records-share/",
                                       # create/status/records/download endpoints gated by the 32-char
-                                      # token in the URL. The patient half is at /api/v1/portal/records-share/
-                                      # and is NOT exempt (normal patient-JWT).
-    "/api/v1/view-report/",          # Printed prescription/lab-report QR, opened by a non-app scanner
+    "/api/v1/view-report/",
                                       # (apps/hospital_patients/document_view_views.py) — no Atomwalk login at all;
-                                      # auth is the signed token in the URL itself (core/utils/qr_token.py).
     "/health/",
-    "/django-admin/",                # Django admin (core/urls.py) — it has its own session login, not a Bearer token
+    "/django-admin/",
 )
 
 # drf-spectacular's schema and Swagger views are AllowAny once past this middleware, so
-# exempting them would publish the whole API surface anonymously. Only exempt them in DEBUG
-# (a browser can't send a Bearer header to view them); in production they stay behind a JWT.
 DEBUG_ONLY_EXEMPT_PREFIXES = (
     "/api/docs/",
     "/api/schema/",
@@ -107,8 +79,6 @@ class JWTHospitalMiddleware:
             if not db_name:
                 return self._unauthorised("Token missing hospital context.")
             # Auto-register hospital DB config if not yet in settings.DATABASES.
-            # Hospital DBs are not persisted across restarts — they're registered
-            # lazily on first use (login, or here on subsequent requests).
             if db_name not in settings.DATABASES:
                 from apps.hospital_master.services import ensure_hospital_db
                 from apps.hospital_master.models import Hospital

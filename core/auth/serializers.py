@@ -3,17 +3,7 @@ from rest_framework import serializers
 
 
 class StaffLoginSerializer(serializers.Serializer):
-    """
-    Staff login — two supported shapes:
-      1. {mobile, password} — hospital resolved via the atomwalk-wide
-         StaffMobileIndex, no hospital selection needed (mobile numbers are
-         globally unique across every hospital on the platform).
-      2. {hospital_code, employee_id, password} — for hospitals that use
-         employee IDs. Employee IDs are only unique WITHIN a hospital (two
-         hospitals can both have "EMP-001"), so this path needs a hospital
-         hint the mobile path doesn't — see StaffLoginView.
-    Exactly one of the two shapes must be provided.
-    """
+    """Staff login — two supported shapes:"""
     mobile      = serializers.CharField(required=False, allow_blank=True)
     hospital_code   = serializers.CharField(required=False, allow_blank=True)
     employee_id = serializers.CharField(required=False, allow_blank=True)
@@ -55,8 +45,6 @@ class SetupPasswordSerializer(serializers.Serializer):
 
 class ChangePasswordSerializer(serializers.Serializer):
     # Only required for a voluntary change (see ChangePasswordView) — the
-    # forced first-login flow skips it since the person just proved they
-    # know the current (temp) password by using it to log in.
     current_password = serializers.CharField(write_only=True, required=False, allow_blank=True)
     new_password      = serializers.CharField(min_length=8, write_only=True)
     confirm_password  = serializers.CharField(write_only=True)

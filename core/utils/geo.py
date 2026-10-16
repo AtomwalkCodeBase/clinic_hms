@@ -1,12 +1,4 @@
-"""
-core/utils/geo.py
-------------
-Distance math for "hospitals near me". Deliberately not a geocoding
-client — geocoding (address → lat/lng) happens once, out of band, when
-platform admin sets a hospital's coordinates; nothing in the request path
-calls out to a third-party API, so there's no external dependency, cost,
-or failure mode to worry about at request time.
-"""
+"""core/utils/geo.py"""
 
 from math import radians, sin, cos, sqrt, atan2
 
@@ -23,13 +15,7 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 
 def parse_lat_lng(request):
-    """
-    Pulls optional ?lat=&lng= query params off a request, validated to real
-    coordinate ranges. Returns (lat, lng) floats, or (None, None) if either
-    is missing/invalid — callers treat that as "no location given" rather
-    than raising, since location is always an optional refinement here,
-    never a required parameter.
-    """
+    """Pulls optional ?lat=&lng= query params off a request, validated to real"""
     lat_raw = (request.query_params.get("lat") or "").strip()
     lng_raw = (request.query_params.get("lng") or "").strip()
     if not lat_raw or not lng_raw:

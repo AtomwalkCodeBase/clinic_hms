@@ -1,11 +1,4 @@
-"""
-e2e_demo — drives the whole application through its HTTP API, one role at a time, and writes an Excel list of everything it tried.
-
-    python manage.py e2e_demo --excel e2e_report.xlsx [--patients 3] [--staff-per-role 1] [--tag demo1]
-
-It works against the configured database and storage (data stays there so it can be looked at in the app) and runs the document
-tasks in-process. Logins it creates are written to logs/e2e_logins_<tag>.txt, never printed.
-"""
+"""e2e_demo — drives the whole application through its HTTP API, one role at a time, and writes an Excel list of everything it tried."""
 import io
 import json
 import secrets
@@ -91,7 +84,6 @@ class Command(BaseCommand):
         for x in bad:
             self.stdout.write(f"  FAIL {x[0]} | {x[1]} | {x[2]} | {x[5]} | {x[7]}")
 
-    # ---------------------------------------------------------------------------------------------
     def scenario(self, r, o):
         from django.contrib.auth import get_user_model
         tag = r.tag

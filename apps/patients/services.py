@@ -13,13 +13,7 @@ from django.conf import settings
 
 
 def resolve_target_awpid_and_dob(request):
-    """
-    Shared helper — resolves which patient (self or a linked family member)
-    a portal request is about, and returns (awpid, date_of_birth, error_response).
-    Mirrors the ownership check already used by PortalMyRecordsView /
-    PortalHealthSummaryView: a family member's AWPID is only valid here if
-    PatientRelationship actually links it to this account.
-    """
+    """Shared helper — resolves which patient (self or a linked family member)"""
     acct = accounts().get(pk=request.user.id)
     target_awpid = (request.query_params.get("patient_awpid") or request.data.get("patient_awpid") or "").strip() or acct.awpid
 
@@ -39,12 +33,7 @@ def resolve_target_awpid_and_dob(request):
 
 logger = logging.getLogger(__name__)
 def sync_patient_booking(appointment, db_name):
-    """
-    Best-effort — booking must never fail because this couldn't run. If
-    neither the booked patient nor (for a dependent) their guardian has ever
-    created a patient portal account, there's genuinely nothing to sync to;
-    that's the normal case for most front-desk walk-ins, not an error.
-    """
+    """Best-effort — booking must never fail because this couldn't run. If"""
     try:
         from apps.patients.models import Patient, PatientRelationship
         from apps.patients.models import PatientBooking
@@ -55,17 +44,12 @@ def sync_patient_booking(appointment, db_name):
             return
 
         # Already synced? (e.g. this Appointment was actually created via the
-        # portal's own booking view, which writes its PatientBooking inline —
-        # avoid a duplicate row if this ever gets called from both places.)
         if PatientBooking.objects.using("default").filter(appointment_id=appointment.id).exists():
             return
 
         acct = accounts().filter(awpid=patient_awpid).first()
         if not acct:
             # Not the account owner themself — maybe a dependent, in which
-            # case the booking should show up on the GUARDIAN's dashboard
-            # (same as when a patient books a family member through the
-            # portal directly — see PortalBookView.post).
             rel = PatientRelationship.objects.using("default").filter(
                 dependent__awpid=patient_awpid
             ).first()
@@ -91,17 +75,11 @@ def sync_patient_booking(appointment, db_name):
         )
     except Exception:
         # Same graceful-degradation pattern as core.utils.audit.log_action — a
-        # booking that already succeeded in the hospital DB must not fail (or
-        # roll back) just because this best-effort portal-visibility sync hit
-        # an unexpected error.
         logger.warning("sync_patient_booking failed for appointment_id=%s db=%s", appointment.id, db_name, exc_info=True)
 
 
 logger = logging.getLogger(__name__)
 # Vision tokens are expensive and Groq's per-model TPM budget is small — a
-# full-res phone photo of an A4 page can be ~4k+ tokens on its own. Downscale
-# hard and re-encode as JPEG before sending; handwriting stays legible well
-# below this and each page then costs ~1k tokens.
 _MAX_EDGE = 800
 _JPEG_Q = 80
 def _prep_image(png_bytes: bytes) -> str:
@@ -156,16 +134,12 @@ STRUCTURED-EXTRACTION RULES
 - raw_text (add this key too) holds the FULL verbatim transcription of everything written, in reading order — UNALTERED, including any misspellings."""
 _USER_TEXT = "Read this handwritten consultation note and return the JSON described in your instructions."
 # Per-tab steer. The consult session has a Prescription tab and an Internal
-# Note tab; telling the model which one it's looking at improves accuracy and
-# stops it hallucinating drugs into a plain note (or vice versa).
 _FOCUS_HINT = {
     "rx": " This page is PRIMARILY THE PRESCRIPTION: fill the `prescription` array with every medication written. Doctors also write clinical context on the same page — capture everything that IS written: symptoms/history -> `subjective`, measured vitals or exam findings -> `objective`, the diagnosis / clinical impression if one is written -> `assessment` (and `diagnoses`), the non-drug plan — advice, rest, fluids, follow-up, tests ordered -> `plan` / `advice` / `investigations` / `follow_up_days`. Do NOT repeat the medication lines inside `plan`; those go ONLY in `prescription`. Do not invent an assessment or plan that is not written.",
     "note": " This is a CLINICAL NOTE page with NO prescription: fill the SOAP fields, `diagnoses`, `investigations`, `advice` and `follow_up_days`, and leave `prescription` empty.",
     "all": "",
 }
 # For the multi-page path: one image per request (so each request fits the
-# provider's per-minute token budget), then a final text-only structuring
-# call over the joined transcription.
 _TRANSCRIBE_SYS = """You transcribe ONE photographed page of a HANDWRITTEN medical consultation note.
 - Transcribe VERBATIM, line by line, top to bottom. Do NOT summarise, correct, rephrase, expand, translate or invent anything. Keep abbreviations, drug names, doses, units and numbers exactly as written.
 - If a word or number is genuinely illegible, write [illegible]. Never guess a dose or a drug name.
@@ -187,11 +161,6 @@ _EMPTY = {
 _FREQ_OK = {"od", "bd", "td", "qid", "sos", "stat", "nocte", "mane"}
 _ROUTE_OK = {"oral", "iv", "im", "sc", "topical", "inhaled", "rectal", "sublingual"}
 # ── Frequency / sig shorthand ──────────────────────────────────────────────
-# Doctors write the dosing frequency a dozen different ways, and a small
-# vision model often drops it into `instructions` instead of `frequency`
-# ("3 days 2donly" -> instructions="2donly", frequency=""). This maps the
-# common written forms to the canonical enum. Checked in order — specific
-# words first, then the "N-N-N" grid, then "N daily"/"N times", then plain OD.
 _N_TO_FREQ = {1: "od", 2: "bd", 3: "td", 4: "qid"}
 _FREQ_PATTERNS = [
     ("stat",  re.compile(r"\b(stat|immediately|at once|right now)\b", re.I)),
@@ -204,11 +173,9 @@ _FREQ_PATTERNS = [
     ("od",    re.compile(r"\b(od|qd|o\.?d|q\.?d|q24h|1\s*-\s*0\s*-\s*0|once daily|once a day|every day|daily)\b", re.I)),
 ]
 # "N daily / N times / N x" — tolerant of the model's misreads of "daily"
-# (2donly, 2dly, 3daly …) and of a missing space.
 _FREQ_NUM_RE = re.compile(r"\b([1-4])\s*(?:x|times?|d[a-z]{0,3}ly|/\s*day|per\s*day|a\s*day)\b", re.I)
 def _freq_from_text(s: str):
-    """(canonical enum, matched-substring) for the first frequency form found
-    in `s`, or (None, None). Pure."""
+    """(canonical enum, matched-substring) for the first frequency form found"""
     s = (s or "").strip()
     if not s:
         return None, None
@@ -223,8 +190,7 @@ def _freq_from_text(s: str):
             return enum, m.group(0)
     return None, None
 def _strip_span(s: str, frag: str) -> str:
-    """Remove the first occurrence of `frag` from `s` and tidy leftover
-    punctuation / double spaces."""
+    """Remove the first occurrence of `frag` from `s` and tidy leftover"""
     if not frag:
         return s
     i = s.lower().find(frag.lower())
@@ -233,20 +199,12 @@ def _strip_span(s: str, frag: str) -> str:
     out = (s[:i] + s[i + len(frag):])
     return re.sub(r"\s{2,}", " ", out).strip(" ,;-·").strip()
 # ── Local pixel pre-check ────────────────────────────────────────────────────
-# Runs before any API call. A pen/finger stroke on the white pad is near-black;
-# this lets us answer "is this page blank?" ourselves instead of paying for a
-# vision call and then trusting the model's self-report.
 _INK_LUMA_MAX = 200          # greyscale value at/below which a pixel counts as ink
 # Only a canvas essentially untouched by pen falls below this. A page with even
-# a few scrawled words sits well clear of it, so a real (if sparse) note is
-# never mistaken for blank and dropped. Kept deliberately low: a genuine note
-# in a light hand should still reach the model (and get its confidence capped
-# by _SPARSE_INK_FRACTION), not be discarded here.
 _BLANK_INK_FRACTION = 0.0006
 _SPARSE_INK_FRACTION = 0.010  # mean over the written pages below this → cap confidence
 def _ink_fraction(png_bytes: bytes) -> float:
-    """Fraction of pixels dark enough to be pen strokes. Fails OPEN (1.0) so a
-    decode error never suppresses a real note."""
+    """Fraction of pixels dark enough to be pen strokes. Fails OPEN (1.0) so a"""
     try:
         from PIL import Image
         im = Image.open(io.BytesIO(png_bytes)).convert("L")
@@ -259,13 +217,7 @@ def _ink_fraction(png_bytes: bytes) -> float:
         logger.debug("consult-pad ink-fraction check failed", exc_info=True)
         return 1.0
 def _partition_pages(page_images: list) -> tuple:
-    """(written_pages, blank_page_numbers) from local pixel inspection.
-
-    A sheet the patient never wrote on — an extra page added by accident, a
-    trailing empty page — is dropped here so it can't sink a note that WAS
-    written on the other pages. Only when every page is blank does the caller
-    treat the whole load as empty.
-    """
+    """(written_pages, blank_page_numbers) from local pixel inspection."""
     written, blank_nums = [], []
     for idx, png in enumerate(page_images):
         if _ink_fraction(png) >= _BLANK_INK_FRACTION:
@@ -274,15 +226,12 @@ def _partition_pages(page_images: list) -> tuple:
             blank_nums.append(idx + 1)
     return written, blank_nums
 def _is_sparse(page_images: list) -> bool:
-    """True when the written pages carry, on average, very little ink — a real
-    note in a light hand: cap the model's confidence rather than trust it."""
+    """True when the written pages carry, on average, very little ink — a real"""
     if not page_images:
         return False
     fracs = [_ink_fraction(p) for p in page_images]
     return (sum(fracs) / len(fracs)) < _SPARSE_INK_FRACTION
 # A per-page transcription that is really just the model saying "nothing here".
-# Dropped from the joined text so one such page can't drag a multi-page note
-# into a false "not a clinical note".
 _BLANKISH_TRANSCRIPTION_RE = re.compile(
     r"^[\s\W]*(?:\[?\s*(?:blank(?:\s+page)?|empty|illegible|"
     r"no(?:thing)?(?:\s+(?:text|writing|content|written|here|visible))*|"
@@ -301,11 +250,9 @@ _DOSE_AMOUNT_RE = re.compile(
     r"(?:\d+(?:\.\d+)?|½|¼|\bhalf\b|\bone\b|\btwo\b)\s*"
     r"(?:tab|tablet|cap|capsule|tsp|tbsp|puff|drop|spray|sachet|amp|scoop|ml|application)s?", re.I)
 # Loose per-administration ceilings — above these is almost always a mis-read
-# and worth a second look, not a hard block.
 _DOSE_MAX = {"mcg": 5000.0, "ug": 5000.0, "mg": 4000.0, "g": 5.0, "gm": 5.0, "ml": 60.0, "iu": 100000.0}
 def _check_dose(dosage: str) -> list:
-    """Conservative heuristic flags for an obviously-off or unusable dose
-    string — only the clear cases, so it doesn't cry wolf on normal orders."""
+    """Conservative heuristic flags for an obviously-off or unusable dose"""
     s = (dosage or "").strip()
     if not s:
         return []  # 'dose missing' is flagged separately upstream
@@ -341,9 +288,6 @@ def _as_float(v):
         return None
     return max(0.0, min(1.0, f))
 # A recognised result is "empty" (blank page / nothing usable written) when the
-# model returned no structured content and only a trivial amount of raw text.
-# The encounter page treats this as its own state ("pages look blank") rather
-# than a normal load that happens to fill nothing.
 _MIN_MEANINGFUL_CHARS = 6
 def _has_content(recognized: dict) -> bool:
     if recognized.get("prescription") or recognized.get("diagnoses"):
@@ -396,9 +340,6 @@ def _parse_json(text: str) -> dict:
         instr = str(it.get("instructions", "")).strip()
 
         # Frequency: normalise the model's value (handles "1-0-1", "twice",
-        # "BD", …), and if it's still missing, try to recover one the model
-        # dropped into `instructions` / `dosage` ("3 days 2donly" -> bd) and
-        # strip that token back out of the instructions.
         raw_freq = str(it.get("frequency", "")).strip().lower()
         mapped = raw_freq if raw_freq in _FREQ_OK else (_freq_from_text(raw_freq)[0] if raw_freq else None)
         freq_from = ""
@@ -414,8 +355,6 @@ def _parse_json(text: str) -> dict:
         freq_ok = mapped in _FREQ_OK
 
         # Surfaced to the doctor on the review panel — a line missing a dose or
-        # duration, or one where we had to assume a frequency, needs a look
-        # before it goes into the record.
         flags = []
         if not dosage:
             flags.append("dose missing")
@@ -442,20 +381,11 @@ def _parse_json(text: str) -> dict:
     out["prescription"] = clean
     return out
 def _post_chat(payload: dict) -> str:
-    """
-    POST an OpenAI-compatible chat request with retry-on-rate-limit, and
-    return the assistant message content. Groq reports a per-minute
-    token-budget overrun as 413 (not 429) on the vision path, so both are
-    treated as retryable; it also honours a `retry-after` header.
-    """
+    """POST an OpenAI-compatible chat request with retry-on-rate-limit, and"""
     key = settings.CONSULT_PAD_LLM_KEY
     url = settings.CONSULT_PAD_LLM_BASE.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     # Recognition is serialised per session (one call at a time), so a single
-    # request can afford a few honest retries against the provider's small
-    # per-minute budget. Kept bounded so a hard quota wall still surfaces as
-    # `failed` (→ "type it in") rather than hanging; the doctor's Load button
-    # auto-polls, so a slow success is fine.
     _MAX_TRIES = 5
     resp = None
     for attempt in range(_MAX_TRIES):
@@ -504,24 +434,7 @@ def _structure_text(full_text: str, focus: str = "all") -> dict:
 def _page_key(png_bytes: bytes) -> str:
     return hashlib.sha1(png_bytes).hexdigest()
 def recognise(page_images: list, *, focus: str = "all", page_text_cache: dict | None = None) -> dict:
-    """
-    page_images: list of raw PNG byte strings, in page order.
-    focus: "all" | "rx" | "note" — which consult-session tab these pages are.
-    page_text_cache: {sha1(png): verbatim_text} from a PRIOR compile of this
-        tab. Pages whose bytes are unchanged are reused from here and cost no
-        model call — so a re-load after the doctor "adds something" only
-        transcribes the NEW pages, then re-structures the whole note. The
-        result carries an updated cache back under recognized["_page_texts"].
-
-    Returns {"status": "done" | "empty" | "skipped" | "failed",
-             "recognized": {subjective, objective, assessment, plan, raw_text,
-                            diagnoses, prescription, investigations, advice,
-                            follow_up_days, is_clinical_note, confidence,
-                            _page_texts},
-             "error": ""}.
-    "empty" means the pages were blank / unreadable / not a clinical note.
-    Never raises — a recognition failure must not lose the handwritten note.
-    """
+    """page_images: list of raw PNG byte strings, in page order."""
     key = settings.CONSULT_PAD_LLM_KEY
     cache_in = dict(page_text_cache or {})
     if not key:
@@ -530,8 +443,6 @@ def recognise(page_images: list, *, focus: str = "all", page_text_cache: dict | 
         return {"status": "failed", "recognized": dict(_EMPTY), "error": "no pages"}
 
     # Local pixel pre-check. Drop any sheet with essentially no pen on it, so
-    # one stray blank page can't sink a note written on the others. Only when
-    # every page is blank is the whole load "empty".
     written_pages, blank_page_nums = _partition_pages(page_images)
     if not written_pages:
         logger.info("consult-pad recognition: all %d page(s) blank on pixel check — skipped model",
@@ -553,9 +464,6 @@ def recognise(page_images: list, *, focus: str = "all", page_text_cache: dict | 
     try:
         page_warnings = ""
         # Per-page transcription, cache-aware. An unchanged page is free; only
-        # new/edited pages hit the model. One failing page never discards the
-        # rest. `cache_out` keeps only the pages present now, so it can't grow
-        # without bound across reloads.
         page_texts, failed_pages, cache_out, calls_made = [], [], {}, 0
         for idx, png in enumerate(page_images):
             h = _page_key(png)
@@ -585,9 +493,6 @@ def recognise(page_images: list, *, focus: str = "all", page_text_cache: dict | 
             return {"status": "empty", "recognized": dict(_EMPTY, _page_texts=cache_out), "error": ""}
         recognized = _structure_text(full, focus=focus)
         # We transcribed real text off the page ourselves. A text-only
-        # structuring pass that then reports "not a clinical note" is overruled
-        # — worst case the doctor gets the raw transcription to read, which
-        # beats a false "pages look blank".
         if len(full) >= _MIN_MEANINGFUL_CHARS:
             recognized["is_clinical_note"] = True
         if failed_pages:
@@ -600,7 +505,6 @@ def recognise(page_images: list, *, focus: str = "all", page_text_cache: dict | 
         recognized["page_warnings"] = " ".join(p for p in (blank_note, page_warnings) if p)
         if sparse_ink:
             # Barely anything on the page — don't let a confident-sounding model
-            # push it past the encounter page's low-confidence gate.
             recognized["low_ink"] = True
             c = recognized.get("confidence")
             recognized["confidence"] = 0.3 if c is None else min(c, 0.3)
@@ -624,7 +528,6 @@ def recognise(page_images: list, *, focus: str = "all", page_text_cache: dict | 
 
 
 # brand + generic + doctor-shorthand aliases. Strengths / forms deliberately
-# omitted — this table is for name resolution only.
 SEED_DRUGS = [
     {"brand": "Dolo", "generic": "Paracetamol", "aliases": ["pcm", "para", "paracetamol", "acetaminophen", "calpol", "crocin", "dolo 650", "p 650", "pcm 650", "febrinil"]},
     {"brand": "Combiflam", "generic": "Ibuprofen + Paracetamol", "aliases": ["ibuprofen+paracetamol", "brufen+pcm", "flexon", "ibugesic plus"]},
@@ -738,9 +641,6 @@ SEED_DRUGS = [
     {"brand": "Tegrital", "generic": "Carbamazepine", "aliases": ["carbamazepine", "tegrital", "zeptol", "mazetol"]},
 ]
 # Common handwriting / OCR misreads of frequent OPD drugs -> the standard
-# generic. These give the consult-pad recogniser an EXACT hit (no fuzzy
-# threshold to clear) for the mistakes that actually recur on the pad.
-# surface is lower-case; value must match a `generic` in SEED_DRUGS above.
 MISREADS = {
     "panacetamol": "Paracetamol", "paracetmol": "Paracetamol",
     "paracetamal": "Paracetamol", "paracetemol": "Paracetamol",
@@ -774,11 +674,7 @@ MISREADS = {
     "prednisolon": "Prednisolone", "methylprednisolon": "Methylprednisolone",
 }
 def alias_pairs():
-    """
-    Yield (surface_lower, generic_lower) for every brand and alias in the
-    seed table. `surface` is the abbreviated/branded string a doctor might
-    write; `generic` is what it maps to.
-    """
+    """Yield (surface_lower, generic_lower) for every brand and alias in the"""
     for d in SEED_DRUGS:
         gen = (d.get("generic") or "").strip().lower()
         if not gen:
@@ -791,13 +687,7 @@ def alias_pairs():
             if a:
                 yield a, gen
 def seed_name_pairs():
-    """
-    Yield (surface_lower, canonical) where `canonical` is the standard,
-    properly-cased generic name — for use as a STANDALONE drug-name resolver
-    when the hospital has no (or a sparse) Drug catalog. Covers every generic,
-    brand and alias in SEED_DRUGS plus the MISREADS table. The generic also
-    maps to itself so an already-standard string snaps to the right casing.
-    """
+    """Yield (surface_lower, canonical) where `canonical` is the standard,"""
     for d in SEED_DRUGS:
         gen = (d.get("generic") or "").strip()
         if not gen:
@@ -949,13 +839,7 @@ SEED_TESTS = [
     {"canonical": "Serum LDH", "aliases": ["ldh", "s ldh", "lactate dehydrogenase"]},
 ]
 def consult_pad_lab_aliases_alias_pairs():
-    """
-    Yield (surface_lower, canonical) for every canonical name and alias in the
-    seed table. `surface` is the lower-cased string a doctor might scrawl;
-    `canonical` is the standard, properly-cased test name it maps to. The
-    canonical name also yields a pair against its own lower-case form so an
-    already-standard string snaps to the canonical casing.
-    """
+    """Yield (surface_lower, canonical) for every canonical name and alias in the"""
     for t in SEED_TESTS:
         canon = (t.get("canonical") or "").strip()
         if not canon:

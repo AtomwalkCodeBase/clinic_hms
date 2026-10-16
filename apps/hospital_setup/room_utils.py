@@ -1,24 +1,10 @@
-"""
-apps/org/room_utils.py
-------------------------
-Shared helpers for Room / RoomAssignment — overlap detection (same room,
-same day, clashing time window) and resolving which room a doctor is
-sitting in for a given appointment slot.
-"""
+"""apps/org/room_utils.py"""
 
 from apps.hospital_setup.models import RoomAssignment
 
 
 def find_overlapping_assignment(db_name, room_id, day_of_week, start_time, end_time, exclude_pk=None):
-    """
-    Returns the first active RoomAssignment for this room+day whose time
-    window overlaps [start_time, end_time), or None if the slot is free.
-
-    Overlap test: two ranges [a_start, a_end) and [b_start, b_end) overlap
-    iff a_start < b_end AND a_end > b_start — this catches partial overlaps
-    (e.g. an existing 9:00-13:00 slot blocks a new 12:30-14:00 request),
-    not just exact duplicates.
-    """
+    """Returns the first active RoomAssignment for this room+day whose time"""
     qs = RoomAssignment.objects.using(db_name).filter(
         room_id=room_id, day_of_week=day_of_week, is_active=True,
         start_time__lt=end_time, end_time__gt=start_time,
@@ -29,14 +15,7 @@ def find_overlapping_assignment(db_name, room_id, day_of_week, start_time, end_t
 
 
 def resolve_room_for_slot(db_name, doctor_user_id, day_of_week, slot_time):
-    """
-    Which room (if any) a doctor is assigned to for a given day-of-week +
-    time — used to auto-fill an appointment's room/floor at booking time.
-    Returns the matching RoomAssignment (with .room preloaded) or None if
-    the doctor has no room assignment covering that slot (rooms are opt-in;
-    a hospital that hasn't set up room assignments yet just gets no room on
-    the appointment, not an error).
-    """
+    """Which room (if any) a doctor is assigned to for a given day-of-week +"""
     if slot_time is None:
         return None
     return (
@@ -51,17 +30,7 @@ def resolve_room_for_slot(db_name, doctor_user_id, day_of_week, slot_time):
 
 
 def get_doctor_home_room(db_name, doctor_user_id):
-    """
-    A doctor's "home" room, ignoring day/time entirely — just any active
-    RoomAssignment row they have. Every doctor in this system sits in one
-    dedicated room across all their working days (RoomAssignment rows for
-    a doctor all point at the same Room), so this is a safe fallback when
-    resolve_room_for_slot() finds no assignment covering the *exact*
-    day/time (e.g. backfilling a historical or randomly-seeded appointment
-    whose stored time doesn't fall inside the doctor's configured window).
-    Returns the matching RoomAssignment (with .room preloaded) or None if
-    the doctor has no room assignment at all.
-    """
+    """A doctor's "home" room, ignoring day/time entirely — just any active"""
     return (
         RoomAssignment.objects.using(db_name)
         .filter(doctor_id=doctor_user_id, is_active=True)

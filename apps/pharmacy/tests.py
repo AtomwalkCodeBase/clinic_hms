@@ -1,10 +1,4 @@
-"""
-apps/pharmacy/tests.py
-----------------------
-Hospital-DB tests for stock receipt and dispensing. They need the extra "hospital_test"
-database alias:  python manage.py test apps.pharmacy --settings=core.settings.test
-(skipped under the normal settings).
-"""
+"""apps/pharmacy/tests.py"""
 
 from decimal import Decimal
 

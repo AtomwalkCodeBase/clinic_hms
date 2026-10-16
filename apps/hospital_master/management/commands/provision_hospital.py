@@ -1,23 +1,4 @@
-"""
-Management command: provision_hospital
-
-Creates a new hospital hospital end-to-end:
-  1. Creates Hospital + Subscription rows in Atomwalk DB
-  2. Creates a PostgreSQL database for the hospital
-  3. Runs all hospital-app migrations against that DB
-  4. Creates a hospital_admin StaffUser in the hospital DB
-
-Usage:
-  python manage.py provision_hospital \\
-    --name "Apollo Delhi" \\
-    --hospital-code apollo-delhi \\
-    --city Delhi \\
-    --state Delhi \\
-    --gstin 07AABCU9603R1ZX \\
-    --admin-email admin@apollodelhi.in \\
-    --tier starter \\
-    --settings=core.settings.development
-"""
+"""Management command: provision_hospital"""
 
 import secrets
 import string
@@ -28,9 +9,6 @@ from apps.hospital_master.models import Hospital, Subscription
 from apps.hospital_master.services import parameters_of
 from apps.hospital_master.services import create_hospital_database, run_hospital_migrations
 # Re-exported for backwards compatibility — apps/atomwalk/management/commands/
-# seed_full_demo.py imports TIER_FEATURE_DEFAULTS from this module. The real
-# definition now lives in apps/hospitals/constants.py (single source of truth,
-# also used by apps/hospital_master/platform_views.py) so the two copies can't drift.
 from apps.hospital_master.services import TIER_FEATURE_DEFAULTS
 
 

@@ -1,10 +1,4 @@
-"""
-core/utils/hashing.py
----------------------
-DPDP Act 2023 compliant hashing utilities.
-
-patient.mobile: the 10-digit mobile number, stored as is (see stored_mobile).
-"""
+"""core/utils/hashing.py"""
 
 import re
 import logging
@@ -16,15 +10,7 @@ DEFAULT_COUNTRY_CODE = "+91"
 
 
 def normalize_mobile(mobile: str) -> str:
-    """
-    Normalize a mobile number to +91XXXXXXXXXX format.
-
-    Accepts: '9876543210', '09876543210', '+919876543210', '919876543210'
-    Returns: '+919876543210'
-
-    Raises:
-        ValueError if the number cannot be normalized to 10 digits.
-    """
+    """Normalize a mobile number to +91XXXXXXXXXX format."""
     # Strip all non-digit characters except leading +
     cleaned = re.sub(r"[^\d+]", "", mobile.strip())
 
@@ -47,13 +33,5 @@ def normalize_mobile(mobile: str) -> str:
 
 
 def stored_mobile(mobile: str) -> str:
-    """
-    The mobile number as it is stored in patient.mobile: the 10 digits only (no +91, spaces or dashes).
-
-    Args:
-        mobile: Raw mobile number in any supported format.
-
-    Raises:
-        ValueError if the number is not a valid 10-digit mobile number.
-    """
+    """The mobile number as it is stored in patient.mobile: the 10 digits only (no +91, spaces or dashes)."""
     return normalize_mobile(mobile)[len(DEFAULT_COUNTRY_CODE):]

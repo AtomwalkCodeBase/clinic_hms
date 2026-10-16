@@ -73,6 +73,22 @@ export default function MyReportsPage() {
     wasProcessing.current = processingCount;
   }, [processingCount, attentionCount, toastSuccess, toastWarning]);
 
+  // New uploads the patient has not confirmed yet: read and typed, waiting for "Submit".
+  const pending = docs.filter(d => !d.confirmed && !d.source_hospital_id && d.uploaded_by !== "staff" && stateOf(d) === "ready");
+  const [submitting, setSubmitting] = useState(false);
+  async function submitPending() {
+    setSubmitting(true);
+    try {
+      const res = await apiClient.post(API_ENDPOINTS.RECORDS.SUBMIT,
+        { decisions: pending.map(d => ({ document_id: d.id, document_type: d.doc_type })) }, { params: awpidParam });
+      const out = res?.data?.data ?? res?.data ?? {};
+      const bad = (out.rejected || []).length;
+      toastSuccess(`${(out.submitted || []).length} report${(out.submitted || []).length === 1 ? "" : "s"} submitted and locked.${bad ? ` ${bad} could not be submitted.` : ""}`);
+      refetch();
+    } catch (err) { toastApiError(err, "Couldn’t submit — please try again."); }
+    setSubmitting(false);
+  }
+
   // One place for every action on a report (try again, keep a duplicate).
   async function actOn(doc, payload, message) {
     try {
@@ -278,6 +294,19 @@ export default function MyReportsPage() {
             }}>{label} {counts[id] ? `(${counts[id]})` : ""}</button>
           ))}
         </div>
+
+        {pending.length > 0 && (
+          <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", padding: "12px 16px", marginBottom: 14,
+                        border: "1px solid var(--color-border)", borderRadius: 12, background: "var(--color-surface, #fff)" }}>
+            <div style={{ fontSize: 13 }}>
+              <strong>{pending.length} new report{pending.length === 1 ? "" : "s"} to confirm.</strong>{" "}
+              Check the type shown on each one (open it to change it), then submit. Submitted reports are locked and appear in your health journey.
+            </div>
+            <button className="btn btn-primary" disabled={submitting} onClick={submitPending}>
+              {submitting ? "Submitting…" : `Submit ${pending.length} report${pending.length === 1 ? "" : "s"}`}
+            </button>
+          </div>
+        )}
 
         {/* search, sort, select */}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>

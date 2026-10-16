@@ -39,10 +39,7 @@ def staff_name(request, fallback="Staff"):
     """Who is doing this, for the 'recorded by' columns."""
     return getattr(request.user, "full_name", None) or getattr(request.user, "email", fallback)
 def parse_date(value, field, label, *, allow_future=False):
-    """
-    (date, None) for a YYYY-MM-DD value between 1900 and today (or later when allow_future); a blank value gives
-    (None, None); anything else gives (None, a 400 response to return as it is).
-    """
+    """(date, None) for a YYYY-MM-DD value between 1900 and today (or later when allow_future); a blank value gives"""
     if not value:
         return None, None
     try:
@@ -127,8 +124,7 @@ def _canon(keyword):
     k = re.sub(r"[^a-z0-9]", "", keyword.lower())
     return k[:-1] if len(k) > 3 and k.endswith("s") else k
 def _dedupe_levels(rules):
-    """A keyword counts once per type: if it is listed twice (at any level, spelt differently or as a plural), only the
-    strongest one stays."""
+    """A keyword counts once per type: if it is listed twice (at any level, spelt differently or as a plural), only the"""
     for levels in rules.values():
         seen = set()
         for level in ("strong", "medium", "weak"):
@@ -136,8 +132,6 @@ def _dedupe_levels(rules):
     return rules
 DOCUMENT_RULES = _dedupe_levels(DOCUMENT_RULES)
 # Patterns that are not words. A written dose such as 1-0-1 or 0-1-0 (morning-noon-night) is a clue for a prescription,
-# but only a medium one: a discharge summary lists doses too. Each digit is 0-3 and none touches another digit, so a date
-# like 11-09-2026 can not match.
 PATTERN_RULES = {
     "prescription": [("medium", "1-0-1 dose pattern", re.compile(r"(?<![0-9])[0-3]\s*-\s*[0-3]\s*-\s*[0-3](?![0-9])"))],
 }
@@ -148,7 +142,6 @@ def normalize_text(text):
         return ""
     return re.sub(r"\s+", " ", text.lower()).strip()
 # A measurement unit such as mg/dL is not a dose, and a "Ref. Doctor" line is not a prescriber: neither should push a
-# lab report towards "prescription".
 _UNIT_RE = re.compile(r"(?<![a-z])(?:mg|ml|mcg|ug|ng|pg|g|u|iu|miu|uiu|mmol|meq)\s*/\s*(?:dl|l|ml|min|hr|cumm|kg|hpf)(?![a-z])")
 _REF_DOCTOR_RE = re.compile(r"(?<![a-z])ref(?:erred|\.)?\s*(?:by|doctor)\b[^\n]*")
 def prepare_text(text):
@@ -159,9 +152,7 @@ def prepare_text(text):
     return normalize_text(t)
 _PATTERNS = {}
 def _pattern(keyword):
-    """Whole-word match: not glued to other letters (digits are fine, so "500mg" finds "mg"). The words of a phrase may
-    be separated by spaces, hyphens or nothing at all ("follow up" = "Follow-up" = "Followup"), and the last word may
-    be a plural ("prescription" = "Prescriptions")."""
+    """Whole-word match: not glued to other letters (digits are fine, so "500mg" finds "mg"). The words of a phrase may"""
     if keyword not in _PATTERNS:
         words = [re.escape(w) for w in re.split(r"[\s\-]+", keyword) if w]
         body = r"[\s\-]*".join(words)
@@ -195,14 +186,7 @@ def calculate_document_scores(text):
         scores[document_type] = {"score": score, "matched_rules": matched}
     return scores
 def classify_document_by_rules(text):
-    """The rules' verdict on `text`:
-
-        document_type      the winning type, or "not_classified"
-        status             "rule_classified" or "review_required"
-        best_guess         the highest-scoring type ("" if nothing matched), even when it did not win
-        score / second_best_score / score_margin
-        matched_rules      what matched for the best-scoring type
-    """
+    """The rules' verdict on `text`:"""
     scores = calculate_document_scores(text)
     ranked = sorted(scores.items(), key=lambda item: (-item[1]["score"], item[0]))
     best_type, best = ranked[0]
@@ -217,8 +201,7 @@ def classify_document_by_rules(text):
     return {**result, "document_type": best_type, "status": RULE_CLASSIFIED, "best_guess": best_type}
 # ── recording a verdict (the only code that writes classification state) ──
 def store_rule_result(document, result):
-    """Save the rules' verdict: the classification row and the document's current type. A person's choice is
-    never overwritten. Does not touch the document's pipeline status."""
+    """Save the rules' verdict: the classification row and the document's current type. A person's choice is"""
     classification, _ = DocumentClassification.objects.using("default").get_or_create(document=document)
     if classification.status in (HUMAN_CLASSIFIED, ISSUED):
         return classification
@@ -264,8 +247,7 @@ def _classification(document):
     except ObjectDoesNotExist:
         return None
 def method_of(document):
-    """How the type was decided: "rule" (the keyword rules), "staff" (a person, or the hospital that issued the
-    document), "" (not classified)."""
+    """How the type was decided: "rule" (the keyword rules), "staff" (a person, or the hospital that issued the"""
     c = _classification(document)
     if c is None:
         return ""
@@ -305,8 +287,7 @@ Status = MedicalDocument.Status
 
 
 def source_uuid(value):
-    """MedicalDocument.source_id is a UUID. An encounter's id already is one; any other id (a lab request "<db>:<n>", a
-    report number) maps to a fixed UUID, so the same source always finds the same document."""
+    """MedicalDocument.source_id is a UUID. An encounter's id already is one; any other id (a lab request "<db>:<n>", a"""
     try:
         return uuid.UUID(str(value))
     except ValueError:
@@ -344,7 +325,6 @@ def mime_of(doc):
 
 
 # Two Celery queues, so one file never waits behind someone else's big upload: "instant" is for a single file,
-# "bulk" for several. Run one worker per queue (celery -A core worker -Q instant / -Q bulk).
 INSTANT_QUEUE = "instant"
 BULK_QUEUE = "bulk"
 MAX_SUBMIT = 100            # decisions in one submit call
@@ -360,9 +340,7 @@ def _safe_delete(name: str) -> None:
     elif name:
         logger.warning("records: refusing to delete %r — not a documents/ or patients/ object", name)
 def save_upload(awpid, files):
-    """`files` = [(uploaded_file, raw_bytes)]. One batch per upload, however many files. The files go to S3
-    UPLOAD_THREADS at a time (one after another made a big upload wait for the sum of every transfer); if any
-    transfer fails, everything already sent is deleted and nothing is saved."""
+    """`files` = [(uploaded_file, raw_bytes)]. One batch per upload, however many files. The files go to S3"""
     patient = Patient.objects.using("default").get(awpid=awpid)
     batch = DocumentBatch.objects.create(patient=patient)
     docs = [MedicalDocument(patient=patient, batch=batch, document_ref_name=(f.name or "")[:50],
@@ -387,8 +365,7 @@ def save_upload(awpid, files):
         raise
     return batch, list(MedicalDocument.objects.filter(batch=batch).order_by("id"))
 def start_processing(document_ids, queue=BULK_QUEUE):
-    """Queue each document's first stage on `queue`. If the queue can't be reached the document is marked failed -
-    the patient sees it and can retry - rather than left "queued" for ever."""
+    """Queue each document's first stage on `queue`. If the queue can't be reached the document is marked failed -"""
     from apps.documents.tasks import extract_document_task
     for document_id in document_ids:
         try:
@@ -418,8 +395,7 @@ def batch_summary(batch):
 # ── processing ───────────────────────────────────────────────────────────
 @contextmanager
 def _locked(document_id):
-    """True if this call got document_id's lock; released on exit. A Postgres advisory lock, so a live
-    worker and a redelivered task can never act on the same document at once."""
+    """True if this call got document_id's lock; released on exit. A Postgres advisory lock, so a live"""
     conn = connections["default"]
     with conn.cursor() as cur:
         cur.execute("SELECT pg_try_advisory_lock(%s)", [document_id])
@@ -448,16 +424,14 @@ def fail_document_by_id(document_id, message):
     if doc:
         fail_document(doc, message)
 def extract_document(document_id):
-    """Stage 1: file → content check → text. Returns True when the document is ready for classify_document.
-    A file that can never work (empty, too big, not a PDF/JPEG/PNG) is failed here; any other error is raised so
-    the Celery task retries it."""
+    """Stage 1: file → content check → text. Returns True when the document is ready for classify_document."""
     with _locked(document_id) as got:
         if not got:
             return False
         doc = _in_status(document_id, Status.QUEUED, Status.EXTRACTING, Status.CLASSIFYING)
         if not doc:
             return False
-        if doc.status == Status.CLASSIFYING:      # a retry after the text was saved: only the hand-off is left
+        if doc.status == Status.CLASSIFYING:
             return True
         if doc.status != Status.EXTRACTING:
             doc.status = Status.EXTRACTING
@@ -468,7 +442,7 @@ def extract_document(document_id):
                 raise ValueError("The file is empty.")
             if len(raw) > MAX_FILE_BYTES:
                 raise ValueError("The file is over 250 MB.")
-            mime = validate_bytes(raw)          # real PDF / JPEG / PNG, by content — before any parser sees it
+            mime = validate_bytes(raw)
             if mime.startswith("image/"):
                 size = ocr.image_size(raw)
                 if size is None:
@@ -488,8 +462,7 @@ def extract_document(document_id):
         doc.save(update_fields=["status", "updated_at"])
         return True
 def classify_document(document_id):
-    """Stage 2: the rule engine on the extracted text → the document's classification. A person's choice is never
-    overwritten. The document ends "completed", or "review_required" if the rules could not tell what it is."""
+    """Stage 2: the rule engine on the extracted text → the document's classification. A person's choice is never"""
     with _locked(document_id) as got:
         if not got:
             return
@@ -501,9 +474,7 @@ def classify_document(document_id):
         review = classification.status == REVIEW_REQUIRED
         _end(doc, Status.REVIEW_REQUIRED if review else Status.COMPLETED, error_message="")
 def reclassify_existing(limit=5000):
-    """Run today's rules again over documents the rules classified (never a person's choice, never a hospital-issued
-    document), using the text already extracted — no OCR. For after a keyword in classification.py was edited.
-    Returns {"checked", "changed", "classified", "unclassified"}."""
+    """Run today's rules again over documents the rules classified (never a person's choice, never a hospital-issued"""
     counts = {"checked": 0, "changed": 0, "classified": 0, "unclassified": 0}
     docs = (MedicalDocument.objects
             .filter(status__in=(Status.COMPLETED, Status.REVIEW_REQUIRED), source_hospital_id__isnull=True,
@@ -521,9 +492,7 @@ def reclassify_existing(limit=5000):
         counts["unclassified" if doc.doc_classification == NOT_CLASSIFIED else "classified"] += 1
     return counts
 def correct_document(doc, document_type):
-    """A person files the document under `document_type` - one file at a time. It replaces whatever the rules said
-    and locks the document: once decided, nobody (not the patient, not an admin) can change it again.
-    Works on a failed document too: the file is still there, so it becomes a normal completed one."""
+    """A person files the document under `document_type` - one file at a time. It replaces whatever the rules said"""
     if is_confirmed(doc):
         raise DocumentLocked("This document is confirmed and can't be changed.")
     if doc.status in MedicalDocument.IN_PROGRESS:
@@ -532,8 +501,7 @@ def correct_document(doc, document_type):
     _end(doc, Status.COMPLETED, error_message="")
 # ── the review step: which uploads still wait for the patient's decision ─────
 def review_starts_at():
-    """When the review step began (settings.RECORDS_REVIEW_FROM, an ISO date-time). Everything uploaded before it is
-    already part of the patient's documents and never needs review; unset means the review step is off."""
+    """When the review step began (settings.RECORDS_REVIEW_FROM, an ISO date-time). Everything uploaded before it is"""
     raw = getattr(settings, "RECORDS_REVIEW_FROM", "") or ""
     when = parse_datetime(raw) if raw else None
     if when is not None and when.tzinfo is None:
@@ -548,9 +516,7 @@ def awaiting_review_q():
     return (Q(created_by_type="P", source_hospital_id__isnull=True, created_at__gte=start)
             & ~Q(d_classification__status__in=(HUMAN_CLASSIFIED, ISSUED)))
 def document_counts(awpid):
-    """What the My Documents dropdown and the badges need: {"total", "awaiting_review", "unclassified", "by_type"}.
-    Only finished, confirmed-or-grandfathered documents count towards the types; the files waiting for review are
-    counted apart."""
+    """What the My Documents dropdown and the badges need: {"total", "awaiting_review", "unclassified", "by_type"}."""
     docs = MedicalDocument.objects.using("default").filter(patient__awpid=awpid)
     awaiting = awaiting_review_q()
     done = (Status.COMPLETED, Status.REVIEW_REQUIRED)
@@ -565,9 +531,7 @@ def document_counts(awpid):
         "by_type": by_type,
     }
 def submit_decisions(awpid, decisions):
-    """The patient's final answer for a list of files: [{"document_id", "document_type"}]. Each file is checked on
-    its own - a bad one never stops the rest. Returns ({"submitted": [id], "rejected": [{"document_id", "reason"}]}).
-    A submitted file gets the person's type and is locked. Sending the same list again changes nothing."""
+    """The patient's final answer for a list of files: [{"document_id", "document_type"}]. Each file is checked on"""
     wanted = [d["document_id"] for d in decisions]
     docs = {d.id: d for d in MedicalDocument.objects.using("default").filter(patient__awpid=awpid, pk__in=wanted)
             .select_related("d_classification")}
@@ -608,18 +572,14 @@ def retry_document(doc):
         raise ValueError("Only a file that failed can be tried again.")
     _end(doc, Status.QUEUED, error_message="")
 def can_discard(doc):
-    """A patient may remove an upload that failed, or one that has been read but whose type they have not confirmed yet
-    (the Needs Review and Ready to Submit lists). Never one still being read - the worker is using it - and never one
-    already confirmed, which is part of their records."""
+    """A patient may remove an upload that failed, or one that has been read but whose type they have not confirmed yet"""
     if doc.status == Status.FAILED:
         return True
     if doc.status not in (Status.COMPLETED, Status.REVIEW_REQUIRED):
         return False
     return MedicalDocument.objects.using("default").filter(pk=doc.pk).filter(awaiting_review_q()).exists()
 def dismiss_document(doc):
-    """The patient removes an upload (see `can_discard`): its stored copy and its rows. A document that is being read
-    or is already confirmed is never deleted here, so nothing in the patient's records is ever lost. The batch is
-    brought in line with what is left (and removed when nothing is)."""
+    """The patient removes an upload (see `can_discard`): its stored copy and its rows. A document that is being read"""
     if not can_discard(doc):
         raise ValueError("Only a file that failed, or one you haven't confirmed yet, can be removed.")
     batch, name = doc.batch, (doc.file_name.name if doc.file_name else "")
@@ -629,8 +589,7 @@ def dismiss_document(doc):
         if not batch.b_documents.exists():
             batch.delete()
 def _queue_processing(document_id):
-    """Read a hospital-issued document for the timeline too (its text, then its facts), once its row is committed.
-    The hospital's save never fails because the queue is down: backfill_task fills in what was missed."""
+    """Read a hospital-issued document for the timeline too (its text, then its facts), once its row is committed."""
     def queue():
         try:
             from apps.documents.tasks import process_document_task
@@ -640,9 +599,7 @@ def _queue_processing(document_id):
     transaction.on_commit(queue, using="default")
 def create_issued_document(*, awpid, file_path, name, doc_type, source_hospital_id, source_type, source_id, mime_type="application/pdf",
                            public_document_id="", document_date=None):
-    """A document a hospital made for the patient (signed prescription, lab report, handwriting): it is already in
-    the bucket at `file_path` and already has its type, from its source, so it skips the upload pipeline (no
-    classification) and is stored as completed. Its text and timeline facts are read in the background."""
+    """A document a hospital made for the patient (signed prescription, lab report, handwriting): it is already in"""
     doc = MedicalDocument(
         patient=Patient.objects.using("default").get(awpid=awpid), created_by_type="H",
         source_hospital_id=source_hospital_id, source_type=source_type,
@@ -654,8 +611,7 @@ def create_issued_document(*, awpid, file_path, name, doc_type, source_hospital_
     _queue_processing(doc.pk)
     return MedicalDocument.objects.using("default").get(pk=doc.pk)
 def extract_text(raw, mime):
-    """(text, engine). PDF text layer if it has one ("pdf_text"), otherwise RapidOCR on the image or the first PDF
-    pages ("ocr")."""
+    """(text, engine). PDF text layer if it has one ("pdf_text"), otherwise RapidOCR on the image or the first PDF"""
     if mime == "application/pdf":
         from pypdf import PdfReader
         text = "\n".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(raw)).pages[:5]).strip()
@@ -668,8 +624,7 @@ def extract_text(raw, mime):
 def _read_file(doc):
     return storage.get_bytes(doc.file_name.name)
 def document_text(doc):
-    """The document's extracted text. A hospital-issued document skipped the upload pipeline, so it has none yet:
-    read it from its file now, the same way an upload is read."""
+    """The document's extracted text. A hospital-issued document skipped the upload pipeline, so it has none yet:"""
     try:
         stored = doc.d_extraction.extracted_text
     except DocumentExtraction.DoesNotExist:

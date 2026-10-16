@@ -1,10 +1,4 @@
-"""
-apps/hospital_setup/compliance_serializers.py
---------------------------------
-Serializers for the audit-log review API (backed by apps.hospital_setup.AuditLog, not
-a table in this app — see views.py::AuditLogListView), RecordAmendment
-(patient correction requests), and ConsentRecord (consent proof trail).
-"""
+"""apps/hospital_setup/compliance_serializers.py"""
 
 from rest_framework import serializers
 
@@ -12,11 +6,7 @@ from apps.hospital_setup.models import RecordAmendment, ConsentRecord
 
 
 class AuditLogSerializer(serializers.Serializer):
-    """
-    Read-only — mirrors apps.hospital_setup.models.AuditLog. A plain Serializer (not
-    ModelSerializer) because this app doesn't own that model; it just reads
-    it from the hospital DB (see views.py).
-    """
+    """Read-only — mirrors apps.hospital_setup.models.AuditLog. A plain Serializer (not"""
     id             = serializers.IntegerField()
     actor_user_id  = serializers.IntegerField(allow_null=True)
     actor_email    = serializers.CharField()
@@ -57,15 +47,9 @@ class RecordAmendmentSerializer(serializers.ModelSerializer):
 
 
 class RecordAmendmentCreateSerializer(serializers.Serializer):
-    """
-    Patient-facing — what a patient submits to request a correction.
-    `patient` and `status` are set by the view, not accepted from the client.
-    """
+    """Patient-facing — what a patient submits to request a correction."""
     resource_type   = serializers.CharField(max_length=50)
     # A patient describing "my address is wrong" has no way to know the
-    # internal row id of their own Patient record — defaults to 0 (not a
-    # real id) when omitted; the reviewing staff member resolves the exact
-    # record from resource_type + field_name + the patient it's attached to.
     resource_id     = serializers.IntegerField(required=False, default=0)
     field_name      = serializers.CharField(max_length=100)
     current_value   = serializers.CharField(max_length=2000, required=False, allow_blank=True)

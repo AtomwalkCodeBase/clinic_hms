@@ -1,8 +1,4 @@
-"""
-apps/hospital_setup/compliance_urls.py
--------------------------
-Mounted at /api/v1/compliance/ (see core/urls.py).
-"""
+"""apps/hospital_setup/compliance_urls.py"""
 
 from django.urls import path
 

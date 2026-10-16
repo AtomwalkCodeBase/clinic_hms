@@ -1,16 +1,4 @@
-"""
-apps/billing/pdf.py
---------------------
-Renders a real, printable PDF for an Invoice — reportlab is already a
-project dependency (used by the demo-seed script for synthetic lab report
-PDFs; see apps/management/commands/seed_full_demo.py) but this is
-the first place it's used for an actual production document.
-
-Returns raw PDF bytes; the view layer wraps them as a base64 data URI so the
-frontend can open them the same way every other in-app file viewer does
-(JWT auth is a bearer header, not a cookie, so a plain <a href> to the API
-url won't carry credentials — see frontend/src/utils/fileViewer.js).
-"""
+"""apps/billing/pdf.py"""
 from decimal import Decimal
 from io import BytesIO
 
@@ -26,13 +14,7 @@ def _money(v):
 
 
 def _qr_image(text):
-    """
-    A compact QR receipt (HMS-09c-2) — no public verification portal exists
-    in this product yet, so rather than link to a URL that would 404, the
-    code encodes the receipt itself (invoice #, patient, amount, date) as
-    plain text. Still genuinely useful: any QR scanner app shows the payment
-    confirmation without the patient needing to unfold/photograph the paper.
-    """
+    """A compact QR receipt (HMS-09c-2) — no public verification portal exists"""
     import qrcode
     qr = qrcode.QRCode(box_size=4, border=1)
     qr.add_data(text)
@@ -41,14 +23,7 @@ def _qr_image(text):
 
 
 def generate_invoice_pdf(invoice, items, payments, patient, branch, hospital_name):
-    """
-    invoice: billing.Invoice instance
-    items:   list of billing.InvoiceItem
-    payments: list of billing.Payment
-    patient: hospital_patients.HospitalPatient instance
-    branch:  org.Branch instance (may be None)
-    hospital_name: str
-    """
+    """invoice: billing.Invoice instance"""
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
@@ -79,7 +54,6 @@ def generate_invoice_pdf(invoice, items, payments, patient, branch, hospital_nam
     c.drawRightString(qr_col_right, height - 36 * mm, f"Status: {invoice.status.replace('_', ' ').title()}")
 
     # QR receipt — invoice #, patient, amount, date encoded as plain text
-    # (see _qr_image docstring for why it's not a URL).
     try:
         qr_text = (
             f"{hospital_name or 'Hospital'}\n"
@@ -95,7 +69,6 @@ def generate_invoice_pdf(invoice, items, payments, patient, branch, hospital_nam
                     width=qr_size, height=qr_size, preserveAspectRatio=True, mask="auto")
     except Exception:
         # QR generation is a nice-to-have, not the reason this PDF exists —
-        # never let it block the invoice itself from rendering.
         pass
 
     y -= 6 * mm

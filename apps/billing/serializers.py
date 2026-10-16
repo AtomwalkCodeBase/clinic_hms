@@ -10,8 +10,6 @@ from apps.billing.models import (
 
 class ServiceCategorySerializer(serializers.ModelSerializer):
     # `name` is kept as the external field name (source="label") so the
-    # /billing/service-categories/ response shape is byte-for-byte
-    # unchanged from the pre-merge ServiceCategory table.
     name = serializers.CharField(source="label")
 
     class Meta:
@@ -38,17 +36,6 @@ class InvoiceStatusOptionSerializer(serializers.ModelSerializer):
 
 class RoomTypeOptionSerializer(serializers.ModelSerializer):
     # Same value+label shape as InvoiceStatusOptionSerializer (not the
-    # name-mirrors-label shape ServiceCategory/PaymentMode use) — Room.room_type
-    # stores this row's machine `value`, while `label` is what the Room
-    # form's dropdown displays, matching how the field already worked
-    # before it became hospital-configurable (was a fixed choices= list on org.models.Room).
-    #
-    # category/is_bed_based are what let this one catalog serve both OPD
-    # rooms (Consultation, Procedure — category="opd"/"procedure",
-    # is_bed_based=False) and bed-based IPD rooms (General Ward, Private,
-    # ICU, … — category="ipd", is_bed_based=True) since the v8 unification
-    # folded org.Ward's old, separate ward_type catalog in here. See
-    # billing.OptionList's own docstring.
     class Meta:
         model  = OptionList
         fields = ["id", "value", "label", "is_active", "is_system", "sort_order",
@@ -81,9 +68,6 @@ class InvoiceSerializer(serializers.ModelSerializer):
     items    = InvoiceItemSerializer(many=True, read_only=True)
     payments = PaymentSerializer(many=True, read_only=True)
     # `patient` on its own is just a FK id — front desk's billing list needs
-    # a name to search/scan by, same as every other patient-facing list in
-    # this app. `patient` is a real same-DB ForeignKey (not cross-hospital),
-    # so `.full_name`/`.uhid` are free reads off the already-fetched row.
     patient_name = serializers.SerializerMethodField()
     patient_uhid = serializers.SerializerMethodField()
 

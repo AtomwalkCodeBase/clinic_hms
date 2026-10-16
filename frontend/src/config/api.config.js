@@ -34,6 +34,7 @@ export const API_ENDPOINTS = {
 
   RECORDS: {
     UPLOAD: `${API_V1}/records/upload/`,   // multipart, apps/records
+    SUBMIT: `${API_V1}/records/submit/`,   // the patient confirms the type of each new upload
     HEALTH_TIMELINE:  (awpid) => `${API_V1}/peds/patients/${awpid}/health-timeline/`,
     GROWTH:           (awpid) => `${API_V1}/peds/patients/${awpid}/growth/`,
     IMMUNIZATION:     (awpid) => `${API_V1}/peds/patients/${awpid}/immunization/`,

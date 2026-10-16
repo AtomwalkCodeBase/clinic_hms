@@ -1,20 +1,4 @@
-"""
-core/messaging/email.py
----------------
-Thin wrapper over Django's own email machinery (django.core.mail) — this
-codebase had no EMAIL_BACKEND configured at all before this file existed
-(see core/settings/base.py). In DEBUG it defaults to Django's console
-backend (prints the email to the server log — no account needed, fully
-functional for local dev/demo). In production it requires real SMTP
-credentials via env vars (EMAIL_HOST / EMAIL_HOST_USER / EMAIL_HOST_PASSWORD
-etc.) — same "the hospital's own account, not ours" pattern already used
-for the payment gateway: Atomwalk can't supply a working mail relay on the
-customer's behalf, but the integration is real and will work the moment
-they plug in an SMTP account (Gmail app password, SES, SendGrid SMTP, etc).
-
-Never raises — a failed email must not break the request that triggered it
-(same never-break-the-caller contract as core/utils/audit.py::log_action).
-"""
+"""core/messaging/email.py"""
 
 import logging
 
@@ -68,12 +52,7 @@ def send_temp_password_email(to: str, full_name: str, temp_password: str, login_
 
 def send_hospital_provisioned_email(to: str, hospital_name: str, hospital_code: str,
                                      employee_id: str, admin_mobile: str, temp_password: str) -> bool:
-    """
-    Sent once, at provisioning time, to the hospital's admin email — the only
-    place the raw temp password is delivered. The provisioning UI deliberately
-    stops showing it on screen (see platform-admin DashboardPage.jsx), so this
-    email is the admin's sole record of it until they set their own password.
-    """
+    """Sent once, at provisioning time, to the hospital's admin email — the only"""
     subject = f"Your Atomwalk hospital admin account is ready — {hospital_name}"
     body = (
         f"Hi,\n\n"

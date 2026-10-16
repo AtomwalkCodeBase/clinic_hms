@@ -1,27 +1,11 @@
-"""
-core/api/response.py
-----------------
-Standardized API response helpers.
-ALL views must use these functions — never return raw serializer data.
-
-Response shape:
-  Success: { success: true,  message: str, data: any }
-  Error:   { success: false, message: str, errors: dict }
-"""
+"""core/api/response.py"""
 
 from rest_framework.response import Response
 from rest_framework import status as http_status
 
 
 def success(data=None, message="", status=http_status.HTTP_200_OK):
-    """
-    Return a successful API response.
-
-    Args:
-        data:    The payload to return (serialized dict/list or None).
-        message: Optional human-readable success message.
-        status:  HTTP status code (default 200).
-    """
+    """Return a successful API response."""
     return Response(
         {
             "success": True,
@@ -38,14 +22,7 @@ def created(data=None, message="Created successfully"):
 
 
 def error(message="An error occurred", errors=None, status=http_status.HTTP_400_BAD_REQUEST):
-    """
-    Return an error API response.
-
-    Args:
-        message: Human-readable error summary.
-        errors:  Dict of field-level errors (from serializer.errors or custom).
-        status:  HTTP status code (default 400).
-    """
+    """Return an error API response."""
     return Response(
         {
             "success": False,

@@ -4,8 +4,7 @@ from core.storage import _attachment_disposition
 
 
 class AttachmentDispositionTests(SimpleTestCase):
-    """S3 rejects a response-content-disposition that isn't ISO-8859-1 — this
-    broke every View/Download on prescriptions titled "Rx … — <date>"."""
+    """S3 rejects a response-content-disposition that isn't ISO-8859-1 — this"""
 
     def _assert_s3_safe(self, value):
         value.encode("iso-8859-1")          # must not raise

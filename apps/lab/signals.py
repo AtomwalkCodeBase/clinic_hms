@@ -1,8 +1,4 @@
-"""
-apps/lab/signals.py
---------------------
-Write-through: when a LabReport is delivered, mirror it to atomwalk.LabResult.
-"""
+"""apps/lab/signals.py"""
 
 import logging
 from django.db.models.signals import post_save
@@ -31,8 +27,6 @@ def on_report_delivered(sender, instance, **kwargs):
     from apps.patients.models import Patient
 
     # Mirror into the My Reports document vault (MedicalDocument) so a delivered lab report shows in the patient's
-    # My Reports. The result below links to it; it is also the report's file. Best-effort: a failure here must not
-    # roll back the deliver.
     document = None
     try:
         from apps.lab.archive import store_lab_report_document

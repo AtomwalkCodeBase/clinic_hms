@@ -1,13 +1,4 @@
-"""
-LLM extraction of pediatric clinical facts from already-OCR'd document text.
-
-The LLM (DeepSeek-R1 on the shared Ollama GPU box) is used ONLY to pull facts
-out of free text. It never decides chronic/acute, severity or recurrence -
-those are in clinical_rules / episodes and driven by config.
-
-Everything returned here is normalised (units, dates) and sanity-checked
-before it touches the database.
-"""
+"""LLM extraction of pediatric clinical facts from already-OCR'd document text."""
 
 import json
 import logging
@@ -79,9 +70,7 @@ def build_user_prompt(doc_type: str, text: str, patient_dob: Optional[date]) -> 
 
 # ------------------------------------------------------------------ LLM call
 def ask_llm(system: str, user: str, timeout: int = 180) -> str:
-    """The same prompt to the company LLM api (settings.LLM_API_URL, token auth, {"user_prompt": ...} in, the answer text
-    out) or, for local testing with LLM_API_STYLE=ollama, to a local Ollama (/api/chat, no token). The api takes one
-    prompt, so the instructions go in front of the document. A 503 from the company api means its GPU is off."""
+    """The same prompt to the company LLM api (settings.LLM_API_URL, token auth, {"user_prompt": ...} in, the answer text"""
     import requests
 
     prompt = f"{system}\n\n{user}"

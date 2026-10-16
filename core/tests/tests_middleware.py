@@ -1,8 +1,4 @@
-"""
-core/tests/tests_middleware.py
-------------------------
-Which paths JWTHospitalMiddleware lets through without a Bearer token.
-"""
+"""core/tests/tests_middleware.py"""
 
 from django.conf import settings
 from django.test import TestCase, override_settings

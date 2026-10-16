@@ -1,11 +1,4 @@
-"""
-core/auth/tests.py
-------------------------
-DB-independent tests for token issuance/shape. Full login-flow tests (staff/
-platform/patient) need a live atomwalk DB + a provisioned hospital DB, so
-they're intentionally not attempted here — see the module docstring in
-core/tests/tests.py for the DB-independent vs DB-backed test split.
-"""
+"""core/auth/tests.py"""
 
 import jwt
 from django.conf import settings
@@ -16,10 +9,7 @@ from core.auth.views import _make_tokens, StaffLoginView, PlatformLoginView, Pat
 
 class TokenIssuanceTests(TestCase):
     def test_access_and_refresh_tokens_have_distinct_jti(self):
-        """
-        Each token must get its own jti so logout can revoke exactly one
-        token (e.g. just the access token) without invalidating the other.
-        """
+        """Each token must get its own jti so logout can revoke exactly one"""
         tokens = _make_tokens({"user_id": 1, "role": "doctor"})
         access_payload = jwt.decode(tokens["access"], settings.JWT_SIGNING_KEY, algorithms=["HS256"])
         refresh_payload = jwt.decode(tokens["refresh"], settings.JWT_SIGNING_KEY, algorithms=["HS256"])
@@ -39,11 +29,7 @@ class TokenIssuanceTests(TestCase):
 
 
 class LoginThrottleScopeTests(TestCase):
-    """
-    Verifies the login endpoints are actually wired to the "login" throttle
-    scope (settings.py alone doesn't guarantee a view uses it — this closes
-    that gap so a future refactor can't silently drop the rate limit).
-    """
+    """Verifies the login endpoints are actually wired to the "login" throttle"""
 
     def test_staff_login_has_login_scope(self):
         self.assertEqual(StaffLoginView.throttle_scope, "login")

@@ -1,11 +1,4 @@
-"""
-apps/opd/pdf.py
-----------------
-Renders a real, printable PDF for a Prescription — same reportlab pattern as
-apps/billing/pdf.py's invoice PDF (see that module's docstring for why this
-returns raw bytes rather than a rendered template, and why the view layer
-wraps them as a base64 data URI instead of a raw application/pdf response).
-"""
+"""apps/opd/pdf.py"""
 import base64
 from io import BytesIO
 
@@ -26,18 +19,7 @@ ROUTE_LABEL = {
 
 
 def generate_prescription_pdf(prescription, items, doctor_name, patient, branch, hospital_name, visit_date=None):
-    """
-    prescription: opd.Prescription instance
-    items:        list of opd.PrescriptionItem
-    doctor_name:  str (already resolved — Prescription only stores a raw
-                  doctor_user_id, resolving the display name is the view's job)
-    patient:      hospital_patients.HospitalPatient instance
-    branch:       org.Branch instance (may be None)
-    hospital_name: str
-    visit_date:   date the encounter happened (may be None) — distinct from
-                  created_at on the prescription row itself, which is fine
-                  to fall back to if this isn't passed.
-    """
+    """prescription: opd.Prescription instance"""
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
@@ -63,13 +45,6 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
     when = visit_date or prescription.created_at
 
     # ── QR: "scan to save in My Reports" ────────────────────────────────
-    # Encodes a view-report link (core.utils.qr_token.issue_url) whose token ties
-    # this Rx number to the patient's AWPID — the app's own camera forwards
-    # whatever it scans straight to the verify() path and files it under
-    # Prescriptions automatically; any other scanner (Google Lens etc.) just
-    # opens the link as a normal webpage with a view-consent prompt
-    # (apps/hospital_patients/document_view_views.py). Best-effort: a missing
-    # rx_number / awpid, or any error, just omits the QR.
     header_right = right
     try:
         awpid = getattr(patient, "awpid", "") if patient else ""
@@ -199,22 +174,7 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
 
 def generate_encounter_summary_pdf(encounter, appointment, diagnoses, rx_items, doctor_name,
                                     patient, branch, hospital_name):
-    """
-    A real, printable consultation summary PDF — replaces the doctor's old
-    "Download Summary" button, which built a plain .txt file client-side
-    with no server round trip. Same reportlab pattern as
-    generate_prescription_pdf/apps.billing.pdf.generate_invoice_pdf above.
-
-    encounter:   opd.OPDEncounter instance (signed or draft — either way,
-                 this reflects whatever's on the encounter right now)
-    appointment: opd.Appointment instance (for chief_complaint/visit date)
-    diagnoses:   encounter.diagnoses (list of {"code","description","is_primary"})
-    rx_items:    list of opd.PrescriptionItem, or [] if nothing prescribed
-    doctor_name: str (already resolved by the caller)
-    patient:     hospital_patients.HospitalPatient instance
-    branch:      org.Branch instance (may be None)
-    hospital_name: str
-    """
+    """A real, printable consultation summary PDF — replaces the doctor's old"""
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
@@ -383,16 +343,7 @@ def generate_encounter_summary_pdf(encounter, appointment, diagnoses, rx_items, 
 
 
 def images_to_pdf(page_data_uris, *, header=None):
-    """
-    Stitch a list of "data:image/...;base64,..." strings into one PDF, one
-    image per A4 page, scaled to fit with a margin and aspect ratio kept.
-
-    Used to archive the consult-pad's raw handwriting (ConsultSession
-    rx_pages / note_pages) as a permanent PDF on encounter sign — see
-    apps.opd.views._store_handwriting_pdfs.
-
-    Returns PDF bytes, or None if nothing decodable was passed.
-    """
+    """Stitch a list of "data:image/...;base64,..." strings into one PDF, one"""
     imgs = []
     for uri in page_data_uris or []:
         if not isinstance(uri, str) or "," not in uri:

@@ -1,9 +1,4 @@
-"""
-apps/billing/tests.py
----------------------
-Hospital-DB tests for payment posting. Needs the "hospital_test" alias:
-  python manage.py test apps.billing --settings=core.settings.test   (skipped otherwise)
-"""
+"""apps/billing/tests.py"""
 
 import threading
 from decimal import Decimal

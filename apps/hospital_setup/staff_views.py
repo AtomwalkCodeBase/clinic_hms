@@ -1,17 +1,4 @@
-"""
-apps/org/views.py
------------------
-Org management APIs for hospital admin setup.
-
-Hospital admin flow:
-  1. Create branches (physical locations)
-  2. Create departments within branches
-  3. Invite staff (generates invite token → staff sets own password)
-  4. Create/update doctor profiles
-
-All views require IsAuthenticated + IsHospitalAdmin unless noted.
-IsHospitalStaff allows read-only access where indicated.
-"""
+"""apps/org/views.py"""
 
 import base64
 import mimetypes
@@ -59,8 +46,6 @@ from apps.hospital_setup.staff_serializers import (
 )
 
 # Rough cap on the base64 photo payload — keeps us comfortably under DRF's
-# default 2.5MB request-body limit (DATA_UPLOAD_MAX_MEMORY_SIZE) while still
-# allowing a reasonably sized profile photo. ~1.4MB of actual image data.
 _MAX_PHOTO_BASE64_CHARS = 1_900_000
 
 
@@ -71,19 +56,7 @@ def _gen_temp_password(length=12) -> str:
 
 
 def _email_collision(email, hospital_db, exclude_staff_id=None):
-    """
-    Returns an error message if `email` is already in use somewhere it
-    would collide at the database level, or "" if it's free to use.
-
-    Two separate unique constraints can be hit here — StaffUser.email is
-    unique WITHIN a hospital DB, and StaffMobileIndex.email is unique ACROSS
-    every hospital on the platform (it's the atomwalk-wide login-routing
-    index). Neither was checked before writing, so inviting/reactivating a
-    staff member with an email already used by anyone else — even a
-    deactivated account at the SAME hospital, or any account at a
-    DIFFERENT one — hit an unhandled IntegrityError and surfaced as a raw
-    500 instead of a clean validation error.
-    """
+    """Returns an error message if `email` is already in use somewhere it"""
     if not email:
         return ""
     from apps.patients.models import StaffMobileIndex
@@ -96,8 +69,6 @@ def _email_collision(email, hospital_db, exclude_staff_id=None):
     idx_qs = StaffMobileIndex.objects.using("default").filter(email__iexact=email)
     if exclude_staff_id:
         # The reactivation path's own index row (same mobile) is allowed to
-        # keep this same email — only a DIFFERENT mobile's index row using
-        # it is a real collision.
         existing_mobile = StaffUser.objects.using(hospital_db).filter(pk=exclude_staff_id).values_list("phone", flat=True).first()
         if existing_mobile:
             idx_qs = idx_qs.exclude(mobile=existing_mobile)
@@ -150,12 +121,7 @@ class StaffListView(APIView):
 
 
 class StaffInviteView(APIView):
-    """
-    POST /api/v1/org/staff/invite/
-    Creates a staff user with unusable password.
-    Returns an invite_token for the staff member to set their own password via
-    POST /api/v1/auth/setup-password/.
-    """
+    """POST /api/v1/org/staff/invite/"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def post(self, request):
@@ -165,12 +131,6 @@ class StaffInviteView(APIView):
         d = s.validated_data
 
         # ── Resolve custom role (role="custom" only) ────────────────────────
-        # Everything below that used to branch on the literal string
-        # d["role"] == "doctor" now branches on is_doctor_equivalent instead,
-        # so a custom role that acts_as doctor gets exactly the same
-        # DoctorProfile / schedule / resource-limit treatment a real doctor
-        # invite gets — see apps.hospital_setup.rbac.resolve_acts_as for why this is
-        # the right identity signal, not the permission codes.
         custom_role_obj = None
         acts_as = set()
         if d["role"] == "custom":
@@ -187,11 +147,6 @@ class StaffInviteView(APIView):
         is_doctor_equivalent = d["role"] == "doctor" or "doctor" in acts_as
 
         # ── Subscription limit check (fails CLOSED — see apps.hospital_master.services) ──
-        # Applies whether this ends up creating a brand-new StaffUser or
-        # reactivating a previously-deactivated one below — either way the
-        # active headcount for this role goes up by one, and a deactivated
-        # account isn't counted in current usage, so the same check (with its
-        # default increment=1) is correct for both paths.
         from apps.hospital_master.models import Hospital
         from apps.hospital_master.services import check_limit, LimitCheckFailed
         resource = "doctors" if is_doctor_equivalent else "staff"
@@ -204,9 +159,6 @@ class StaffInviteView(APIView):
             return error(exc.message, status=exc.status)
 
         # A mobile number already routed to a *different* hospital must not be
-        # silently reassigned here — that would hijack that person's login at
-        # their existing hospital. Only proceed if it's unused, or already
-        # points at this same hospital (the reactivation path below).
         existing_index = StaffMobileIndex.objects.using("default").filter(mobile=d["phone"]).first()
         if existing_index and existing_index.hospital.db_name != request.hospital_db:
             return error(
@@ -230,9 +182,6 @@ class StaffInviteView(APIView):
             existing.custom_role          = custom_role_obj
             existing.email                = d.get("email") or existing.email
             # Employee ID is auto-generated via NNTM, never typed in — see
-            # next_employee_id. Someone predating this feature (or created
-            # before it) may not have one yet; assign it now rather than
-            # leaving it permanently blank. Once set it never changes.
             if not existing.employee_id:
                 existing.employee_id = next_employee_id(request.hospital_db)
             existing.must_change_password = True
@@ -298,24 +247,17 @@ class StaffInviteView(APIView):
         staff.save(using=request.hospital_db)
 
         # Extra branches beyond the primary — meaningful for doctors who
-        # work more than one location; harmless single-row equivalent to
-        # the legacy branch FK for every other role. Only acts if the
-        # caller actually sent branch_ids (most invites won't).
         if d.get("branch_ids"):
             from apps.hospital_setup.branch_utils import set_staff_branches
             set_staff_branches(staff, d["branch_ids"], branch.id if branch else None, request.hospital_db)
             staff.save(using=request.hospital_db, update_fields=["branch"])
 
         # Doctor basics — admin enters these now so patient-facing cards are
-        # never blank; the doctor fills in the rest themselves after login.
         if is_doctor_equivalent and any(
             d.get(f) for f in ("registration_no", "specialisation", "qualification", "experience_years",
                                "consultation_fee", "followup_fee")
         ):
             # consultation_fee / followup_fee are only written when the
-            # hospital controls fees; when fee_ownership == "doctor" both
-            # fields belong to the doctor's self-service profile and are
-            # intentionally left null here.
             from apps.hospital_master.models import Hospital as _Hospital
             try:
                 _hospital = _Hospital.objects.using("default").get(pk=request.hospital_id)
@@ -338,7 +280,6 @@ class StaffInviteView(APIView):
             )
 
         # Working-hours schedule — optional at registration; doctor can also
-        # configure it later via PATCH /org/staff/<pk>/schedule/.
         if is_doctor_equivalent and d.get("schedule"):
             from apps.hospital_setup.models import DoctorSchedule, DoctorAvailabilitySlot
             from apps.hospital_setup.staff_serializers import DoctorScheduleSerializer as _SchedSer
@@ -355,8 +296,6 @@ class StaffInviteView(APIView):
                         schedule=sched, **day
                     )
         # Same basics for every other role — nursing/pharmacy council
-        # registration is legally required before those accounts should be
-        # treated as active, and nobody should end up with a blank profile.
         elif not is_doctor_equivalent and any(
             d.get(f) for f in ("registration_no", "council_name", "registration_expiry",
                                "qualification", "experience_years")
@@ -389,11 +328,7 @@ class StaffInviteView(APIView):
 
 
 class StaffDetailView(APIView):
-    """
-    GET   /api/v1/org/staff/{id}/  — staff member detail
-    PATCH /api/v1/org/staff/{id}/  — update role, branch, department, phone
-    DELETE /api/v1/org/staff/{id}/ — deactivate (soft)
-    """
+    """GET   /api/v1/org/staff/{id}/  — staff member detail"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def _get(self, request, pk):
@@ -419,9 +354,6 @@ class StaffDetailView(APIView):
             return error("Enter a valid 10-digit mobile number.", errors={"phone": "Invalid format."})
 
         # Changing the login mobile number needs the atomwalk-wide index kept
-        # in sync — otherwise the old number stays routed here and the new
-        # one isn't routed anywhere, breaking this person's login either way.
-        # Reject up front if it's already claimed by someone else.
         if "phone" in d and d["phone"] != staff.phone:
             clash = StaffMobileIndex.objects.using("default").filter(mobile=d["phone"]).exclude(
                 hospital_id=request.hospital_id
@@ -433,13 +365,6 @@ class StaffDetailView(APIView):
                 )
 
         # Refuse to role-change away the last active hospital_admin — see the
-        # matching check in apps/hospital_master/platform_views.py for the deactivate
-        # case (this view's DELETE, below, does the deactivate check).
-        # Checks acts_as too — a custom role bundling "hospital_admin" counts
-        # as an effective admin here just like a literal one, on both sides
-        # (is THIS staff member currently one, and are there OTHERS besides
-        # them) — otherwise a hospital could be silently left with zero
-        # effective admins while this guard believed one still existed.
         staff_old_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
         staff_is_admin = staff.role == "hospital_admin" or "hospital_admin" in staff_old_acts_as
         if "role" in d and d["role"] != "hospital_admin" and staff_is_admin and staff.is_active:
@@ -455,9 +380,6 @@ class StaffDetailView(APIView):
                 )
 
         # Resolve the custom role being moved TO, if any — needed both for
-        # the resource-bucket check right below and for actually setting
-        # staff.custom_role further down. See StaffInviteView for the same
-        # pattern (is_doctor_equivalent from acts_as, not literal role=="doctor").
         new_custom_role_obj = None
         if d.get("role") == "custom":
             if not d.get("custom_role_id"):
@@ -471,11 +393,6 @@ class StaffDetailView(APIView):
                 return error("Custom role not found.", errors={"custom_role_id": "Invalid."})
 
         # A role change that crosses the doctor / non-doctor line moves this
-        # person into a different capacity bucket (max_doctors vs max_staff)
-        # without freeing up a slot anywhere — check the bucket they'd be
-        # moving INTO before allowing it. No check needed for a role change
-        # within the same bucket (e.g. nurse → front_desk) since the total
-        # headcount in that bucket doesn't change.
         if "role" in d and staff.is_active and d["role"] != staff.role:
             old_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
             old_is_doctor = staff.role == "doctor" or "doctor" in old_acts_as
@@ -495,9 +412,6 @@ class StaffDetailView(APIView):
                     return error(exc.message, status=exc.status)
 
         # employee_id is deliberately NOT in this list — it's auto-generated
-        # via NNTM at creation time and never editable afterward (matches
-        # how UHID/invoice numbers work). Assign one now if this record
-        # predates the feature and somehow still doesn't have one.
         if not staff.employee_id:
             staff.employee_id = next_employee_id(request.hospital_db)
 
@@ -525,9 +439,6 @@ class StaffDetailView(APIView):
                 elif field == "role":
                     staff.role = d["role"]
                     # Only ever set for role="custom" — cleared otherwise so
-                    # a staff member moved back to a system role doesn't keep
-                    # a stale custom_role pointing at a bundle they're no
-                    # longer actually assigned.
                     staff.custom_role = new_custom_role_obj
                 else:
                     setattr(staff, field, d[field])
@@ -536,9 +447,6 @@ class StaffDetailView(APIView):
 
         if "phone" in d:
             # NOTE: "email" is deliberately not in `allowed` above (no endpoint
-            # currently lets staff email be edited), but we still sync whatever
-            # the current staff.email is into the index here so the two never
-            # drift apart when the mobile number changes.
             StaffMobileIndex.objects.using("default").update_or_create(
                 mobile=staff.phone,
                 defaults={
@@ -549,9 +457,6 @@ class StaffDetailView(APIView):
 
         if "branch_id" in d:
             # Keep the mapping table's primary row matching the legacy FK
-            # this endpoint just changed — see apps.hospital_setup.branch_utils. Extra
-            # (non-primary) branches, if any, are managed separately via
-            # StaffBranchesView, not through this plain field.
             from apps.hospital_setup.branch_utils import sync_primary_branch
             sync_primary_branch(staff, request.hospital_db)
 
@@ -582,15 +487,7 @@ class StaffDetailView(APIView):
 
 
 class StaffBranchesView(APIView):
-    """
-    GET /api/v1/org/staff/{id}/branches/ — this staff member's full branch
-    assignment (usually just the one primary — see StaffBranchMapping).
-    PUT /api/v1/org/staff/{id}/branches/  — replace it.
-    Body: {"branch_ids": [1, 2], "primary_branch_id": 1}
-    Meaningful for doctors who work more than one branch; harmless to use
-    for any role (a single-entry list is equivalent to the legacy
-    single-branch assignment).
-    """
+    """GET /api/v1/org/staff/{id}/branches/ — this staff member's full branch"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def _get_staff(self, request, pk):
@@ -635,19 +532,7 @@ class StaffBranchesView(APIView):
 
 
 class StaffDoctorsView(APIView):
-    """
-    GET /api/v1/org/staff/{id}/doctors/ — the doctor(s) this nurse is
-    rostered to (empty for every other role).
-    PUT /api/v1/org/staff/{id}/doctors/  — replace it. Body: {"doctor_ids": [1, 2]}
-
-    This is what apps.opd.views's nurse-scoping (AppointmentListCreateView /
-    AppointmentUpcomingView / AppointmentHistoryView / MonitoringListView)
-    reads to decide which patients a nurse's queue/vitals/upcoming-schedule
-    views show — same "assigned, not everyone" idea a doctor already gets
-    from doctor_user_id=request.user.id, just admin-configured instead of
-    identity-derived. An empty list is valid (unassigns everything) and is
-    also every nurse's starting state until an admin sets this.
-    """
+    """GET /api/v1/org/staff/{id}/doctors/ — the doctor(s) this nurse is"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def _get_staff(self, request, pk):
@@ -690,13 +575,7 @@ class StaffDoctorsView(APIView):
 
 
 class MyBranchesView(APIView):
-    """
-    GET /api/v1/org/me/branches/ — the logged-in staff member's own branch
-    assignment (self-service, read-only — branches are assigned by the
-    hospital admin, see StaffBranchesView). Used by the frontend to decide
-    whether to show a branch switcher: one entry (or zero, for staff who
-    predate branch assignment entirely) means no switcher is needed.
-    """
+    """GET /api/v1/org/me/branches/ — the logged-in staff member's own branch"""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
@@ -731,12 +610,6 @@ class StaffResendInviteView(APIView):
 
 
 # ── Table-driven RBAC ──────────────────────────────────────────────────────────
-# See apps.hospital_setup.rbac / docs/onboarding_auth_rbac_architecture.md 4.3. Every
-# hospital DB is seeded (migration 0013) with the 6 system roles and the fixed
-# permission catalog. Viewing is available to any hospital admin regardless
-# of tier — creating/editing a CUSTOM role requires feat_custom_roles
-# (enterprise). System roles are always read-only via this API; they exist
-# to describe the hardcoded Is* checks, not to be edited around them.
 
 class PermissionListView(APIView):
     """GET /api/v1/org/permissions/ — the fixed, deploy-time permission catalog."""
@@ -748,11 +621,7 @@ class PermissionListView(APIView):
 
 
 class RoleListCreateView(APIView):
-    """
-    GET  /api/v1/org/roles/  — every role (6 system + any custom), each with
-                                its granted permission codes.
-    POST /api/v1/org/roles/  — create a custom role. Requires feat_custom_roles.
-    """
+    """GET  /api/v1/org/roles/  — every role (6 system + any custom), each with"""
     def get_permissions(self):
         if self.request.method == "POST":
             return [IsAuthenticated(), IsHospitalAdmin(), RequireFeature("feat_custom_roles")()]
@@ -791,16 +660,7 @@ class RoleListCreateView(APIView):
 
 
 class RoleDetailView(APIView):
-    """
-    PATCH  /api/v1/org/roles/{id}/  — edit a custom role's name/description/
-                                       permission_codes. System roles can't be
-                                       edited (400). Requires feat_custom_roles.
-    DELETE /api/v1/org/roles/{id}/  — delete a custom role. System roles can't
-                                       be deleted. Any staff still holding this
-                                       role (via UserRole) simply loses the
-                                       extra grant — their primary StaffUser.role
-                                       is untouched.
-    """
+    """PATCH  /api/v1/org/roles/{id}/  — edit a custom role's name/description/"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin, RequireFeature("feat_custom_roles")]
 
     def _get_role(self, request, pk):
@@ -851,11 +711,6 @@ class RoleDetailView(APIView):
         if role.is_system_role:
             return error("System roles can't be deleted.")
         # Unlike UserRole (extra roles — CASCADE is fine, losing an extra
-        # grant isn't destructive), StaffUser.custom_role is PROTECTed: a
-        # staff member whose PRIMARY role this is would be left with role=
-        # "custom" and no way to resolve permissions/identity at all if the
-        # role vanished under them. Check explicitly for a clear, actionable
-        # error instead of surfacing Django's raw ProtectedError as a 500.
         holders = StaffUser.objects.using(request.hospital_db).filter(
             custom_role=role, is_active=True
         ).count()
@@ -870,16 +725,7 @@ class RoleDetailView(APIView):
 
 
 class StaffRolesView(APIView):
-    """
-    GET /api/v1/org/staff/{id}/roles/ — this staff member's primary role
-                                         (StaffUser.role, always active) plus
-                                         any extra custom roles assigned.
-    PUT /api/v1/org/staff/{id}/roles/  — replace the extra-roles set.
-                                         Body: {"role_ids": [3, 5]}
-                                         Requires feat_custom_roles. The
-                                         primary role is unaffected — this
-                                         only manages additive grants.
-    """
+    """GET /api/v1/org/staff/{id}/roles/ — this staff member's primary role"""
     def get_permissions(self):
         if self.request.method == "PUT":
             return [IsAuthenticated(), IsHospitalAdmin(), RequireFeature("feat_custom_roles")()]
@@ -925,11 +771,7 @@ class StaffRolesView(APIView):
 # ── Doctor Profile ────────────────────────────────────────────────────────────
 
 class DoctorProfileView(APIView):
-    """
-    GET  /api/v1/org/staff/{id}/doctor-profile/ — get profile
-    POST /api/v1/org/staff/{id}/doctor-profile/ — create profile (doctor role only)
-    PATCH /api/v1/org/staff/{id}/doctor-profile/ — update profile
-    """
+    """GET  /api/v1/org/staff/{id}/doctor-profile/ — get profile"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def _get_staff(self, request, pk):
@@ -984,17 +826,7 @@ class DoctorProfileView(APIView):
 
 
 class MyDoctorProfileView(APIView):
-    """
-    GET   /api/v1/org/me/doctor-profile/ — the logged-in doctor's own profile
-    PATCH /api/v1/org/me/doctor-profile/ — self-service update
-
-    Doctor-only, and always scoped to request.user's own StaffUser row — no
-    :pk in the URL, so a doctor can never read or edit anyone else's profile.
-    Admin-set basics (registration_no, specialisation, qualification,
-    experience_years) are read-only here; use DoctorProfileView (admin-only)
-    to change those. Everything else — fee, signature, bio, photo, languages —
-    the doctor owns.
-    """
+    """GET   /api/v1/org/me/doctor-profile/ — the logged-in doctor's own profile"""
     permission_classes = [IsAuthenticated, IsDoctor]
 
     def _fee_editable(self, request):
@@ -1021,10 +853,6 @@ class MyDoctorProfileView(APIView):
         ctx = {"fee_editable": self._fee_editable(request)}
 
         # digital_signature is handled separately from the generic serializer
-        # loop below — same reasoning as MyStaffProfileView's photo handling:
-        # base64 in, S3 key out, nothing but the key touches the DB.
-        # DoctorSelfProfileSerializer.digital_signature is read-only for this
-        # reason.
         old_sig_key = profile.digital_signature
         if "digital_signature" in request.data:
             sig = request.data.get("digital_signature") or ""
@@ -1064,14 +892,7 @@ class MyDoctorProfileView(APIView):
 # ── Staff Profile (every non-doctor role) ─────────────────────────────────────
 
 class StaffProfileView(APIView):
-    """
-    GET   /api/v1/org/staff/{id}/profile/ — get profile
-    POST  /api/v1/org/staff/{id}/profile/ — create profile (any non-doctor role)
-    PATCH /api/v1/org/staff/{id}/profile/ — update profile
-
-    Admin-only — mirrors DoctorProfileView but for nurse/front desk/lab tech/
-    pharmacist/hospital admin, which use StaffProfile instead of DoctorProfile.
-    """
+    """GET   /api/v1/org/staff/{id}/profile/ — get profile"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def _get_staff(self, request, pk):
@@ -1127,14 +948,7 @@ class StaffProfileView(APIView):
 
 
 class MyStaffProfileDetailsView(APIView):
-    """
-    GET   /api/v1/org/me/staff-profile/ — the logged-in (non-doctor) staff
-                                           member's own profile
-    PATCH /api/v1/org/me/staff-profile/ — self-service update
-
-    Mirrors MyDoctorProfileView for every other role. Doctors have their own
-    richer endpoint (MyDoctorProfileView) and should not hit this one.
-    """
+    """GET   /api/v1/org/me/staff-profile/ — the logged-in (non-doctor) staff"""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
@@ -1161,15 +975,7 @@ class MyStaffProfileDetailsView(APIView):
 
 
 class MyStaffProfileView(APIView):
-    """
-    GET   /api/v1/org/me/profile/ — the logged-in staff member's own basic profile
-    PATCH /api/v1/org/me/profile/ — self-service update (currently: photo only)
-
-    Open to ANY staff role (doctor, nurse, front desk, lab tech, pharmacist,
-    hospital admin) — always scoped to request.user's own StaffUser row.
-    This is deliberately separate from MyDoctorProfileView: photo is common
-    to every login, bio/signature/languages are doctor-specific.
-    """
+    """GET   /api/v1/org/me/profile/ — the logged-in staff member's own basic profile"""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
@@ -1186,11 +992,6 @@ class MyStaffProfileView(APIView):
             return not_found("Staff member not found.")
 
         # photo is handled separately from the generic serializer loop below
-        # — it arrives as a base64 data URI and needs to be verified + pushed
-        # to S3 (core.storage), with only the resulting object key ever
-        # touching the DB. StaffMeSerializer.photo is read-only for exactly
-        # this reason (see its definition) so it never appears in
-        # validated_data.
         old_photo_key = staff.photo
         if "photo" in request.data:
             photo = request.data.get("photo") or ""
@@ -1230,23 +1031,7 @@ class MyStaffProfileView(APIView):
 # ── Doctors list (for scheduling dropdown etc.) ───────────────────────────────
 
 class DoctorListView(APIView):
-    """
-    GET /api/v1/org/doctors/?q=&specialisation=&branch_id= — list doctors
-    with profiles (any staff). Includes custom-role staff whose
-    Role.acts_as includes "doctor" (e.g. a solo-clinic role bundling
-    doctor+nurse+front_desk) — see apps.hospital_setup.rbac.resolve_acts_as. They get
-    a DoctorProfile at invite time the same as a literal doctor (see
-    StaffInviteView), so they show up here with real specialisation/fee/
-    schedule data, not a blank card.
-
-    ?q= matches first/last name or specialisation (front-desk doctor
-    search — "cardio" finds every cardiologist, "sharma" finds every
-    doctor named Sharma). ?specialisation= narrows to an exact
-    specialisation for a dedicated filter dropdown. ?branch_id= narrows to
-    doctors assigned to that branch (see apps.hospital_setup.branch_utils) — omitted
-    means "every branch", same default as everywhere else that filter is
-    optional.
-    """
+    """GET /api/v1/org/doctors/?q=&specialisation=&branch_id= — list doctors"""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
@@ -1276,11 +1061,7 @@ class DoctorListView(APIView):
 
 
 class DoctorSpecialisationListView(APIView):
-    """
-    GET /api/v1/org/doctors/specialisations/ — distinct, non-blank
-    specialisation values currently in use at this hospital, for a filter
-    dropdown (front desk doctor search) instead of free-typing.
-    """
+    """GET /api/v1/org/doctors/specialisations/ — distinct, non-blank"""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
@@ -1301,16 +1082,9 @@ class DoctorSpecialisationListView(APIView):
 # ── Hospital-level clinical settings ───────────────────────────────────────────
 
 class HospitalSettingsView(APIView):
-    """
-    GET   /api/v1/org/settings/  — read hospital-level clinical config
-    PATCH /api/v1/org/settings/  — update (hospital admin only)
-
-    Currently exposes fee_ownership.  Add other per-hospital knobs here rather
-    than scattering them across unrelated endpoints.
-    """
+    """GET   /api/v1/org/settings/  — read hospital-level clinical config"""
     def get_permissions(self):
         # Any staff role may read (the doctor profile needs fee_ownership);
-        # only admins see the full config or may change it.
         perm = IsHospitalStaff if self.request.method == "GET" else IsHospitalAdmin
         return [IsAuthenticated(), perm()]
 
@@ -1331,16 +1105,12 @@ class HospitalSettingsView(APIView):
         return success(data={
             "fee_ownership": params.fee_ownership,
             # Read-only here — staff need this to log in with Employee ID
-            # instead of mobile (see core.auth.views.StaffLoginView), but it's
-            # not exposed for editing on this endpoint; see
-            # hospital_master.platform_views.HospitalDetailView for that.
             "hospital_code": hospital.hospital_code,
             # ── Billing config ──────────────────────────────────────────
             "registration_fee_enabled": params.registration_fee_enabled,
             "registration_fee_amount": str(params.registration_fee_amount),
             "default_tax_rate": str(params.default_tax_rate),
             # ── Branding ───────────────────────────────────────────────
-            # params.logo holds an S3 key; .url signs it fresh on every read (see core/storage.py).
             "logo": params.logo.url if params.logo else "",
         })
 
@@ -1382,8 +1152,6 @@ class HospitalSettingsView(APIView):
         if "logo" in request.data:
             logo = request.data["logo"] or ""
             # Client resizes before upload (see HospitalLogoUpload.jsx), but
-            # don't trust that — cap the incoming string so a bypassed client
-            # can't force an enormous upload through.
             if len(logo) > 1_500_000:
                 return error("Logo image is too large. Please upload a smaller file.")
             if not logo:
@@ -1414,13 +1182,7 @@ class HospitalSettingsView(APIView):
 # ── Doctor working-hours schedule ─────────────────────────────────────────────
 
 class DoctorScheduleView(APIView):
-    """
-    GET   /api/v1/org/staff/<pk>/schedule/  — get doctor's working hours
-    PUT   /api/v1/org/staff/<pk>/schedule/  — full replace (admin or the doctor themselves)
-
-    Both the hospital admin and the doctor whose schedule it is can call PUT.
-    Any other staff role is rejected.
-    """
+    """GET   /api/v1/org/staff/<pk>/schedule/  — get doctor's working hours"""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def _get_doctor(self, request, pk):
@@ -1483,12 +1245,7 @@ class DoctorScheduleView(APIView):
 
 
 class RoomAssignmentListCreateView(APIView):
-    """
-    GET  /api/v1/org/room-assignments/?room_id=&doctor_id=  — list (any staff)
-    POST /api/v1/org/room-assignments/                      — create a weekly
-         slice (hospital admin only). Rejects with 409 if it overlaps an
-         existing active assignment for the same room + day of week.
-    """
+    """GET  /api/v1/org/room-assignments/?room_id=&doctor_id=  — list (any staff)"""
     def get_permissions(self):
         if self.request.method == "GET":
             return [IsAuthenticated(), IsHospitalStaff()]
@@ -1552,10 +1309,7 @@ class RoomAssignmentListCreateView(APIView):
 
 
 class RoomAssignmentDetailView(APIView):
-    """
-    PATCH  /api/v1/org/room-assignments/{id}/ — edit day/time/doctor (re-checks overlap)
-    DELETE /api/v1/org/room-assignments/{id}/ — deactivate
-    """
+    """PATCH  /api/v1/org/room-assignments/{id}/ — edit day/time/doctor (re-checks overlap)"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def _get(self, request, pk):

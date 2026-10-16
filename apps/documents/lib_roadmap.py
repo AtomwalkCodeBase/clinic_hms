@@ -24,12 +24,7 @@ def timing_for(age_days, min_age_days, max_age_days):
 def same_name(a, b):
     return (a or "").strip().lower() == (b or "").strip().lower()
 def merge(rules, records, *, date_of_birth, same_slot, matched, open_slot):
-    """
-    One entry per rule, in rule order, then the records that matched no rule (extra=True).
-      same_slot(rule, record) -> bool   does this record fill this slot (each record fills at most one)
-      matched(rule_or_None, record)     the entry for a slot with a record (rule is None for an extra record)
-      open_slot(rule, timing)           the entry for a slot with no record
-    """
+    """One entry per rule, in rule order, then the records that matched no rule (extra=True)."""
     age_days = (date.today() - date_of_birth).days if date_of_birth else None
     used, roadmap = set(), []
     for rule in rules:
@@ -48,8 +43,7 @@ def default_schedule(noun):
 
 
 def active_schedule(noun, hospital_id=None):
-    """A hospital's active schedule is its own schedule that is switched on (the latest one if several are); with none, or
-    with no hospital (the patient portal, which spans hospitals), the system "Default Schedule" template."""
+    """A hospital's active schedule is its own schedule that is switched on (the latest one if several are); with none, or"""
     if hospital_id:
         own = (Schedule.objects.using("default").filter(kind=noun, owner_hospital_id=hospital_id, active=True)
                .order_by("-updated_at", "-id").first())
@@ -96,15 +90,7 @@ def _serialize_matched(rule, record):
         "extra": rule is None,                # a record that fits no slot of the schedule
     }
 def build_roadmap(awpid, date_of_birth, rules, *, viewer_hospital_id=None, hie_consent=True):
-    """
-    `rules`: a queryset or list of VaccinationScheduleRule (or dicts with vaccine_name, scheduled_label, min_age_days,
-    max_age_days), in display order; the caller picks the schedule (see rules_for in roadmap.py).
-
-    `hie_consent=False` drops records from OTHER hospitals than viewer_hospital_id. Two kinds stay visible anyway:
-    records never attributed to a hospital (source_hospital_id is None), and "pending_review" ones, because any
-    hospital's staff must be able to review a parent's upload. Only the staff roadmap passes False; the patient
-    portal never filters.
-    """
+    """`rules`: a queryset or list of VaccinationScheduleRule (or dicts with vaccine_name, scheduled_label, min_age_days,"""
     from apps.documents.models import ImmunizationRecord
 
     records = ImmunizationRecord.objects.using("default").filter(patient__awpid=awpid)
@@ -127,12 +113,7 @@ def build_roadmap(awpid, date_of_birth, rules, *, viewer_hospital_id=None, hie_c
                                    and same_name(r.vaccine_name, rule_get(rule, "vaccine_name"))),
         matched=_serialize_matched, open_slot=open_slot)
 def summarize_roadmap(roadmap):
-    """
-    Counts for "N of M completed". Only the schedule's own slots count (not `extra` records).
-    `next_recommended` is the first unknown slot that is due now.
-    stats: completed; upcoming (unknown, window not open yet); needs_review (pending_review, or unknown and due now /
-    past window: an open question for the parent or doctor); outside (records, extra or not, not given at a clinic).
-    """
+    """Counts for "N of M completed". Only the schedule's own slots count (not `extra` records)."""
     slots = [item for item in roadmap if not item.get("extra")]
     unknown = [i for i in slots if i["status"] == "unknown"]
     completed = sum(1 for i in slots if i["status"] == "completed")
@@ -169,12 +150,7 @@ def _milestone_roadmap_serialize_matched(rule, record):
         "extra": rule is None,
     }
 def milestone_roadmap_build_roadmap(awpid, date_of_birth, rules, *, viewer_hospital_id=None, hie_consent=True):
-    """
-    The child's real MilestoneRecord rows laid over a schedule's rules (see roadmap.py). `rules` is a queryset or
-    list of MilestoneScheduleRule (or dicts with domain, milestone, scheduled_label, min_age_days, max_age_days),
-    already in display order. `hie_consent=False` drops records logged at a hospital other than viewer_hospital_id;
-    there is no cross-hospital review step for milestones, so nothing is exempt.
-    """
+    """The child's real MilestoneRecord rows laid over a schedule's rules (see roadmap.py). `rules` is a queryset or"""
     from apps.documents.models import MilestoneRecord
 
     records = MilestoneRecord.objects.using("default").filter(patient__awpid=awpid)

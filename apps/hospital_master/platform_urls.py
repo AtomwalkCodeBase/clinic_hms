@@ -37,13 +37,10 @@ urlpatterns = [
          HospitalStaffResetPasswordView.as_view(), name="platform-hospital-staff-reset-password"),
 
     # System-level vaccination schedule templates (owner_hospital_id=None,
-    # is_template=True) — cloned by hospital admins via
-    # apps.documents.views (VaccinationScheduleListCreateView).
     path("vaccination-templates/", VaccinationTemplateListCreateView.as_view(), name="platform-vaccination-template-list-create"),
     path("vaccination-templates/<int:pk>/", VaccinationTemplateDetailView.as_view(), name="platform-vaccination-template-detail"),
 
     # System-level developmental-milestone schedule templates — same
-    # clone-a-template pattern as vaccination templates above.
     path("milestone-templates/", MilestoneTemplateListCreateView.as_view(), name="platform-milestone-template-list-create"),
     path("milestone-templates/<int:pk>/", MilestoneTemplateDetailView.as_view(), name="platform-milestone-template-detail"),
 ]

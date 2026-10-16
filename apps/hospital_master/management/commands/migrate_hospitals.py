@@ -1,15 +1,4 @@
-"""
-Management command: migrate_hospitals
-
-Runs Django migrations against all active hospital DBs (or a specific one).
-
-Usage:
-  # Migrate all active hospitals:
-  python manage.py migrate_hospitals --settings=core.settings.development
-
-  # Migrate a specific hospital by db_name:
-  python manage.py migrate_hospitals --db aw_sunrise_clinic --settings=core.settings.development
-"""
+"""Management command: migrate_hospitals"""
 
 from django.core.management.base import BaseCommand
 

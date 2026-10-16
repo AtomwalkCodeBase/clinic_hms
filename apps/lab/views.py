@@ -24,12 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class LabCatalogView(APIView):
-    """
-    GET  /api/v1/lab/catalog/  — active tests, for doctor/nurse/patient pickers.
-                                  Pass ?include_inactive=1 (lab-tech catalog
-                                  management screen) to also see deactivated ones.
-    POST /api/v1/lab/catalog/  — lab tech adds a new test to the catalog.
-    """
+    """GET  /api/v1/lab/catalog/  — active tests, for doctor/nurse/patient pickers."""
     permission_classes = [IsAuthenticated, IsHospitalStaff, RequireFeature("feat_lab")]
 
     def get_permissions(self):
@@ -51,7 +46,6 @@ class LabCatalogView(APIView):
 
         validated = dict(s.validated_data)
         # Code is never typed by hand — NNTM assigns it, same as UHID/invoice/
-        # lab report numbers, so codes stay unique and consistently formatted.
         if not validated.get("code"):
             validated["code"] = self._next_test_code(request, db)
 
@@ -69,7 +63,6 @@ class LabCatalogView(APIView):
             return ""
 
         # Idempotent — covers branches created before "lab_test" existed as
-        # an NNTM entity, so older hospitals don't hit a missing-row DoesNotExist.
         NextNumber.objects.using(db).get_or_create(
             branch_id=branch_id, entity="lab_test",
             defaults={"prefix": "LT-", "pad_length": 4, "last_number": 0},
@@ -96,24 +89,8 @@ class LabTestDetailView(APIView):
 
 
 # ── Sample Type catalog — "make it configurable" ────────────────────────────
-# Backed by apps.billing.OptionList(list_type="sample_type"), same table as
-# Drug Form / Payment Mode / Room Type / Admission Type&Source — but a
-# bespoke view here (not billing's generic DropdownListCreateView/
-# DropdownDetailView) because that base class hardcodes IsHospitalAdmin for
-# viewing inactive entries (?all=1), which would lock the lab tech — the
-# actual domain expert who manages this catalog, same role as pharmacist for
-# Drug Form (see apps.pharmacy.views.DrugFormTypeListCreateView, the
-# direct precedent this mirrors) — out of the Sample Type Setup screen.
 class SampleTypeListCreateView(APIView):
-    """
-    GET  /api/v1/lab/sample-types/  — active list, for the Lab Test
-                                       Catalog's "Sample Type" dropdown.
-                                       Pass ?include_inactive=1 (Sample Type
-                                       Setup screen) to also see deactivated
-                                       ones.
-    POST /api/v1/lab/sample-types/  — lab tech adds a new sample type
-                                       (e.g. "Tissue").
-    """
+    """GET  /api/v1/lab/sample-types/  — active list, for the Lab Test"""
     def get_permissions(self):
         if self.request.method == "POST":
             return [IsAuthenticated(), IsLabTech(), RequireFeature("feat_lab")()]
@@ -161,18 +138,7 @@ class SampleTypeDetailView(APIView):
 
 
 class LabRequestListCreateView(APIView):
-    """
-    GET  /api/v1/lab/requests/  — filter by encounter_id, appointment_id,
-                                   patient_id, or status. Used by the doctor's
-                                   consultation page, the nurse's lab-orders
-                                   page, and the lab-tech queue alike.
-    POST /api/v1/lab/requests/  — doctor orders one or more tests for an
-                                   encounter: { encounter_id, tests: [id,...],
-                                   urgency?, clinical_notes? }. Patient,
-                                   branch, appointment and requested_by are
-                                   all resolved server-side from the encounter
-                                   — never trusted from the client.
-    """
+    """GET  /api/v1/lab/requests/  — filter by encounter_id, appointment_id,"""
     permission_classes = [IsAuthenticated, IsHospitalStaff, RequireFeature("feat_lab")]
 
     def get(self, request):
@@ -221,9 +187,6 @@ class LabRequestListCreateView(APIView):
         notes   = request.data.get("clinical_notes", "")
 
         # appointment.branch_id predates some rows (see Appointment model
-        # comment) and patient.branch_id can be unset too — fall back to the
-        # hospital's first active branch rather than trying to INSERT with a
-        # NULL branch (LabRequest.branch is required, so that would 500).
         branch_id = enc.appointment.branch_id or patient.branch_id
         if not branch_id:
             from apps.hospital_setup.models import Branch
@@ -241,14 +204,6 @@ class LabRequestListCreateView(APIView):
                 skipped.append(f"test {test_id} (not found or inactive)")
                 continue
             # request_number: a real, sequential, quotable-at-the-counter
-            # token — NNTM entity="lab_request" (prefix "LR-"). This is a
-            # new entity (unlike "prescription", which already existed in
-            # the seed list before it was ever used), so existing hospitals'
-            # branches won't have a counter row yet — self-heal the same
-            # defensive way _next_test_code() does for "lab_test" above.
-            # Never blocks ordering if it fails; the rare row left with
-            # request_number=None just isn't token-quotable, same as
-            # before this field existed.
             request_number = None
             try:
                 from apps.hospital_setup.models import NextNumber
@@ -282,14 +237,7 @@ class LabRequestListCreateView(APIView):
 
 
 class LabRequestLookupView(APIView):
-    """
-    GET /api/v1/lab/requests/lookup/?request_number=LR-000123
-    The counter workflow: a patient walks up and quotes their request
-    number (shown to them in the portal once they choose in-house). Pulls
-    up the full request — patient details, test, status, and result if
-    already delivered — regardless of the active/completed tab or
-    pagination. Mirrors apps.pharmacy.views.PrescriptionLookupView.
-    """
+    """GET /api/v1/lab/requests/lookup/?request_number=LR-000123"""
     permission_classes = [IsAuthenticated, IsHospitalStaff, RequireFeature("feat_lab")]
 
     def get(self, request):
@@ -309,13 +257,7 @@ class LabRequestLookupView(APIView):
 
 
 class LabRequestChoiceView(APIView):
-    """
-    PATCH /api/v1/lab/requests/{id}/choice/
-    Staff-side override — a nurse sets in-house/outside on the patient's
-    behalf when the patient can't decide via the portal themselves.
-    (The patient's own version of this lives in the portal app, since
-    patients authenticate with a different JWT and have no hospital context.)
-    """
+    """PATCH /api/v1/lab/requests/{id}/choice/"""
     permission_classes = [IsAuthenticated, IsHospitalStaff, RequireFeature("feat_lab")]
 
     def patch(self, request, pk):
@@ -344,28 +286,11 @@ class LabRequestChoiceView(APIView):
 
 
 # Same ceiling as the patient portal's own upload — see
-# apps.patients.views.PortalDocumentListCreateView._MAX_DOC_BASE64_CHARS.
 _MAX_DOC_BASE64_CHARS = 7_000_000  # ≈5MB raw file
 
 
 class LabRequestAttachDocumentView(APIView):
-    """
-    POST /api/v1/lab/requests/{id}/attach-document/
-
-    Staff-side counterpart to the patient portal's own outside-report upload
-    (apps.patients.views.PortalDocumentListCreateView). That endpoint
-    is IsPatient-only, so a nurse had no way to attach a report for a patient
-    who walks in with a physical copy, or who has no portal account at all —
-    LabRequestChoiceView already lets a nurse mark a request "outside" on the
-    patient's behalf, but nothing let them finish the job. Writes to the same
-    atomwalk MedicalDocument table, tagged with the same
-    source (a lab request, "<db>:<request_id>") the patient's own upload would use,
-    so LabRequestSerializer.attached_document and the patient's own
-    PortalLabOrderListView pick it up identically regardless of who
-    uploaded it — same document, same visibility, from either side.
-
-    Body: {file_data (data URI, required), title?, doc_type?}
-    """
+    """POST /api/v1/lab/requests/{id}/attach-document/"""
     permission_classes = [IsAuthenticated, IsHospitalStaff, RequireFeature("feat_lab")]
 
     def post(self, request, pk):
@@ -421,8 +346,6 @@ class LabRequestAttachDocumentView(APIView):
         )
 
         # Attaching an outside report only makes sense once the request is
-        # actually marked "outside" — self-heal that here instead of forcing
-        # the nurse to do LabRequestChoiceView as a separate first step.
         update_fields = []
         if req.patient_choice != "outside":
             req.patient_choice = "outside"
@@ -464,24 +387,9 @@ class LabRequestStatusView(APIView):
 
 
 def _bill_lab_request(req, db, user, hospital_id):
-    """
-    Create a real Invoice for this lab request, priced from LabTest.price —
-    mirrors apps.pharmacy.views.DispenseView's billing block, closing the
-    same gap on the lab side: choosing in-house never used to create an
-    actual payable Invoice, only a separate payment_status field that
-    BillingSummaryView tracked in isolation from real invoicing.
-
-    Fires at report delivery — the moment the test is confirmed actually
-    performed — not at in-house choice time, so a request that's chosen
-    in-house but then cancelled or never processed doesn't get billed for
-    a service that never happened. One Invoice per LabRequest (unlike
-    prescriptions, where multiple drug items can share one invoice, each
-    lab request is already its own billable unit). Never blocks report
-    delivery on failure — the report itself is already saved by the time
-    this runs.
-    """
+    """Create a real Invoice for this lab request, priced from LabTest.price —"""
     if req.invoice_id:
-        return  # already billed (e.g. re-delivering an already-billed report)
+        return
     try:
         from decimal import Decimal
         from apps.billing.models import Invoice, InvoiceItem
@@ -509,15 +417,7 @@ def _bill_lab_request(req, db, user, hospital_id):
 
 
 class LabReportUploadView(APIView):
-    """
-    POST /api/v1/lab/requests/{id}/report/
-    Lab tech uploads the result (summary optional, file required) for an
-    in-house test. Creates the LabReport if it doesn't exist yet; pass
-    deliver:true to finalise in the same call (sets status=delivered, fires
-    the HIE signal) instead of saving as a draft first. Delivering without a
-    file is rejected — the file is what every other login (patient, nurse,
-    doctor) actually opens, a text summary alone isn't enough to show them.
-    """
+    """POST /api/v1/lab/requests/{id}/report/"""
     permission_classes = [IsAuthenticated, IsLabTech, RequireFeature("feat_lab")]
 
     def post(self, request, pk):
@@ -535,10 +435,6 @@ class LabReportUploadView(APIView):
         report.result_summary = request.data.get("result_summary", report.result_summary)
         if file_data := request.data.get("file_data"):
             # Verify the payload's real magic bytes match an allowed file
-            # type instead of trusting the client-supplied mime_type — a
-            # mislabeled upload here would later get served back to a
-            # patient's or doctor's browser under whatever content-type was
-            # claimed at upload time.
             try:
                 verified_mime = validate_data_uri(file_data)
             except FileValidationError as exc:
@@ -559,8 +455,6 @@ class LabReportUploadView(APIView):
                 blob_storage.delete(old_file_key)
             report.mime_type = verified_mime
             # Named after the specific test plus who it belongs to, not
-            # whatever the lab tech's scanner/phone happened to call the
-            # file — see core.storage.UPLOAD_CATEGORIES / display_file_name().
             report.file_name = blob_storage.display_file_name(
                 "lab-report", verified_mime,
                 detail=req.test.name, name=req.patient.full_name, identifier=req.patient.awpid,

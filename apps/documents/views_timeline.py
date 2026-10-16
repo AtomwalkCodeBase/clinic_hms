@@ -1,15 +1,4 @@
-"""
-DRF API for the guardian app (React) and the clinician view.
-
-GET   patients/<awpid>/health-timeline/?from=YYYY-MM-DD&to=YYYY-MM-DD&view=guardian|doctor
-GET   patients/<awpid>/growth/?indicator=weight_kg|height_cm|head_circ_cm
-POST  patients/<awpid>/growth/                 manual measurement (clinician)
-GET   patients/<awpid>/immunization/
-POST  patients/<awpid>/immunization/           manual vaccine record (clinician / guardian)
-POST  patients/<awpid>/rebuild/                recompute episodes & flags (clinician)
-PATCH events/<id>/                          verify / reject / recode (clinician)
-POST  recurrence/<id>/acknowledge/          (clinician)
-"""
+"""DRF API for the guardian app (React) and the clinician view."""
 from datetime import date
 
 from django.shortcuts import get_object_or_404

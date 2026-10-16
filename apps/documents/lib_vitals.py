@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 VITAL_SIGNS = ("systolic_bp", "diastolic_bp", "pulse_rate", "temperature", "spo2", "respiratory_rate", "blood_sugar_rbs", "nurse_notes")
 GROWTH = ("height_cm", "weight_kg", "head_circumference_cm")
-ADULT_GROWTH = ("height_cm", "weight_kg")                    # an adult's height and weight are kept with the other vitals
+ADULT_GROWTH = ("height_cm", "weight_kg")
 def _number(value):
     return float(value) if value is not None else None
 def _merged(vitals, growth):
@@ -33,11 +33,7 @@ def _merged(vitals, growth):
     one.bmi = bmi(one)
     return one
 def save_visit(patient, appointment_id, hospital_id, user_id, data, *, is_minor):
-    """
-    Store what the nurse recorded for a visit. `patient` is the atomwalk patient (or None), `data` the validated fields.
-    A child's height, weight and head size go to growth_measurement; everything else, and an adult's height and weight,
-    to vitals. Returns the visit's vitals as one object.
-    """
+    """Store what the nurse recorded for a visit. `patient` is the atomwalk patient (or None), `data` the validated fields."""
     common = {"patient": patient, "source_hospital_id": hospital_id}
     kept = VITAL_SIGNS if is_minor else VITAL_SIGNS + ADULT_GROWTH
     Vitals.objects.using("default").update_or_create(
@@ -73,10 +69,7 @@ def recorded(appointment_ids):
     done = set(Vitals.objects.using("default").filter(appointment_id__in=ids).values_list("appointment_id", flat=True))
     return done | set(GrowthMeasurement.objects.using("default").filter(source_id__in=ids).values_list("source_id", flat=True))
 def history_readings(awpid, limit=20):
-    """
-    A patient's latest readings, newest first, one per visit, in the shape the history screens and the emergency summary
-    read (bp_systolic, resp_rate ... head_circumference_cm). Another hospital's id is never part of it.
-    """
+    """A patient's latest readings, newest first, one per visit, in the shape the history screens and the emergency summary"""
     by_visit, loose = {}, []
     for row in list(Vitals.objects.using("default").filter(patient__awpid=awpid).order_by("-recorded_at")[:limit]) + \
             list(GrowthMeasurement.objects.using("default").filter(patient__awpid=awpid, is_rejected=False).order_by("-measured_on")[:limit]):
@@ -93,12 +86,7 @@ def _reading(vitals, growth):
             "weight_kg": one.weight_kg, "height_cm": one.height_cm, "head_circumference_cm": one.head_circumference_cm,
             "resp_rate": one.respiratory_rate, "blood_sugar_mgdl": one.blood_sugar_rbs}
 def growth_points(awpid, *, hospital_id=None, include_other=True):
-    """
-    The points of a growth chart, one per day, oldest first: {"date", height_cm, weight_kg, head_circumference_cm, bmi,
-    "source"}. With a `hospital_id` (the staff view) a reading is "this_hospital" or "other_hospital", and other
-    hospitals' readings are left out unless `include_other` and only count on days this hospital has none. Without it (the
-    patient's own view) the source is the reading's own: clinic or home.
-    """
+    """The points of a growth chart, one per day, oldest first: {"date", height_cm, weight_kg, head_circumference_cm, bmi,"""
     points = {}
     rows = [(g.measured_on, g, g.head_circumference_cm) for g in
             GrowthMeasurement.objects.using("default").filter(patient__awpid=awpid, is_rejected=False)]
@@ -130,13 +118,7 @@ def bmi(row):
 
 
 def sync_encounter_to_hie(encounter, db, patient, hospital_id=None):
-    """
-    Copy this encounter's diagnoses to the shared clinical events so other hospitals can see this patient's
-    cross-provider history. Never blocks sign-off: all failures are logged and swallowed.
-
-    `hospital_id` is the atomwalk id of the hospital writing the rows (request.hospital_id);
-    when omitted (seed commands) it is resolved from `db` — see resolve_source_hospital_id.
-    """
+    """Copy this encounter's diagnoses to the shared clinical events so other hospitals can see this patient's"""
     if patient is None or not getattr(patient, "awpid", None):
         logger.warning("HIE sync skipped for encounter %s: no patient/awpid.", encounter.id)
         return
@@ -186,7 +168,6 @@ REFERENCE_TABLES = {
         ],
     },
     # 0-24mo from the length-for-age (recumbent) table, 24-60mo from the
-    # height-for-age (standing) table — see module docstring for why.
     "height": {
         "M": [
             (0, 1, 49.8842, 0.0379), (1, 1, 54.7244, 0.0356), (2, 1, 58.4249, 0.0342),
@@ -228,25 +209,18 @@ def _lms(measurement, sex, age_months):
             return tuple(x0 + frac * (x1 - x0) for x0, x1 in zip(c0, c1))
     return tuple(table[-1][1:])
 def get_percentile(measurement, sex, age_months, value):
-    """
-    {"z_score", "percentile" (0-100)} for one measurement, or None when it can't be scored (no value, age outside
-    0-60 months, sex not M or F). measurement: "weight" (kg), "height" or "head_circumference" (cm).
-    """
+    """{"z_score", "percentile" (0-100)} for one measurement, or None when it can't be scored (no value, age outside"""
     lms = _lms(measurement, sex, age_months)
     if value is None or lms is None:
         return None
     L, M, S = lms
     value = float(value)
     z = (((value / M) ** L) - 1) / (L * S) if L != 0 else math.log(value / M) / S
-    z = max(-5, min(5, z))                         # a wildly out-of-range reading shouldn't blow up the percentile
+    z = max(-5, min(5, z))
     return {"z_score": round(z, 2), "percentile": round(0.5 * (1 + math.erf(z / math.sqrt(2))) * 100, 1)}
 _MEASURED = {"weight": "weight_kg", "height": "height_cm", "head_circumference": "head_circumference_cm"}
 def add_percentiles(series, gender, date_of_birth, *, only_source=None):
-    """
-    Add a "percentiles" dict to each reading in `series` (dicts with "date" as YYYY-MM-DD, weight_kg, height_cm,
-    head_circumference_cm, "source") taken before the child turned 5. `only_source` limits it to readings from that
-    source. Returns whether any reading got a percentile.
-    """
+    """Add a "percentiles" dict to each reading in `series` (dicts with "date" as YYYY-MM-DD, weight_kg, height_cm,"""
     if gender not in ("M", "F") or not date_of_birth:
         return False
     found = False

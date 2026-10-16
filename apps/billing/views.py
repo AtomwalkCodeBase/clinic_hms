@@ -33,13 +33,7 @@ from apps.billing.models import (
 
 
 class BillingServiceListView(APIView):
-    """
-    GET  /api/v1/billing/services/  — list the active price catalog (any staff)
-    POST /api/v1/billing/services/  — add a new catalog entry (hospital admin
-         only). Previously GET-only — the catalog could only be populated by
-         a direct DB write; this is what lets a hospital actually manage
-         their own price list instead of one being hand-seeded for them.
-    """
+    """GET  /api/v1/billing/services/  — list the active price catalog (any staff)"""
     def get_permissions(self):
         if self.request.method == "GET":
             return [IsAuthenticated(), IsHospitalStaff()]
@@ -59,10 +53,7 @@ class BillingServiceListView(APIView):
 
 
 class BillingServiceDetailView(APIView):
-    """
-    PATCH  /api/v1/billing/services/{id}/ — edit name/price/tax/category
-    DELETE /api/v1/billing/services/{id}/ — deactivate (soft delete)
-    """
+    """PATCH  /api/v1/billing/services/{id}/ — edit name/price/tax/category"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def _get(self, request, pk):
@@ -123,8 +114,6 @@ class PaymentModeDetailView(DropdownDetailView):
     identity_field = "name"
     model_field = "label"
     # A hospital can genuinely not want to offer e.g. "Credit" or "Online" —
-    # unlike InvoiceStatusOption, no backend logic depends on any specific
-    # PaymentModeOption row staying active. See DropdownDetailView docstring.
     system_can_deactivate = True
 
 
@@ -159,24 +148,11 @@ class RoomTypeDetailView(DropdownDetailView):
     identity_field = "value"
     model_field = "value"
     # Nothing in the backend branches on a specific room type value (unlike
-    # InvoiceStatusOption) — a hospital that doesn't run procedures should
-    # be able to switch "Procedure" off, same reasoning as PaymentModeOption.
-    # (What used to be a separate WardTypeListCreateView/WardTypeDetailView
-    # pair is gone — ward types are just room_type rows with
-    # is_bed_based=True now, see billing.OptionList's docstring.)
     system_can_deactivate = True
 
 
 class InvoiceListCreateView(APIView):
-    """
-    GET  /api/v1/billing/invoices/  — list invoices (optionally filter by
-                                       patient_id, appointment_id, or status)
-    POST /api/v1/billing/invoices/  — create an invoice, optionally from an
-                                       appointment and/or with line items in
-                                       one call (what the front-desk Billing
-                                       page uses) so it doesn't need three
-                                       round trips to bill a walk-in.
-    """
+    """GET  /api/v1/billing/invoices/  — list invoices (optionally filter by"""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
@@ -197,8 +173,6 @@ class InvoiceListCreateView(APIView):
         branch_id = request.data.get("branch")
 
         # Resolve patient/branch from an appointment when one is given —
-        # this is the normal front-desk path (bill straight off the queue),
-        # since Appointment.patient_id stores Patient.uuid, not Patient.id.
         appointment_id = request.data.get("appointment_id")
         if appointment_id:
             from apps.opd.models import Appointment
@@ -218,12 +192,6 @@ class InvoiceListCreateView(APIView):
             return error("patient (or appointment_id) is required.", errors={"patient": "Required."})
 
         # No appointment_id (billing without a visit — e.g. a registration
-        # fee or a standalone charge) and no explicit branch in the request:
-        # fall back to the requesting staff member's own branch, then to the
-        # patient's own registered branch. Previously fell back to a bare
-        # `1` — always billing to whichever branch happened to have that
-        # database ID, silently mis-attributing revenue on any multi-branch
-        # hospital rather than to the branch this actually happened at.
         if not branch_id:
             branch_id = getattr(request.user, "branch_id", None)
         if not branch_id:
@@ -245,7 +213,6 @@ class InvoiceListCreateView(APIView):
         )
 
         # Optional line items in the same call — [{description, unit_price,
-        # quantity, tax_rate, service}], service is a BillingService id.
         for item in request.data.get("items", []):
             InvoiceItem.objects.using(db).create(
                 invoice=inv,
@@ -264,11 +231,7 @@ class InvoiceListCreateView(APIView):
 
 
 class InvoiceDetailView(APIView):
-    """
-    GET   /api/v1/billing/invoices/{id}/ — invoice with items + payments
-    PATCH /api/v1/billing/invoices/{id}/ — update status/notes/discount
-                                            (e.g. mark issued, apply a discount)
-    """
+    """GET   /api/v1/billing/invoices/{id}/ — invoice with items + payments"""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def _get(self, request, pk):
@@ -319,17 +282,7 @@ class InvoiceDetailView(APIView):
 
 
 class InvoicePDFView(APIView):
-    """
-    GET /api/v1/billing/invoices/{id}/pdf/
-
-    Renders the invoice as a real PDF (reportlab — see apps/billing/pdf.py)
-    with a QR "receipt" embedded (HMS-09c-1 / HMS-09c-2). Returned as a
-    base64 data URI in the standard envelope, not a raw
-    application/pdf response — every other file viewer in this app follows
-    that same convention (see frontend/src/utils/fileViewer.js) because auth
-    here is a JWT bearer header, not a cookie, so a plain <a href> straight
-    to the API wouldn't carry credentials.
-    """
+    """GET /api/v1/billing/invoices/{id}/pdf/"""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request, pk):
@@ -398,17 +351,7 @@ class InvoiceItemCreateView(APIView):
 
 
 class PaymentCreateView(APIView):
-    """
-    POST /api/v1/billing/payments/  — record a payment against an invoice.
-    GET  /api/v1/billing/payments/  — payment ledger (HMS-09d-1): every
-         payment recorded, newest first, with the invoice/patient it belongs
-         to resolved so this reads as an actual ledger and not a bare list
-         of amounts. ?date_from=&date_to= (on paid_at), ?payment_mode=,
-         ?patient_id= narrow it down. The ledger total in the response is
-         computed over the WHOLE filtered set, not just the current page —
-         same "totals shouldn't lie about pagination" rule used everywhere
-         else in this app (see e.g. OPD's status_counts).
-    """
+    """POST /api/v1/billing/payments/  — record a payment against an invoice."""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
@@ -465,8 +408,6 @@ class PaymentCreateView(APIView):
             return error("Validation error.", errors=s.errors)
         db = request.hospital_db
         # Payment + the invoice's running total in one transaction, with the invoice row
-        # locked: two payments posted at once used to both read the same paid_amount and one
-        # of them was lost.
         with transaction.atomic(using=db):
             payment = Payment.objects.using(db).create(
                 recorded_by_id=request.user.id, **s.validated_data
@@ -479,18 +420,7 @@ class PaymentCreateView(APIView):
 
 
 class RevenueReportView(APIView):
-    """
-    GET /api/v1/billing/reports/revenue/?date_from=&date_to=  (HMS-09d-2)
-
-    Defaults to the last 30 days. Two different date bases, deliberately:
-    "billed" is invoices ISSUED/created in the window (what got charged),
-    "collected" is payments RECEIVED in the window (what actually came in)
-    — the two aren't the same invoices necessarily (an invoice billed near
-    the window's start may get paid after it), which is exactly why both
-    numbers are worth showing side by side instead of collapsing to one.
-    Cancelled invoices are excluded from "billed" — they were never real
-    revenue.
-    """
+    """GET /api/v1/billing/reports/revenue/?date_from=&date_to=  (HMS-09d-2)"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def get(self, request):
@@ -512,9 +442,6 @@ class RevenueReportView(APIView):
         total_billed = invoices.aggregate(t=Sum("total_amount"))["t"] or Decimal("0")
         total_collected = payments.aggregate(t=Sum("amount"))["t"] or Decimal("0")
         # Outstanding is a point-in-time balance (not date-scoped) across
-        # every not-yet-settled invoice — mixing in a date filter here would
-        # hide money still owed from before the window, which defeats the
-        # point of showing it at all.
         total_outstanding = (
             Invoice.objects.using(db)
             .exclude(status__in=[Invoice.STATUS_CANCELLED, Invoice.STATUS_PAID])
@@ -558,23 +485,7 @@ class RevenueReportView(APIView):
 
 
 class BillingSummaryView(APIView):
-    """
-    GET /api/v1/billing/summary/?patient_id=
-    GET /api/v1/billing/summary/?appointment_id=  (resolves patient off the
-         appointment — Appointment.patient_id is a UUID mirror of
-         Patient.uuid, not the same key space as Invoice.patient_id, so this
-         is the path the front-desk Bill screen actually uses)
-
-    Combined read-only view of what a patient owes/has paid across three
-    still-separate systems: billing.Invoice (front-desk billed items —
-    consultation, procedures, whatever's on the price catalog), lab
-    (LabRequest, priced off the LabTest catalog, own payment_status), and
-    pharmacy (Dispense, which has no sale-price field yet — estimated off
-    the stock's unit_cost, flagged as such). Nothing here is merged into a
-    single Invoice; lab and pharmacy keep their own payment tracking. This
-    just puts the three totals side by side so front desk isn't hunting
-    across three screens to see what a patient owes in total.
-    """
+    """GET /api/v1/billing/summary/?patient_id="""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
@@ -615,9 +526,6 @@ class BillingSummaryView(APIView):
         lab_count = lab_requests.count()
 
         # ── Pharmacy charges — ESTIMATED. Dispense has no sale-price field
-        # today (only Stock.unit_cost, the hospital's own purchase cost), so
-        # this is flagged as an estimate rather than a real charge — see
-        # billing backlog item for adding real pharmacy pricing.
         from apps.pharmacy.models import Dispense
         dispenses = (
             Dispense.objects.using(db)

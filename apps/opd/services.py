@@ -1,9 +1,4 @@
-"""
-apps/opd/services.py
---------------------
-OPD billing rules used when an encounter is signed. Moved out of opd/views.py, which the seed
-commands had to import underscore-prefixed functions from.
-"""
+"""apps/opd/services.py"""
 
 import logging
 
@@ -13,20 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_doctor_consultation_fee(db, doctor_user_id, appointment_type=None):
-    """
-    encounter.doctor_user_id is a UUIDField, but the value actually stored
-    in it is the StaffUser's plain integer pk — Django's UUIDField silently
-    wraps a plain int via uuid.UUID(int=value) (see e.g. core.auth.views'
-    "user_id": staff.id, saved straight into these UUID columns). Unwrap
-    either form back to the integer pk so DoctorProfile can be looked up.
-
-    For a "followup" visit, prefers DoctorProfile.followup_fee — but only
-    if the doctor actually set one; otherwise falls back to their regular
-    consultation_fee, so doctors who never configured a separate follow-up
-    rate keep charging the same flat fee for every visit type (unchanged
-    behaviour for them). Returns None if there's no doctor profile or no
-    fee resolvable at all.
-    """
+    """encounter.doctor_user_id is a UUIDField, but the value actually stored"""
     import uuid as _uuid
     from apps.hospital_setup.models import StaffUser
     from apps.opd.models import Appointment
@@ -43,18 +25,7 @@ def resolve_doctor_consultation_fee(db, doctor_user_id, appointment_type=None):
 
 
 def auto_generate_invoice(encounter, db, user, patient=None, hospital_id=None):
-    """
-    Create a draft invoice after encounter sign-off. Never blocks sign-off.
-
-    Uses the doctor's actual DoctorProfile fee (falls back to ₹0 — not a
-    guessed flat amount — if the doctor never set one) and the hospital's
-    configured default_tax_rate, instead of the old hardcoded ₹500.
-
-    Picks consultation_fee vs followup_fee based on the appointment's
-    appointment_type (see resolve_doctor_consultation_fee), and labels the
-    invoice line accordingly — so a follow-up visit is no longer charged
-    and described identically to a first consultation.
-    """
+    """Create a draft invoice after encounter sign-off. Never blocks sign-off."""
     from decimal import Decimal
     from apps.billing.models import Invoice, InvoiceItem
     from apps.opd.models import HospitalPatient

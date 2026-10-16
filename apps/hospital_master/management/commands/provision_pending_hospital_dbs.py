@@ -1,29 +1,4 @@
-"""
-Management command: provision_pending_hospital_dbs
-
-Finishes provisioning for hospitals that already have a Hospital + Subscription
-row in the atomwalk DB (created by apps/hospitals/migrations/
-0015_seed_east_bangalore_clinics.py, which deliberately only inserts
-atomwalk rows — see that migration's docstring) but no real per-hospital
-Postgres database yet, so they show up in "hospitals near me" with an
-empty "View doctors" list.
-
-For each target hospital this does exactly what provision_hospital does for a
-brand-new hospital, minus the Hospital/Subscription creation (which already
-exists here):
-  1. Create the Postgres database
-  2. Run all hospital-app migrations against it
-  3. Point it at the default vaccination + milestone schedule templates
-  4. Create a hospital_admin StaffUser + atomwalk StaffMobileIndex entry
-
-Safe to re-run: skips any hospital whose database already exists (checked
-via pg_database, not just db_name being set on the Hospital row) and skips
-creating a second hospital_admin if one already exists in that hospital DB.
-
-Usage:
-  python manage.py provision_pending_hospital_dbs --settings=core.settings.development
-  python manage.py provision_pending_hospital_dbs --hospital-code care-cure-clinic --settings=core.settings.development
-"""
+"""Management command: provision_pending_hospital_dbs"""
 
 import secrets
 import string

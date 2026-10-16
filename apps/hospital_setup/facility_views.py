@@ -1,17 +1,4 @@
-"""
-apps/org/views.py
------------------
-Org management APIs for hospital admin setup.
-
-Hospital admin flow:
-  1. Create branches (physical locations)
-  2. Create departments within branches
-  3. Invite staff (generates invite token → staff sets own password)
-  4. Create/update doctor profiles
-
-All views require IsAuthenticated + IsHospitalAdmin unless noted.
-IsHospitalStaff allows read-only access where indicated.
-"""
+"""apps/org/views.py"""
 
 import logging
 
@@ -35,18 +22,13 @@ from apps.hospital_setup.staff_services import seed_next_numbers
 from apps.hospital_setup.facility_serializers import BranchSerializer, DepartmentSerializer, FloorSerializer, RoomSerializer, BedSerializer
 
 # Rough cap on the base64 photo payload — keeps us comfortably under DRF's
-# default 2.5MB request-body limit (DATA_UPLOAD_MAX_MEMORY_SIZE) while still
-# allowing a reasonably sized profile photo. ~1.4MB of actual image data.
 _MAX_PHOTO_BASE64_CHARS = 1_900_000
 
 
 # ── Branches ──────────────────────────────────────────────────────────────────
 
 class BranchListCreateView(APIView):
-    """
-    GET  /api/v1/org/branches/ — list all branches (any staff)
-    POST /api/v1/org/branches/ — create branch (hospital admin only)
-    """
+    """GET  /api/v1/org/branches/ — list all branches (any staff)"""
     def get_permissions(self):
         if self.request.method == "GET":
             return [IsAuthenticated(), IsHospitalStaff()]
@@ -82,11 +64,7 @@ class BranchListCreateView(APIView):
 
 
 class BranchDetailView(APIView):
-    """
-    GET   /api/v1/org/branches/{id}/ — branch detail
-    PATCH /api/v1/org/branches/{id}/ — update branch
-    DELETE /api/v1/org/branches/{id}/ — deactivate (soft delete)
-    """
+    """GET   /api/v1/org/branches/{id}/ — branch detail"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def _get(self, request, pk):
@@ -125,10 +103,7 @@ class BranchDetailView(APIView):
 # ── Departments ───────────────────────────────────────────────────────────────
 
 class DepartmentListCreateView(APIView):
-    """
-    GET  /api/v1/org/departments/?branch_id=1  — list departments
-    POST /api/v1/org/departments/              — create department
-    """
+    """GET  /api/v1/org/departments/?branch_id=1  — list departments"""
     def get_permissions(self):
         if self.request.method == "GET":
             return [IsAuthenticated(), IsHospitalStaff()]
@@ -189,15 +164,9 @@ class DepartmentDetailView(APIView):
 
 
 # ── Floors ───────────────────────────────────────────────────────────────
-# A branch's physical floors, set up once by hospital admin so Rooms (OPD)
-# and Wards (IPD) can be assigned to one from a dropdown instead of free
-# text. Same admin-writes/staff-reads split as everything else here.
 
 class FloorListCreateView(APIView):
-    """
-    GET  /api/v1/org/floors/?branch_id=1  — list floors (any staff, read-only)
-    POST /api/v1/org/floors/              — create a floor (hospital admin only)
-    """
+    """GET  /api/v1/org/floors/?branch_id=1  — list floors (any staff, read-only)"""
     def get_permissions(self):
         if self.request.method == "GET":
             return [IsAuthenticated(), IsHospitalStaff()]
@@ -232,10 +201,7 @@ class FloorListCreateView(APIView):
 
 
 class FloorDetailView(APIView):
-    """
-    PATCH  /api/v1/org/floors/{id}/ — rename / renumber
-    DELETE /api/v1/org/floors/{id}/ — deactivate (soft delete)
-    """
+    """PATCH  /api/v1/org/floors/{id}/ — rename / renumber"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def _get(self, request, pk):
@@ -255,9 +221,6 @@ class FloorDetailView(APIView):
             setattr(floor, attr, val)
         floor.save(using=request.hospital_db)
         # Keep every room's legacy free-text `floor` mirror in sync with a
-        # rename, the same way RoomDetailView/RoomListCreateView keep it in
-        # sync going forward — otherwise a renamed floor would silently
-        # desync from rooms that already point at it.
         if "name" in s.validated_data:
             Room.objects.using(request.hospital_db).filter(floor_obj=floor).update(floor=floor.name)
         return success(data=FloorSerializer(floor).data, message="Floor updated.")
@@ -272,17 +235,9 @@ class FloorDetailView(APIView):
 
 
 # ── Rooms & Room Assignments ──────────────────────────────────────────────────
-# Floors/rooms per branch, and which doctor sits in which room during which
-# weekly time window. Rooms are opt-in — a hospital that never sets any of
-# this up just gets no room shown on appointments, nothing breaks.
 
 def _room_type_option(db, value):
-    """
-    Looks up the billing.OptionList(list_type="room_type") row a room_type
-    value refers to — local import to avoid the apps.hospital_setup <-> apps.billing
-    circularity noted throughout this file. Returns None if it isn't a
-    configured, active room type for this hospital.
-    """
+    """Looks up the billing.OptionList(list_type="room_type") row a room_type"""
     from apps.billing.models import OptionList
     return OptionList.objects.using(db).filter(
         list_type=OptionList.LIST_ROOM_TYPE, value=value, is_active=True
@@ -290,15 +245,7 @@ def _room_type_option(db, value):
 
 
 class RoomListCreateView(APIView):
-    """
-    GET  /api/v1/org/rooms/?branch_id=1  — list rooms (any staff, read-only).
-         Covers both OPD rooms and bed-based rooms (wards/ICU/etc. — see
-         org.Room's own docstring for the v8 unification) — nothing here
-         distinguishes them beyond room_type; a caller that only wants
-         bed-based rooms filters client-side on whichever room_type values
-         have is_bed_based=True (billing.OptionList).
-    POST /api/v1/org/rooms/              — create a room (hospital admin only)
-    """
+    """GET  /api/v1/org/rooms/?branch_id=1  — list rooms (any staff, read-only)."""
     def get_permissions(self):
         if self.request.method == "GET":
             return [IsAuthenticated(), IsHospitalStaff()]
@@ -333,10 +280,6 @@ class RoomListCreateView(APIView):
             return error("Not a configured room type for this hospital.", errors={"room_type": "Invalid choice."})
 
         # Bed capacity is required at setup time for a bed-based room type
-        # (general ward/private/ICU/etc.) — this is what lets
-        # BedListCreateView.post/BedDetailView.patch below refuse to add or
-        # move a bed into a room past however many beds it was actually
-        # built to hold. Stays null for a non-bed-based (OPD) room.
         capacity = s.validated_data.get("capacity")
         if type_option.is_bed_based:
             if capacity is None or capacity < 1:
@@ -354,12 +297,7 @@ class RoomListCreateView(APIView):
 
 
 class RoomDetailView(APIView):
-    """
-    PATCH  /api/v1/org/rooms/{id}/ — rename / move floor / change type / capacity / department
-    DELETE /api/v1/org/rooms/{id}/ — deactivate (soft delete). Beds under a
-           deactivated room are left as-is (still occupied beds shouldn't
-           silently vanish) — deactivate its beds first if that's intended.
-    """
+    """PATCH  /api/v1/org/rooms/{id}/ — rename / move floor / change type / capacity / department"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def _get(self, request, pk):
@@ -397,8 +335,6 @@ class RoomDetailView(APIView):
         for attr, val in s.validated_data.items():
             setattr(room, attr, val)
         # floor_obj is the source of truth once set — keep the legacy
-        # free-text `floor` mirror in sync so existing readers (e.g.
-        # RoomAssignmentSerializer's source="room.floor") don't desync.
         if "floor_obj" in s.validated_data:
             room.floor = room.floor_obj.name if room.floor_obj else ""
         room.save(using=request.hospital_db)
@@ -411,31 +347,14 @@ class RoomDetailView(APIView):
         room.is_active = False
         room.save(using=request.hospital_db, update_fields=["is_active"])
         # Assignments for a deactivated room are pointless to keep active —
-        # switch them off too so they stop showing up as "booked" if the
-        # room name is ever reused later.
         RoomAssignment.objects.using(request.hospital_db).filter(room=room, is_active=True).update(is_active=False)
         return success(message="Room deactivated.")
 
 
 # ── Beds ────────────────────────────────────────────────────────────────
-# See docs/PENDING_IMPROVEMENTS.md item 3 — nothing in the schema could
-# model an actual inpatient bed before this, so Admission.status could
-# never move past ADMITTED ("awaiting bed"). Deliberately minimal CRUD,
-# same admin-writes/staff-reads split as Room/RoomAssignment above. Beds
-# hang off Room now (a bed-based room — see org.Room's own docstring for
-# the v8 unification that folded the old, separate Ward model into Room);
-# what used to be WardListCreateView/WardDetailView is just
-# RoomListCreateView/RoomDetailView above, since a ward IS a room now.
 
 class BedListCreateView(APIView):
-    """
-    GET  /api/v1/org/beds/?room_id=&branch_id=&status=  — list beds
-    POST /api/v1/org/beds/                              — create a bed (hospital admin only)
-
-    branch_id filters via the room's own branch — Bed has no direct branch
-    FK (a bed belongs to a room, a room belongs to a branch — no need to
-    denormalize the branch onto Bed too for a table this small).
-    """
+    """GET  /api/v1/org/beds/?room_id=&branch_id=&status=  — list beds"""
     def get_permissions(self):
         if self.request.method == "GET":
             return [IsAuthenticated(), IsHospitalStaff()]
@@ -476,8 +395,6 @@ class BedListCreateView(APIView):
                          errors={"bed_number": "Already in use."})
 
         # Rooms created before `capacity` existed are still capacity=None
-        # ("uncapped") — every other bed-based room enforces the limit set
-        # at setup.
         if room.capacity is not None:
             current_beds = Bed.objects.using(request.hospital_db).filter(room=room, is_active=True).count()
             if current_beds >= room.capacity:
@@ -494,18 +411,7 @@ class BedListCreateView(APIView):
 
 
 class BedDetailView(APIView):
-    """
-    PATCH  /api/v1/org/beds/{id}/ — rename the bed number (or move it to a
-           different room). `status` is intentionally NOT editable here —
-           ipd.views.AssignBedView/ReleaseBedView are the only place
-           allowed to flip a bed between available/occupied (see Bed's own
-           docstring), so an admission's bed can never point at a bed
-           whose status disagrees with reality.
-    DELETE /api/v1/org/beds/{id}/ — deactivate (soft delete). Refused while
-           the bed is occupied — release it (or discharge the admission)
-           first, so an occupied bed can't silently vanish from the bed
-           picker / status board out from under a patient.
-    """
+    """PATCH  /api/v1/org/beds/{id}/ — rename the bed number (or move it to a"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def _get(self, request, pk):
@@ -523,9 +429,6 @@ class BedDetailView(APIView):
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         # Moving a bed into a different room is subject to that room's
-        # capacity too, same as creating one there directly (see
-        # BedListCreateView.post) — otherwise capacity could be bypassed by
-        # adding a bed to an under-capacity room and then moving it.
         new_room = s.validated_data.get("room")
         if new_room is not None and new_room.id != bed.room_id:
             type_option = _room_type_option(request.hospital_db, new_room.room_type)
@@ -557,22 +460,7 @@ class BedDetailView(APIView):
 
 
 class BedMarkCleanView(APIView):
-    """
-    POST /api/v1/org/beds/{id}/mark-clean/ — cleaning -> available.
-
-    A bed lands on `cleaning` the moment apps.ipd.views.DischargeAdmissionView
-    or apps.ipd.views.TransferBedView frees it — this is the only place that
-    confirms it's actually ready for the next patient. Kept as its own
-    endpoint (not folded into BedDetailView.patch, which explicitly refuses
-    to touch status at all — see that view's own docstring) for the same
-    reason Assign/Release/Discharge are each their own endpoint in
-    apps.ipd.views: one narrow, auditable action per real-world event,
-    rather than a generic "set any field to anything" PATCH.
-
-    Gated to front desk, matching every other bed-lifecycle action
-    (AssignBedView/ReleaseBedView/DischargeAdmissionView/TransferBedView) —
-    this codebase has no separate housekeeping role.
-    """
+    """POST /api/v1/org/beds/{id}/mark-clean/ — cleaning -> available."""
     permission_classes = [IsAuthenticated, IsFrontDesk]
 
     def post(self, request, pk):
@@ -590,15 +478,7 @@ class BedMarkCleanView(APIView):
 
 
 class BedMaintenanceView(APIView):
-    """
-    POST /api/v1/org/beds/{id}/maintenance/  body: {"action": "block" | "out_of_service" | "unblock"}
-
-    Hospital admin taking a bed in or out of rotation for a reason that has
-    nothing to do with patient flow (repairs, deep-cleaning, decommission)
-    — distinct from the front-desk-owned clinical bed lifecycle above.
-    Refuses to touch a bed that's reserved/occupied/cleaning so a
-    maintenance action can never silently strand an admission.
-    """
+    """POST /api/v1/org/beds/{id}/maintenance/  body: {"action": "block" | "out_of_service" | "unblock"}"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     ACTION_TO_STATUS = {
@@ -635,18 +515,7 @@ class BedMaintenanceView(APIView):
 
 
 class BedBoardView(APIView):
-    """
-    GET /api/v1/org/beds/board/?branch_id=
-
-    The live Floor -> Room -> Bed grid front desk (and any hospital staff,
-    read-only) actually works off — one call instead of the frontend
-    stitching together separate Floor/Room/Bed list calls itself. Bed-based
-    rooms only (a room whose room_type's billing.OptionList row has
-    is_bed_based=True) — OPD consultation rooms have no place on a bed
-    board. Any authenticated hospital staff role can view it (visibility
-    only); every bed-status-changing action stays gated on its own endpoint
-    exactly as it already was.
-    """
+    """GET /api/v1/org/beds/board/?branch_id="""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
@@ -694,24 +563,7 @@ class BedBoardView(APIView):
 # ── Front-desk triage: department-level doctor availability ────────────────
 
 class DepartmentAvailabilityView(APIView):
-    """
-    GET /api/v1/org/departments/availability/?branch_id=&date=YYYY-MM-DD
-
-    Answers the question front desk needs BEFORE attempting a booking:
-    "is there any doctor in this department I could book with today, and
-    if not, when?" — not a live per-slot query (that conflict check still
-    happens, on its own, at the existing appointment-booking endpoint).
-    Deliberately schedule-based (org.DoctorSchedule / DoctorAvailabilitySlot)
-    rather than appointment-count-based: those two apps don't share a
-    doctor-identity type today (opd.Appointment.doctor_user_id is a raw
-    UUID field with no FK, while a doctor's rostered hours here hang off a
-    real FK to org.StaffUser) — see docs/PENDING_IMPROVEMENTS.md for the
-    wider identity-model note. This view only needs the roster side of
-    that, so it sidesteps the mismatch rather than papering over it.
-
-    See docs/PENDING_IMPROVEMENTS.md item 1 (front-desk triage / reroute to
-    Emergency) — this is the endpoint that decision is based on.
-    """
+    """GET /api/v1/org/departments/availability/?branch_id=&date=YYYY-MM-DD"""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
@@ -737,7 +589,7 @@ class DepartmentAvailabilityView(APIView):
                 department=dept, role="doctor", is_active=True,
             )
             doctors_free_today = 0
-            best_slot = None  # (date, time) — earliest across all doctors, today or a future day
+            best_slot = None
 
             for doc in doctors:
                 schedule = (

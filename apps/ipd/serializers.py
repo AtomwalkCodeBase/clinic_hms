@@ -1,16 +1,4 @@
-"""
-apps/ipd/serializers.py
-------------------------
-admission_type / admission_source are validated against
-billing.OptionList (is_active rows for the hospital DB the request is
-already scoped to — request.hospital_db) rather than a hardcoded choices=
-list, matching how Drug.form / Invoice.status / Payment.payment_mode are
-already validated (see apps/billing/views.py's dropdown base classes).
-
-Every serializer here expects `context={"hospital_db": request.hospital_db}`
-from the view — OptionList rows are hospital-scoped and there is no other
-reliable way for a serializer to know which hospital DB to check against.
-"""
+"""apps/ipd/serializers.py"""
 
 from rest_framework import serializers
 
@@ -29,9 +17,7 @@ def _option_exists(hospital_db, list_type, value):
 
 
 class OptionListSerializer(serializers.ModelSerializer):
-    """Generic read/write serializer for the two new configurable
-    catalogs — admission_type and admission_source. Mirrors the shape
-    billing's own OptionList-backed dropdowns already expose."""
+    """Generic read/write serializer for the two new configurable"""
     class Meta:
         model = OptionList
         fields = ["id", "list_type", "value", "label", "is_active", "is_system", "sort_order"]
@@ -39,9 +25,7 @@ class OptionListSerializer(serializers.ModelSerializer):
 
 
 class RecommendAdmissionSerializer(serializers.Serializer):
-    """POST body for RecommendAdmissionView. recommended_by is intentionally
-    NOT a field here — it is set by the view from request.user, never from
-    client input (see models.AdmissionReferral module docstring)."""
+    """POST body for RecommendAdmissionView. recommended_by is intentionally"""
     patient_id             = serializers.IntegerField()
     department_id          = serializers.IntegerField()
     admission_type         = serializers.CharField(max_length=30)
@@ -104,27 +88,7 @@ class AdmissionReferralSerializer(serializers.ModelSerializer):
 
 
 class RegisterExternalReferralSerializer(serializers.Serializer):
-    """POST body for RegisterExternalReferralView — front desk logging a
-    referral straight from an external paper/PDF letter the moment it
-    arrives, instead of waiting for an in-app doctor to type it into
-    RecommendAdmissionSerializer first. recommended_by is still never a
-    field here — the view stamps it from request.user, same discipline as
-    RecommendAdmissionSerializer; it's just a front-desk StaffUser doing
-    the logging this time, not a doctor (see models.AdmissionReferral
-    module docstring, design decision 2).
-
-    Deliberately narrower than RecommendAdmissionSerializer in two ways
-    that keep this from being a backdoor around "front desk can never
-    single-handedly originate an admission":
-      - admission_source must be one of AdmissionReferral.
-        SOURCES_REQUIRING_ACCEPTANCE (validate() below) — a source that
-        doesn't need a doctor's countersign anyway (OPD Consultation,
-        Walk-in, ...) still can only come from a doctor's own Recommend
-        Admission action.
-      - external_referring_doctor_name / external_referring_facility are
-        REQUIRED here (optional on the doctor path) — this endpoint's
-        entire premise is a named outside doctor's letter in hand.
-    """
+    """POST body for RegisterExternalReferralView — front desk logging a"""
     patient_id             = serializers.IntegerField()
     department_id          = serializers.IntegerField()
     admission_type         = serializers.CharField(max_length=30)
@@ -133,8 +97,6 @@ class RegisterExternalReferralSerializer(serializers.Serializer):
     external_referring_doctor_name = serializers.CharField(max_length=200)
     external_referring_facility    = serializers.CharField(max_length=200)
     # Letter paperwork detail, folded into AdmissionReferral.source_details
-    # by the view — doesn't earn its own column (same JSON-for-variant-
-    # detail pattern the model already uses, see models.py).
     referral_letter_date      = serializers.DateField(required=False, allow_null=True)
     referral_letter_reference = serializers.CharField(max_length=100, required=False, allow_blank=True)
     is_mlc                  = serializers.BooleanField(required=False, default=False)
@@ -164,11 +126,7 @@ class RegisterExternalReferralSerializer(serializers.Serializer):
 
 
 class CompleteAdmissionSerializer(serializers.Serializer):
-    """POST body for CompleteAdmissionView — front desk's ONLY write path
-    into this app. There is no field here for admission_type, source,
-    ordering doctor, department, or reason — all of that comes from the
-    referral the view looks up, never from this request (see
-    views.CompleteAdmissionView)."""
+    """POST body for CompleteAdmissionView — front desk's ONLY write path"""
     referral_id        = serializers.UUIDField()
     attendant_name      = serializers.CharField(max_length=200, required=False, allow_blank=True)
     attendant_phone      = serializers.CharField(max_length=15, required=False, allow_blank=True)
@@ -212,36 +170,16 @@ class AdmissionSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     # Bug fix: these two SerializerMethodField backers (ordering_doctor_name,
-    # awaiting_bed declared above) were previously defined on the WRONG class
-    # (AdmissionUpdateSerializer below, which has no such fields at all) —
-    # every response returning Admission data (CompleteAdmissionView,
-    # AssignBedView, ReleaseBedView, DischargeAdmissionView, AdmissionListView,
-    # AdmissionDetailView, AwaitingBedListView, ...) raised
-    # AttributeError: 'AdmissionSerializer' object has no attribute
-    # 'get_ordering_doctor_name' the moment it was actually exercised against
-    # a live DB. Confirmed via direct end-to-end testing while building the
-    # bed-turnover/reserve/transfer feature (never caught before because, per
-    # this codebase's own recurring caution elsewhere, these views "had never
-    # been exercised against a real Postgres before").
     def get_ordering_doctor_name(self, obj):
         return f"{obj.ordering_doctor.first_name} {obj.ordering_doctor.last_name}".strip()
 
     def get_awaiting_bed(self, obj):
-        """True while the admission is registered but has no bed yet — the
-        "assign later" outcome front desk can pick at completion time."""
+        """True while the admission is registered but has no bed yet — the"""
         return obj.bed_id is None and obj.status in (Admission.STATUS_REQUESTED, Admission.STATUS_ADMITTED)
 
 
 class AdmissionUpdateSerializer(serializers.Serializer):
-    """PATCH body for AdmissionDetailView — front desk's only path to
-    change an admission after it's been registered. Deliberately as narrow
-    as CompleteAdmissionSerializer's own write surface: registration data
-    only (the same four fields front desk supplies at intake, plus the
-    discharge-date estimate), never the clinical fields (patient,
-    admission_type/source, ordering_doctor, department, reason) — those
-    come from the referral and stay fixed, same reasoning as
-    CompleteAdmissionSerializer's own docstring. `partial`-style: every
-    field optional, only what's present in the request changes."""
+    """PATCH body for AdmissionDetailView — front desk's only path to"""
     attendant_name           = serializers.CharField(max_length=200, required=False, allow_blank=True)
     attendant_phone          = serializers.CharField(max_length=15, required=False, allow_blank=True)
     payer_type               = serializers.CharField(max_length=20, required=False, allow_blank=True)
@@ -250,16 +188,7 @@ class AdmissionUpdateSerializer(serializers.Serializer):
 
 
 class AssignBedSerializer(serializers.Serializer):
-    """POST body for AssignBedView — front desk assigning a bed to an
-    already-completed admission, either right away or later off the
-    Awaiting Bed worklist. Both are the same action; only the timing
-    differs (see docs/PENDING_IMPROVEMENTS.md item 3).
-
-    A bed reserved (Bed.STATUS_RESERVED) for THIS SAME admission is also
-    acceptable here — confirming a reservation is just "assign," the same
-    endpoint, not a separate action (see views.ReserveBedView). A bed
-    reserved for a DIFFERENT admission is refused exactly like an occupied
-    one — the whole point of reserving it was to stop that."""
+    """POST body for AssignBedView — front desk assigning a bed to an"""
     bed_id = serializers.IntegerField()
 
     def validate_bed_id(self, value):
@@ -278,11 +207,7 @@ class AssignBedSerializer(serializers.Serializer):
 
 
 class ReserveBedSerializer(serializers.Serializer):
-    """POST body for ReserveBedView — hold a specific available bed against
-    an admission that's ADMITTED (completed, awaiting bed) but not yet
-    bedded, e.g. while its current occupant is still being discharged/
-    cleaned out. Confirming the hold later is AssignBedView, not this
-    endpoint again."""
+    """POST body for ReserveBedView — hold a specific available bed against"""
     bed_id = serializers.IntegerField()
 
     def validate_bed_id(self, value):
@@ -297,10 +222,7 @@ class ReserveBedSerializer(serializers.Serializer):
 
 
 class TransferBedSerializer(serializers.Serializer):
-    """POST body for TransferBedView — move an ACTIVE admission's patient
-    from their current bed straight into a different one, atomically. The
-    target must be genuinely free (available) — you can't transfer into a
-    bed someone else has reserved or is occupying."""
+    """POST body for TransferBedView — move an ACTIVE admission's patient"""
     to_bed_id = serializers.IntegerField()
 
     def validate_to_bed_id(self, value):

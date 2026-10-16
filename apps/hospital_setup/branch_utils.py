@@ -1,11 +1,4 @@
-"""
-apps/org/branch_utils.py
---------------------------
-Shared helpers for StaffBranchMapping — keeps StaffUser.branch (the legacy
-single FK, still what JWT payloads carry as branch_id and what most reads
-fall back to) in sync with the mapping table's primary row, so nothing
-that only knows about the old single-branch field ever goes stale.
-"""
+"""apps/org/branch_utils.py"""
 
 from apps.hospital_setup.models import StaffBranchMapping
 
@@ -20,13 +13,7 @@ def get_staff_branch_ids(staff_id, db_name):
 
 
 def get_staff_ids_in_branch(branch_id, db_name):
-    """
-    Reverse of get_staff_branch_ids() — every staff id assigned to
-    `branch_id`, via the mapping table OR the legacy single `branch` FK
-    (same fallback is_staff_in_branch() applies per-staff, done here as a
-    set query for filtering a whole queryset at once, e.g. DoctorListView's
-    ?branch_id= filter).
-    """
+    """Reverse of get_staff_branch_ids() — every staff id assigned to"""
     from apps.hospital_setup.models import StaffUser
     branch_id = int(branch_id)
     mapped = set(
@@ -43,13 +30,7 @@ def get_staff_ids_in_branch(branch_id, db_name):
 
 
 def is_staff_in_branch(staff, branch_id, db_name):
-    """
-    True if `staff` (a StaffUser instance) is assigned to `branch_id` —
-    either via the mapping table, or (for staff who predate/haven't been
-    given extra mappings) via the legacy single `branch` FK. A staff
-    member with zero mapping rows and no legacy branch is assigned to
-    nothing and this returns False for every branch_id, including None.
-    """
+    """True if `staff` (a StaffUser instance) is assigned to `branch_id` —"""
     if branch_id is None:
         return False
     branch_id = int(branch_id)
@@ -61,17 +42,7 @@ def is_staff_in_branch(staff, branch_id, db_name):
 
 
 def set_staff_branches(staff, branch_ids, primary_branch_id, db_name):
-    """
-    Replace a staff member's full branch assignment with `branch_ids`,
-    marking `primary_branch_id` (must be one of them, or the first one if
-    not given) as primary. Also updates `staff.branch` (legacy FK) to the
-    primary, saved by the caller — this function only touches the mapping
-    table and sets `staff.branch_id` in memory.
-
-    An empty `branch_ids` list clears all assignments (staff.branch
-    becomes None) — a valid state for a newly-invited staff member with
-    no branch yet, or someone being unassigned pending reassignment.
-    """
+    """Replace a staff member's full branch assignment with `branch_ids`,"""
     branch_ids = list(dict.fromkeys(int(b) for b in branch_ids))  # dedupe, keep order
     if primary_branch_id is not None:
         primary_branch_id = int(primary_branch_id)
@@ -89,15 +60,7 @@ def set_staff_branches(staff, branch_ids, primary_branch_id, db_name):
 
 
 def sync_primary_branch(staff, db_name):
-    """
-    Call after `staff.branch` (the legacy single FK) is set/changed
-    directly (e.g. StaffDetailView.patch's plain branch_id field) without
-    going through set_staff_branches — keeps the mapping table's primary
-    row matching, demoting any previous primary and adding/promoting a
-    mapping row for the new one. No-op if staff.branch_id is None (mapping
-    rows for OTHER branches, if any, are left alone — clearing the
-    primary via this path doesn't imply un-assigning the extra branches).
-    """
+    """Call after `staff.branch` (the legacy single FK) is set/changed"""
     StaffBranchMapping.objects.using(db_name).filter(staff_id=staff.id).update(is_primary=False)
     if staff.branch_id is not None:
         StaffBranchMapping.objects.using(db_name).update_or_create(

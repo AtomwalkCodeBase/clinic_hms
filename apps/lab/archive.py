@@ -1,14 +1,4 @@
-"""
-apps/lab/archive.py
--------------------
-store_lab_report_document() — on delivery (apps/lab/signals.py), store the
-LabReport as a MedicalDocument(document_type=lab_report) so it shows in the
-patient's My Reports. Idempotent by source_type "lab_report" + source_id = the report id.
-
-The file is the PDF/image the lab uploaded (normalised to PDF, QR-stamped),
-or else a PDF generated from the released result (apps/lab/pdf.py).
-All hospital-DB reads are explicit .using(db) with pk filters.
-"""
+"""apps/lab/archive.py"""
 
 import base64
 import logging

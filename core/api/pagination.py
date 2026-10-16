@@ -1,21 +1,4 @@
-"""
-core/api/pagination.py
-------------------
-Pagination helpers for Atomwalk HMS.
-
-The views in this codebase are plain APIView subclasses that return the shared
-`success(data=...)` envelope (see core/api/response.py) rather than DRF generic views, so DRF's
-pagination classes never run (the old StandardResultsPagination/LargeResultsPagination were
-removed as dead code). List endpoints use `paginate_queryset` / `paginate_list`, which read
-?page=&page_size= from the request, slice the data, and return a `meta` dict
-that should be embedded in the response alongside the page's items, e.g.:
-
-    page_items, meta = paginate_queryset(request, qs)
-    return success(data={
-        "results": MySerializer(page_items, many=True).data,
-        "pagination": meta,
-    })
-"""
+"""core/api/pagination.py"""
 
 import math
 
@@ -53,13 +36,7 @@ def _build_meta(page, page_size, total_count):
 
 
 def paginate_queryset(request, queryset, default_page_size=DEFAULT_PAGE_SIZE, max_page_size=MAX_PAGE_SIZE):
-    """
-    Slice an (unsliced) Django QuerySet according to ?page=&page_size=.
-
-    Returns:
-        (page_items, meta) — page_items is the sliced queryset for this page,
-        meta is a dict: {page, page_size, total_count, total_pages, has_next, has_previous}.
-    """
+    """Slice an (unsliced) Django QuerySet according to ?page=&page_size=."""
     page, page_size = _parse_page_params(request, default_page_size, max_page_size)
     total_count = queryset.count()
     page, meta = _build_meta(page, page_size, total_count)
@@ -69,13 +46,7 @@ def paginate_queryset(request, queryset, default_page_size=DEFAULT_PAGE_SIZE, ma
 
 
 def paginate_list(request, items, default_page_size=DEFAULT_PAGE_SIZE, max_page_size=MAX_PAGE_SIZE):
-    """
-    Slice an already-materialized Python list (e.g. aggregated across
-    multiple hospital databases) according to ?page=&page_size=.
-
-    Returns:
-        (page_items, meta) — same shape as paginate_queryset.
-    """
+    """Slice an already-materialized Python list (e.g. aggregated across"""
     page, page_size = _parse_page_params(request, default_page_size, max_page_size)
     total_count = len(items)
     page, meta = _build_meta(page, page_size, total_count)

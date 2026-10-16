@@ -6,4 +6,4 @@ class DocumentsConfig(AppConfig):
     name = "apps.documents"
     label = "documents"
     verbose_name = "Documents"
-    database = "atomwalk"    # which database the tables of this app live in (read by core/db_router.py)
+    database = "atomwalk"

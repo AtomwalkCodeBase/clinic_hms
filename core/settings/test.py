@@ -1,15 +1,4 @@
-"""
-Test settings — development settings plus one throwaway hospital database alias.
-
-The router (core/db_router.py) migrates every hospital app only onto non-default
-aliases, so with the stock DATABASES a `TestCase` can never touch a hospital table.
-This module adds a single extra alias ("hospital_test") so hospital-app tests can run:
-
-    python manage.py test --settings=core.settings.test
-
-Tests opt in with core.tests.testing.HospitalDBTestCase. Under the normal settings those
-tests are skipped, so `python manage.py test` keeps working unchanged.
-"""
+"""Test settings — development settings plus one throwaway hospital database alias."""
 
 from .development import *  # noqa: F401,F403
 

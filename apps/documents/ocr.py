@@ -1,23 +1,4 @@
-"""
-apps/documents/ocr.py
------------
-One entry point for turning an image — or a rasterised scanned-PDF page —
-into text with a confidence score, for apps/records/services.py.
-
-The engine is RapidOCR (the PP-OCR / PaddleOCR detection + recognition models
-running on ONNX Runtime; pip-only, CPU, no system package), and nothing else:
-no Tesseract, no second engine, no setting to choose between them. If RapidOCR
-is missing or reads nothing, the result is an empty string and the document
-goes to the patient to type by hand.
-
-Why RapidOCR: on real phone photos a deep-learning text detector copes with
-skew, perspective, glare and low contrast where line-model engines fragment.
-
-Nothing here is imported at module load: the engine is imported lazily and any
-failure degrades to an empty string. The model object is expensive to build,
-so it is cached as a singleton. Born-digital PDFs never get here at all (their
-text layer is read directly).
-"""
+"""apps/documents/ocr.py"""
 
 from __future__ import annotations
 
@@ -29,23 +10,15 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 # One lock guards the lazy singleton so concurrent OCR calls (gunicorn threads, a warm-up thread) can't each build
-# a model. Model construction is the only thing serialised; inference is not.
 _INIT_LOCK = threading.Lock()
 
 
 # A phone photo or a big screenshot can be tens of megapixels. Decoding one costs about 4 bytes a pixel and the OCR models
-# make several copies of it, which is how a single PNG pushed a 2 GB server past its memory and got the worker killed.
-# Text stays readable at 2500 px on the long side, so anything larger is shrunk before it reaches OCR; an image so big
-# that even decoding it is a risk is treated as unreadable (the patient then picks its type by hand).
 MAX_OCR_SIDE = 2500
 MAX_OCR_PIXELS = 100_000_000
 # The other extreme is just as dangerous: RapidOCR scales a tiny image UP before reading it, so a 1x1 pixel PNG (a
-# placeholder some phones hand over instead of the real file) made it allocate 4 GB and got the worker killed, and a
-# 1x500 strip took 7 GB. Measured: 16x16 is already fine (about 400 MB), so 32 px on the short side is a safe floor.
 MIN_OCR_SIDE = 32
 # A thin strip is the same trap in another form: the short side is scaled up, so the long side grows with the shape.
-# Measured peak memory on a 2500 px strip: 5:1 about 500 MB, 10:1 850 MB, 17:1 1.3 GB, 78:1 5.7 GB. A document photo is
-# about 1.4:1 (a long till receipt rarely passes 5:1), so anything thinner than 8:1 is not read.
 MAX_OCR_ASPECT = 8
 
 
@@ -161,11 +134,7 @@ def _rapidocr(image_bytes: bytes):
 
 # ── scanned-PDF rasterisation ─────────────────────────────────────────
 def pdf_page_images(raw: bytes, *, max_pages: int = 3, dpi: int = 200) -> list[bytes]:
-    """
-    Render the first `max_pages` pages of an image-only PDF to PNG bytes so
-    they can be OCR'd. Needs PyMuPDF (`pymupdf`); returns [] if it isn't
-    installed or the file won't open.
-    """
+    """Render the first `max_pages` pages of an image-only PDF to PNG bytes so"""
     try:
         import fitz  # PyMuPDF
     except Exception:

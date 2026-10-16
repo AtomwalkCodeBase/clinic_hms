@@ -104,7 +104,7 @@ class MobileIsStoredAsTheNumberTests(TestCase):
         send.assert_not_called()
 
 
-@override_settings(RECORDS_REVIEW_FROM="")          # the review step is off here: every upload counts as confirmed
+@override_settings(RECORDS_REVIEW_FROM="")
 class PortalDocumentTests(TestCase):
     databases = {"default"}
 

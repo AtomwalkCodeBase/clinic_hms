@@ -1,20 +1,4 @@
-"""
-Episode grouping and recurrent-episode detection.
-
-ClinicalEvent  = "this condition was mentioned in this document on this date"
-HealthEpisode  = the real-world illness instance the events belong to
-
-Rules
------
-* CHRONIC group  -> exactly one episode per patient; it opens at the first
-  confirmed mention and stays open (end=None). Later mentions are follow-ups.
-* ACUTE group    -> events of the same group whose gap from the previous event
-  is <= merge_days collapse into one episode; a larger gap starts a new one.
-* Provisional-only episodes ("? dengue", "r/o UTI") are kept but flagged and
-  excluded from recurrence counts and summary numbers.
-* Recurrence     -> sliding window over episode start dates per group, any
-  window rule in config satisfied => RECURRENT.
-"""
+"""Episode grouping and recurrent-episode detection."""
 
 from bisect import bisect_left
 from dataclasses import dataclass, field
@@ -100,7 +84,6 @@ def build_episodes(events: List[EventIn], cfg=None) -> List[Episode]:
                 chronic[group] = ep
                 episodes.append(ep)
             # A provisional first mention shouldn't fix the onset date once
-            # a confirmed mention arrives.
             if ep.is_provisional and not ev.is_provisional:
                 ep.start = ev.event_date
             _absorb(ep, ev)
@@ -133,15 +116,7 @@ def _add_months(d: date, months: int) -> date:
 
 
 def detect_recurrence(episodes: List[Episode], dob: date, as_of: date, cfg=None) -> List[dict]:
-    """
-    Returns one entry per condition group that has an episode or a rule:
-    {
-      "group", "label", "is_recurrent", "triggered_on", "rule": {"min_count","window_months"},
-      "episodes_last_12m", "expected_per_year", "context": "typical for age" | ...,
-      "clinical_hint", "episode_keys": [...]
-    }
-    Only groups with at least one confirmed acute episode are returned.
-    """
+    """Returns one entry per condition group that has an episode or a rule:"""
     cfg = cfg or load_config()
     rules = {k: v for k, v in cfg["recurrence_rules"].items() if not k.startswith("_")}
     by_group: dict = {}

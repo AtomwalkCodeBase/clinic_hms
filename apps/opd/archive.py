@@ -1,14 +1,4 @@
-"""
-apps/opd/archive.py
--------------------
-store_prescription_document() — on encounter sign, render the Prescription to
-a PDF (with the "scan to save in My Reports" QR, apps/opd/pdf.py) and store it
-as a MedicalDocument(document_type=prescription). Idempotent by
-source_type = "encounter", source_id = the encounter id.
-
-All hospital-DB reads are explicit .using(db) with pk filters — no relation
-traversal, which this project's multi-DB router mis-routes to "default".
-"""
+"""apps/opd/archive.py"""
 
 import base64
 import logging

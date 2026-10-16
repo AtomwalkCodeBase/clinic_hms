@@ -1,31 +1,4 @@
-"""
-core/messaging/otp.py
-------------
-Shared OTP generation, hashing, verification, and "action token" issuance
-used by every OTP flow in the system (staff + patient password reset,
-patient self-registration, day-to-day patient OTP login, patient
-mobile-number re-verification).
-
-Flow, the same for every purpose:
-  1. request_otp()  — creates an OTPCode row (atomwalk DB), sends the code
-                       via core.messaging.email/core.messaging.sms, enforces a resend cooldown.
-  2. verify_otp()   — checks the submitted code against the OTPCode row,
-                       caps failed attempts, marks the row used, and on
-                       success returns a short-lived signed JWT ("action
-                       token") — NOT the raw ability to reset a password or
-                       create an account directly. This mirrors the
-                       signed-JWT "token_type" convention of the
-                       staff setup-password token (core.auth.views)
-                       rather than inventing a second convention.
-  3. decode_action_token() — the next-step endpoint (reset-password,
-                       complete-registration, patient-otp-login, confirm
-                       mobile-change) calls this to prove step 2 actually
-                       happened, and for whom.
-
-Codes are 6 digits, numeric, generated with `secrets` (not `random`) so
-they're not predictable. Only the SHA-256 hash (salted with OTP_HASH_PEPPER)
-is ever stored — a leaked otp_code row can't be replayed.
-"""
+"""core/messaging/otp.py"""
 
 import hashlib
 import logging
@@ -54,9 +27,6 @@ class OTPError(Exception):
 
 def _pepper() -> str:
     # settings.OTP_HASH_PEPPER already resolves the DEBUG-only fallback to
-    # JWT_SIGNING_KEY (see core/settings/base.py) — required standalone
-    # in production so this hash can be rotated independently of the JWT
-    # signing key.
     return settings.OTP_HASH_PEPPER
 
 
@@ -90,11 +60,7 @@ def resend_cooldown_remaining(purpose: str, identifier: str) -> int:
 
 
 def create_otp(purpose, identifier, target_type="", target_id=None, target_db=""):
-    """
-    Create and persist a new OTPCode row. Does NOT send it — callers pair
-    this with core.messaging.email.send_otp_email / core.messaging.sms.send_otp_sms.
-    Returns (otp_row, raw_code, channel).
-    """
+    """Create and persist a new OTPCode row. Does NOT send it — callers pair"""
     from apps.patients.models import OTPCode
     from apps.hospital_master.models import Hospital
 
@@ -118,11 +84,7 @@ def create_otp(purpose, identifier, target_type="", target_id=None, target_db=""
 
 
 def verify_otp(purpose, identifier, submitted_code):
-    """
-    Verify a submitted code against the most recent unused OTPCode row for
-    this purpose+identifier. Raises OTPError with a user-facing message on
-    any failure. On success, marks the row used and returns it.
-    """
+    """Verify a submitted code against the most recent unused OTPCode row for"""
     from apps.patients.models import OTPCode
 
     otp = (
@@ -152,12 +114,7 @@ def verify_otp(purpose, identifier, submitted_code):
 
 
 def make_action_token(purpose, identifier, target_type="", target_id=None, target_db=""):
-    """
-    Signed, short-lived JWT proving "this identifier just verified an OTP
-    for this purpose". Presented to the next-step endpoint instead of the
-    raw OTP so a code can never be replayed once consumed, and so the
-    next-step endpoint doesn't need to re-touch the OTPCode table at all.
-    """
+    """Signed, short-lived JWT proving "this identifier just verified an OTP"""
     payload = {
         "purpose":     purpose,
         "identifier":  identifier,

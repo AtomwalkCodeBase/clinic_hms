@@ -1,8 +1,4 @@
-"""
-apps/hospital_patients/signals.py
--------------------------
-Write-through: when an Allergy is saved, mirror it to atomwalk.SharedAllergy.
-"""
+"""apps/hospital_patients/signals.py"""
 
 import logging
 from django.db.models.signals import post_save

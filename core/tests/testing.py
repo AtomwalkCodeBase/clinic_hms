@@ -1,11 +1,4 @@
-"""
-core/tests/testing.py
----------------
-Shared helpers for tests that need a hospital database.
-
-Use HospitalDBTestCase with `--settings=core.settings.test` (which defines the
-"hospital_test" alias). Under any other settings module the test classes are skipped.
-"""
+"""core/tests/testing.py"""
 
 import unittest
 from types import SimpleNamespace
@@ -39,10 +32,7 @@ class HospitalDBMixin:
 
     def call_view(self, view, method, path, *, user_id, role, data=None, hospital_id=1,
                   features=("feat_pharmacy",), view_kwargs=None):
-        """
-        Invoke a DRF view the way JWTHospitalMiddleware + JWTHospitalAuthentication would:
-        a MockUser as request.user and hospital_db / hospital_id set on the request.
-        """
+        """Invoke a DRF view the way JWTHospitalMiddleware + JWTHospitalAuthentication would:"""
         factory = APIRequestFactory()
         request = getattr(factory, method)(path, data or {}, format="json")
         user = MockUser({"user_id": user_id, "role": role, "hospital_id": hospital_id})
@@ -58,8 +48,7 @@ class HospitalDBTestCase(HospitalDBMixin, TestCase):
 
 
 class HospitalDBTransactionTestCase(HospitalDBMixin, TransactionTestCase):
-    """Commits for real (tables are flushed afterwards); needed when several threads/connections
-    must see each other's writes, e.g. row-lock tests."""
+    """Commits for real (tables are flushed afterwards); needed when several threads/connections"""
 
 
 def ensure_hospital(pk):

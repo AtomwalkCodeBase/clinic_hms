@@ -1,21 +1,4 @@
-"""
-apps/hospital_setup/compliance_views.py
---------------------------
-Two audiences:
-
-  Hospital staff (hospital-scoped, request.hospital_db already resolved by
-  JWTHospitalAuthentication):
-    AuditLogListView             — read apps.hospital_setup.AuditLog (PHI access trail)
-    RecordAmendmentStaffListView — list correction requests for this hospital
-    RecordAmendmentResolveView   — approve/reject a request
-    ConsentRecordListView        — a patient's consent history
-
-  Patients (portal JWT has no fixed hospital — request.hospital_db is None; a
-  hospital must be picked explicitly, same pattern as
-  apps.patients.views.PortalBookView):
-    PortalRecordAmendmentView    — GET: my requests across every hospital
-                                    POST: submit a new request against one
-"""
+"""apps/hospital_setup/compliance_views.py"""
 
 import logging
 
@@ -42,12 +25,7 @@ logger = logging.getLogger(__name__)
 # ── Hospital staff: PHI access log ──────────────────────────────────────────
 
 class AuditLogListView(APIView):
-    """
-    GET /api/v1/compliance/audit-log/
-    Query params: patient_id (uuid), action (substring), resource_type, page, page_size.
-    Hospital-admin-only — this is every staff member's PHI access trail for
-    the whole hospital, not something a doctor needs to browse day to day.
-    """
+    """GET /api/v1/compliance/audit-log/"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def get(self, request):
@@ -77,10 +55,7 @@ class AuditLogListView(APIView):
 # ── Hospital staff: record amendments (DPDP Art. 13) ───────────────────────
 
 class RecordAmendmentStaffListView(APIView):
-    """
-    GET /api/v1/compliance/amendments/
-    Query params: status (pending/approved/rejected), page, page_size.
-    """
+    """GET /api/v1/compliance/amendments/"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def get(self, request):
@@ -99,18 +74,7 @@ class RecordAmendmentStaffListView(APIView):
 
 
 class RecordAmendmentResolveView(APIView):
-    """
-    POST /api/v1/compliance/amendments/<pk>/resolve/
-    Body: {status: "approved"|"rejected", review_notes}
-
-    Records the decision only — it does NOT automatically rewrite the
-    underlying field. Auto-applying an arbitrary (resource_type, resource_id,
-    field_name) triple across every model in the system is exactly the kind
-    of "generic write" that turns a correction workflow into a data-integrity
-    hole. The reviewer applies the actual fix through the normal edit screen
-    for that record, then marks the request resolved here — same
-    responsibility split as any real medical-records-correction process.
-    """
+    """POST /api/v1/compliance/amendments/<pk>/resolve/"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def post(self, request, pk):
@@ -142,11 +106,7 @@ class RecordAmendmentResolveView(APIView):
 # ── Hospital staff: consent history ─────────────────────────────────────────
 
 class ConsentRecordListView(APIView):
-    """
-    GET /api/v1/compliance/consents/?patient_id=
-    Any hospital staff member can look this up for a specific patient — same
-    visibility level as viewing the rest of that patient's chart.
-    """
+    """GET /api/v1/compliance/consents/?patient_id="""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
@@ -167,13 +127,7 @@ class ConsentRecordListView(APIView):
 # ── Patient portal: request a correction ────────────────────────────────────
 
 class PortalRecordAmendmentView(APIView):
-    """
-    GET  /api/v1/compliance/portal/amendments/            — my requests, every hospital
-    POST /api/v1/compliance/portal/amendments/             — submit a new request
-      Body: {hospital_id, patient_awpid? (defaults to self),
-             resource_type, resource_id, field_name, current_value?,
-             requested_value, reason?}
-    """
+    """GET  /api/v1/compliance/portal/amendments/            — my requests, every hospital"""
     permission_classes = [IsPatient]
 
     def get(self, request):

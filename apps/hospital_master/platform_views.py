@@ -1,16 +1,4 @@
-"""
-apps/hospital_master/platform_views.py
------------------------------
-API views accessible only to the Atomwalk platform admin (is_platform=True).
-
-Endpoints:
-  GET  /api/v1/platform/hospitals/         — list all hospitals + subscription status
-  POST /api/v1/platform/hospitals/         — provision a new hospital
-  GET  /api/v1/platform/hospitals/{id}/    — hospital detail
-  PATCH /api/v1/platform/hospitals/{id}/   — update subscription tier / is_active
-
-No management commands required — everything is done via API.
-"""
+"""apps/hospital_master/platform_views.py"""
 
 import re
 import secrets
@@ -44,12 +32,7 @@ def _gen_password(length=14):
 
 
 def _teardown_failed_hospital(hospital):
-    """
-    Roll back a partially-provisioned hospital (see HospitalListCreateView.post
-    Steps 3/4). Subscription.hospital is a OneToOneField with on_delete=
-    PROTECT, so a bare hospital.delete() raises ProtectedError as long as its
-    Subscription row still exists — Subscription must go first.
-    """
+    """Roll back a partially-provisioned hospital (see HospitalListCreateView.post"""
     Subscription.objects.filter(hospital=hospital).delete()
     hospital.delete()
 
@@ -96,15 +79,7 @@ def _hospital_to_dict(hospital):
 
 
 def _usage_counts(hospital):
-    """
-    Live doctor/branch/staff counts from the hospital's own database, for
-    comparing against Subscription.max_doctors/max_branches/max_staff on the
-    platform-admin UI. Thin wrapper over apps.hospital_master.services.get_usage_counts
-    (the same helper the write-time limit checks use) — best-effort: a
-    hospital DB that's unreachable or not yet migrated (e.g. mid-provisioning)
-    shouldn't break the whole hospital list, so any failure here just reports
-    unknown usage rather than raising.
-    """
+    """Live doctor/branch/staff counts from the hospital's own database, for"""
     try:
         return get_usage_counts(hospital.db_name)
     except Exception as exc:
@@ -122,10 +97,7 @@ def _log_change(hospital, action, before, after, actor_email):
 
 
 class HospitalListCreateView(APIView):
-    """
-    GET  /api/v1/platform/hospitals/  — list all hospitals
-    POST /api/v1/platform/hospitals/  — provision a new hospital
-    """
+    """GET  /api/v1/platform/hospitals/  — list all hospitals"""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request):
@@ -139,8 +111,6 @@ class HospitalListCreateView(APIView):
             hospitals = hospitals.order_by("-created_at")
 
         # Stats are computed over the full search-matched set (before tier/
-        # status filtering) so the summary cards stay a platform-wide picture
-        # even while the list below is narrowed down.
         all_matching = list(hospitals)
         tier_counts = {}
         status_counts = {}
@@ -197,7 +167,6 @@ class HospitalListCreateView(APIView):
             return error("Enter a valid 10-digit mobile number.", errors={"admin_mobile": "Invalid format."})
 
         # A mobile number already routed to another hospital must not be
-        # silently reassigned — that would hijack that person's login there.
         if StaffMobileIndex.objects.using("default").filter(mobile=admin_mobile).exists():
             return error(
                 f"Mobile number {admin_mobile} is already registered at another hospital.",
@@ -259,12 +228,6 @@ class HospitalListCreateView(APIView):
         except Exception as exc:
             logger.error("Migrations failed for %s: %s", db_name, exc)
             # Unlike the DB-creation failure above, this step runs against a
-            # database that DOES exist by now — leaving it and the Hospital/
-            # Subscription rows behind (as this used to) permanently reserves
-            # the hospital_code/db_name and makes every retry fail with
-            # "Hospital code already taken" instead of the real underlying error,
-            # with no way to retry short of a manual DB cleanup. Tear both
-            # down so a retry (even with the same name) starts clean.
             drop_hospital_database(db_name)
             _teardown_failed_hospital(hospital)
             return error(f"Database setup failed: {exc}", status=500)
@@ -296,11 +259,6 @@ class HospitalListCreateView(APIView):
             logger.info("hospital_admin created and indexed for hospital %s", hospital_code)
 
             # Email is the only place the raw temp password goes — the
-            # provisioning UI deliberately doesn't display it on screen (see
-            # DashboardPage.jsx ProvisionModal). A delivery failure must not
-            # fail provisioning itself; the API response still carries the
-            # password as a fallback so the platform admin can hand it over
-            # another way if the email bounces.
             from core.messaging.email import send_hospital_provisioned_email
             email_sent = send_hospital_provisioned_email(
                 to=admin_email, hospital_name=name, hospital_code=hospital_code,
@@ -342,10 +300,7 @@ class HospitalListCreateView(APIView):
 
 
 class HospitalDetailView(APIView):
-    """
-    GET   /api/v1/platform/hospitals/{id}/ — hospital detail
-    PATCH /api/v1/platform/hospitals/{id}/ — update tier or active status
-    """
+    """GET   /api/v1/platform/hospitals/{id}/ — hospital detail"""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def _get_hospital(self, pk):
@@ -372,12 +327,6 @@ class HospitalDetailView(APIView):
         actor_email = getattr(request.user, "email", "") or ""
 
         # ── Hospital Code (hospital_code) — separate from the plain profile
-        # fields below because it needs validation + a uniqueness check, and
-        # because it's login-relevant (see core.auth.views.StaffLoginView's
-        # employee-ID path) rather than purely cosmetic. Safe to change any
-        # time after creation — it's looked up live at login, and db_name
-        # (fixed forever once the hospital DB is created) never derives from
-        # it after the initial provisioning step.
         if "hospital_code" in d:
             new_hospital_code = slugify((d["hospital_code"] or "").strip())
             if not new_hospital_code:
@@ -396,8 +345,6 @@ class HospitalDetailView(APIView):
                 _log_change(hospital, "code_change", before_hospital_code, new_hospital_code, actor_email)
 
         # ── Profile fields — plain edits, no audit-log entry (that's reserved
-        # for tier/status/active lifecycle changes; a name/city typo fix isn't
-        # a "hospital lifecycle" event worth showing in that trail). ─────────
         params = parameters_of(hospital)
         profile_updated = []
         for field in ["name", "city", "state", "gstin"]:
@@ -417,11 +364,6 @@ class HospitalDetailView(APIView):
             updated_fields.append("profile")
 
         # ── Coordinates — power the patient app's "hospitals near me"
-        # (apps.patients.views, core.utils.geo.haversine_km). Sent as
-        # numbers, not the free-text profile fields above: validated to
-        # real-world lat/lng ranges so a typo can't quietly break every
-        # distance sort. Either key alone clears just that one field
-        # (empty string/null → None) rather than requiring both at once.
         geo_updated = []
         if "latitude" in d or "longitude" in d:
             for field, lo, hi in (("latitude", -90, 90), ("longitude", -180, 180)):
@@ -474,10 +416,6 @@ class HospitalDetailView(APIView):
             _log_change(hospital, "tier_change", before_tier, new_tier, actor_email)
 
         # Manually move a hospital through the subscription lifecycle — e.g.
-        # mark them 'suspended' for a serious issue, or roll back a mistaken
-        # 'frozen' state, without having to touch/reset their tier. Enforced
-        # in core/api/authentication.py: frozen/suspended blocks all API access
-        # for that hospital's staff, read_only blocks writes only.
         new_status = d.get("status")
         if new_status:
             valid_statuses = dict(Subscription.STATUS_CHOICES)
@@ -498,10 +436,7 @@ class HospitalDetailView(APIView):
 
 
 class HospitalAuditLogView(APIView):
-    """
-    GET /api/v1/platform/hospitals/{id}/audit-log/ — history of tier/status/
-    active changes for one hospital, most recent first.
-    """
+    """GET /api/v1/platform/hospitals/{id}/audit-log/ — history of tier/status/"""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request, pk):
@@ -523,16 +458,7 @@ class HospitalAuditLogView(APIView):
 
 
 class PlatformStatsView(APIView):
-    """
-    GET /api/v1/platform/stats/ — platform-wide usage metrics for the
-    Dashboard's hero panel, plus a cross-hospital recent-activity feed.
-
-    Every number here is a live count from a real table — no revenue,
-    system-health, or other figures are included since nothing in the
-    codebase currently tracks pricing, payments, or infrastructure health.
-    Best-effort per hospital: an unreachable hospital DB is skipped for the
-    usage totals (and logged) rather than failing the whole request.
-    """
+    """GET /api/v1/platform/stats/ — platform-wide usage metrics for the"""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request):
@@ -580,12 +506,7 @@ class PlatformStatsView(APIView):
 
 
 class HospitalOverviewView(APIView):
-    """
-    GET /api/v1/platform/hospitals/{id}/overview/ — counts backing the
-    hospital detail page's Overview tab: branches, doctors, staff,
-    patients, and today's appointments. No storage figure is returned —
-    nothing in this project tracks per-hospital storage usage.
-    """
+    """GET /api/v1/platform/hospitals/{id}/overview/ — counts backing the"""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request, pk):
@@ -615,10 +536,7 @@ class HospitalOverviewView(APIView):
 
 
 class HospitalStaffListView(APIView):
-    """
-    GET /api/v1/platform/hospitals/{id}/staff/ — every staff member at one
-    hospital, for the hospital detail page's Users & Roles tab.
-    """
+    """GET /api/v1/platform/hospitals/{id}/staff/ — every staff member at one"""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request, pk):
@@ -647,14 +565,7 @@ class HospitalStaffListView(APIView):
 
 
 class HospitalStaffDetailView(APIView):
-    """
-    PATCH /api/v1/platform/hospitals/{id}/staff/{staff_id}/ — deactivate/
-    reactivate a staff member or change their role, from the platform side.
-
-    POST  /api/v1/platform/hospitals/{id}/staff/{staff_id}/reset-password/
-    — generate a new temp password and force a change on next login, same
-    mechanism used at hospital provisioning time.
-    """
+    """PATCH /api/v1/platform/hospitals/{id}/staff/{staff_id}/ — deactivate/"""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def _get(self, hospital_id, staff_id):
@@ -678,11 +589,6 @@ class HospitalStaffDetailView(APIView):
         d = request.data
 
         # Refuse to deactivate or role-change away the last active
-        # hospital_admin at this hospital — that would lock the hospital out
-        # of its own admin panel with no one able to invite a replacement.
-        # Checks acts_as too — a custom role bundling "hospital_admin" counts
-        # as an effective admin here just like a literal one (see the
-        # matching fix in apps/org/views.py).
         staff_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
         staff_is_admin = staff.role == "hospital_admin" or "hospital_admin" in staff_acts_as
         would_lose_admin_status = (
@@ -705,10 +611,6 @@ class HospitalStaffDetailView(APIView):
                 )
 
         # ── Subscription limit check (fails CLOSED — see apps.hospital_master.services) ──
-        # Reactivating a deactivated staff member, or role-changing an active
-        # one across the doctor/non-doctor line, both put a new person into a
-        # capacity bucket (max_doctors / max_staff) without freeing a slot
-        # anywhere else — check before committing either change.
         was_active  = staff.is_active
         final_active = bool(d["is_active"]) if "is_active" in d else was_active
         new_role = d.get("role")
@@ -718,11 +620,6 @@ class HospitalStaffDetailView(APIView):
                 return error(f"Invalid role. Choose: {', '.join(valid_roles)}")
         final_role = new_role or staff.role
         # Checks acts_as too — a custom role bundling "doctor" must count
-        # against max_doctors, not max_staff, same as a literal doctor (see
-        # the matching is_doctor_equivalent pattern in apps/org/views.py).
-        # This endpoint doesn't assign custom roles itself (new_role is
-        # always one of the 6 system roles), so only the OLD side can be
-        # role="custom" here.
         old_is_doctor = staff.role == "doctor" or "doctor" in staff_acts_as
         old_resource = "doctors" if old_is_doctor else "staff"
         new_resource = "doctors" if final_role == "doctor" else "staff"
@@ -772,12 +669,7 @@ class HospitalStaffResetPasswordView(APIView):
 
 
 class PlatformUserListView(APIView):
-    """
-    GET /api/v1/platform/users/ — global cross-hospital staff directory.
-    Loops every hospital DB (fine at the current handful-of-hospitals scale;
-    would need a atomwalk-side mirror table to stay fast at real scale).
-    Supports ?search=, ?role=, ?status=(active|inactive), ?hospital_id=.
-    """
+    """GET /api/v1/platform/users/ — global cross-hospital staff directory."""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request):
@@ -823,13 +715,7 @@ class PlatformUserListView(APIView):
 
 
 class PlanListView(APIView):
-    """
-    GET /api/v1/platform/plans/ — the 4 license tiers' feature sets and
-    limits, for the Subscriptions page's comparison table. No pricing is
-    included — there is no pricing model anywhere in this system (no price
-    field on Subscription, no billing/invoicing feature at all), so nothing
-    here should imply a dollar/rupee figure that isn't real.
-    """
+    """GET /api/v1/platform/plans/ — the 4 license tiers' feature sets and"""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request):

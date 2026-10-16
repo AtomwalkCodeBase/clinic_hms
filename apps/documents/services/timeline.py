@@ -1,7 +1,4 @@
-"""
-Assembles the timeline API payload from already-computed pieces.
-Pure function - views.py fetches rows, converts them, and calls build_timeline().
-"""
+"""Assembles the timeline API payload from already-computed pieces."""
 
 from datetime import date
 from typing import List, Optional
@@ -26,15 +23,7 @@ def build_timeline(*, dob: date, sex: str, p_from: date, p_to: date,
                    immunization: dict, admissions: List[dict], critical_labs: List[dict],
                    birth_history: Optional[dict], audience: str = "guardian",
                    cfg=None) -> dict:
-    """
-    events_by_id: {event_id: {"date": date, "severity": str, "document_id": int,
-                              "condition_text": str, "is_verified": bool}}
-    growth_points: [{"measured_on": date, "age_months", "weight_kg": {...}, "height_cm": {...},
-                     "head_circ_cm": {...}, "document_id"}]
-    admissions: [{"admitted_on": date, "discharged_on": date|None, "ward": str, "document_id",
-                  "reason": str|None, "is_critical": bool}]
-    critical_labs: [{"date": date, "analyte", "value", "direction", "severity", "document_id"}]
-    """
+    """events_by_id: {event_id: {"date": date, "severity": str, "document_id": int,"""
     cfg = cfg or load_config()
     labels = cfg.get("patient_labels", {})
     lbl = (lambda code: labels.get(code, code)) if audience == "guardian" else (lambda code: code)

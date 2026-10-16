@@ -48,26 +48,8 @@ class DoctorProfileSerializer(serializers.ModelSerializer):
 
 
 class DoctorSelfProfileSerializer(serializers.ModelSerializer):
-    """
-    Self-service view/edit for the logged-in doctor's own profile.
-
-    admin_fields (registration_no, specialisation, qualification,
-    experience_years) are always read-only here — set by the hospital admin
-    at onboarding, changeable only via DoctorProfileView.
-
-    consultation_fee and followup_fee are conditionally read-only together:
-    when the hospital's fee_ownership == "hospital" both fields are locked
-    for doctors; when fee_ownership == "doctor" they can edit both freely.
-    The view (MyDoctorProfileView) passes fee_editable=True/False as
-    context so this serializer doesn't need to query the Hospital itself.
-    followup_fee may be left blank — the invoice generator falls back to
-    consultation_fee for follow-up visits when it's unset.
-    """
+    """Self-service view/edit for the logged-in doctor's own profile."""
     # digital_signature stores an S3 object key (see core/storage.py), not a
-    # usable image source — this returns a freshly-signed URL on every read
-    # instead. Read-only here: the write side is handled explicitly in
-    # MyDoctorProfileView.patch() (decode base64 -> verify -> upload -> store
-    # key), same pattern as StaffMeSerializer.photo below.
     digital_signature = serializers.SerializerMethodField()
 
     def get_digital_signature(self, obj):
@@ -139,13 +121,7 @@ class StaffProfileSerializer(serializers.ModelSerializer):
 
 
 class StaffProfileSelfSerializer(serializers.ModelSerializer):
-    """
-    Self-service view/edit for a non-doctor staff member's own profile —
-    mirrors DoctorSelfProfileSerializer. registration_no / council_name /
-    registration_expiry / qualification / experience_years were set by the
-    hospital admin at onboarding and are read-only here; gender / bio /
-    languages the staff member owns.
-    """
+    """Self-service view/edit for a non-doctor staff member's own profile —"""
     class Meta:
         model  = StaffProfile
         fields = ["registration_no", "council_name", "registration_expiry",
@@ -156,16 +132,8 @@ class StaffProfileSelfSerializer(serializers.ModelSerializer):
 
 
 class StaffMeSerializer(serializers.ModelSerializer):
-    """
-    Self-service view/edit for ANY logged-in staff member's own basic
-    profile — currently just the photo. Shared by every role (doctor,
-    nurse, front desk, lab tech, pharmacist, hospital admin) via
-    MyStaffProfileView, scoped to request.user's own row.
-    """
+    """Self-service view/edit for ANY logged-in staff member's own basic"""
     # photo stores an S3 object key (see core/storage.py), not a usable
-    # image source — signed fresh on every read. Read-only: the write side
-    # is handled explicitly in MyStaffProfileView.patch() (decode base64 ->
-    # verify -> upload -> store key).
     photo = serializers.SerializerMethodField()
 
     def get_photo(self, obj):
@@ -183,26 +151,15 @@ class StaffSerializer(serializers.ModelSerializer):
     branch_name    = serializers.CharField(source="branch.name", read_only=True)
     department_name = serializers.CharField(source="department.name", read_only=True)
     # Only meaningful when role="custom" — the hospital-defined Role's own
-    # name/acts_as, so the frontend can show "Doctor Clinic" instead of the
-    # literal string "custom" and know which system-role treatment (colors,
-    # icons, etc.) applies. Null for the 6 system roles.
     custom_role_name = serializers.CharField(source="custom_role.name", read_only=True, default=None)
     custom_role_acts_as = serializers.SerializerMethodField()
 
     def get_custom_role_acts_as(self, obj):
         return obj.custom_role.acts_as if obj.custom_role_id else []
     # Full branch assignment (usually just the one primary branch, mirrored
-    # from `branch`/`branch_name` above for backward compat — more than one
-    # entry means this person, almost always a doctor, works multiple
-    # branches; see apps.hospital_setup.branch_utils).
     branches = serializers.SerializerMethodField()
 
     # photo stores an S3 object key — signed fresh on every read, same
-    # reasoning as StaffMeSerializer.photo above. This serializer is
-    # read-only wherever staff.photo would otherwise be written (staff
-    # invite/edit doesn't set photo — only the staff member's own
-    # self-service profile does, via StaffMeSerializer), so no write-side
-    # handling is needed here.
     photo = serializers.SerializerMethodField()
 
     def get_photo(self, obj):
@@ -212,10 +169,6 @@ class StaffSerializer(serializers.ModelSerializer):
         mappings = (
             StaffBranchMapping.objects
             # .using() isn't available via this implicit manager call inside
-            # a serializer method — the queryset passed to the serializer's
-            # instance list already resolved `obj` from the right hospital DB,
-            # and StaffBranchMapping shares that same hospital DB (both live
-            # in apps.hospital_setup, routed together), so plain .filter() here is safe.
             .filter(staff_id=obj.id)
             .select_related("branch")
             .order_by("-is_primary", "branch__name")
@@ -226,10 +179,6 @@ class StaffSerializer(serializers.ModelSerializer):
         ]
 
     # Only meaningful for role="nurse" — which doctor(s) the hospital admin
-    # has rostered this nurse to (see NurseDoctorAssignment). Empty for
-    # every other role, and empty for a nurse nobody's assigned yet — that
-    # nurse's queue/vitals/upcoming-schedule views show no patients until
-    # an admin sets this via StaffDoctorsView (Staff page "Assign Doctors").
     assigned_doctors = serializers.SerializerMethodField()
 
     def get_assigned_doctors(self, obj):
@@ -261,8 +210,7 @@ class StaffSerializer(serializers.ModelSerializer):
 
 
 class StaffInviteSerializer(serializers.Serializer):
-    """Input for inviting a new staff member. Mobile is the login identifier
-    (see atomwalk.StaffMobileIndex) — email is optional/informational only."""
+    """Input for inviting a new staff member. Mobile is the login identifier"""
     phone         = serializers.CharField(max_length=20)
     email         = serializers.EmailField(required=False, allow_blank=True)
 
@@ -272,33 +220,19 @@ class StaffInviteSerializer(serializers.Serializer):
         return value
 
     # Employee ID is NOT accepted as input — it's auto-generated via NNTM
-    # (see apps.hospital_setup.staff_services.next_employee_id), same as UHID/invoice/etc.
-    # Never manually typed in, so it isn't part of this input contract.
     first_name    = serializers.CharField(max_length=150)
     last_name     = serializers.CharField(max_length=150, required=False, allow_blank=True)
     role          = serializers.ChoiceField(choices=[
         "hospital_admin", "doctor", "nurse", "front_desk", "lab_tech", "pharmacist", "custom"
     ])
     # Required (and validated further in the view, which needs request.hospital_db
-    # to confirm it's a real, non-system Role belonging to this hospital) only
-    # when role="custom" — which hospital-defined Role this invite is for.
     custom_role_id = serializers.IntegerField(required=False, allow_null=True)
     branch_id     = serializers.IntegerField(required=False, allow_null=True)
     department_id = serializers.IntegerField(required=False, allow_null=True)
     # Extra branches beyond branch_id (the primary) — meaningful for doctor
-    # role only in practice, harmless to accept for any role. If provided,
-    # branch_id (if also given) is folded in as the primary automatically —
-    # see apps.hospital_setup.branch_utils.set_staff_branches.
     branch_ids    = serializers.ListField(child=serializers.IntegerField(), required=False, allow_empty=True)
 
     # ── Professional basics — admin enters these at creation for EVERY role,
-    #    not just doctor, so nobody ends up with a blank profile (nursing/
-    #    pharmacy council registration is legally required before those
-    #    accounts should even be treated as active). specialisation only
-    #    applies to doctor; council_name / registration_expiry mainly matter
-    #    for nurse and pharmacist but are harmless to leave blank for others.
-    #    Everything else (gender, bio, languages, photo, signature) is
-    #    self-service — see MyDoctorProfileView / MyStaffProfileDetailsView.
     registration_no     = serializers.CharField(max_length=50, required=False, allow_blank=True)
     council_name        = serializers.CharField(max_length=150, required=False, allow_blank=True)
     registration_expiry = serializers.DateField(required=False, allow_null=True)
@@ -307,11 +241,6 @@ class StaffInviteSerializer(serializers.Serializer):
     experience_years     = serializers.IntegerField(required=False, allow_null=True, min_value=0)
 
     # ── Doctor-only fields — ignored for non-doctor roles ────────────────────
-    # consultation_fee / followup_fee: accepted here when the hospital's
-    # fee_ownership is "hospital" — the view checks the hospital setting and
-    # writes them to DoctorProfile; ignored silently for non-doctor roles.
-    # followup_fee is optional even then — left null, the invoice generator
-    # falls back to consultation_fee for follow-up visits.
     consultation_fee = serializers.DecimalField(
         max_digits=8, decimal_places=2, required=False, allow_null=True
     )
@@ -319,7 +248,6 @@ class StaffInviteSerializer(serializers.Serializer):
         max_digits=8, decimal_places=2, required=False, allow_null=True
     )
     # Working-hours schedule: list of up to 7 day objects.  Optional at
-    # registration — can also be set later via /staff/<pk>/schedule/.
     schedule = DoctorScheduleSerializer(required=False, allow_null=True)
 
 
@@ -350,8 +278,6 @@ class RoleWriteSerializer(serializers.Serializer):
     description       = serializers.CharField(max_length=255, required=False, allow_blank=True)
     permission_codes  = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
     # Which system-role identities this custom role should be treated as
-    # throughout the app — e.g. ["doctor", "nurse", "front_desk"] for a
-    # solo-clinic role. See apps.hospital_setup.rbac.resolve_acts_as / ACTS_AS_CHOICES.
     acts_as           = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
 
     def validate_acts_as(self, value):

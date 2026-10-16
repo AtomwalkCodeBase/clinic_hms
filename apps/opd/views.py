@@ -1,28 +1,4 @@
-"""
-OPD API Views
-
-Queue:
-  GET    /api/v1/opd/appointments/             — today's queue (by doctor)
-  POST   /api/v1/opd/appointments/             — book appointment
-  GET    /api/v1/opd/appointments/<id>/        — appointment detail
-  POST   /api/v1/opd/appointments/<id>/status/ — move queue state
-
-Encounters:
-  POST   /api/v1/opd/encounters/               — create/open encounter
-  GET    /api/v1/opd/encounters/<id>/          — get encounter
-  PATCH  /api/v1/opd/encounters/<id>/          — update SOAP
-  POST   /api/v1/opd/encounters/<id>/sign/     — sign off encounter
-
-Prescriptions:
-  POST   /api/v1/opd/prescriptions/            — create Rx for encounter
-  GET    /api/v1/opd/prescriptions/<id>/       — get Rx
-  POST   /api/v1/opd/prescriptions/<id>/items/ — add drug items
-  DELETE /api/v1/opd/prescriptions/<id>/items/<item_id>/ — remove item
-
-  GET    /api/v1/opd/favourites/               — list doctor's Rx favourites
-  POST   /api/v1/opd/favourites/               — save favourite
-  DELETE /api/v1/opd/favourites/<id>/          — delete favourite
-"""
+"""OPD API Views"""
 
 import logging
 from datetime import date, timedelta
@@ -62,13 +38,6 @@ logger = logging.getLogger(__name__)
 
 
 # ── Appointment Type catalog — "make it configurable" ───────────────────────
-# Reuses billing's generic OptionList CRUD base classes untouched (see
-# apps/billing/views.py) — same pattern already backing Drug Form / Payment
-# Mode / Invoice Status / Admission Type&Source / Room Type / Sample Type.
-# opd/booking itself never surfaces a picker for this today (front desk
-# always books "opd"; "followup"/"emergency" are set programmatically, not
-# chosen from a dropdown) — this exists so a hospital can see/extend the
-# catalog (e.g. add "teleconsult") even though nothing forces them to.
 class AppointmentTypeListCreateView(DropdownListCreateView):
     list_type = OptionList.LIST_APPOINTMENT_TYPE
     serializer_class = AppointmentTypeSerializer
@@ -81,22 +50,11 @@ class AppointmentTypeDetailView(DropdownDetailView):
     serializer_class = AppointmentTypeSerializer
     identity_field = "name"
     model_field = "label"
-    system_can_deactivate = False  # opd/followup/emergency stay available — backend fee/labeling logic depends on them existing
+    system_can_deactivate = False
 
 
 def _nurse_assigned_doctor_ids(request, db):
-    """
-    Doctor id(s) this nurse is rostered to (see apps.hospital_setup.NurseDoctorAssignment
-    / StaffDoctorsView, admin-configured via the Staff page's "Assign
-    Doctors" action) — the nurse counterpart of the doctor self-scoping
-    block above (`doctor_user_id=request.user.id`). A nurse who isn't
-    literally role="nurse" but acts_as one (custom role) gets this too.
-    Returns None for anyone who isn't a nurse, meaning "don't scope by this".
-    A nurse with zero assignments gets `set()` back — deliberately: their
-    queue/vitals/upcoming-schedule/monitoring views show no patients until
-    an admin assigns them at least one doctor, the same "nothing until
-    configured" behavior an unassigned doctor's own queue would show.
-    """
+    """Doctor id(s) this nurse is rostered to (see apps.hospital_setup.NurseDoctorAssignment"""
     acts_as = getattr(request.user, "acts_as", [])
     if request.user.role != "nurse" and "nurse" not in acts_as:
         return None
@@ -104,15 +62,10 @@ def _nurse_assigned_doctor_ids(request, db):
     return get_nurse_doctor_ids(request.user.id, db)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Appointments / Queue
-# ──────────────────────────────────────────────────────────────────────────────
 
 class AppointmentListCreateView(APIView):
-    """
-    GET  — Today's OPD queue. Doctors see their own; admin sees all.
-    POST — Book a new appointment (assigns next token number).
-    """
+    """GET  — Today's OPD queue. Doctors see their own; admin sees all."""
     permission_classes = [IsHospitalStaff]
 
     def get(self, request):
@@ -124,31 +77,16 @@ class AppointmentListCreateView(APIView):
         qs = qs.filter(scheduled_date=appt_date)
 
         # Doctor sees only their queue unless admin. Checks acts_as too, not
-        # just the literal role — a custom role bundling "doctor" (e.g. a
-        # solo-clinic role) must get the same self-scoping a literal doctor
-        # gets, not the unscoped whole-clinic view meant for admin/front-desk.
         acts_as = getattr(request.user, "acts_as", [])
         if request.user.role == "doctor" or "doctor" in acts_as:
             qs = qs.filter(doctor_user_id=request.user.id)
 
         # Nurse sees only the queue for doctor(s) the hospital admin has
-        # assigned them to (see NurseDoctorAssignment) — same idea as the
-        # doctor self-scoping above, just admin-configured. An unassigned
-        # nurse gets an empty queryset, not the whole hospital's queue.
         nurse_doctor_ids = _nurse_assigned_doctor_ids(request, db)
         if nurse_doctor_ids is not None:
             qs = qs.filter(doctor_user_id__in=nurse_doctor_ids)
 
         # Branch scoping — explicit ?branch_id= wins; otherwise front-desk/nurse
-        # default to their own branch so a multi-branch hospital doesn't see
-        # every branch's queue mixed together. "all" opts out explicitly.
-        #
-        # A doctor passing an explicit branch_id must actually be assigned to
-        # it (see apps.hospital_setup.branch_utils / StaffBranchMapping) — this is what
-        # makes a doctor's branch switcher on the frontend a real access
-        # boundary instead of just a UI filter; nothing previously stopped a
-        # doctor from requesting any other hospital branch's queue by simply
-        # passing its id.
         branch_param = request.query_params.get("branch_id")
         if branch_param and branch_param != "all":
             if request.user.role == "doctor" or "doctor" in acts_as:
@@ -169,8 +107,6 @@ class AppointmentListCreateView(APIView):
             qs = qs.filter(status=appt_status)
 
         # Doctor / room filters — same query param names as
-        # AppointmentUpcomingView so a frontend filter bar can share one
-        # set of controls across both "today" and "upcoming" views.
         doctor_param = request.query_params.get("doctor_user_id")
         if doctor_param:
             qs = qs.filter(doctor_user_id=doctor_param)
@@ -179,9 +115,6 @@ class AppointmentListCreateView(APIView):
             qs = qs.filter(room_id=room_param)
 
         # Free-text search across every header the front-desk queue table
-        # shows: patient name/UHID/AWPID/mobile (via Patient), plus doctor
-        # name, chief complaint, and room — all plain fields on Appointment
-        # itself so no extra join is needed for those.
         patient_q = (request.query_params.get("patient") or "").strip()
         if patient_q:
             from apps.opd.models import HospitalPatient
@@ -202,7 +135,6 @@ class AppointmentListCreateView(APIView):
             )
 
         # Status counts over the WHOLE day (pre-pagination) so dashboard stat
-        # cards stay accurate regardless of which page is currently loaded.
         status_counts = {
             "total":       qs.count(),
             "waiting":     qs.filter(status__in=["waiting", "scheduled"]).count(),
@@ -212,7 +144,6 @@ class AppointmentListCreateView(APIView):
         }
 
         # Active patients first (in consult > vitals ready > waiting > scheduled),
-        # finished ones at the bottom; ties broken by token number.
         from django.db.models import Case, When, IntegerField
         status_priority = Case(
             When(status="in_progress", then=0),
@@ -262,16 +193,6 @@ class AppointmentListCreateView(APIView):
         next_token = (max(last_token) + 1) if last_token else 1
 
         # Branch scoping — an appointment belongs to the branch the PATIENT
-        # is registered at, not wherever the booking staff member happens to
-        # be assigned. Using the booker's own branch_id here was the bug
-        # behind "patient not appearing in any queue": in a multi-branch
-        # hospital (or whenever the booking staff account has no branch_id
-        # set at all, e.g. a freshly provisioned hospital_admin), the
-        # appointment could end up on a different branch_id — or None — than
-        # the branch a queue view explicitly filters to, so the newly
-        # registered patient silently never shows up in anyone's queue.
-        # Falls back to the query param (explicit override) then the
-        # booking user's branch only if the patient itself has none on file.
         from apps.opd.models import HospitalPatient
         patient = HospitalPatient.objects.using(db).filter(uuid=data["patient_id"]).first()
         branch_id = (
@@ -281,12 +202,6 @@ class AppointmentListCreateView(APIView):
         )
 
         # Resolve room/floor from org.RoomAssignment, if the hospital has set
-        # any up — a doctor sharing a room with others at different times of
-        # day (see apps.hospital_setup.models.RoomAssignment) is looked up by day-of-week
-        # + the booked time and baked into the appointment now, rather than
-        # looked up live later, so it doesn't retroactively change if room
-        # assignments are edited after the fact. No assignment configured for
-        # this doctor/slot just leaves the appointment roomless — opt-in.
         room_fields = {}
         if scheduled_time:
             from apps.hospital_setup.room_utils import resolve_room_for_slot
@@ -300,15 +215,6 @@ class AppointmentListCreateView(APIView):
                 }
 
         # Only a same-day booking means the patient is physically here now —
-        # that's the one case "Waiting" is true the moment it's booked (a
-        # walk-in front-desk is registering on the spot). A future-dated
-        # booking is not "waiting" at all yet; it's scheduled, and only
-        # becomes "waiting" when the patient actually checks in on the day
-        # (see AppointmentStatusView / QueuePage's "Check In" action). Every
-        # appointment used to get STATUS_WAITING unconditionally here, which
-        # made a booking made today for next week show as "waiting" — as if
-        # the patient were already sitting in the hospital — on both the
-        # doctor's dashboard and queue, days before they'd even arrive.
         initial_status = (
             Appointment.STATUS_WAITING if appt_date == date.today()
             else Appointment.STATUS_SCHEDULED
@@ -323,10 +229,6 @@ class AppointmentListCreateView(APIView):
         )
 
         # Make this visible in the patient's own portal login, if they (or
-        # their guardian, for a dependent) have one — front-desk/nurse
-        # bookings used to never appear there at all, since only the portal's
-        # own booking flow wrote the atomwalk-side PatientBooking row that
-        # "My Bookings" actually reads from. See apps.patients.services.
         from apps.patients.services import sync_patient_booking
         sync_patient_booking(appointment, db)
 
@@ -334,15 +236,7 @@ class AppointmentListCreateView(APIView):
 
 
 class AppointmentHistoryView(APIView):
-    """
-    GET /api/v1/opd/history/?patient=&date_from=&date_to=&status=&page=&page_size=
-
-    Searchable visit history — NOT limited to today like the live queue.
-    Search by patient name / UHID / AWPID, optionally narrowed to a date
-    range. Doctors see only their own past patients (same scoping as their
-    live queue); nurse sees only their assigned doctor(s)' past patients
-    (see NurseDoctorAssignment); front desk sees the whole hospital.
-    """
+    """GET /api/v1/opd/history/?patient=&date_from=&date_to=&status=&page=&page_size="""
     permission_classes = [IsHospitalStaff]
 
     def get(self, request):
@@ -388,9 +282,6 @@ class AppointmentHistoryView(APIView):
         data = serializer.data
 
         # Per-visit indicators for the History module: does this visit have a
-        # prescription, and does it have an internal (clinical) note? So the
-        # UI can show an explicit "No prescription issued" / "No internal note
-        # recorded" instead of just an empty space.
         enc_ids = [row["encounter"]["id"] for row in data if row.get("encounter")]
         if enc_ids:
             from apps.documents.models import MedicalDocument
@@ -405,11 +296,6 @@ class AppointmentHistoryView(APIView):
                 .values_list("encounter_id", flat=True).distinct()
             }
             # Two archived PDFs can hang off one encounter (see
-            # apps.opd.views._store_prescription_pdf / _store_handwriting_pdfs):
-            #   encounter:<id>                  -> typeset prescription  [pt + dr]
-            #   encounter:<id>:handwritten:rx   -> handwritten Rx        [pt + dr]
-            # They are patient documents (MedicalDocument). The handwritten Internal Note is not: it is the
-            # doctor's own record, kept on the consult session (ConsultSession.note_pdf), never a patient document.
             from apps.patients.models import ConsultSession
             typeset_rx_docs, hw_rx_docs = {}, {}
             Source = MedicalDocument.Source
@@ -450,25 +336,7 @@ class AppointmentHistoryView(APIView):
 
 
 class AppointmentUpcomingView(APIView):
-    """
-    GET /api/v1/opd/appointments/upcoming/?date_from=&date_to=&status=&room_id=&branch_id=&patient=
-
-    Every appointment from today onward (ascending date/time), NOT limited
-    to a single day like AppointmentListCreateView's queue — this is what
-    powers the doctor's "know my whole upcoming schedule" dashboard, not
-    just today's. Doctor sees only their own (same acts_as-aware scoping as
-    the live queue); nurse sees only their assigned doctor(s)' upcoming
-    schedule (see NurseDoctorAssignment); other staff see the whole
-    hospital, narrowable to one branch/room. date_from defaults to today; passing an earlier date_from
-    lets the same endpoint show a recent-past window too if ever needed,
-    but the frontend dashboard only ever asks for today-forward.
-
-    Deliberately a flat, filterable, paginated list rather than pre-grouped
-    "today/tomorrow/this week" buckets server-side — the frontend groups by
-    scheduled_date client-side, which stays correct across timezones/DST
-    without this endpoint needing to know the caller's "today" separately
-    from scheduled_date's.
-    """
+    """GET /api/v1/opd/appointments/upcoming/?date_from=&date_to=&status=&room_id=&branch_id=&patient="""
     permission_classes = [IsHospitalStaff]
 
     def get(self, request):
@@ -496,7 +364,6 @@ class AppointmentUpcomingView(APIView):
             qs = qs.filter(status=appt_status)
         else:
             # Default view excludes cancelled/no-show clutter from "what's
-            # coming up" — still reachable via an explicit ?status= filter.
             qs = qs.exclude(status__in=[Appointment.STATUS_CANCELLED, Appointment.STATUS_NO_SHOW])
 
         room_id = request.query_params.get("room_id")
@@ -534,10 +401,6 @@ class AppointmentUpcomingView(APIView):
             )
 
         # Ascending — "what's next" reads top-to-bottom chronologically,
-        # the opposite of AppointmentHistoryView's newest-first "what
-        # already happened" ordering. Nulls (no time picked — a walk-in
-        # slot) sort after timed appointments on the same day so a
-        # doctor's fixed-time bookings aren't pushed down by untimed ones.
         from django.db.models import F
         qs = qs.order_by("scheduled_date", F("scheduled_time").asc(nulls_last=True), "token_number")
 
@@ -560,11 +423,7 @@ def _get_whisper():
 
 
 class TranscribeView(APIView):
-    """
-    POST /api/v1/opd/transcribe/  (multipart, field: audio)
-    Transcribes doctor dictation using Whisper (faster-whisper, local CPU).
-    Returns {"text": "..."} — the frontend shows it for review before inserting.
-    """
+    """POST /api/v1/opd/transcribe/  (multipart, field: audio)"""
     permission_classes = [IsDoctor, RequireFeature("feat_ai_voice")]
 
     def post(self, request):
@@ -595,8 +454,6 @@ class TranscribeView(APIView):
             return Response({"text": text})
         except Exception:
             # Log the real exception server-side only — the raw message
-            # (library internals, file paths) has no business reaching the
-            # doctor's browser. They just need to know dictation didn't work.
             logger.exception("Transcription failed")
             return api_error("Transcription failed. Please try again or type the note manually.", status=500)
         finally:
@@ -608,12 +465,7 @@ class TranscribeView(APIView):
 
 
 class OPDStatsView(APIView):
-    """
-    GET /api/v1/opd/stats/?days=7
-    Per-day appointment counts for the last N days (default 7, max 30).
-    Doctors see only their own; other staff see the whole clinic.
-    Response: {"results": [{"date": "2026-08-03", "day": "Mon", "total": 5, "done": 2}, ...]}
-    """
+    """GET /api/v1/opd/stats/?days=7"""
     permission_classes = [IsHospitalStaff]
 
     def get(self, request):
@@ -651,14 +503,7 @@ class OPDStatsView(APIView):
 
 
 class MonitoringListView(APIView):
-    """
-    GET /api/v1/opd/monitoring/?date=YYYY-MM-DD  (default today)
-    Nurse's patient-monitoring list: every patient seen (or being seen) today
-    with the doctor's orders — investigations to chase, prescriptions given,
-    advice and follow-up. Lets nursing staff track patient condition post-consult.
-    A nurse only sees encounters for their assigned doctor(s) (see
-    NurseDoctorAssignment) — same scoping as their live queue.
-    """
+    """GET /api/v1/opd/monitoring/?date=YYYY-MM-DD  (default today)"""
     permission_classes = [IsHospitalStaff]
 
     def get(self, request):
@@ -683,7 +528,6 @@ class MonitoringListView(APIView):
             encounters = encounters.filter(appointment__branch_id=request.user.branch_id)
 
         # Summary counts over the WHOLE day (pre-pagination) so the nurse's
-        # summary strip stays accurate regardless of which page is loaded.
         summary = {
             "total":            encounters.count(),
             "with_tests":       encounters.exclude(investigations="").exclude(investigations__isnull=True).count(),
@@ -693,10 +537,6 @@ class MonitoringListView(APIView):
         page_items, meta = paginate_queryset(request, encounters)
 
         # Batched lookups for the whole page instead of 3-4 separate queries
-        # PER ROW (patient, prescription, prescription items, vitals) — that
-        # pattern was fine at demo scale but scales linearly with a hospital's
-        # daily patient count, making the nurse monitoring feed progressively
-        # slower as volume grows.
         enc_ids = [enc.id for enc in page_items]
         appt_ids = [enc.appointment_id for enc in page_items]
         patient_uuids = [enc.patient_id for enc in page_items if enc.patient_id]
@@ -730,9 +570,6 @@ class MonitoringListView(APIView):
                 "encounter_id":    str(enc.id),
                 "token_number":    appt.token_number,
                 # Patient's real numeric id (enc.patient_id is Patient.uuid,
-                # not the pk) — same convention as OPDEncounterSerializer's
-                # get_patient_pk(). The nurse monitoring feed needs this to
-                # fetch this patient's vaccination roadmap per row.
                 "patient_pk":      patient.id if patient else None,
                 "patient_name":    patient.full_name if patient else appt.patient_awpid,
                 "patient_uhid":    patient.uhid if patient else "",
@@ -809,16 +646,7 @@ class AppointmentStatusView(APIView):
 
 
 class AppointmentRescheduleView(APIView):
-    """
-    POST /api/v1/opd/appointments/<id>/reschedule/  {scheduled_date, scheduled_time?}
-
-    Moves an appointment to a new date/time in place instead of front desk
-    having to cancel and rebook. Only allowed while still SCHEDULED/WAITING
-    (once vitals are taken or the doctor's started, rescheduling doesn't make
-    sense — cancel and book a fresh visit instead). Re-runs the same
-    slot-conflict check, token-number assignment, and room resolution used at
-    booking time (see AppointmentListCreateView.post).
-    """
+    """POST /api/v1/opd/appointments/<id>/reschedule/  {scheduled_date, scheduled_time?}"""
     permission_classes = [IsHospitalStaff]
 
     def post(self, request, pk):
@@ -914,9 +742,7 @@ class VitalsView(APIView):
         return Response(VitalsSerializer(vitals).data, status=status.HTTP_201_CREATED if created else 200)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # OPD Encounters
-# ──────────────────────────────────────────────────────────────────────────────
 
 class EncounterCreateView(APIView):
     """GET/POST /api/v1/opd/encounters/"""
@@ -939,10 +765,6 @@ class EncounterCreateView(APIView):
 
     def post(self, request):
         # Checks acts_as too — a custom role bundling "doctor" (e.g. a
-        # solo-clinic role that's also nurse/front-desk) must be able to
-        # open a consultation, the same as a literal doctor. Before this,
-        # any custom-role staff hit a hard "Only doctors can create
-        # encounters" wall here even when invited specifically to act as one.
         if request.user.role != "doctor" and "doctor" not in getattr(request.user, "acts_as", []):
             return api_forbidden("Only doctors can create encounters.")
         db = request.hospital_db
@@ -984,10 +806,6 @@ class EncounterDetailView(APIView):
             return api_error("Cannot edit a signed encounter.")
 
         # A follow-up "in 0 days" isn't a real follow-up (it's just today,
-        # the same visit) — only a positive day count or clearing the field
-        # entirely (null) make sense, so reject 0/negative here rather than
-        # silently accepting a value the rest of the flow can't sensibly act
-        # on (e.g. front-desk's follow-up booking).
         if "follow_up_in_days" in request.data:
             raw = request.data["follow_up_in_days"]
             if raw not in (None, "", "null"):
@@ -1016,13 +834,7 @@ def _open_consult_session(encounter_id, hospital_id):
 
 
 def _fold_session_into_encounter(sess, enc, db):
-    """
-    Belt-and-suspenders: if the doctor signs without pressing "Load
-    handwritten note", pull whatever the session's Internal-Note tab
-    recognised into any still-empty encounter field, and its Prescription
-    tab into Prescription rows. A field the doctor already filled is left
-    alone. Returns True if anything changed.
-    """
+    """Belt-and-suspenders: if the doctor signs without pressing "Load"""
     changed = False
     note = (sess.note_recognised or {}) if sess else {}
     if note.get("status") == "done":
@@ -1038,7 +850,6 @@ def _fold_session_into_encounter(sess, enc, db):
             if val:
                 soap_filled = True
         # Model transcribed the note but didn't split it into SOAP sections —
-        # keep the verbatim text rather than dropping it on sign.
         if not soap_filled:
             raw = (note.get("raw_text") or "").strip()
             if raw and not (enc.subjective or "").strip():
@@ -1066,8 +877,6 @@ def _fold_session_into_encounter(sess, enc, db):
         if prescription is None:
             prescription = _create_prescription_for(enc, db)
         # De-dupe by drug name alone — folding on sign runs on top of whatever
-        # "Load handwritten note" already inserted, and the recognised dose text
-        # wobbles between OCR runs, so a (name, dose) key re-adds the same drug.
         def _norm_drug(s):
             return " ".join((s or "").strip().lower().split())
         existing = {_norm_drug(i.drug_name)
@@ -1107,10 +916,7 @@ def _create_prescription_for(enc, db):
 
 
 def _store_prescription_pdf(enc, db, hospital_id):
-    """After sign: mirror the prescription to a atomwalk
-    MedicalDocument(document_type=prescription) so it shows in the doctor's
-    history and the patient's My Reports. Delegates to
-    apps.opd.archive.store_prescription_document."""
+    """After sign: mirror the prescription to a atomwalk"""
     rx = Prescription.objects.using(db).filter(encounter_id=enc.id).first()
     if rx is None:
         return
@@ -1122,19 +928,7 @@ def _store_prescription_pdf(enc, db, hospital_id):
 
 
 def _store_handwriting_pdfs(enc, db, hospital_id, session_id):
-    """
-    After sign: archive the consult pad's RAW HANDWRITING as permanent PDFs
-    in object storage — the original-source record behind the typeset
-    prescription and the OCR'd SOAP note.
-
-      rx_pages   -> MedicalDocument(document_type=prescription)   [patient + doctor]
-      note_pages -> ConsultSession.note_pdf   [doctor only: kept on the consult
-                    session, never a patient document, so no patient query can reach it]
-
-    Best-effort: any failure here is logged and swallowed, never blocks the
-    sign. On success the now-redundant base64 canvas is cleared from the
-    ConsultSession row. Idempotent via the document's source.
-    """
+    """After sign: archive the consult pad's RAW HANDWRITING as permanent PDFs"""
     if not session_id:
         return
     try:
@@ -1161,9 +955,6 @@ def _store_handwriting_pdfs(enc, db, hospital_id, session_id):
         rx_label = (rx.rx_number if rx and rx.rx_number else "")
 
         # (tab, pages, doc_type, folder, s3_category, title)
-        #   doc_type    -> the document's classification (drives portal visibility)
-        #   s3_category -> a key from core.storage.UPLOAD_CATEGORIES (drives
-        #                  the stored file name segment)
         specs = [
             ("rx", sess.rx_pages, "prescription", "prescriptions", "prescription",
              f"Handwritten Prescription{(' ' + rx_label) if rx_label else ''} — {visit_date}"),
@@ -1210,13 +1001,7 @@ def _store_handwriting_pdfs(enc, db, hospital_id, session_id):
 
 
 class EncounterInternalNoteView(APIView):
-    """
-    GET /api/v1/opd/encounters/<id>/internal-note/[?download=1]
-
-    The doctor's handwritten Internal Note, archived as a PDF when the encounter was signed. It lives on the consult
-    session (ConsultSession.note_pdf), so it is reachable only here — by a doctor of the hospital that wrote it —
-    and never through the patient's documents.
-    """
+    """GET /api/v1/opd/encounters/<id>/internal-note/[?download=1]"""
     permission_classes = [IsDoctor]
 
     def get(self, request, pk):
@@ -1238,15 +1023,7 @@ class EncounterInternalNoteView(APIView):
 
 
 class EncounterConsultSessionView(APIView):
-    """
-    POST /api/v1/opd/encounters/<id>/consult-session/                 — start /
-         resume the handwriting session for this encounter, returns the QR.
-    POST same URL  {"action": "recognise"}                            — compile
-         the handwriting NOW (lazy transcription — runs only on demand, and
-         only over pages not already transcribed). Then poll GET for the result.
-    GET  same URL                                                     — the
-         session's current recognised state, for "Load handwritten note".
-    """
+    """POST /api/v1/opd/encounters/<id>/consult-session/                 — start /"""
     permission_classes = [IsDoctor]
 
     def _enc(self, request, pk):
@@ -1288,10 +1065,7 @@ class EncounterConsultSessionView(APIView):
         })
 
     def _recognise(self, request, pk):
-        """Kick off transcription on demand. Only tabs with un-transcribed
-        pages (or a prior failure) actually run the model; a page whose bytes
-        are already in the tab's page-text cache is re-used for free. The
-        client then polls GET until status is done/empty/failed."""
+        """Kick off transcription on demand. Only tabs with un-transcribed"""
         import threading
         from apps.patients.models import ConsultSession
         from apps.patients.views import _run_tab_recognition, _decode_pages
@@ -1357,7 +1131,6 @@ class EncounterConsultSessionView(APIView):
             "rx": _public(sess.rx_recognised),
             "note": _public(sess.note_recognised),
             # Page images so the encounter screen can show the doctor the
-            # actual handwriting next to what was read.
             "rx_pages": sess.rx_pages or [],
             "note_pages": sess.note_pages or [],
         })
@@ -1378,7 +1151,6 @@ class EncounterSignView(APIView):
             return api_error("Already signed.")
 
         # Fold in any handwriting-session content the doctor didn't explicitly
-        # "Load" — so signing never silently drops what was written on the phone.
         sess = _open_consult_session(enc.id, request.hospital_id)
         if sess:
             try:
@@ -1403,15 +1175,9 @@ class EncounterSignView(APIView):
         auto_generate_invoice(enc, db, request.user, patient, hospital_id=request.hospital_id)
 
         # Write-through to the cross-hospital HIE shared tables (atomwalk DB).
-        # This is the platform's single write-through path for shared history
-        # (apps.clinical and the old apps.pharmacy models were retired and
-        # own no tables). It writes straight to the atomwalk Shared* tables and
-        # never blocks sign-off — see apps/hie.py.
         sync_encounter_to_hie(enc, db, patient, hospital_id=request.hospital_id)
 
         # Store the prescription as a PDF (doctor history + patient portal),
-        # archive the consult-pad's raw handwriting as PDFs, then close the
-        # handwriting session for this consultation.
         _store_prescription_pdf(enc, db, request.hospital_id)
         if sess:
             _store_handwriting_pdfs(enc, db, request.hospital_id, sess.id)
@@ -1428,24 +1194,7 @@ class EncounterSignView(APIView):
 
 
 class FollowUpActionView(APIView):
-    """
-    POST /api/v1/opd/encounters/<id>/follow-up/
-    body: {"mode": "nurse", "note": "..."} or {"mode": "reminder", "follow_up_in_days": 7}
-
-    Deliberately its OWN endpoint, separate from EncounterDetailView.patch —
-    that PATCH refuses to touch a signed encounter at all, but a doctor
-    needs to be able to decide the follow-up plan even AFTER sign & close
-    (that's the whole point: signing locks the clinical record, not the
-    doctor's ability to say what happens next for this patient).
-
-    mode="nurse" hands the actual booking to a nurse (see
-    FollowupNurseWorklistView / FollowupMarkBookedView below) instead of the
-    doctor booking it themselves — there's no in-app doctor-booking flow for
-    this and the nurse already coordinates with the patient/front desk.
-    mode="reminder" is the pre-existing, unchanged path: just sets
-    follow_up_in_days, and apps.hospital_setup generates the patient-facing
-    reminder as before.
-    """
+    """POST /api/v1/opd/encounters/<id>/follow-up/"""
     permission_classes = [IsDoctor]
 
     def post(self, request, pk):
@@ -1484,12 +1233,7 @@ class FollowUpActionView(APIView):
 
 
 def _reconstruct_shared_reference(enc, db):
-    """
-    Best-effort "most recent documented visit" summary built from the
-    cross-hospital HIE shared tables, for when this hospital has no local
-    encounter for the patient at all. Only used as a fallback by
-    PreviousEncounterView — see its docstring.
-    """
+    """Best-effort "most recent documented visit" summary built from the"""
     from apps.opd.models import HospitalPatient
     from apps.opd.patient_services import PatientService
 
@@ -1503,7 +1247,6 @@ def _reconstruct_shared_reference(enc, db):
     history = PatientService.get_shared_history(awpid=patient.awpid)
 
     # Don't reference this same visit's own not-yet-signed data — only
-    # records strictly before today's appointment count as "past".
     cutoff = enc.appointment.scheduled_date if getattr(enc, "appointment", None) else date.today()
 
     def before_cutoff(items, date_field):
@@ -1522,8 +1265,6 @@ def _reconstruct_shared_reference(enc, db):
     prescriptions = before_cutoff(history.get("prescriptions", []), "prescribed_on")
 
     # Find the single most recent date among what's left, then keep only
-    # what happened on that date — "the last documented visit", not a
-    # jumble of every past record at once.
     candidate_dates = []
     for item in diagnoses:
         d = item["created_at"]
@@ -1562,32 +1303,7 @@ def _reconstruct_shared_reference(enc, db):
 
 
 class PreviousEncounterView(APIView):
-    """
-    GET /api/v1/opd/encounters/<id>/previous/
-    Most recent OTHER signed encounter for the same patient at this
-    hospital — powers the "Past Consultation" tab on a follow-up visit.
-
-    Only signed encounters qualify as a citable "past consultation" — a
-    draft could still change. When none is found we still check for an
-    unsigned prior encounter so the frontend can tell the doctor WHY
-    ("nothing signed yet" vs "genuinely no visit here at this hospital"),
-    rather than a flat, unexplained "not found" on what the doctor knows
-    is a follow-up.
-
-    "Follow-up" as an appointment type does NOT mean "has a prior visit at
-    THIS hospital" — a patient can be following up on care from elsewhere
-    (another hospital in the network, or outside it entirely). So when
-    there's no local encounter at all (signed or draft) but the patient has
-    consented to cross-hospital sharing and DOES have shared history on
-    file, we reconstruct the most recent documented visit from that shared
-    data (diagnoses/labs/prescriptions dated strictly before this visit)
-    and return it as `shared_reference` — a real, useful answer instead of
-    a dead end, clearly labeled as coming from shared records rather than
-    a full local SOAP note.
-
-    Returns {"data": <local encounter or null>, "unsigned_pending": bool,
-    "shared_reference": <reconstructed cross-hospital visit summary or null>}.
-    """
+    """GET /api/v1/opd/encounters/<id>/previous/"""
     permission_classes = [IsDoctorOrNurse]
 
     def get(self, request, pk):
@@ -1598,15 +1314,6 @@ class PreviousEncounterView(APIView):
             return api_not_found("Encounter not found.")
 
         # Match on patient_id OR the appointment's own patient_awpid.
-        # patient_id is a plain UUID field set independently at encounter
-        # creation time (OPDEncounterCreateSerializer takes it straight from
-        # the frontend, not derived from the appointment) — so two
-        # encounters for the very same patient can end up with different
-        # patient_id values if anything upstream (booking flow, a stale
-        # cached lookup) resolved the patient differently. patient_awpid is
-        # the same stable person-identifier used for cross-hospital
-        # matching, stored redundantly on every Appointment, so OR-ing it in
-        # catches the same person even when patient_id alone would miss it.
         awpid = getattr(enc.appointment, "patient_awpid", "") if getattr(enc, "appointment", None) else ""
         match = Q(patient_id=enc.patient_id)
         if awpid:
@@ -1631,12 +1338,6 @@ class PreviousEncounterView(APIView):
         shared_reference = None if unsigned_pending else _reconstruct_shared_reference(enc, db)
 
         # TEMPORARY diagnostic — this "not found" result has been wrong
-        # before despite the query logic looking correct, so rather than
-        # patch blind again, surface exactly what's actually in this hospital
-        # db to compare against. NOT filtered by `match` — deliberately
-        # broader than the query above — so a genuine mismatch between two
-        # encounters' patient_id/awpid is directly visible side by side,
-        # instead of silently vanishing from a filtered debug list too.
         from apps.opd.models import HospitalPatient as _DebugPatient
 
         recent = list(
@@ -1661,9 +1362,6 @@ class PreviousEncounterView(APIView):
             )
 
         # Pull in the real Patient identity (uhid/full_name) behind both
-        # patient_id fields on every row, plus this encounter's own, so a
-        # UHID match with a different patient_id/awpid — a duplicate-
-        # identity bug — is directly visible instead of just raw UUIDs.
         id_pool = {enc.patient_id}
         for row in recent:
             id_pool.add(row["patient_id"])
@@ -1693,12 +1391,7 @@ class PreviousEncounterView(APIView):
 
 
 class FollowupNurseWorklistView(APIView):
-    """
-    GET /api/v1/opd/followups/nurse-worklist/
-    Every encounter where a doctor asked a nurse to book the patient's next
-    visit and it hasn't been marked booked yet. Same nurse-to-doctor
-    assignment scoping as MonitoringListView.
-    """
+    """GET /api/v1/opd/followups/nurse-worklist/"""
     permission_classes = [IsHospitalStaff]
 
     def get(self, request):
@@ -1741,8 +1434,7 @@ class FollowupNurseWorklistView(APIView):
 
 
 class FollowupMarkBookedView(APIView):
-    """POST /api/v1/opd/followups/<id>/mark-booked/ — nurse confirms they've
-    coordinated the patient's next appointment; drops it off the worklist."""
+    """POST /api/v1/opd/followups/<id>/mark-booked/ — nurse confirms they've"""
     permission_classes = [IsHospitalStaff]
 
     def post(self, request, pk):
@@ -1764,16 +1456,7 @@ class FollowupMarkBookedView(APIView):
 
 
 class EncounterSummaryPDFView(APIView):
-    """
-    GET /api/v1/opd/encounters/<id>/pdf/
-
-    Real, printable consultation-summary PDF for a doctor to hand a patient
-    or keep for their own records — replaces the old "Download Summary"
-    button, which built a plain-text .txt file entirely client-side (no
-    server round trip, so it could never reflect anything not already
-    sitting in the browser's own state). Same reportlab-generated,
-    base64-data-URI pattern as InvoicePDFView/PortalPrescriptionReceiptPDFView.
-    """
+    """GET /api/v1/opd/encounters/<id>/pdf/"""
     permission_classes = [IsHospitalStaff]
 
     def get(self, request, pk):
@@ -1829,9 +1512,7 @@ class EncounterSummaryPDFView(APIView):
         })
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Prescriptions
-# ──────────────────────────────────────────────────────────────────────────────
 
 class PrescriptionCreateView(APIView):
     """POST /api/v1/opd/prescriptions/"""
@@ -1850,8 +1531,6 @@ class PrescriptionCreateView(APIView):
 
         if hasattr(enc, "prescription"):
             # Carries an extra `prescription_id` field alongside the standard
-            # message/errors shape — the frontend uses it to redirect straight
-            # to the existing prescription instead of just showing the error.
             return Response({
                 "success": False,
                 "message": "Prescription already exists for this encounter.",
@@ -1860,12 +1539,6 @@ class PrescriptionCreateView(APIView):
             }, status=409)
 
         # rx_number: a real, sequential, quotable-at-the-counter token —
-        # NNTM entity="prescription" (prefix "RX-", seeded per branch, same
-        # infrastructure invoice_number/lab report_number already use).
-        # Never blocks prescription creation if it fails — the doctor's
-        # note-taking must not be held hostage by a numbering hiccup; the
-        # rare row left with rx_number=None just isn't quotable/searchable
-        # by token, same as it wasn't before this field existed.
         from core.utils.nntm import get_next_number
         from apps.opd.models import HospitalPatient
         rx_number = None
@@ -1898,10 +1571,7 @@ class PrescriptionDetailView(APIView):
 
 
 class PrescriptionItemView(APIView):
-    """
-    POST   /api/v1/opd/prescriptions/<pk>/items/           — add drug item
-    DELETE /api/v1/opd/prescriptions/<pk>/items/<item_id>/ — remove drug item
-    """
+    """POST   /api/v1/opd/prescriptions/<pk>/items/           — add drug item"""
     permission_classes = [IsDoctor]
 
     def post(self, request, pk):
@@ -1912,12 +1582,6 @@ class PrescriptionItemView(APIView):
             return api_not_found("Prescription not found.")
 
         # `drug` is looked up manually against the hospital DB rather than left
-        # to the serializer's auto-generated PrimaryKeyRelatedField, which
-        # would validate against the default connection — wrong database
-        # entirely under per-hospital physical DBs. Same pattern as LabRequest's
-        # `test` FK in apps/lab/views.py. A missing/invalid id is treated as
-        # "no catalog match" rather than a hard error, so a doctor can still
-        # save a free-text drug the pharmacist hasn't catalogued yet.
         payload = dict(request.data)
         drug_id = payload.pop("drug", None)
         drug_obj = None

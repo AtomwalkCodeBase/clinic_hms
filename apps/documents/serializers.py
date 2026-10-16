@@ -28,6 +28,5 @@ class DecisionSerializer(serializers.Serializer):
 
 
 class SubmitSerializer(serializers.Serializer):
-    """The patient's final answers: one type per file. The type itself is checked per file in services.submit_decisions,
-    so one wrong entry is reported without stopping the others."""
+    """The patient's final answers: one type per file. The type itself is checked per file in services.submit_decisions,"""
     decisions = serializers.ListField(child=DecisionSerializer(), allow_empty=False, max_length=100)

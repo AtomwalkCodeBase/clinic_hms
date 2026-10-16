@@ -24,24 +24,7 @@ class DrugSearchView(APIView):
 
 
 class DrugCatalogView(APIView):
-    """
-    GET  /api/v1/prescriptions/drugs/  — active catalog entries, for the
-                                          doctor's prescription dropdown (and
-                                          pharmacy's "receive stock" picker).
-                                          Pass ?include_inactive=1 (pharmacist
-                                          catalog management screen) to also
-                                          see deactivated ones. Pass ?page=
-                                          (pharmacist's Drug Catalog Setup
-                                          list) for a paginated {results,
-                                          pagination} shape instead — the
-                                          doctor dropdown and stock picker
-                                          never pass ?page=, so they keep
-                                          getting the plain full list.
-    POST /api/v1/prescriptions/drugs/  — pharmacist adds a new drug to the
-                                          catalog. Doctors/nurses/etc. only
-                                          get read access — the catalog is
-                                          pharmacist-maintained by design.
-    """
+    """GET  /api/v1/prescriptions/drugs/  — active catalog entries, for the"""
     def get_permissions(self):
         if self.request.method == "POST":
             return [IsAuthenticated(), IsPharmacist(), RequireFeature("feat_pharmacy")()]
@@ -75,7 +58,6 @@ class DrugCatalogView(APIView):
         db = request.hospital_db
         validated = dict(s.validated_data)
         # Code is never typed by hand — NNTM assigns it, same as the lab
-        # catalog's test codes, so codes stay unique and consistently formatted.
         if not validated.get("drug_code"):
             validated["drug_code"] = self._next_drug_code(request, db)
 
@@ -93,7 +75,6 @@ class DrugCatalogView(APIView):
             return ""
 
         # Idempotent — covers branches created before "drug" existed as an
-        # NNTM entity, so older hospitals don't hit a missing-row DoesNotExist.
         NextNumber.objects.using(db).get_or_create(
             branch_id=branch_id, entity="drug",
             defaults={"prefix": "DRG-", "pad_length": 4, "last_number": 0},
@@ -103,20 +84,7 @@ class DrugCatalogView(APIView):
 
 
 class DrugFormTypeListCreateView(APIView):
-    """
-    GET  /api/v1/prescriptions/drug-forms/  — active list, for the Drug
-                                               Catalog's "Drug Form" dropdown.
-                                               Pass ?include_inactive=1 (Drug
-                                               Form Setup screen) to also see
-                                               deactivated ones.
-    POST /api/v1/prescriptions/drug-forms/  — pharmacist adds a new drug
-                                               form (e.g. "Suppository").
-
-    Backed by apps.billing.OptionList(list_type="drug_form") since the v7
-    table-count redesign merged DrugFormType into billing's shared
-    configurable-dropdown table — this view's request/response shape is
-    unchanged.
-    """
+    """GET  /api/v1/prescriptions/drug-forms/  — active list, for the Drug"""
     def get_permissions(self):
         if self.request.method == "POST":
             return [IsAuthenticated(), IsPharmacist(), RequireFeature("feat_pharmacy")()]
@@ -176,7 +144,3 @@ class DrugCatalogDetailView(APIView):
         return success(data=DrugSerializer(drug).data, message="Drug updated.")
 
 # PrescriptionListCreateView / PrescriptionFinalizeView (and the
-# Prescription/PrescriptionItem models they served) were retired as dead
-# code (HMS-07c-1) — the live doctor-consultation flow has only ever
-# written prescriptions to apps.opd.Prescription/PrescriptionItem (see
-# apps/opd/views.py PrescriptionCreateView), never to these.

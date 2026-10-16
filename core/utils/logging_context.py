@@ -1,15 +1,4 @@
-"""
-core/utils/logging_context.py
------------------------
-Request-scoped context for log records, so one API call can be followed across the
-middleware, views, signals and services that log while handling it.
-
-  RequestIdMiddleware   assigns/accepts an X-Request-ID and echoes it in the response
-  set_request_identity  called by JWTHospitalMiddleware once the token is decoded
-  RequestContextFilter  copies the values onto every LogRecord (request_id, hospital_id, user_id)
-
-Uses contextvars, so it is safe under threads and async and is reset for every request.
-"""
+"""core/utils/logging_context.py"""
 
 import logging
 import re

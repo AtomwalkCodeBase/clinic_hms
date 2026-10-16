@@ -1,11 +1,4 @@
-"""
-Base settings for Atomwalk Healthcare Platform.
-
-Architecture:
-  - 'default' DB  → Atomwalk DB (shared: hospitals, users, subscriptions)
-  - Hospital DBs    → one PostgreSQL DB per hospital, resolved at request time
-                    via HospitalDatabaseRouter using thread-local context
-"""
+"""Base settings for Atomwalk Healthcare Platform."""
 
 import os
 from pathlib import Path
@@ -269,6 +262,9 @@ CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/
 CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
 CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cast=bool)
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_WORKER_SEND_TASK_EVENTS = True       # Flower lists tasks from these events
+CELERY_TASK_SEND_SENT_EVENT = True
+CELERY_TASK_TRACK_STARTED = True
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 600}
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"

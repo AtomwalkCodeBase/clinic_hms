@@ -1,9 +1,4 @@
-"""
-apps/opd/vitals_service.py
---------------------------
-A nurse records a visit's vitals in the hospital screens; they are stored in Atomwalk (apps/vitals.py). This
-finds who the patient is, whether they are a child, and hands the fields over.
-"""
+"""apps/opd/vitals_service.py"""
 from apps.patients.models import Patient
 from apps.documents.lib_vitals import recorded, save_visit, visit_vitals
 from core.utils.age import age_years_months

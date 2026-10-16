@@ -1,10 +1,4 @@
-"""
-apps/billing/services.py
-------------------------
-Invoice logic shared by every app that bills (billing, opd, ipd, lab, pharmacy, patients).
-Moved out of billing/views.py and opd/views.py, where other apps had to import
-underscore-prefixed view functions to reach it.
-"""
+"""apps/billing/services.py"""
 
 from decimal import Decimal
 

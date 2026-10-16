@@ -28,12 +28,7 @@ class StockListView(APIView):
         })
 
     def post(self, request):
-        """
-        Receive stock — creates a new batch, or tops up an existing one for
-        the same (drug, branch, batch_number), and logs a "purchase"
-        StockTransaction either way so the ledger always explains how the
-        quantity got there.
-        """
+        """Receive stock — creates a new batch, or tops up an existing one for"""
         s = StockSerializer(data=request.data)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
@@ -55,12 +50,10 @@ class StockListView(APIView):
                 },
             )
             # Lock the batch and read its current quantity, so this can't overwrite a
-            # concurrent dispense's decrement with a stale value.
             stock = Stock.objects.using(db).select_for_update().get(pk=stock.pk)
             qty_before = stock.quantity
             stock.quantity += added
             # An existing batch being topped up can still have its price/expiry
-            # corrected in the same call rather than needing a second edit step.
             if not made:
                 if d.get("expiry_date"):  stock.expiry_date = d["expiry_date"]
                 if d.get("unit_cost") is not None: stock.unit_cost = d["unit_cost"]
@@ -87,9 +80,6 @@ class DispenseView(APIView):
         qty   = s.validated_data["quantity"]
 
         # One transaction for the whole stock movement, holding a row lock on the batch:
-        # two pharmacists dispensing the same batch queue up here instead of both reading
-        # the same quantity and one decrement being lost, and a failure part-way rolls the
-        # deduction back instead of leaving stock reduced with no ledger row.
         with transaction.atomic(using=db):
             stock = Stock.objects.using(db).select_for_update().get(pk=s.validated_data["stock"].pk)
 
@@ -115,20 +105,6 @@ class DispenseView(APIView):
             )
 
             # If every item on this prescription now has at least one dispense
-            # record against it, treat the whole prescription as fulfilled so it
-            # drops off the pending queue. This checks "touched at least once"
-            # rather than "fully dispensed to the prescribed quantity" — there's
-            # no quantity-prescribed field on PrescriptionItem to compare
-            # against, only what's actually been dispensed, so a same-item
-            # top-up dispense (e.g. partial fill now, rest later) won't
-            # re-open a prescription already marked dispensed. Good enough for
-            # the common case; a pharmacist can still dispense against an
-            # already-"dispensed" prescription's item if more is needed.
-            #
-            # apps.opd.Prescription/PrescriptionItem — the live model doctors
-            # actually write to (see apps/pharmacy/models.py header note; this
-            # used to point at the old apps.pharmacy models, which the
-            # live OPD flow never wrote to, so nothing ever reached this queue).
             from apps.opd.models import Prescription, PrescriptionItem
             item = s.validated_data["prescription_item"]
             prescription_id = item.prescription_id
@@ -143,14 +119,6 @@ class DispenseView(APIView):
                 Prescription.objects.using(db).filter(pk=prescription_id).update(status=Prescription.STATUS_DISPENSED)
 
         # ── Billing: create/append to a real Invoice, priced from Stock.mrp
-        # (actual sale price) rather than Stock.unit_cost (purchase cost) —
-        # this is the gap BillingSummaryView flags explicitly as "no
-        # sale-price field yet, estimate only." One Invoice per Prescription:
-        # created on the first dispense against it, every later dispense of
-        # another item on the same Rx appends an InvoiceItem to that same
-        # invoice instead of creating a duplicate. Never blocks the dispense
-        # itself — stock is already deducted and recorded above; a billing
-        # hiccup shouldn't strand a drug that's physically left the shelf.
         try:
             from decimal import Decimal
             from apps.billing.models import Invoice, InvoiceItem
@@ -159,15 +127,10 @@ class DispenseView(APIView):
             from core.utils.nntm import get_next_number
 
             # Its own savepoint: a failure half-way (invoice created, line item not) rolls the
-            # whole bill back rather than leaving an empty invoice behind. Still best-effort.
             with transaction.atomic(using=db):
                 # Locked so two concurrent dispenses on one Rx can't each create its invoice.
                 rx = Prescription.objects.using(db).select_for_update().get(pk=prescription_id)
                 # Batch MRP wins (real price this batch was received at); fall
-                # back to unit_cost, then to the drug's catalog reference price
-                # (Drug.default_mrp) rather than silently billing ₹0 just
-                # because whoever received this particular batch left the price
-                # fields blank.
                 unit_price = (
                     stock.mrp if stock.mrp is not None
                     else stock.unit_cost if stock.unit_cost is not None
@@ -202,27 +165,7 @@ class DispenseView(APIView):
 
 
 class PendingPrescriptionsView(APIView):
-    """
-    GET /api/v1/pharmacy/prescriptions/
-    The pharmacist's working queue — prescriptions a doctor has written
-    (apps.opd.Prescription, created the moment a doctor saves one during a
-    consultation — see opd.views.PrescriptionCreateView) grouped with their
-    items and how much of each has already been dispensed.
-    ?status=dispensed shows completed ones instead of the default "active".
-
-    Only shows prescriptions the patient has actually chosen to fill
-    in-house (patient_choice="in_house") — a doctor finalizing a
-    prescription does NOT put it in front of the pharmacist by itself;
-    the patient has to opt in via the portal (or have front desk record
-    that choice for them) first. Without this filter every prescription
-    ever written would show up here the moment it's saved, regardless of
-    whether the patient even intends to fill it at this pharmacy.
-
-    Deliberately not reusing opd.PrescriptionDetailView — that's shaped for
-    the doctor/clinical view (IsHospitalStaff, bare ids), not the pharmacist
-    screen, which needs patient/doctor names resolved and per-item
-    dispensed quantity.
-    """
+    """GET /api/v1/pharmacy/prescriptions/"""
     permission_classes = [IsAuthenticated, IsPharmacist, RequireFeature("feat_pharmacy")]
 
     def get(self, request):
@@ -240,11 +183,6 @@ class PendingPrescriptionsView(APIView):
         page_items, meta = paginate_queryset(request, qs)
 
         # Batch-resolve patient/doctor names in two queries instead of one
-        # each per row. patient_id/doctor_user_id are UUIDs on Prescription
-        # (patient_id mirrors Patient.uuid; doctor_user_id is the StaffUser
-        # pk wrapped via uuid.UUID(int=staff_id) — see
-        # apps.opd.services.resolve_doctor_consultation_fee for the same
-        # unwrap trick applied there).
         patient_uuids = {p.patient_id for p in page_items}
         doctor_pks = {(d.int if hasattr(d, "int") else d) for d in {p.doctor_user_id for p in page_items}}
         patients = {p.uuid: p for p in HospitalPatient.objects.using(db).filter(uuid__in=patient_uuids)}
@@ -265,12 +203,6 @@ class PendingPrescriptionsView(APIView):
             doctor = doctors.get(doctor_pk)
             results.append({
                 # rx_number: the real NNTM-generated token (e.g. "RX-000123")
-                # patients can quote at the counter — previously this was
-                # just the first 8 chars of the internal UUID, which was
-                # never shown to the patient anywhere and wasn't a real
-                # sequential/quotable reference. Falls back to the old
-                # truncated-UUID form only for pre-existing rows that
-                # predate the rx_number field.
                 "id": str(rx.id), "rx_number": rx.rx_number or str(rx.id)[:8].upper(), "status": rx.status,
                 "patient_choice": rx.patient_choice, "payment_status": rx.payment_status,
                 "notes": rx.notes, "finalized_at": rx.created_at, "created_at": rx.created_at,
@@ -292,14 +224,7 @@ class PendingPrescriptionsView(APIView):
 
 
 class PrescriptionLookupView(APIView):
-    """
-    GET /api/v1/pharmacy/prescriptions/lookup/?rx_number=RX-000123
-    The counter workflow: a patient walks up and quotes their rx_number
-    (shown to them in the portal / on the printed slip). This pulls up the
-    full prescription — patient details and items — regardless of status
-    filter or pagination, same idea as a lab tech searching by report
-    number. Exact match only; rx_number is unique per hospital DB.
-    """
+    """GET /api/v1/pharmacy/prescriptions/lookup/?rx_number=RX-000123"""
     permission_classes = [IsAuthenticated, IsPharmacist, RequireFeature("feat_pharmacy")]
 
     def get(self, request):

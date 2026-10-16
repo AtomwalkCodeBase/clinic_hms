@@ -1,9 +1,4 @@
-"""
-core/tests/tests_exceptions.py
-------------------------
-DRF-raised errors must reach clients in the {success, message, errors} envelope
-(core.api.exceptions.custom_exception_handler, registered in REST_FRAMEWORK).
-"""
+"""core/tests/tests_exceptions.py"""
 
 import time
 

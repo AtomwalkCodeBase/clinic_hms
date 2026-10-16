@@ -1,9 +1,4 @@
-"""
-apps/hospital_patients/views.py
------------------------
-Thin view layer — delegates all logic to PatientService.
-Views only: validate input, call service, return standardised response.
-"""
+"""apps/hospital_patients/views.py"""
 
 import logging
 
@@ -29,13 +24,7 @@ from apps.opd.models import HospitalPatient, Allergy
 
 
 def _maybe_charge_registration_fee(patient, hospital_id, db, user):
-    """
-    If this hospital has registration_fee_enabled (Hospital Admin → Settings,
-    off by default), auto-create a small draft invoice for it — same
-    best-effort/non-blocking pattern as apps.opd's consultation auto-invoice:
-    registration already succeeded either way, so a billing hiccup here
-    shouldn't turn into a failed registration.
-    """
+    """If this hospital has registration_fee_enabled (Hospital Admin → Settings,"""
     try:
         from apps.hospital_master.models import Hospital
         from apps.hospital_master.services import parameters_of
@@ -48,7 +37,7 @@ def _maybe_charge_registration_fee(patient, hospital_id, db, user):
         if not params.registration_fee_enabled or not params.registration_fee_amount:
             return
         if not getattr(patient, "branch_id", None):
-            return  # Invoice.branch is required — nothing sensible to bill against
+            return
 
         invoice_number, _ = get_next_number(branch_id=patient.branch_id, entity="invoice", using=db)
         invoice = Invoice.objects.using(db).create(
@@ -108,17 +97,7 @@ class PatientRegisterView(APIView):
 
 
 class PatientEmergencyRegisterView(APIView):
-    """
-    POST /api/v1/patients/register-emergency/
-
-    Front desk's entry point for Path 3 (Emergency) — see
-    docs/PENDING_IMPROVEMENTS.md item 1. Deliberately its own endpoint
-    rather than a flag on PatientRegisterView: the validation rules are
-    genuinely different (no mobile/guardian required at all), and keeping
-    them apart means the normal registration path's required-mobile-or-
-    guardian rule is never accidentally weakened while wiring this one in.
-    Restricted to front desk, same as normal registration.
-    """
+    """POST /api/v1/patients/register-emergency/"""
     permission_classes = [IsAuthenticated, IsFrontDesk | IsHospitalStaff]
 
     def post(self, request):
@@ -151,14 +130,7 @@ class PatientEmergencyRegisterView(APIView):
 
 
 class PatientLookupView(APIView):
-    """
-    GET /api/v1/patients/lookup/?mobile=
-    Called live as front desk types a mobile number during registration —
-    tells them whether this patient already exists in the Atomwalk network
-    (and whether they're already registered at THIS hospital specifically),
-    so front desk never creates a disconnected duplicate. Never reveals
-    which other hospital a patient has visited.
-    """
+    """GET /api/v1/patients/lookup/?mobile="""
     permission_classes = [IsAuthenticated, IsFrontDesk | IsHospitalStaff]
 
     def get(self, request):
@@ -170,11 +142,7 @@ class PatientLookupView(APIView):
 
 
 class PatientAttachNetworkView(APIView):
-    """Attach a searched Atomwalk identity to this hospital for a visit.
-
-    Hospital-local models require a local Patient/UHID, while the identity stays
-    global. This avoids asking reception to repeat a full registration.
-    """
+    """Attach a searched Atomwalk identity to this hospital for a visit."""
     permission_classes = [IsAuthenticated, IsFrontDesk | IsHospitalStaff]
 
     def post(self, request):
@@ -190,14 +158,7 @@ class PatientAttachNetworkView(APIView):
 
 
 class PatientSearchView(APIView):
-    """
-    GET /api/v1/patients/search/?q=&branch_id=
-    GET /api/v1/patients/search/?page=&page_size=  (full paginated list — see below)
-
-    Empty/missing q browses the most recently registered patients at this
-    hospital instead of erroring — lets front desk scan a short list to
-    pick from when they don't have an exact name/UHID/mobile to search yet.
-    """
+    """GET /api/v1/patients/search/?q=&branch_id="""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
@@ -212,13 +173,6 @@ class PatientSearchView(APIView):
         )
 
         # Two callers share this endpoint:
-        #   1. Typeahead search boxes (register/appointments patient picker)
-        #      — no ?page=, capped at 50 with a truncated/total_matches hint
-        #      instead of page controls, which would be an odd UX for a
-        #      live-search dropdown.
-        #   2. A full "All Patients" list screen — passes ?page= explicitly
-        #      and gets real page/page_size/total_pages controls back, same
-        #      shape as AppointmentListCreateView's pagination.
         if "page" in request.query_params:
             page_items, meta = paginate_queryset(request, qs)
             return success(data={
@@ -231,12 +185,6 @@ class PatientSearchView(APIView):
         limit = 50
 
         # If nothing matched locally and the query looks like a mobile
-        # number, check whether this person already exists elsewhere on the
-        # Atomwalk network (same Patient atomwalk PatientLookupView
-        # uses during registration) — a patient search shouldn't come back
-        # empty just because this is the first time *this* hospital has
-        # looked them up; staff can then send them to registration instead
-        # of assuming they're a brand-new patient.
         network_match = None
         digits = "".join(ch for ch in query if ch.isdigit())
         if total_matches == 0 and len(digits) >= 6:
@@ -258,14 +206,7 @@ class PatientSearchView(APIView):
 
 
 class PatientFamilyTreeView(APIView):
-    """
-    GET /api/v1/patients/family-tree/?awpid=
-    Whole-household lookup for the front-desk search screen: given one
-    family member's AWPID (a search result or a lookup_by_mobile match),
-    returns every linked family member (guardian + all dependents/siblings)
-    so front desk can pick and book for any of them without a second
-    search. See PatientService.get_family_tree for the resolution logic.
-    """
+    """GET /api/v1/patients/family-tree/?awpid="""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
@@ -294,19 +235,7 @@ class PatientDetailView(APIView):
 
 
 class PatientHistoryView(APIView):
-    """
-    GET /api/v1/patients/<id>/history/
-    Returns cross-hospital shared clinical records from Atomwalk HIE.
-    source_hospital_id is NEVER included in the response.
-
-    Gated on patient.hie_consent_given — a Patient record only carries this
-    flag as True if the patient (or front desk registering them in person)
-    explicitly agreed to cross-hospital sharing. Portal bookings always set
-    it via the consent modal; front-desk registration sets it from its own
-    consent checkbox. If neither ran (e.g. an older record from before this
-    flag existed, or consent was declined), no shared data is exposed here
-    — this hospital's staff only see what this hospital itself recorded.
-    """
+    """GET /api/v1/patients/<id>/history/"""
     permission_classes = [IsAuthenticated, IsDoctorOrNurse]
 
     def get(self, request, pk):
@@ -320,12 +249,6 @@ class PatientHistoryView(APIView):
             log_action(request, request.hospital_db, action="patient.history.view_blocked_no_consent",
                         resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
             # Documents THIS hospital captured for THIS visit — the consult
-            # note, the handwritten prescription, the typeset prescription PDF
-            # — are not cross-hospital sharing; they're this hospital's own
-            # record, just stored atomwalk-side because that's where the file
-            # pipeline lives. So they stay visible even without HIE consent
-            # (source_hospital_id pins them to us; patient-uploaded docs have it
-            # null). Everything else stays gated.
             from django.db.models import F
             from apps.documents.models import MedicalDocument
             from apps.documents.lib_documents import document_rows
@@ -350,13 +273,7 @@ class PatientHistoryView(APIView):
 
 
 class PatientDocumentDetailView(APIView):
-    """
-    GET /api/v1/patients/documents/<doc_id>/
-    Full content (a signed file URL) for one document referenced from the
-    lightweight list inside get_shared_history(). Split out into its own
-    endpoint so the history payload itself stays small — a doctor only pays
-    for the full base64 file when they actually open one.
-    """
+    """GET /api/v1/patients/documents/<doc_id>/"""
     permission_classes = [IsAuthenticated, IsDoctorOrNurse]
 
     def get(self, request, doc_id):
@@ -367,14 +284,8 @@ class PatientDocumentDetailView(APIView):
             return not_found("Document not found.")
 
         # Same HIE-consent gate PatientHistoryView applies to the lightweight
-        # list this document's id would normally be discovered from — a
-        # doc_id obtained any other way (stale link, guessed id) must not
-        # bypass consent just because the summary list itself is gated.
         owner = HospitalPatient.objects.using(request.hospital_db).filter(awpid=doc.patient.awpid).first()
         # A document this hospital captured for this visit (consult note,
-        # handwritten/typeset prescription) is exempt from the HIE gate — it's
-        # our own record, not cross-hospital sharing. Same carve-out as
-        # PatientHistoryView's no-consent branch.
         own_hospital_doc = doc.source_hospital_id == request.hospital_id
         if not own_hospital_doc and (not owner or not owner.hie_consent_given):
             from core.utils.audit import log_action
@@ -387,11 +298,6 @@ class PatientDocumentDetailView(APIView):
                     resource_type="SharedDocument", resource_id=doc.id)
 
         # Rows written before object storage (and the consult-pad's no-S3
-        # fallback) hold the file inline as a "data:" URI — hand those back
-        # as-is; only a real S3 object key gets a presigned URL.
-        # ?download=1 -> the caller wants a "Save As", not an inline view: an
-        # S3 URL gets a Content-Disposition override; a "data:" URI is saved
-        # client-side (utils/fileViewer.downloadFile).
         want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
         from apps.documents.lib_documents import display_name, mime_of
         dl_name = display_name(doc) or "document.pdf"
@@ -406,13 +312,7 @@ class PatientDocumentDetailView(APIView):
 
 
 class PatientLabResultDetailView(APIView):
-    """
-    GET /api/v1/patients/lab-results/<result_id>/
-    Full content (including file_data) for one cross-hospital shared lab
-    result, referenced from the lightweight list inside get_shared_history().
-    Mirrors PatientDocumentDetailView — same reasoning for keeping this split
-    out of the summary payload.
-    """
+    """GET /api/v1/patients/lab-results/<result_id>/"""
     permission_classes = [IsAuthenticated, IsDoctorOrNurse]
 
     def get(self, request, result_id):
@@ -423,7 +323,6 @@ class PatientLabResultDetailView(APIView):
             return not_found("Lab result not found.")
 
         # Same HIE-consent gate as PatientDocumentDetailView above — see
-        # that view's comment.
         owner = HospitalPatient.objects.using(request.hospital_db).filter(awpid=r.patient.awpid if r.patient_id else "").first()
         if not owner or not owner.hie_consent_given:
             from core.utils.audit import log_action

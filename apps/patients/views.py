@@ -47,14 +47,8 @@ from apps.documents import lib_documents as records
 
 logger = logging.getLogger(__name__)
 # Matches literal doctors AND custom-role staff whose Role.acts_as includes
-# "doctor" (e.g. a solo-clinic role bundling doctor+nurse+front_desk) — see
-# apps.hospital_setup.rbac.resolve_acts_as. Reused everywhere this module looks up
-# "doctors" for patient-facing search/booking, so a patient can find and
-# book this person the same as any literal doctor.
 DOCTOR_Q = Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"])
 # What actually gets pulled from the Atomwalk DB into a new hospital's view —
-# shown to the patient verbatim in the consent prompt, and kept in sync with
-# PatientService.get_shared_history()'s five categories (plus documents).
 HIE_SHARE_CATEGORIES = [
     "Past diagnoses and clinical notes",
     "Allergies on record",
@@ -64,34 +58,14 @@ HIE_SHARE_CATEGORIES = [
     "Documents you've uploaded (old reports, scans, discharge summaries)",
 ]
 def _patient_app_enabled(hospital):
-    """
-    True only if this hospital's subscription has feat_patient_app on.
-    Patients authenticate with a hospital-independent JWT (no MockUser.subscription
-    to lean on — that's only populated for staff, see core/api/authentication.py),
-    so every portal endpoint that touches a specific hospital re-checks this
-    directly rather than trusting a JWT claim.
-    """
+    """True only if this hospital's subscription has feat_patient_app on."""
     from apps.hospital_master.models import Subscription
     sub = Subscription.objects.using("default").filter(hospital=hospital).first()
     return bool(sub and sub.feat_patient_app)
 # ── Register ─────────────────────────────────────────────────────────────────
 
 class PortalRegisterView(APIView):
-    """
-    POST /api/v1/portal/register/
-    body: {action_token, full_name, mobile, password, gender?, date_of_birth?}
-
-    Requires a verified `action_token` from
-    POST /api/v1/auth/otp/verify/ (purpose="registration_patient") proving
-    the caller actually received an OTP at the EMAIL address they're
-    registering — see core/auth/otp_views.py. Email-based for now since
-    verifying via mobile requires a paid SMS gateway that isn't wired up yet
-    (see core/messaging/sms.py). The email used to create the account is taken from
-    the TOKEN (what was actually verified), not from the request body, so a
-    verified-but-different address can't be swapped in at the last step.
-    The mobile number is still required (PatientAccount.mobile is the
-    primary login identifier) but is NOT OTP-verified in this flow.
-    """
+    """POST /api/v1/portal/register/"""
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -130,18 +104,6 @@ class PortalRegisterView(APIView):
             return error(reason, errors={"mobile": reason})
 
         # ── Reuse (or create) this person's global Patient ─────────
-        # Self-registering here used to only create a PatientAccount (the
-        # login) and generate its own one-off AWPID, never touching
-        # Patient — the atomwalk table every hospital's front desk
-        # actually searches (see PatientService.lookup_by_mobile). That made
-        # every self-registered patient invisible to front-desk dedup, so
-        # the same person could get registered a second time as a "new"
-        # walk-in with no link back to their portal account, and vice versa:
-        # someone already registered as a walk-in at some hospital before
-        # ever signing up here would get a second, disconnected AWPID on
-        # sign-up instead of claiming their existing one. get_or_create on
-        # mobile — the same dedup key PatientService.register() uses
-        # for front-desk registration — fixes both directions at once.
         mobile_norm = normalize_mobile(mobile)
         mobile_value = stored_mobile(mobile_norm)
         gender = (d.get("gender") or "")[:1].upper()
@@ -175,14 +137,7 @@ class PortalRegisterView(APIView):
 # ── Hospitals & doctors ──────────────────────────────────────────────────────
 
 def _hospital_card(t, lat=None, lng=None):
-    """
-    Shared shape for every patient-facing hospital listing (browse list +
-    cross-hospital search) — keeps "near me" distance math in one place.
-    distance_km is None whenever the patient hasn't shared their location
-    OR this hospital has no lat/lng on file yet (platform admin hasn't set
-    it) — either way that's "unknown", not "far away", so callers sort
-    None to the end rather than treating it as infinitely close/far.
-    """
+    """Shared shape for every patient-facing hospital listing (browse list +"""
     params = parameters_of(t)
     distance_km = None
     if lat is not None and params.latitude is not None and params.longitude is not None:
@@ -197,9 +152,6 @@ def _hospital_card(t, lat=None, lng=None):
         "logo": blob_storage.signed_url(params.logo),
         "distance_km": distance_km,
         # Raw coordinates, for "Get Directions" / map-preview links on the
-        # frontend — None when the platform admin hasn't set them yet.
-        # Deliberately alongside distance_km rather than replacing it: this
-        # is the only place the frontend ever sees a hospital's location.
         "latitude": params.latitude,
         "longitude": params.longitude,
     }
@@ -207,12 +159,7 @@ def _sort_by_distance(cards):
     cards.sort(key=lambda c: c["distance_km"] if c["distance_km"] is not None else float("inf"))
     return cards
 class PortalHospitalListView(APIView):
-    """
-    GET /api/v1/portal/hospitals/?lat=&lng=
-    lat/lng are optional — pass them (from the browser's Geolocation API)
-    to get each hospital's distance and have the nearest sorted first;
-    omit them and this behaves exactly as before (alphabetical).
-    """
+    """GET /api/v1/portal/hospitals/?lat=&lng="""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -231,12 +178,7 @@ class PortalHospitalListView(APIView):
             _sort_by_distance(hospitals)
         return Response({"results": hospitals})
 class PortalPlatformStatsView(APIView):
-    """
-    GET /api/v1/portal/stats/ — real counts for the dashboard's hero panel
-    (hospitals on the platform, doctors across all of them). No made-up
-    marketing numbers — this is a live count from the atomwalk + each
-    active hospital's own staff table.
-    """
+    """GET /api/v1/portal/stats/ — real counts for the dashboard's hero panel"""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -258,9 +200,6 @@ class PortalPlatformStatsView(APIView):
             "doctors": doctor_count,
         })
 # Lay terms → the substrings that actually show up in a free-text
-# `specialisation` field (hospital admins type this in, no fixed list) —
-# lets "heart surgeon" or "opthalmologist" (misspelled, patients will
-# misspell this) actually find "Cardiothoracic Surgeon" / "Ophthalmologist".
 _SPECIALITY_SYNONYMS = {
     "generalist":        ["general physician", "general medicine", "gp"],
     "general physician": ["general medicine", "gp"],
@@ -304,14 +243,7 @@ def _expand_search_terms(q):
             terms.update(synonyms)
     return terms
 class PortalSearchView(APIView):
-    """
-    GET /api/v1/portal/search/?q=<term>
-    One search box for the whole platform. A patient can type a hospital
-    name, a doctor's name, or a reason/specialisation ("cardiologist",
-    "eye doctor", "generalist") and get matching doctors from EVERY active
-    hospital — not just one they've already picked — plus matching
-    hospitals. This is the entry point the redesigned dashboard search uses.
-    """
+    """GET /api/v1/portal/search/?q=<term>"""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -322,9 +254,6 @@ class PortalSearchView(APIView):
         lat, lng = parse_lat_lng(request)
 
         # Optional numeric refinements — doctors with unknown data on either
-        # field are kept rather than hidden (a profile the hospital hasn't
-        # finished filling in shouldn't disappear from search just because
-        # the patient added a price/experience filter).
         min_experience_raw = (request.query_params.get("min_experience") or "").strip()
         max_fee_raw = (request.query_params.get("max_fee") or "").strip()
         try:
@@ -445,12 +374,7 @@ class PortalSearchView(APIView):
         return Response({"hospitals": hospitals, "doctors": doctors[:40]})
 _DR_PREFIX_RE = re.compile(r"^dr\.?\s+", re.IGNORECASE)
 def _doctor_display_name(staff):
-    """
-    Always "Dr. <name>", exactly once — regardless of whether whoever set
-    up the staff account already typed "Dr." into the first name field
-    (front desk / hospital admin invite forms don't forbid it, so some
-    accounts have first_name="Dr. Riya" and some just "Riya").
-    """
+    """Always "Dr. <name>", exactly once — regardless of whether whoever set"""
     full_name = staff.get_full_name()
     stripped = _DR_PREFIX_RE.sub("", full_name).strip()
     return f"Dr. {stripped}" if stripped else full_name
@@ -469,14 +393,7 @@ def _doctor_card(staff, profile):
         "known_for":        profile.known_for if profile else "",
     }
 class PortalSpecialtyListView(APIView):
-    """
-    GET /api/v1/portal/specialties/
-    Powers "Find Doctors"' specialty filter. specialisation is a free-typed
-    field on DoctorProfile (hospital admins type it in, no fixed choices —
-    see _SPECIALITY_SYNONYMS above), so this aggregates the real distinct
-    values in use across every active hospital instead of shipping a
-    hardcoded list that would drift from what's actually on doctor profiles.
-    """
+    """GET /api/v1/portal/specialties/"""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -536,10 +453,6 @@ class PortalDoctorListView(APIView):
             doctors = [_doctor_card(s, profiles.get(s.id)) for s in staff_list]
         except Exception:
             # A hospital can exist in the atomwalk (listed, bookable-in-theory)
-            # before its own operational database has been provisioned — e.g.
-            # a directory listing awaiting full onboarding. That's "no
-            # doctors yet", not a platform error, so this degrades to an
-            # empty list instead of a 500.
             logger.warning("portal doctors: hospital db %s unreachable", hospital.db_name, exc_info=True)
             doctors = []
         params = parameters_of(hospital)
@@ -583,11 +496,6 @@ class PortalDoctorDetailView(APIView):
         }
 
         # Which payment modes this hospital currently accepts (hospital admin
-        # toggles these in Billing Setup — see apps.billing.OptionList,
-        # list_type="payment_mode"; v7 merged the old standalone
-        # PaymentModeOption table into this shared dropdown table)
-        # so the booking screen's "How will you pay?" step reflects the real
-        # choice instead of a hardcoded pair of buttons.
         from apps.billing.models import OptionList
         data["payment_methods"] = list(
             OptionList.objects.using(hospital.db_name)
@@ -597,20 +505,12 @@ class PortalDoctorDetailView(APIView):
         )
 
         # Real count, not a marketing number — signed (finalized) consultations
-        # this doctor has completed at THIS hospital. No cross-hospital total
-        # (each hospital only knows its own encounters), and no fabricated
-        # rating/review numbers — we don't have a reviews system.
         from apps.opd.models import OPDEncounter
         data["consultations_count"] = OPDEncounter.objects.using(hospital.db_name).filter(
             doctor_user_id=staff.id, status=OPDEncounter.STATUS_SIGNED
         ).count()
 
         # Which weekdays this doctor actually works (0=Monday..6=Sunday, same
-        # as DoctorAvailabilitySlot.day_of_week) — lets the booking calendar
-        # grey out days before the patient picks one, instead of only finding
-        # out after picking a date and seeing an empty slot grid (see
-        # _slot_grid, which already has this same "no schedule configured"
-        # fallback: None here means "no restriction", not "no days work").
         from apps.hospital_setup.models import DoctorSchedule, DoctorAvailabilitySlot
         schedule = DoctorSchedule.objects.using(hospital.db_name).filter(doctor_id=staff.id).first()
         if schedule:
@@ -624,12 +524,7 @@ class PortalDoctorDetailView(APIView):
 
         return Response(data)
 class PortalNextTokenView(APIView):
-    """
-    GET /api/v1/portal/hospitals/<hospital_id>/doctors/<doctor_id>/next-token/?date=YYYY-MM-DD
-    Preview only — the real token is assigned atomically at booking time in
-    PortalBookView, so this can be off by one if someone else books in between.
-    Shown to the patient as "you'll likely be token #N" before they confirm.
-    """
+    """GET /api/v1/portal/hospitals/<hospital_id>/doctors/<doctor_id>/next-token/?date=YYYY-MM-DD"""
     permission_classes = [IsPatient]
 
     def get(self, request, hospital_id, doctor_id):
@@ -655,12 +550,7 @@ class PortalNextTokenView(APIView):
 # ── Slots ────────────────────────────────────────────────────────────────────
 
 def _generic_slot_grid():
-    """
-    Fallback grid — 09:00-13:00 and 14:00-18:00, 15-minute slots. Only used
-    when a doctor has no working-hours schedule configured at all (see
-    org.DoctorSchedule), so booking doesn't break entirely for accounts
-    that predate that feature or haven't been set up yet.
-    """
+    """Fallback grid — 09:00-13:00 and 14:00-18:00, 15-minute slots. Only used"""
     slots = []
     for start_h, end_h in ((9, 13), (14, 18)):
         t = dtime(start_h, 0)
@@ -669,17 +559,7 @@ def _generic_slot_grid():
             t = (datetime.combine(date.today(), t) + timedelta(minutes=15)).time()
     return slots
 def _slot_grid(doctor_id, db, slot_date):
-    """
-    Per-doctor, per-day time grid — reads the doctor's own configured
-    working hours (org.DoctorSchedule / DoctorAvailabilitySlot, set by the
-    hospital admin at invite time or edited later) for slot_date's weekday,
-    instead of a fixed generic grid. This is what actually determines the
-    booking window and slot size (slot_duration_minutes) shown to patients
-    and front desk — previously this function ignored the doctor's
-    configured hours entirely and always returned the generic grid below,
-    which is why a doctor set up for 09:00-20:00 only ever showed slots
-    up to 17:45.
-    """
+    """Per-doctor, per-day time grid — reads the doctor's own configured"""
     from apps.hospital_setup.models import DoctorSchedule, DoctorAvailabilitySlot
 
     schedule = DoctorSchedule.objects.using(db).filter(doctor_id=doctor_id).first()
@@ -705,10 +585,7 @@ def _slot_grid(doctor_id, db, slot_date):
         t = (datetime.combine(date.today(), t) + timedelta(minutes=step)).time()
     return slots
 class PortalSlotListView(APIView):
-    """
-    GET /api/v1/portal/hospitals/<hospital_id>/doctors/<doctor_id>/slots/?date=YYYY-MM-DD
-    Available to patients AND hospital staff (front desk uses it too).
-    """
+    """GET /api/v1/portal/hospitals/<hospital_id>/doctors/<doctor_id>/slots/?date=YYYY-MM-DD"""
     permission_classes = []  # JWT already validated by middleware
 
     def get(self, request, hospital_id, doctor_id):
@@ -776,8 +653,6 @@ class PortalBookView(APIView):
             return Response({"error": "hospital_id and doctor_id are required."}, status=400)
 
         # Booking window capped at 2 months out (mirrors the date picker's
-        # own max= on the frontend) — enforced here too since the frontend
-        # limit is trivial to bypass by calling this endpoint directly.
         try:
             requested_date = date.fromisoformat(scheduled_date)
         except ValueError:
@@ -788,8 +663,6 @@ class PortalBookView(APIView):
             return Response({"error": "Appointments can only be booked up to 2 months in advance."}, status=400)
 
         # scheduled_time is optional — the patient portal is token/queue-based
-        # (pick a date, get the next token) rather than fixed-time-slot booking.
-        # Front desk's own booking flow still uses PortalSlotListView/exact times.
 
         try:
             hospital = Hospital.objects.using("default").get(pk=hospital_id, is_active=True)
@@ -806,17 +679,11 @@ class PortalBookView(APIView):
         except StaffUser.DoesNotExist:
             return Response({"error": "Doctor not found at this hospital."}, status=404)
         # Appointment.doctor_name is a plain snapshot string (not a live FK
-        # lookup), so it must not inherit a "Dr." some hospital already typed
-        # into the staff account's first name — see _doctor_display_name().
         doctor_name = _doctor_display_name(doctor).replace("Dr. ", "", 1) or doctor.email
 
         acct = accounts().get(pk=request.user.id)
 
         # ── Who is this booking actually for? ──────────────────────────────
-        # Defaults to the account owner. If patient_awpid is given and isn't
-        # the account's own, it must be a linked family member (see
-        # PortalFamilyListCreateView) — never an arbitrary AWPID, so one
-        # patient can't book under someone else's identity.
         target_awpid = (d.get("patient_awpid") or "").strip() or acct.awpid
         if target_awpid == acct.awpid:
             target_name, target_gender, target_dob = acct.full_name, acct.gender, acct.date_of_birth
@@ -836,10 +703,6 @@ class PortalBookView(APIView):
         patient = HospitalPatient.objects.using(db).filter(awpid=target_awpid).first()
         if not patient:
             # First time this patient is being registered at THIS hospital —
-            # this is exactly the moment their shared cross-hospital history
-            # becomes visible to a new set of doctors, so consent is required
-            # before anything is created. Once given, it's on record for this
-            # hospital going forward (not asked again on later bookings here).
             if not d.get("data_sharing_consent"):
                 return Response({
                     "consent_required": True,
@@ -854,10 +717,6 @@ class PortalBookView(APIView):
             from core.utils.nntm import get_next_number
             uhid, _ = get_next_number(branch_id=branch.id, entity="uhid", using=db)
             # These Patient columns are all NOT NULL (blank=True, no null=True) —
-            # a mobile-only portal signup has acct.email = None (and a
-            # Patient can carry a null gender), so every value sourced
-            # from the account must be coalesced to "" or the INSERT hits a
-            # NotNullViolation on the first booking at a hospital.
             patient = HospitalPatient.objects.using(db).create(
                 awpid=target_awpid,
                 uhid=uhid,
@@ -866,7 +725,6 @@ class PortalBookView(APIView):
                 gender=target_gender or "",
                 date_of_birth=target_dob,
                 # Patient.mobile/email are NOT NULL — a portal account that
-                # signed up by mobile has email=None, so coalesce to "".
                 mobile=contact_mobile if target_awpid == acct.awpid else "",
                 email=(acct.email or "") if target_awpid == acct.awpid else "",
                 is_dependent=target_awpid != acct.awpid,
@@ -879,9 +737,6 @@ class PortalBookView(APIView):
                 dpdp_consent_at=timezone.now(),
             )
             # Durable proof trail behind the two booleans above — patient
-            # granted both by submitting data_sharing_consent through the
-            # portal itself (no staff intermediary), see
-            # apps.hospital_setup.compliance_services.record_consent.
             from apps.hospital_setup.compliance_services import record_consent
             from apps.hospital_setup.models import ConsentRecord
             record_consent(db, patient, ConsentRecord.CONSENT_DPDP_PROCESSING,
@@ -905,9 +760,6 @@ class PortalBookView(APIView):
         next_token = (max(tokens) + 1) if tokens else 1
 
         # Resolve room/floor the same way front desk's own booking flow does
-        # (apps.opd.views.AppointmentListCreateView.post) — this is a second,
-        # separate creation path for the same Appointment model, so it needs
-        # the same room-resolution logic rather than inheriting it.
         room_fields = {}
         if scheduled_time:
             from apps.hospital_setup.room_utils import resolve_room_for_slot
@@ -931,9 +783,6 @@ class PortalBookView(APIView):
             token_number=next_token,
             chief_complaint=chief_complaint,
             # Front desk/nurse queues are branch-scoped (AppointmentListCreateView,
-            # MonitoringListView default to the staff member's own branch_id when
-            # no explicit filter is given) — without this, patient-portal bookings
-            # were invisible to both, since branch_id was left null.
             branch_id=doctor.branch_id,
             payment_preference=payment_preference,
             **room_fields,
@@ -962,28 +811,16 @@ class PortalBookView(APIView):
             "payment_preference": payment_preference,
             "patient_name": target_name,
             # Only resolved when scheduled_time was given (a specific slot) —
-            # pure token-based bookings (no fixed time yet) have no room to
-            # show until the doctor actually gets to them, same as any
-            # other slot-dependent lookup.
             "room_name": room_fields.get("room_name") or None,
             "floor": room_fields.get("floor") or None,
             # For the confirmation screen's "Get Directions" / map preview —
-            # same fields _hospital_card() exposes, None if not set yet.
             "latitude": parameters_of(hospital).latitude,
             "longitude": parameters_of(hospital).longitude,
         }, status=201)
 # ── My records (prescriptions, tests, advice from consults) ─────────────────
 
 class PortalMyRecordsView(APIView):
-    """
-    GET /api/v1/portal/my-records/?patient_awpid=
-    Everything the doctor recorded for this patient, across all hospitals:
-    diagnoses, prescription drugs, investigations (tests to do), advice, follow-up.
-    patient_awpid defaults to the account owner; pass a linked family
-    member's AWPID (see PortalFamilyListCreateView) to view their records
-    instead — validated the same way as PortalBookView, so one account can't
-    read another patient's records by guessing an AWPID.
-    """
+    """GET /api/v1/portal/my-records/?patient_awpid="""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -1065,8 +902,6 @@ class PortalMyRecordsView(APIView):
                                 for i in rx.items.using(db).all()
                             ]
                             # So the frontend can offer a PDF download right
-                            # on this card — PortalPrescriptionReceiptPDFView
-                            # takes exactly (hospital_db, prescription pk).
                             record["prescription_id"] = str(rx.id)
                             record["rx_number"] = rx.rx_number
                     results.append(record)
@@ -1079,16 +914,7 @@ class PortalMyRecordsView(APIView):
 # ── My bills ─────────────────────────────────────────────────────────────────
 
 class PortalInvoiceListView(APIView):
-    """
-    GET /api/v1/portal/invoices/?patient_awpid=
-    Every invoice raised for this patient (or a linked family member — see
-    resolve_target_awpid_and_dob), across all hospitals. Invoice has no
-    link back to a specific Appointment/booking in this schema — a hospital
-    can bill a patient for a consultation, a walk-in registration fee, or
-    anything else, all as the same kind of Invoice row keyed only to the
-    patient — so this is a patient-wide bill list, not a per-booking one.
-    Draft invoices (not yet issued to the patient by staff) are excluded.
-    """
+    """GET /api/v1/portal/invoices/?patient_awpid="""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -1133,19 +959,7 @@ class PortalInvoiceListView(APIView):
         page_items, meta = paginate_list(request, results)
         return Response({"results": page_items, "pagination": meta})
 class PortalInvoiceReceiptPDFView(APIView):
-    """
-    GET /api/v1/portal/invoices/<hospital_db>/<id>/receipt/
-    PDF download of one of the patient's own bills — the same PDF staff get
-    from apps.billing.views.InvoicePDFView (reuses generate_invoice_pdf()
-    directly so the two never drift apart), just patient-scoped: ownership
-    is verified via the invoice's own patient.awpid against the requesting
-    account (or a linked family member), the same pattern
-    PortalLabReportFileView uses. Returned as a base64 data URI in the
-    standard envelope, not a raw application/pdf response — patient auth is
-    a JWT bearer header, so a plain <a href> to the API wouldn't carry it
-    (see frontend/src/utils/fileViewer.js, the convention every other file
-    viewer in this app follows).
-    """
+    """GET /api/v1/portal/invoices/<hospital_db>/<id>/receipt/"""
     permission_classes = [IsPatient]
 
     def get(self, request, hospital_db, pk):
@@ -1161,13 +975,6 @@ class PortalInvoiceReceiptPDFView(APIView):
 
         try:
             # NOT prefetch_related("items", "payments") — under this app's
-            # custom multi-db router, Django's prefetch machinery issues the
-            # related-object queries against the "default" atomwalk DB
-            # instead of hospital_db, which 500s with "relation ... does not
-            # exist" (those tables only exist on hospital DBs). Same bug
-            # already found and fixed at PortalPrescriptionReceiptPDFView/
-            # PortalPrescriptionListView — access inv.items/inv.payments
-            # explicitly with .using(hospital_db) below instead of prefetching.
             inv = Invoice.objects.using(hospital_db).get(pk=pk)
         except Invoice.DoesNotExist:
             return not_found("Bill not found.")
@@ -1194,8 +1001,6 @@ class PortalInvoiceReceiptPDFView(APIView):
         pdf_bytes = generate_invoice_pdf(
             invoice=inv,
             # .using(hospital_db) explicitly — see the comment on the inv
-            # fetch above; the plain .all() form is what triggers the
-            # cross-DB router bug.
             items=list(inv.items.using(hospital_db).all()),
             payments=list(inv.payments.using(hospital_db).all().order_by("paid_at")),
             patient=patient,
@@ -1211,23 +1016,10 @@ class PortalInvoiceReceiptPDFView(APIView):
 # ── My bookings ──────────────────────────────────────────────────────────────
 
 # How long past the scheduled time an appointment is given before it's
-# treated as a no-show. Clinics run late; someone booked for 3:15 PM
-# genuinely might still be seen at 4:30. Two hours mirrors what most OPD
-# workflows tolerate before assuming the patient never came in.
 _NO_SHOW_GRACE = timedelta(hours=2)
 _STALE_IF_PAST = ("scheduled", "waiting", "vitals_done")
 def _auto_expire_if_stale(appt, db_name):
-    """
-    An appointment left in a pre-consultation status well past its slot
-    time isn't "upcoming" anymore — nobody checked the patient in and no
-    consultation started, so silently keep showing it as confirmed/waiting
-    is actively misleading. There's no background job runner in this stack
-    yet, so this evaluates lazily: whenever a booking is read (patient's
-    "My Appointments", and anywhere else that later reuses this), stale
-    ones get corrected to no_show right then, once, and persisted — same
-    end result as a periodic sweep, no extra infrastructure required.
-    Mutates `appt.status` in place and returns it.
-    """
+    """An appointment left in a pre-consultation status well past its slot"""
     if appt.status not in _STALE_IF_PAST:
         return appt.status
     appt_time = appt.scheduled_time or dtime(23, 59)
@@ -1250,8 +1042,6 @@ class PortalMyBookingsView(APIView):
 
         today = str(date.today())
         # States where the patient is still "in the queue" — before this,
-        # nothing to wait for (not checked in); at/after in_progress or done,
-        # the wait is over (either being seen or already finished).
         QUEUE_PENDING = (Appointment.STATUS_SCHEDULED, Appointment.STATUS_WAITING, Appointment.STATUS_VITALS_DONE)
         NOT_ACTIVE = (Appointment.STATUS_DONE, Appointment.STATUS_CANCELLED, Appointment.STATUS_NO_SHOW)
 
@@ -1274,21 +1064,11 @@ class PortalMyBookingsView(APIView):
                 token = appt.token_number
                 slot_time = appt.scheduled_time.strftime("%H:%M") if appt.scheduled_time else None
                 # appt.doctor_user_id is a UUIDField, but the value actually
-                # stored in it is StaffUser's plain integer pk — Django's
-                # UUIDField silently wraps a plain int via uuid.UUID(int=value)
-                # (see apps.opd.services.resolve_doctor_consultation_fee for the
-                # same unwrap). Returning it unwrapped sent the frontend a
-                # garbage UUID as doctor_id, so "Book follow-up" 404'd the
-                # doctor-detail lookup the moment a patient tapped to rebook.
                 doctor_id = appt.doctor_user_id.int if isinstance(appt.doctor_user_id, uuid.UUID) else appt.doctor_user_id
                 room_name = appt.room_name or None
                 floor = appt.floor or None
 
                 # Same doctor detail already shown on "Find Doctors" (see
-                # _doctor_card above) — a patient shouldn't lose the doctor's
-                # photo/specialisation just because they're viewing a past
-                # booking instead of browsing. Best-effort: folded into the
-                # same try/except as the rest of this per-booking lookup.
                 if doctor_id:
                     from apps.hospital_setup.models import StaffUser, DoctorProfile
                     staff_obj = StaffUser.objects.using(b.hospital.db_name).filter(pk=doctor_id).first()
@@ -1299,16 +1079,6 @@ class PortalMyBookingsView(APIView):
                         doctor_specialisation = profile_obj.specialisation or ""
 
                 # Self-heal every ledger field that a STAFF-side action can
-                # change out from under this row, not just status — front
-                # desk's AppointmentRescheduleView/AppointmentStatusView (see
-                # apps.opd.views) move the date, change the complaint, or
-                # swap the doctor directly on the hospital-DB Appointment, and
-                # neither one touches PatientBooking (unlike the patient's own
-                # PortalRescheduleBookingView, which does). Without this, a
-                # front-desk reschedule would leave the patient's "My
-                # Bookings" silently showing the old date forever, same bug
-                # class as the original front-desk-booking-invisible issue —
-                # just on an existing row instead of a missing one.
                 dirty_fields = []
                 if status_now != b.status:
                     b.status = status_now
@@ -1326,7 +1096,6 @@ class PortalMyBookingsView(APIView):
                     b.save(using="default", update_fields=dirty_fields)
 
                 # Real, live queue position — only meaningful same-day, and
-                # only while this appointment hasn't itself been called yet.
                 if str(appt.scheduled_date) == today and status_now in QUEUE_PENDING and token is not None:
                     same_day_doctor = Appointment.objects.using(b.hospital.db_name).filter(
                         doctor_user_id=appt.doctor_user_id, scheduled_date=appt.scheduled_date,
@@ -1340,11 +1109,6 @@ class PortalMyBookingsView(APIView):
                     now_serving = in_progress.token_number if in_progress else None
             except Exception:
                 # Best-effort by design (booking.hospital_db may be temporarily
-                # unreachable) — the patient still sees the booking with
-                # whatever was last saved to the atomwalk row, just without
-                # live token/queue data. Logged so a systemic issue (e.g. a
-                # schema change breaking this join hospital-wide) is visible
-                # somewhere instead of just presenting as "missing token".
                 logger.debug("PortalMyBookingsView: live status lookup failed for booking_id=%s db=%s", b.id, b.hospital.db_name, exc_info=True)
             hospital = b.hospital
             params = parameters_of(hospital) if hospital else None
@@ -1360,11 +1124,6 @@ class PortalMyBookingsView(APIView):
                 "doctor_photo": doctor_photo,
                 "doctor_specialisation": doctor_specialisation,
                 # So "Book follow-up" can deep-link straight to this same
-                # doctor's profile instead of dropping the patient back at
-                # the generic hospital doctor-list to re-find who they saw.
-                # None if the underlying appointment row is gone/unreachable
-                # (e.g. hospital DB down) — frontend falls back to the browse
-                # page in that case.
                 "doctor_id": doctor_id,
                 "date": str(b.scheduled_date),
                 "time": slot_time,
@@ -1378,23 +1137,11 @@ class PortalMyBookingsView(APIView):
                 "patient_name": b.patient.full_name if b.patient else None,
                 "patient_awpid": b.patient.awpid if b.patient else None,
                 # "Booked on" — when this appointment was actually reserved,
-                # distinct from the visit date itself (see reference mockup's
-                # "Booked on" field).
                 "booked_at": b.created_at.isoformat() if b.created_at else None,
             })
         return Response({"results": results, "pagination": meta})
 class PortalCancelBookingView(APIView):
-    """
-    POST /api/v1/portal/my-bookings/<id>/cancel/
-
-    Patient self-service cancellation. <id> is the atomwalk-DB
-    PatientBooking pk (what PortalMyBookingsView hands back as "id"), not the
-    hospital-DB Appointment id — the portal only ever deals in PatientBooking
-    rows since a single account can have bookings across many hospitals.
-    Resolves through to the real hospital-DB Appointment, cancels it there,
-    then writes the same status back to the atomwalk row so the two stay in
-    sync (mirrors what PortalMyBookingsView.get() already does opportunistically).
-    """
+    """POST /api/v1/portal/my-bookings/<id>/cancel/"""
     permission_classes = [IsPatient]
 
     def post(self, request, pk):
@@ -1422,14 +1169,7 @@ class PortalCancelBookingView(APIView):
         booking.save(using="default", update_fields=["status"])
         return Response({"status": "cancelled"})
 class PortalRescheduleBookingView(APIView):
-    """
-    POST /api/v1/portal/my-bookings/<id>/reschedule/  {scheduled_date, scheduled_time?}
-
-    Moves an existing booking to a new date/time instead of cancel + rebook.
-    Same window/slot rules as PortalBookView, keyed by PatientBooking pk like
-    PortalCancelBookingView above, and keeps both the hospital-DB Appointment
-    and the atomwalk-DB PatientBooking row in sync.
-    """
+    """POST /api/v1/portal/my-bookings/<id>/reschedule/  {scheduled_date, scheduled_time?}"""
     permission_classes = [IsPatient]
 
     def post(self, request, pk):
@@ -1503,13 +1243,9 @@ class PortalRescheduleBookingView(APIView):
             "floor": room_fields.get("floor") or None,
         })
 # ── My documents ─────────────────────────────────────────────────────────────
-# Uploading is POST /api/v1/records/upload/ (apps/records). These are the
-# patient's read / zip endpoints over apps.documents.MedicalDocument.
 
 def _handwritten_siblings(awpid):
-    """The consult pad's raw handwritten Rx (source "encounter_handwritten_rx")
-    hangs off its typeset prescription instead of being its own row.
-    Returns ({encounter id: handwriting doc id}, [handwriting ids to hide])."""
+    """The consult pad's raw handwritten Rx (source "encounter_handwritten_rx")"""
     from apps.documents.models import MedicalDocument
     Source = MedicalDocument.Source
     docs = MedicalDocument.objects.using("default").filter(
@@ -1533,8 +1269,7 @@ def _document_row(d, handwritten_doc_id=None):
         "batch_id": d.batch_id, "handwritten_doc_id": handwritten_doc_id,
     }
 def _events(doc):
-    """What has happened to a report, oldest first, in words — the Activity tab. Built from what is stored
-    (there is no separate event log), so it shows the upload and the latest outcome."""
+    """What has happened to a report, oldest first, in words — the Activity tab. Built from what is stored"""
     S = type(doc).Status
     label = lambda t: t.replace("_", " ").capitalize() if t else "nothing"       # noqa: E731
     events = [{"at": doc.created_at, "text": "Issued by your hospital" if doc.source_hospital_id else "You uploaded this file"}]
@@ -1565,13 +1300,7 @@ def _own_document(request, doc_id):
         return None, error("Document not found.", status=404)
     return doc, None
 class PortalDocumentListCreateView(APIView):
-    """
-    GET /api/v1/portal/documents/?status=queued,extracting&review=pending|confirmed|all&doc_type=lab_report
-    - the patient's documents, newest first, with each one's processing_status / type / score / method.
-
-    review (default "confirmed"): "confirmed" is My Documents - everything except the patient's new uploads that still
-    wait for their confirmation; "pending" is exactly those uploads (the Needs Review list); "all" is both.
-    """
+    """GET /api/v1/portal/documents/?status=queued,extracting&review=pending|confirmed|all&doc_type=lab_report"""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -1601,8 +1330,7 @@ class PortalDocumentListCreateView(APIView):
         return Response({"results": [_document_row(d, hw_by_base.get(d.source_id) if d.source_type == d.Source.ENCOUNTER else None) for d in page_items],
                          "pagination": meta})
 class PortalDocumentCountsView(APIView):
-    """GET /api/v1/portal/documents/counts/ - {"total", "awaiting_review", "unclassified", "by_type": {code: n}} for the
-    My Documents dropdown and the Needs Review badge. Every type code is present, zeros included."""
+    """GET /api/v1/portal/documents/counts/ - {"total", "awaiting_review", "unclassified", "by_type": {code: n}} for the"""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -1611,16 +1339,7 @@ class PortalDocumentCountsView(APIView):
             return err
         return success(data=records.document_counts(awpid))
 class PortalDocumentDetailView(APIView):
-    """
-    GET    /api/v1/portal/documents/<id>/[?download=1]  — metadata + a short-lived signed file URL, and the
-           types the patient may choose from (`doc_types`: the fixed document types)
-    PATCH  /api/v1/portal/documents/<id>/               — the patient acts on a document they uploaded:
-           {doc_type}  correct its type (a human verdict, which the rules never overwrite)
-           {action: "retry"}  try a file that failed again
-    DELETE /api/v1/portal/documents/<id>/               — remove an upload: a file that failed, or one that has been
-           read but not yet confirmed by the patient (removes the row and its stored copy). A file still being read,
-           or one already confirmed, is refused with 409: a document in the patient's records is never deleted.
-    """
+    """GET    /api/v1/portal/documents/<id>/[?download=1]  — metadata + a short-lived signed file URL, and the"""
     permission_classes = [IsPatient]
 
     def delete(self, request, doc_id):
@@ -1679,10 +1398,7 @@ class PortalDocumentDetailView(APIView):
             return error(str(exc))
         return success(data=_document_row(type(doc).objects.using("default").get(pk=doc.pk)))
 class PortalDocumentZipView(APIView):
-    """
-    POST /api/v1/portal/documents/zip/   body: { ids: [<doc_id>, ...] }  (max 100)
-    Bundles the caller's selected documents into one ZIP.
-    """
+    """POST /api/v1/portal/documents/zip/   body: { ids: [<doc_id>, ...] }  (max 100)"""
     permission_classes = [IsPatient]
     _MAX_IDS = 100
 
@@ -1725,13 +1441,7 @@ class PortalDocumentZipView(APIView):
 # ── My lab orders ────────────────────────────────────────────────────────────
 
 class PortalLabOrderListView(APIView):
-    """
-    GET /api/v1/portal/lab-orders/
-    Every test any doctor (at any hospital) has ordered for this patient,
-    with enough to render the choice/payment/result flow entirely from the
-    portal: price, turnaround estimate, current choice, payment state, and
-    the result once an in-house lab delivers it.
-    """
+    """GET /api/v1/portal/lab-orders/"""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -1751,14 +1461,6 @@ class PortalLabOrderListView(APIView):
                 if not patient:
                     continue
                 # select_related("report") pulls the LabReport in the SAME
-                # .using(db) query. Accessing r.report lazily instead (a bare
-                # reverse-OneToOne lookup) would go through the hospital DB
-                # router, which resolves the db from thread-local state set
-                # by JWTHospitalMiddleware — never populated on this patient-
-                # portal request, so it silently queried the wrong database
-                # (or none) and swallowed the result as "no report yet",
-                # which is what made delivered results look stuck on "choose
-                # an option" here even after a lab tech had delivered them.
                 reqs = (LabRequest.objects.using(db)
                         .select_related("test", "report")
                         .filter(patient=patient)
@@ -1779,11 +1481,6 @@ class PortalLabOrderListView(APIView):
                         }
                     except Exception:
                         # r.report is a OneToOne reverse accessor — this most
-                        # commonly just means "no report uploaded yet" for
-                        # this request, which is normal and expected. Any
-                        # other underlying cause would look identical from
-                        # the outside, so log at debug level rather than a
-                        # bare pass, without treating it as a warning.
                         logger.debug("PortalLabOrderListView: lab report lookup failed for request_id=%s", r.id, exc_info=True)
 
                     attached_doc = None
@@ -1804,10 +1501,6 @@ class PortalLabOrderListView(APIView):
                         "turnaround_hours": r.test.turnaround_hours,
                         "status": r.status,
                         # request_number: the real token to quote at the
-                        # lab counter — see LabRequest.request_number.
-                        # Previously nothing was ever shown here, despite
-                        # the frontend copy already promising one ("visit
-                        # the lab with your token").
                         "request_number": r.request_number,
                         "patient_choice": r.patient_choice,
                         "payment_preference": r.payment_preference,
@@ -1824,13 +1517,7 @@ class PortalLabOrderListView(APIView):
         page_items, meta = paginate_list(request, results)
         return Response({"results": page_items, "pagination": meta})
 class PortalLabOrderChoiceView(APIView):
-    """
-    POST /api/v1/portal/lab-orders/choice/
-    Body: { hospital_db, request_id, patient_choice, payment_preference? }
-    Patient picks in-house vs outside (and, if in-house, how they'll pay).
-    Ownership is verified via awpid before anything is written — hospital_db
-    and request_id alone aren't enough to prove this is the caller's order.
-    """
+    """POST /api/v1/portal/lab-orders/choice/"""
     permission_classes = [IsPatient]
 
     def post(self, request):
@@ -1862,10 +1549,6 @@ class PortalLabOrderChoiceView(APIView):
         order_awpid = lab_req.patient.awpid
         if order_awpid != acct.awpid:
             # Not the account owner's own order — still valid if it belongs
-            # to a linked family member (same check _resolve_target_awpid_
-            # and_dob / PortalMyRecordsView use elsewhere). This was missing
-            # here, so choosing in-house/outside on a family member's lab
-            # order always failed with "This order does not belong to you."
             from apps.patients.models import PatientRelationship
             is_family = PatientRelationship.objects.using("default").filter(
                 guardian__awpid=acct.awpid, dependent__awpid=order_awpid,
@@ -1886,14 +1569,7 @@ class PortalLabOrderChoiceView(APIView):
         ])
         return success(message="Choice saved.")
 class PortalPrescriptionListView(APIView):
-    """
-    GET /api/v1/portal/prescriptions/
-    Every prescription any doctor (at any hospital) has written for this
-    patient, with rx_number, items, and current choice/payment state — the
-    same shape as PortalLabOrderListView, so the patient gets one
-    consistent "buy in-house or take it elsewhere" pattern for both labs
-    and prescriptions.
-    """
+    """GET /api/v1/portal/prescriptions/"""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -1916,34 +1592,14 @@ class PortalPrescriptionListView(APIView):
                 if not patient:
                     continue
                 # Resolved via Appointment -> OPDEncounter -> Prescription
-                # (same relational chain PortalMyRecordsView already uses
-                # successfully) rather than trusting Prescription.patient_id
-                # directly — that field is set independently at encounter-
-                # creation time from whatever the doctor's client sent, so
-                # it isn't guaranteed to match the Appointment's patient_id
-                # the way this chain is. Going through the same proven path
-                # both endpoints use guarantees they agree on which
-                # prescriptions belong to this patient.
                 appt_ids = Appointment.objects.using(db).filter(patient_id=patient.uuid).values_list("id", flat=True)
                 enc_ids = OPDEncounter.objects.using(db).filter(appointment_id__in=list(appt_ids)).values_list("id", flat=True)
                 # NOT prefetch_related("items") — under this app's custom
-                # multi-db router, Django's prefetch machinery issues the
-                # related-object query against the "default" atomwalk DB
-                # instead of `db`, which throws "relation
-                # opd_prescription_item does not exist" (that table only
-                # exists on hospital DBs). That exception was being swallowed
-                # by the `except Exception` below, silently dropping this
-                # hospital's prescriptions from the response instead of
-                # raising. Access rx.items explicitly with .using(db)
-                # instead, same as PortalMyRecordsView/
-                # PortalPrescriptionReceiptPDFView already do.
                 rxs = (Prescription.objects.using(db)
                        .filter(encounter_id__in=list(enc_ids))
                        .order_by("-created_at")[:50])
 
                 # The doctor's handwritten prescription, archived as a PDF on
-                # sign (apps.opd.views._store_handwriting_pdfs). Keyed by
-                # encounter, doc_type "prescription" (patient-visible).
                 hw_by_enc = {
                     d.source_id: d.id
                     for d in MedicalDocument.objects.using("default").filter(
@@ -1973,7 +1629,6 @@ class PortalPrescriptionListView(APIView):
                         "payment_status": rx.payment_status,
                         "created_at": rx.created_at,
                         # id of the archived handwritten-Rx PDF, if the doctor
-                        # used the consult pad — fetch via portal/documents/<id>/
                         "handwritten_document_id": hw_by_enc.get(str(rx.encounter_id)),
                         "items": [{
                             "drug_name": it.drug_name,
@@ -1989,15 +1644,7 @@ class PortalPrescriptionListView(APIView):
         page_items, meta = paginate_list(request, results)
         return Response({"results": page_items, "pagination": meta})
 class PortalPrescriptionChoiceView(APIView):
-    """
-    POST /api/v1/portal/prescriptions/choice/
-    Body: { hospital_db, prescription_id, patient_choice, payment_preference? }
-    Patient picks in-house vs outside (and, if in-house, how they'll pay) —
-    identical shape and ownership logic to PortalLabOrderChoiceView,
-    including family-member support from the start (the lab endpoint this
-    was modelled on originally shipped without it and had to be patched in
-    later — not repeating that here).
-    """
+    """POST /api/v1/portal/prescriptions/choice/"""
     permission_classes = [IsPatient]
 
     def post(self, request):
@@ -2028,9 +1675,6 @@ class PortalPrescriptionChoiceView(APIView):
 
         acct = accounts().get(pk=request.user.id)
         # Ownership resolved via the encounter's appointment, same chain
-        # PortalPrescriptionListView uses — not rx.patient_id directly,
-        # which is set independently at encounter-creation time and isn't
-        # guaranteed to agree with the appointment's patient_id.
         from apps.opd.models import Appointment
         try:
             appt = Appointment.objects.using(hospital_db).get(pk=rx.encounter.appointment_id)
@@ -2059,16 +1703,7 @@ class PortalPrescriptionChoiceView(APIView):
         ])
         return success(message="Choice saved.")
 class PortalPrescriptionReceiptPDFView(APIView):
-    """
-    GET /api/v1/portal/prescriptions/<hospital_db>/<pk>/receipt/
-    A real, printable PDF of a prescription — same base64-data-URI envelope
-    as PortalInvoiceReceiptPDFView (see that view's docstring: patient auth
-    is a JWT bearer header, so a plain <a href> to the API URL wouldn't
-    carry it). Ownership check follows the exact same encounter -> appointment
-    -> patient chain as PortalPrescriptionChoiceView above, for the same
-    reason documented there (rx.patient_id isn't guaranteed to agree with
-    the appointment's patient_id).
-    """
+    """GET /api/v1/portal/prescriptions/<hospital_db>/<pk>/receipt/"""
     permission_classes = [IsPatient]
 
     def get(self, request, hospital_db, pk):
@@ -2086,15 +1721,6 @@ class PortalPrescriptionReceiptPDFView(APIView):
 
         try:
             # NOT prefetch_related("items") — under this app's custom
-            # multi-db router, Django's prefetch machinery issues the
-            # related-object query against the "default" atomwalk DB
-            # instead of hospital_db (confirmed: it 500s with "relation
-            # opd_prescription_item does not exist", because that table
-            # only exists on hospital DBs, not the atomwalk one). Every other
-            # working call site in this file (PortalMyRecordsView,
-            # PortalPrescriptionListView) sidesteps this the same way —
-            # access rx.items explicitly with .using(hospital_db) below
-            # instead of prefetching.
             rx = Prescription.objects.using(hospital_db).select_related("encounter").get(pk=pk)
         except Prescription.DoesNotExist:
             return not_found("Prescription not found.")
@@ -2127,8 +1753,6 @@ class PortalPrescriptionReceiptPDFView(APIView):
 
         pdf_bytes = generate_prescription_pdf(
             # .using(hospital_db) explicitly — see the comment on the rx fetch
-            # above; the plain rx.items.all() form is what triggers the
-            # cross-DB router bug.
             prescription=rx, items=list(rx.items.using(hospital_db).all()), doctor_name=doctor_name,
             patient=patient, branch=branch, hospital_name=hospital_name,
             visit_date=appt.scheduled_date,
@@ -2141,13 +1765,7 @@ class PortalPrescriptionReceiptPDFView(APIView):
             "mime_type": "application/pdf",
         })
 class PortalLabReportFileView(APIView):
-    """
-    GET /api/v1/portal/lab-orders/<hospital_db>/<request_id>/report/
-    Full content (file_data/mime_type) for an in-house lab report the patient
-    has been notified is ready — the list endpoint only sends has_file so the
-    payload stays light, same reasoning as PatientDocumentDetailView. Ownership
-    is verified via awpid, same as the choice endpoint above.
-    """
+    """GET /api/v1/portal/lab-orders/<hospital_db>/<request_id>/report/"""
     permission_classes = [IsPatient]
 
     def get(self, request, hospital_db, request_id):
@@ -2159,10 +1777,6 @@ class PortalLabReportFileView(APIView):
 
         try:
             # select_related("report") — see the identical fix + comment on
-            # PortalLabOrderListView above. A bare lazy `lab_req.report`
-            # reverse lookup routes through the hospital DB router's
-            # thread-local, which is never set on patient-portal requests,
-            # so it silently misses even a delivered report.
             lab_req = LabRequest.objects.using(hospital_db).select_related("patient", "report").get(pk=request_id)
         except LabRequest.DoesNotExist:
             return not_found("Lab order not found.")
@@ -2193,18 +1807,7 @@ class PortalLabReportFileView(APIView):
 # ── My Profile ──────────────────────────────────────────────────────────────
 
 class PortalMobileChangeRequestOTPView(APIView):
-    """
-    POST /api/v1/portal/profile/mobile-change/request-otp/
-    Authenticated — no body needed. Sends an OTP to the EMAIL address
-    currently on file (not a caller-supplied one), so changing a mobile
-    number requires proving control of the account first. Email-based for
-    now — verifying via the old mobile requires a paid SMS gateway that
-    isn't wired up yet (see core/messaging/sms.py); email is free to send and just as
-    good a proof of account ownership. The follow-up
-    PATCH /api/v1/portal/profile/ (mobile field) requires the resulting
-    action_token, obtained via POST /api/v1/auth/otp/verify/
-    (purpose="contact_change_patient", identifier=<account email>).
-    """
+    """POST /api/v1/portal/profile/mobile-change/request-otp/"""
     permission_classes = [IsPatient]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "otp"
@@ -2238,20 +1841,7 @@ class PortalMobileChangeRequestOTPView(APIView):
         data = {"masked_identifier": mask_identifier(email)}
         return success(data=data, message=f"Verification code sent to {mask_identifier(email)}.")
 class PortalProfileView(APIView):
-    """
-    GET  /api/v1/portal/profile/  — the logged-in patient's own account details.
-    PATCH /api/v1/portal/profile/ — update name / mobile / gender / DOB.
-    Email and AWPID are identity keys tied to Patient records across
-    every hospital this patient has consented at, so they're read-only here —
-    changing them would break the cross-hospital identity match that HIE
-    sharing relies on.
-
-    Changing `mobile` to a NEW number requires `action_token` (from
-    POST /api/v1/auth/otp/verify/, purpose="contact_change_patient") proving
-    the caller verified a code sent to the email on file first — see
-    PortalMobileChangeRequestOTPView above. Sending the same mobile back
-    unchanged (or omitting it) needs no token.
-    """
+    """GET  /api/v1/portal/profile/  — the logged-in patient's own account details."""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -2300,8 +1890,6 @@ class PortalProfileView(APIView):
                 return error("Enter a valid 10-digit mobile number.", errors={"mobile": "Invalid format."})
 
             # Only an actual CHANGE needs re-verification — re-sending the
-            # same number the frontend already has loaded shouldn't force
-            # the patient through an OTP for a no-op.
             mobile_changed = bool(mobile) and mobile_of(mobile) != acct.mobile
             if mobile_changed:
                 from core.messaging.otp import decode_action_token, OTPError
@@ -2318,18 +1906,9 @@ class PortalProfileView(APIView):
                 return error("Another account already uses this mobile number.", errors={"mobile": "Already in use."})
 
             # Keep the network-wide Patient.mobile in sync — it's
-            # what front desk's cross-hospital dedup search actually queries
-            # (see PatientService.lookup_by_mobile). Without this, a patient
-            # who changes their number here still shows up to every
-            # hospital's "Find Patient" search under their OLD number, and a
-            # search for their new number comes back "No patient found" even
-            # though their portal profile displays it correctly.
             if mobile:
                 mobile_value = mobile_of(mobile)
                 # mobile is unique at the DB level — check for a
-                # collision against another identity (e.g. a walk-in-only
-                # patient with no portal account of their own) before
-                # writing, so this returns a clean 400 instead of a 500.
                 if Patient.objects.using("default").filter(mobile=mobile_value).exclude(awpid=acct.awpid).exists():
                     return error("Another patient record already uses this mobile number.", errors={"mobile": "Already in use."})
                 Patient.objects.using("default").filter(awpid=acct.awpid).update(mobile=mobile_value)
@@ -2406,26 +1985,7 @@ class PortalProfileView(APIView):
             "photo":         blob_storage.signed_url(acct.photo),
         })
 class PortalHealthSummaryView(APIView):
-    """
-    GET /api/v1/portal/health-summary/?patient_awpid=
-    Feeds the "Health Summary" and "Linked Hospitals" cards on My Profile —
-    everything here is real, already-recorded data (no invented "primary
-    doctor" or "chronic conditions" fields, since nothing in this system
-    tracks either of those concepts yet):
-      - blood_group        from Patient (set at registration)
-      - active_allergies    from SharedAllergy (same HIE table doctors see)
-      - active_diagnoses    from ClinicalEvent (diagnoses) where clinical_status="active"
-      - last_visit          most recent PatientBooking for this patient
-      - linked_hospitals    every hospital this patient has a booking record
-                             at, with their most recent visit there — this
-                             is also, today, the full extent of "who your
-                             records are shared with" (consent is captured
-                             once per hospital at first booking; there's no
-                             separate revoke/manage-access flow yet).
-    patient_awpid defaults to the account owner; pass a linked family
-    member's AWPID to view their summary instead — validated the same way
-    as PortalMyRecordsView.
-    """
+    """GET /api/v1/portal/health-summary/?patient_awpid="""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -2489,25 +2049,7 @@ class PortalHealthSummaryView(APIView):
         })
 _TIMELINE_DEFAULT_LIMIT = 30
 class PortalHealthTimelineView(APIView):
-    """
-    GET /api/v1/portal/timeline/?patient_awpid=&limit=
-    Unified chronological feed for the Records page — merges visits,
-    vaccinations, growth checks, lab results, and documents into one
-    reverse-chronological list so the patient/parent gets a single "what's
-    happened" view instead of five separate sections to cross-reference.
-
-    Reuses the same five sources as PortalMyRecordsView, PortalVaccinationListView
-    (via build_roadmap), PortalGrowthView, PortalLabOrderListView, and
-    PortalDocumentListCreateView — trimmed down to just what a timeline card
-    needs (date/title/subtitle/an optional detail for a "view" action),
-    not the full payload each of those dedicated endpoints returns.
-
-    `limit` caps how many entries come back (default 30) — this is a feed,
-    not an export, and visits/lab-results both fan out across every active
-    hospital DB, so an unbounded merge would be needlessly expensive for what
-    is ultimately a "recent activity" widget. The hospital queryset is fetched
-    once and reused for both fan-outs rather than querying it twice.
-    """
+    """GET /api/v1/portal/timeline/?patient_awpid=&limit="""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -2670,25 +2212,7 @@ class PortalHealthTimelineView(APIView):
 # ── Notifications / reminders (HMS-10g) ────────────────────────────────────
 
 class PortalNotificationsView(APIView):
-    """
-    GET /api/v1/portal/notifications/?patient_awpid=
-
-    Merges two different kinds of reminder into one in-app list (HMS-10g):
-      - Appointment / follow-up reminders — pre-generated rows in each
-        hospital DB's NotificationLog (see apps.hospital_setup.notification_services, run by
-        `python manage.py generate_reminders` on a schedule). Fanned out
-        across every active hospital the same way PortalMyRecordsView does,
-        since a patient's hospitals aren't known in advance.
-      - Vaccination-due reminders — NOT stored anywhere. Computed live from
-        apps.documents.lib_roadmap.build_roadmap() every time this is
-        called, because due-ness is just today's date vs. the patient's age
-        against the schedule — persisting it would just be a second copy
-        that could silently go stale (e.g. after a dose gets logged).
-
-    No real SMS/email/push is sent for any of these — see the module
-    docstring on apps/hospital_setup/notification_services.py for why that's out of scope
-    without a provider account. This is the in-app fallback.
-    """
+    """GET /api/v1/portal/notifications/?patient_awpid="""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -2727,12 +2251,6 @@ class PortalNotificationsView(APIView):
                 logger.warning("notifications: skipped %s (%s)", db, e)
 
         # ── Vaccination-due reminders — computed live, not stored ───────
-        # Only "due_now" (the window is actually open right now — see
-        # build_roadmap()'s _DUE_LEAD_DAYS) surfaces here, not "upcoming":
-        # the roadmap doesn't expose a concrete "window opens on" date for
-        # upcoming slots (it's derived inline from age-in-days, not stored
-        # as a date), so there's nothing honest to compare against a
-        # "due soon" cutoff without re-deriving that math here too.
         try:
             roadmap = build_roadmap(target_awpid, dob, rules_for("vaccination"))
             for item in roadmap:
@@ -2755,13 +2273,7 @@ class PortalNotificationsView(APIView):
             "unread_count": sum(1 for r in results if not r["read"]),
         })
 class PortalNotificationMarkReadView(APIView):
-    """
-    POST /api/v1/portal/notifications/<hospital_db>/<id>/read/
-    Only applies to real NotificationLog rows (appointment/follow-up) — the
-    "id" composite from the list above is "<hospital_db>:<log_id>", split back
-    apart by the frontend before calling this. Vaccination-due entries have
-    no backing row (computed live) so there's nothing to mark read.
-    """
+    """POST /api/v1/portal/notifications/<hospital_db>/<id>/read/"""
     permission_classes = [IsPatient]
 
     def post(self, request, hospital_db, pk):
@@ -2778,9 +2290,6 @@ class PortalNotificationMarkReadView(APIView):
         except NotificationLog.DoesNotExist:
             return not_found("Notification not found.")
         # PortalNotificationsView (the list this "id" comes from) already
-        # resolves a family member's own notifications via
-        # resolve_target_awpid_and_dob — mirror the same ownership rule
-        # here instead of the stricter account-only check this used to have.
         owner_awpid = log.patient.awpid if log.patient else None
         is_owner = owner_awpid == acct.awpid
         is_family = bool(owner_awpid) and not is_owner and PatientRelationship.objects.using("default").filter(
@@ -2794,13 +2303,6 @@ class PortalNotificationMarkReadView(APIView):
             log.save(using=hospital_db, update_fields=["read_at"])
         return success(data={"read": True})
 # PortalForgotPasswordView (the old mobile/AWPID + date-of-birth
-# verification) has been replaced by OTP verification — see
-# core/auth/otp_views.py (OTPRequestView/OTPVerifyView with
-# purpose="password_reset_patient", then PatientForgotPasswordResetView to
-# consume the resulting action_token). This endpoint was also never
-# actually reachable from the frontend (API_ENDPOINTS.PORTAL.FORGOT_PASSWORD
-# was referenced by ForgotPasswordPage.jsx but was never defined in
-# api.config.js) — the OTP flow replaces it end to end, frontend included.
 
 
 class PortalChangePasswordView(APIView):
@@ -2827,20 +2329,6 @@ class PortalChangePasswordView(APIView):
         acct.save(using="default", update_fields=["password"])
         return success(message="Password changed successfully.")
 # ── Emergency QR ─────────────────────────────────────────────────────────────
-# See apps/patients/emergency_access.py for the token mechanics and the security
-# reasoning (why the token payload carries only an awpid, never PHI). This
-# generation endpoint is patient-authenticated (IsPatient); the endpoint
-# that actually serves the summary a scanned QR opens is deliberately
-# public/unauthenticated — see apps/hospital_patients/emergency_views.py, mounted
-# at /api/v1/emergency/ (NOT under /api/v1/portal/) specifically so it
-# reads as the one intentionally-public endpoint in this codebase rather
-# than being buried inside a URL prefix that otherwise implies patient auth.
-#
-# Shown to the patient verbatim in the pre-generation consent prompt, and
-# kept in sync with what apps.patients.views.EmergencySummaryView
-# actually returns. Deliberately broader than HIE_SHARE_CATEGORIES above —
-# this is a full history dump for acute treatment, not the trimmed roadmap
-# a passively-consenting hospital sees.
 EMERGENCY_SHARE_CATEGORIES = [
     "Diagnoses and clinical notes",
     "Allergies on record",
@@ -2853,30 +2341,7 @@ EMERGENCY_SHARE_CATEGORIES = [
     "Your emergency contact's name and phone number",
 ]
 class PortalEmergencyTokenView(APIView):
-    """
-    POST /api/v1/portal/emergency/token/
-    Body: { patient_awpid?, consent_confirmed }  — patient_awpid defaults to
-    self (or a linked family member); consent_confirmed must be true or the
-    request is rejected with 428 (mirrors PortalBookView's first-booking
-    consent gate below — same "explain what's being shared, require an
-    explicit yes" shape, reused rather than reinvented).
-
-    Every generation mints a brand-new token and is a fresh disclosure
-    decision, so consent is required on every call, not just the first —
-    unlike the standing hie_consent_given flag, there is no "already
-    consented, don't ask again" state here by design: this shares MORE than
-    the passive HIE roadmap (full history + viewable files), and each QR is
-    a one-off act the patient chooses to perform for a specific doctor in
-    front of them right now.
-
-    Mints a fresh ~20-minute emergency-access token for the target patient
-    and returns everything the frontend needs to render the QR screen: the
-    raw token (for a "copy link" fallback), the absolute URL a scan should
-    open, an expiry timestamp so the UI can show a countdown, and a ready-
-    to-display QR code image (server-rendered, same `qrcode` library
-    already used for the invoice-receipt QR in apps/billing/pdf.py — no new
-    frontend dependency needed).
-    """
+    """POST /api/v1/portal/emergency/token/"""
     permission_classes = [IsPatient]
 
     def post(self, request):
@@ -2928,13 +2393,7 @@ class PortalEmergencyTokenView(APIView):
             "ttl_minutes": EMERGENCY_TOKEN_TTL_MINUTES,
         })
 def _render_qr_data_uri(text: str) -> str:
-    """
-    Renders `text` as a QR code PNG and returns it as a base64 data URI,
-    ready to drop straight into an <img src>. Mirrors _generate_qr_image()
-    in apps/billing/pdf.py (same qrcode library, same box_size/border) —
-    kept separate rather than imported from there since that helper returns
-    a PIL Image for embedding in a ReportLab PDF, not a web-ready data URI.
-    """
+    """Renders `text` as a QR code PNG and returns it as a base64 data URI,"""
     import base64
     import io
     import qrcode
@@ -2950,17 +2409,7 @@ def _render_qr_data_uri(text: str) -> str:
 
 logger = logging.getLogger(__name__)
 def _resolve_emergency_contact(awpid):
-    """
-    Best-effort "who do we call" for this patient:
-      1. Their own portal account's emergency contact fields, if set.
-      2. Failing that (common for a dependent whose guardian never filled
-         those fields in on the child's behalf, or a dependent with no
-         portal account of their own at all), fall back to the guardian
-         account that registered them — the guardian IS the practical
-         emergency contact for a dependent, even with no explicit fields set.
-    Returns None if neither resolves to anything (self-registered adult who
-    never filled in an emergency contact, no guardian on file).
-    """
+    """Best-effort "who do we call" for this patient:"""
     account = accounts().filter(awpid=awpid).first()
     if account and (account.emergency_contact_name or account.emergency_contact_phone):
         return {
@@ -2980,13 +2429,7 @@ def _resolve_emergency_contact(awpid):
             }
     return None
 def _birth_history(awpid):
-    """
-    A child's birth history, if any hospital has captured it — written
-    through from BirthHistoryView (see apps.documents.views) into
-    atomwalk.BirthHistory. Returns None (not an empty dict) when
-    nothing's on file, so the frontend can tell "no birth history" apart
-    from "not applicable" the same way it already does for emergency_contact.
-    """
+    """A child's birth history, if any hospital has captured it — written"""
     from apps.documents.models import BirthHistory
     bh = BirthHistory.objects.using("default").filter(patient__awpid=awpid).first()
     if not bh:
@@ -3002,16 +2445,7 @@ def _birth_history(awpid):
         "congenital_conditions": bh.congenital_conditions,
     }
 def _milestone_concerns(awpid):
-    """
-    Developmental-milestone records flagged "concern" by a doctor/nurse —
-    the only milestone information an ER doctor treating an unfamiliar
-    child actually needs in an emergency (a full achieved/not-yet roadmap is
-    a well-child-visit concern, not an acute-care one; see
-    apps.documents.lib_vitals for that fuller view, used by the
-    doctor's own consultation screen and the parent's portal). Sourced
-    straight from MilestoneRecord — no schedule merge needed here,
-    just "what has a clinician actually flagged."
-    """
+    """Developmental-milestone records flagged "concern" by a doctor/nurse —"""
     from apps.documents.models import MilestoneRecord
     records = (
         MilestoneRecord.objects.using("default")
@@ -3026,13 +2460,7 @@ def _milestone_concerns(awpid):
         "recorded_by_name": r.recorded_by_name,
     } for r in records]
 def _vaccination_history(awpid):
-    """
-    Every vaccination record on file, clinic-administered or self-reported —
-    including ones still pending review, clearly labeled, so the scanning
-    doctor sees the full picture rather than a silently trimmed one. Mirrors
-    the file-access pattern below: certificate images are resolved to a
-    signed URL here, not returned as raw base64.
-    """
+    """Every vaccination record on file, clinic-administered or self-reported —"""
     records = (
         ImmunizationRecord.objects.using("default")
         .filter(patient__awpid=awpid)
@@ -3051,15 +2479,7 @@ def _vaccination_history(awpid):
         })
     return out
 class EmergencySummaryView(APIView):
-    """
-    GET /api/v1/emergency/<token>/
-
-    No auth. Decodes the short-lived token, resolves the awpid it grants
-    access to, and returns the patient's full shared clinical history plus
-    an emergency contact. Any expired/invalid/malformed token returns a
-    plain 400 with a patient-safe message — never a stack trace, since this
-    endpoint is reachable by anyone with a camera.
-    """
+    """GET /api/v1/emergency/<token>/"""
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_classes = [ScopedRateThrottle]
@@ -3074,18 +2494,12 @@ class EmergencySummaryView(APIView):
         identity = Patient.objects.using("default").filter(awpid=awpid).first()
         if not identity:
             # Token was validly signed but the identity it points to is gone
-            # — shouldn't happen outside of manual DB tampering, but fail
-            # safe rather than 500.
             return error(message="This emergency code is no longer valid.", status=404)
 
         from apps.opd.patient_services import PatientService
         history = PatientService.get_shared_history(awpid=awpid)
 
         # get_shared_history() keeps lab results/documents lightweight (an id
-        # + metadata, no file content) so the same helper stays cheap for
-        # PatientHistoryView's list view. This endpoint has nowhere further
-        # for a doctor to click through to (no login to fetch the detail
-        # endpoints with), so resolve every file to a signed URL right here.
         lab_result_ids = [r["id"] for r in history["lab_results"] if r.get("has_file")]
         lab_files = {
             r.id: blob_storage.signed_url(r.document.file_name.name)
@@ -3143,19 +2557,13 @@ def _client_ip(request):
     xff = request.META.get("HTTP_X_FORWARDED_FOR")
     return xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR")
 # Pairing codes avoid 0/O/1/I so they read cleanly off a screen and back into
-# a phone.
 _PAIRING_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 def _make_pairing(n=6):
     return "".join(secrets.choice(_PAIRING_ALPHABET) for _ in range(n))
 def _device_token(request):
     return request.META.get("HTTP_X_SHARE_DEVICE", "").strip()
 def _device_guard(grant, request):
-    """
-    Once a laptop has claimed this session, every public read must come from
-    that same browser (it holds the device token from the claim response).
-    Returns an error Response to bail with, or None to proceed. A leaked link
-    or a photographed QR carries no device token, so it reads nothing.
-    """
+    """Once a laptop has claimed this session, every public read must come from"""
     if grant.opened_at and not device_matches(grant, _device_token(request)):
         from django.conf import settings
         host = settings.FRONTEND_URL.rstrip("/").split("://", 1)[-1]
@@ -3167,12 +2575,7 @@ def _device_guard(grant, request):
         )
     return None
 def _get_grant(token):
-    """
-    Fetch a RecordsShareRequest by its token, or — when the patient typed the
-    6-digit pairing code into the app instead of scanning — by that code
-    (newest still-pending one wins; codes are only unique among live requests).
-    Lapses an expired grant before returning it.
-    """
+    """Fetch a RecordsShareRequest by its token, or — when the patient typed the"""
     grant = RecordsShareRequest.objects.using("default").filter(token=token).first()
     if not grant and token and token.isdigit() and len(token) == 6:
         grant = (
@@ -3195,17 +2598,13 @@ def _self_awpid(request):
     acct = accounts().filter(pk=request.user.id).first()
     return acct.awpid if acct else None
 def _patient_name(awpid):
-    """Identity is the source of truth, but a self-registered patient may only
-    have a PatientAccount — fall back to it before giving up."""
+    """Identity is the source of truth, but a self-registered patient may only"""
     identity = Patient.objects.using("default").filter(awpid=awpid).first()
     if identity and identity.full_name:
         return identity.full_name, identity
     acct = accounts().filter(awpid=awpid).first()
     return (acct.full_name if acct else ""), identity
 # The navigable Rx & Reports vault — same row shape PortalDocumentListCreateView
-# returns, so the frontend list/detail components are reused unchanged. The
-# consult-pad handwritten prescription is folded into its typeset sibling as
-# `handwritten_doc_id` rather than showing as its own row.
 def _vault_documents(awpid, limit=200):
     Source = MedicalDocument.Source
     hw_rows = list(
@@ -3228,7 +2627,7 @@ def _vault_documents(awpid, limit=200):
         MedicalDocument.objects.using("default")
         .filter(patient__awpid=awpid)
         .exclude(id__in=linked_hw_ids)
-        .exclude(awaiting_review_q())          # an upload the patient has not confirmed yet is not theirs to share
+        .exclude(awaiting_review_q())
         .filter(status="completed")
         .order_by("-created_at")[:limit]
     )
@@ -3246,22 +2645,11 @@ def _vault_documents(awpid, limit=200):
         "handwritten_doc_id": hw_by_base.get(d.source_id) if d.source_type == Source.ENCOUNTER else None,
     } for d in rows]
 # ─────────────────────────────────────────────────────────── privacy layer
-#
-# The patient's standing "what a doctor sees" choices (atomwalk.RecordsPrivacy)
-# subtract from the vault before it reaches a share session. A record hidden
-# here stays hidden in every future share; the only way one reaches a doctor
-# is a per-visit reveal that the patient makes on the live grant
-# (RecordsShareRequest.shown_private_ids), which is dropped when the visit ends.
 
 def _privacy_for(awpid):
     return RecordsPrivacy.objects.using("default").filter(patient__awpid=awpid).first()
 def _privacy_hidden_ids(awpid, docs, privacy=None):
-    """
-    docs = the dicts returned by _vault_documents(awpid). Returns the set of
-    MedicalDocument ids the patient's standing privacy hides from a doctor —
-    the union of hide_all, the live kind rules, and individually
-    locked ids. Per-visit reveals are added back by the caller.
-    """
+    """docs = the dicts returned by _vault_documents(awpid). Returns the set of"""
     p = privacy if privacy is not None else _privacy_for(awpid)
     if not p:
         return set()
@@ -3294,17 +2682,7 @@ def _pending_download_payload(grant):
 # ─────────────────────────────────────────────────────────────── patient: create
 
 class RecordsShareCreateView(APIView):
-    """
-    POST /api/v1/portal/records-share/
-
-    The PATIENT starts the flow from their app: this mints a pending session
-    bound to their awpid and returns a link to hand to the doctor. The doctor
-    opens that link on a laptop (no account), the laptop shows a QR, the
-    patient scans it and confirms — only then does the session go live.
-
-    Body (optional): { "note": "Dr. Rao" }  — a label the patient can attach
-    so their "who has access" list is readable later.
-    """
+    """POST /api/v1/portal/records-share/"""
     permission_classes = [IsPatient]
 
     def post(self, request):
@@ -3336,19 +2714,7 @@ class RecordsShareCreateView(APIView):
 
 
 class RecordsShareClaimView(APIView):
-    """
-    POST /api/v1/records-share/claim/
-      body: { "code": "482193" }   — the doctor types the patient's 6 digits
-                                      at clinic.atomwalk.com/share
-        or: { "token": "<32 hex>" } — the doctor opened a full share link and
-                                      the page is binding itself
-
-    Ties this session to the calling browser: mints a random device token
-    (returned once, kept by that browser and sent as X-Share-Device on every
-    later read) and a 6-char `pairing` shown on the doctor's screen for the
-    patient to scan/type when approving. Only works while the session is still
-    pending — a link that leaks after approval cannot claim its way in.
-    """
+    """POST /api/v1/records-share/claim/"""
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_classes = [ScopedRateThrottle]
@@ -3399,14 +2765,7 @@ class RecordsShareClaimView(APIView):
             "status": grant.status,
         }, status=201)
 class RecordsShareStatusView(APIView):
-    """
-    GET /api/v1/records-share/<token>/
-
-    Polled by the doctor's laptop while it waits, and also read by the
-    patient's phone right after a scan to show "who is asking" before they
-    decide. Returns identifying patient data only once the grant is a live
-    approval.
-    """
+    """GET /api/v1/records-share/<token>/"""
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_classes = [ScopedRateThrottle]
@@ -3422,7 +2781,6 @@ class RecordsShareStatusView(APIView):
             return bail
 
         # Heartbeat so the patient's "who has access" view can show whether
-        # the doctor is actively looking right now.
         if is_live(grant):
             RecordsShareRequest.objects.using("default").filter(pk=grant.pk).update(
                 last_seen_at=timezone.now())
@@ -3446,15 +2804,7 @@ class RecordsShareStatusView(APIView):
             data["pending_download"] = _pending_download_payload(grant)
         return success(data=data)
 class RecordsShareRecordsView(APIView):
-    """
-    GET /api/v1/records-share/<token>/records/
-
-    The read-only payload the laptop renders once approved: patient header,
-    shared clinical history (allergies / diagnoses / vitals / prescriptions),
-    and the navigable Rx & Reports vault. File contents are NOT included —
-    every document is "locked" until the patient releases it for download
-    (see RecordsShareDownloadView).
-    """
+    """GET /api/v1/records-share/<token>/records/"""
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_classes = [ScopedRateThrottle]
@@ -3482,10 +2832,6 @@ class RecordsShareRecordsView(APIView):
         documents = _vault_documents(awpid_of(grant))
 
         # ── standing privacy: drop what the patient keeps private, minus the
-        #    records they revealed for this one visit — skipped entirely when
-        #    the patient chose "share everything" for this grant at approval
-        #    time (grant.share_all), same effect as revealing every private
-        #    record but without touching standing RecordsPrivacy itself ─────
         shown_now = set(grant.shown_private_ids or [])
         if grant.share_all:
             hidden_ids, withheld, hidden_sections = set(), 0, []
@@ -3545,7 +2891,6 @@ class RecordsShareRecordsView(APIView):
                             else _vaccination_history(awpid_of(grant)),
             "documents": documents,
             # One honest line for the clinician: the record list / sections may
-            # be partial. It never says *what* is held back.
             "records_withheld": withheld > 0,
             "sections_withheld": sections_withheld,
             "requester_label": grant.requester_label,
@@ -3553,14 +2898,7 @@ class RecordsShareRecordsView(APIView):
             "window_hours": RecordsShareRequest.WINDOW_HOURS,
         })
 class RecordsShareDownloadView(APIView):
-    """
-    POST /api/v1/records-share/<token>/downloads/   body: { "doc_id": 123 }
-
-    If the patient has already released this document, returns a signed URL.
-    Otherwise records it as the pending download request — the patient sees
-    it on their phone and allows or denies (RecordsShareDownloadDecisionView).
-    Only one pending request at a time; a new one replaces the last.
-    """
+    """POST /api/v1/records-share/<token>/downloads/   body: { "doc_id": 123 }"""
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_classes = [ScopedRateThrottle]
@@ -3592,31 +2930,7 @@ class RecordsShareDownloadView(APIView):
             pending_download_id=doc_id)
         return success(data={"state": "requested"})
 class RecordsShareDocumentViewView(APIView):
-    """
-    GET /api/v1/records-share/<token>/documents/<doc_id>/view/
-
-    Open a document in the browser — instant, no patient approval. The
-    patient already granted the whole session; *saving a copy* is the extra
-    step, not looking at one (see RecordsShareDownloadView for that).
-
-    That separation only holds if "view" never hands over anything a
-    one-click browser action can turn into a saved file. A raw signed PDF
-    URL opened in a new tab renders in the browser's own PDF viewer, which
-    carries its own Download/Print buttons — a doctor could bypass the
-    per-file patient-approval gate entirely just by using those, with no
-    audit trail. So for a PDF, this rasterises each page to a PNG
-    server-side (same renderer apps.documents.ocr uses for OCR) and returns those
-    instead of a URL — a page rendered as an <img> in our own page carries
-    no native viewer chrome to download or print from. For an image
-    document there's no separate "native viewer" risk (the frontend fetches
-    it into an <img> itself rather than navigating to the raw URL), so the
-    signed URL is still returned directly.
-
-    This doesn't make a screenshot impossible — nothing served to a browser
-    ever can. It removes the specific, no-friction, easy-to-stumble-on
-    Download icon that made bypassing the consent gate no different from
-    just looking.
-    """
+    """GET /api/v1/records-share/<token>/documents/<doc_id>/view/"""
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_classes = [ScopedRateThrottle]
@@ -3650,13 +2964,7 @@ class RecordsShareDocumentViewView(APIView):
 
         return success(data={"mime_type": mime_type, "file_url": blob_storage.signed_url(doc.file_name.name)})
 class RecordsShareCloseView(APIView):
-    """
-    POST /api/v1/records-share/<token>/close/
-
-    The doctor closing the session from their laptop. Ending access early is
-    always safe and the token holder is the doctor, so no auth — unlike the
-    patient's /end/ which is inside the portal.
-    """
+    """POST /api/v1/records-share/<token>/close/"""
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_classes = [ScopedRateThrottle]
@@ -3678,20 +2986,7 @@ class RecordsShareCloseView(APIView):
 # ─────────────────────────────────────────────────────────────── patient (auth)
 
 class RecordsShareDecisionView(APIView):
-    """
-    POST /api/v1/records-share/<token>/decision/
-      body: { "approve": true, "pairing": "K7M2QP", "consent_confirmed": true }
-
-    Called by the patient after they scan the QR on the doctor's screen. That
-    QR carries the session's `pairing` (…/share-records/<token>?p=K7M2QP); the
-    app lifts it out and sends it here — or, if the camera won't cooperate,
-    the patient reads the 6 characters shown under the QR and types them. It
-    proves the patient is looking at the doctor's live screen, not replaying a
-    copied link. Too many wrong tries locks the session. `approve:false`
-    declines it. The right pairing but no `consent_confirmed` returns 428 with
-    the list of what will be shared. The session was created by this same
-    patient, so its awpid must match the caller.
-    """
+    """POST /api/v1/records-share/<token>/decision/"""
     permission_classes = [IsPatient]
 
     def post(self, request, token):
@@ -3760,18 +3055,12 @@ class RecordsShareDecisionView(APIView):
                     "share_categories": EMERGENCY_SHARE_CATEGORIES,
                     "window_hours": RecordsShareRequest.WINDOW_HOURS,
                     # How many records the patient's standing privacy would
-                    # withhold from THIS share by default — lets the app skip
-                    # showing the all-vs-default choice entirely when it's 0
-                    # (nothing private exists yet, so the two are identical).
                     "private_count": private_count,
                 },
                 status=428,
             )
 
         # One-time bulk choice, made here instead of one record at a time via
-        # RecordsShareRevealView: "all" skips standing RecordsPrivacy for the
-        # whole grant, "default" (or anything else / omitted) keeps it. Never
-        # touches RecordsPrivacy itself — this is scoped to this one grant.
         share_all = (request.data.get("share_scope") or "default").strip() == "all"
 
         now = timezone.now()
@@ -3814,13 +3103,7 @@ class RecordsShareEndView(APIView):
         grant.save(using="default", update_fields=["status", "pending_download_id", "shown_private_ids"])
         return success(data={"status": grant.status}, message="Access ended.")
 class RecordsShareDownloadDecisionView(APIView):
-    """
-    POST /api/v1/records-share/<token>/downloads/decision/  body: { "approve": true }
-
-    The patient allows or denies the doctor's pending download request. On
-    allow, that document id moves into `download_unlocked_ids` and stays
-    downloadable for the rest of the window.
-    """
+    """POST /api/v1/records-share/<token>/downloads/decision/  body: { "approve": true }"""
     permission_classes = [IsPatient]
 
     def post(self, request, token):
@@ -3846,13 +3129,7 @@ class RecordsShareDownloadDecisionView(APIView):
         grant.save(using="default", update_fields=fields)
         return success(data={"pending_download": None, "unlocked_ids": grant.download_unlocked_ids})
 class RecordsShareMineView(APIView):
-    """
-    GET /api/v1/records-share/mine/
-
-    The patient's "who currently has access to my records" surface — every
-    live grant they've approved, with any pending download request. The
-    mobile app polls this to show the break-glass banner + approval prompts.
-    """
+    """GET /api/v1/records-share/mine/"""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -3906,8 +3183,7 @@ def _bucket_groups(rows):
         g["list"].sort(key=_row_date_key, reverse=True)
     return ordered
 def _paginate_groups(groups, page, target=_PRIVACY_PAGE_ROWS):
-    """Pack ordered groups into pages of ~`target` rows without splitting a
-    group; an oversize group takes a page to itself. Returns (rows, meta)."""
+    """Pack ordered groups into pages of ~`target` rows without splitting a"""
     pages, cur, cur_n = [], [], 0
     for g in groups:
         gn = len(g["list"])
@@ -3931,16 +3207,7 @@ def _paginate_groups(groups, page, target=_PRIVACY_PAGE_ROWS):
         "has_previous": page > 1,
     }
 class RecordsPrivacyView(APIView):
-    """
-    GET  /api/v1/portal/records-privacy/
-    PUT  /api/v1/portal/records-privacy/
-
-    The patient's standing "what a doctor sees when I share my records"
-    config, plus the full vault annotated with each row's effective private
-    state (for the dedicated privacy screen). GET also reports whether a
-    share session is live right now — the frontend asks "just this visit or
-    always?" only then, otherwise a plain confirm.
-    """
+    """GET  /api/v1/portal/records-privacy/"""
     permission_classes = [IsPatient]
 
     def get(self, request):
@@ -4085,7 +3352,6 @@ class RecordsPrivacyView(APIView):
             p.hidden_doc_ids = sorted(mine); fields.append("hidden_doc_ids")
 
         # Incremental bulk lock/unlock — the privacy screen is paged now, so the
-        # client can't send a full replacement list; it sends deltas instead.
         if "add_hidden_doc_ids" in d or "remove_hidden_doc_ids" in d:
             cur = set(p.hidden_doc_ids or [])
             add = {int(x) for x in (d.get("add_hidden_doc_ids") or []) if str(x).lstrip("-").isdigit()}
@@ -4104,12 +3370,7 @@ class RecordsPrivacyView(APIView):
         _audit(me, EmergencyAccessLog.EVENT_PRIVACY, _client_ip(request))
         return success(data={"ok": True})
 class RecordsPrivacyToggleView(APIView):
-    """
-    POST /api/v1/portal/records-privacy/toggle/   body { doc_id, private }
-
-    The single-record lock used from My Reports — add or remove one
-    MedicalDocument id from the standing hidden list.
-    """
+    """POST /api/v1/portal/records-privacy/toggle/   body { doc_id, private }"""
     permission_classes = [IsPatient]
 
     def post(self, request):
@@ -4132,16 +3393,7 @@ class RecordsPrivacyToggleView(APIView):
         _audit(me, EmergencyAccessLog.EVENT_PRIVACY, _client_ip(request))
         return success(data={"doc_id": doc_id, "private": make_private})
 class RecordsShareRevealView(APIView):
-    """
-    POST /api/v1/portal/records-share/<token>/reveal/
-      body { doc_ids: [..], scope: "visit" | "always" | "conceal" }
-
-    visit    — show these to the doctor for THIS live visit only; they drop
-               back to private when the visit ends.
-    always   — also clear them from standing privacy (visible to future
-               doctors too).
-    conceal  — undo a this-visit reveal now.
-    """
+    """POST /api/v1/portal/records-share/<token>/reveal/"""
     permission_classes = [IsPatient]
 
     def post(self, request, token):
@@ -4181,21 +3433,13 @@ class RecordsShareRevealView(APIView):
 
 logger = logging.getLogger(__name__)
 # Total base64 budget for one tab's page images. Finger strokes on white
-# compress tiny; this comfortably fits ~15 pages and just rejects an
-# abusive/malformed PUT before we decode it.
 _MAX_TAB_BASE64_CHARS = 9_000_000
 _TABS = {"rx", "note"}
 # Drug-name normalisation. The recognition model is told it MAY fix an
-# obvious misspelling of a real drug; this pass then grounds that against the
-# hospital's OWN drug catalog (prescriptions.Drug) — the authoritative
-# spelling for that clinic. It only ever rewrites the drug NAME; dose,
-# frequency, route and duration are never touched, and the doctor still
-# reviews every row before signing. `drug_name_raw` keeps what was read so
-# the encounter screen can show "read X -> matched Y".
 _DRUG_MATCH_MIN = 85     # rapidfuzz WRatio; below this we leave the name alone
 _DRUG_MATCH_GAP = 6      # winner must beat the next DIFFERENT drug by at least this
 _DRUG_MATCH_STRONG = 90  # a hit this good is accepted even without the gap
-_DRUG_MIN_LEN = 5        # don't fuzzy-match short tokens / abbreviations (e.g. "pcm")
+_DRUG_MIN_LEN = 5
 _RX_FORM_WORDS = {
     "tab", "tabs", "tablet", "tablets", "cap", "caps", "capsule", "capsules",
     "syp", "syr", "syrup", "susp", "suspension", "inj", "injection", "amp",
@@ -4208,15 +3452,7 @@ def _strip_form_word(name: str) -> str:
         words = words[1:]
     return " ".join(words)
 def _candidate_map(rows, alias_pairs_iter=None):
-    """
-    Build {probe_lower: canonical Drug.name} from catalog rows, plus
-    doctor-shorthand aliases whose generic/brand is already present in the
-    catalog. Pure (no DB / no network) so it can be unit-tested directly.
-
-    `rows`: iterable of dicts with "name" and "generic_name".
-    `alias_pairs_iter`: iterable of (surface_lower, generic_lower) — an alias
-    only takes effect when its generic resolves to a real catalog entry.
-    """
+    """Build {probe_lower: canonical Drug.name} from catalog rows, plus"""
     candidates = {}
     generics = {}  # generic_lower -> canonical name (first wins)
     for r in rows:
@@ -4237,7 +3473,6 @@ def _candidate_map(rows, alias_pairs_iter=None):
             canon = generics.get(seed_gen)
             if not canon:
                 # tolerate strength suffixes on the catalog generic, e.g. seed
-                # "amoxicillin" vs catalog generic "amoxicillin 500 mg"
                 for cg, cn in cat_generics:
                     if seed_gen in cg.split() or cg.startswith(seed_gen + " "):
                         canon = cn
@@ -4246,8 +3481,7 @@ def _candidate_map(rows, alias_pairs_iter=None):
                 candidates[surface] = canon
     return candidates
 def _resolve_item_name(it, candidates, keys, process, fuzz):
-    """Canonicalise one recognised Rx item's drug_name against `candidates`.
-    Mutates `it` in place; never changes dose/frequency/route/duration."""
+    """Canonicalise one recognised Rx item's drug_name against `candidates`."""
     raw = (it.get("drug_name") or "").strip()
     it["drug_name_raw"] = raw
     it["name_source"] = "verbatim"
@@ -4265,11 +3499,6 @@ def _resolve_item_name(it, candidates, keys, process, fuzz):
         return
 
     # Fuzzy: only for tokens long enough to be meaningful. Accept when the top
-    # hit is either near-exact (>= _DRUG_MATCH_STRONG) or clearly ahead of the
-    # next DIFFERENT drug (>= _DRUG_MATCH_GAP). Runner-ups that resolve to the
-    # same canonical (e.g. "Paracetamol" vs "Paracetamol Syrup" sharing the
-    # generic, or a brand alias) don't count as competition. Weaker matches
-    # are left verbatim and flagged for the doctor.
     if len(probe) < _DRUG_MIN_LEN:
         it["flags"].append("not found in catalog — check the name")
         return
@@ -4288,12 +3517,7 @@ def _resolve_item_name(it, candidates, keys, process, fuzz):
     else:
         it["flags"].append("not found in catalog — check the name")
 def _drug_candidate_map(catalog_rows, seed_iter):
-    """Build {probe_lower: canonical drug name}. `seed_iter` is
-    (surface_lower, canonical) from consult_pad_drug_aliases.seed_name_pairs()
-    — the standalone base, so drug names still resolve when the hospital has no
-    Drug catalog. `catalog_rows` (dicts with "name"/"generic_name") are layered
-    on top and win for spelling — a clinic that stocks "Dolo 650" gets that
-    exact string. Pure (no DB / no network)."""
+    """Build {probe_lower: canonical drug name}. `seed_iter` is"""
     candidates = {}
     for surface, canon in seed_iter or []:
         surface = (surface or "").strip().lower()
@@ -4310,17 +3534,12 @@ def _drug_candidate_map(catalog_rows, seed_iter):
             candidates.setdefault(gen, canon)
     return candidates
 def _normalise_rx_against_catalog(recognized: dict, hospital_id):
-    """Mutate recognized['prescription'] in place: canonicalise each drug_name
-    against a standard drug-name table (consult_pad_drug_aliases), enriched
-    with the hospital's own Drug catalog when it has one. Best-effort — any
-    failure leaves the names exactly as recognised."""
+    """Mutate recognized['prescription'] in place: canonicalise each drug_name"""
     items = recognized.get("prescription") or []
     if not items:
         return
 
     # Make sure every item carries these keys even if we bail out early below
-    # (rapidfuzz missing) so the encounter page's review panel renders
-    # consistently.
     for it in items:
         it.setdefault("drug_name_raw", (it.get("drug_name") or "").strip())
         it.setdefault("name_source", "verbatim")
@@ -4332,8 +3551,6 @@ def _normalise_rx_against_catalog(recognized: dict, hospital_id):
         return
 
     # Hospital Drug catalog — nice-to-have, not required. Any failure (no
-    # hospital, DB down, empty catalog) just leaves catalog_rows empty and the
-    # seed table does the work.
     catalog_rows = []
     if hospital_id:
         try:
@@ -4357,29 +3574,14 @@ def _normalise_rx_against_catalog(recognized: dict, hospital_id):
     for it in items:
         _resolve_item_name(it, candidates, keys, process, fuzz)
 # ── Investigation-name normalisation ────────────────────────────────────────
-# Same idea as the drug pass above, for the recognised `investigations` string
-# on the Internal Note tab: turn "CBC, LFT, USG abd" into standard test names
-# the front desk and lab will recognise. Deterministic and reversible — the
-# raw string each token came from is kept, every rewrite is shown to the
-# doctor on the review panel, and `raw_text` is never touched.
-#
-# Unlike drugs, this does NOT require a hospital catalog: the seed alias table
-# (apps/hospital_patients/consult_pad_lab_aliases.py) stands on its own because most
-# clinics don't maintain a lab_test catalog and a test name carries no dosing
-# risk. Where the hospital DOES have one, its names are layered on top and win
-# for spelling.
 _LAB_MATCH_MIN = 88   # rapidfuzz WRatio; below this the token is left as written
 _LAB_MATCH_GAP = 6    # winner must beat the runner-up by at least this much
 _LAB_MIN_LEN = 4      # don't fuzzy-match shorter tokens — 3-letter acronyms
                       # (cbc/lft/esr/…) must come through the exact alias path
-# Split on comma / semicolon / newline (tight), and on slash, ampersand, plus
-# or the word "and" ONLY when surrounded by whitespace — so "Urine R/M",
-# "RFT/electrolytes" written solid, "Na+ K+" and "c/s" survive as one token.
 _LAB_SPLIT_RE = re.compile(r"\s*[,;\n]\s*|\s+/\s+|\s+&\s+|\s+\+\s+|\s+and\s+", re.I)
 _LAB_LIST_PREFIX_RE = re.compile(r"^\s*(?:\d+\s*[.)\-]|[-*•·])\s*")
 def _split_investigations(text: str) -> list:
-    """A recognised `investigations` string -> ordered, de-duplicated list of
-    individual test tokens. Pure; safe on '' (returns [])."""
+    """A recognised `investigations` string -> ordered, de-duplicated list of"""
     if not text or not text.strip():
         return []
     out, seen = [], set()
@@ -4394,10 +3596,7 @@ def _split_investigations(text: str) -> list:
         out.append(tok)
     return out
 def _lab_candidate_map(catalog_names, alias_pairs_iter):
-    """Build {probe_lower: canonical test name}. `catalog_names` is an iterable
-    of the hospital's LabTest.name strings (may be empty); `alias_pairs_iter` is
-    (surface_lower, canonical) from the seed table. Catalog names are added
-    last so a clinic's own spelling wins. Pure (no DB / no network)."""
+    """Build {probe_lower: canonical test name}. `catalog_names` is an iterable"""
     candidates = {}
     for surface, canon in alias_pairs_iter or []:
         surface = (surface or "").strip().lower()
@@ -4410,8 +3609,7 @@ def _lab_candidate_map(catalog_names, alias_pairs_iter):
             candidates[canon.lower()] = canon   # catalog overrides the seed
     return candidates
 def _resolve_investigation(raw, candidates, keys, process, fuzz):
-    """Canonicalise one investigation token. Returns
-    {raw, name, source: verbatim|catalog|catalog_fuzzy, flags:[...]}."""
+    """Canonicalise one investigation token. Returns"""
     raw = (raw or "").strip()
     probe = raw.lower()
     res = {"raw": raw, "name": raw, "source": "verbatim", "flags": []}
@@ -4438,10 +3636,7 @@ def _resolve_investigation(raw, candidates, keys, process, fuzz):
         res["flags"].append("not a recognised investigation — check")
     return res
 def _normalise_investigations_against_catalog(recognized: dict, hospital_id):
-    """Mutate recognized in place: rewrite `investigations` to standard test
-    names and attach `investigations_resolved` (one entry per token, with the
-    raw string and any flag) for the review panel. Best-effort — any failure
-    leaves `investigations` exactly as recognised."""
+    """Mutate recognized in place: rewrite `investigations` to standard test"""
     recognized.setdefault("investigations_resolved", [])
     tokens = _split_investigations(recognized.get("investigations") or "")
     if not tokens:
@@ -4490,24 +3685,15 @@ def _decode_pages(page_datauris):
             pass
     return out
 def _public_recog(blob):
-    """Strip the internal per-page transcription cache before a recognised
-    blob is returned to any client."""
+    """Strip the internal per-page transcription cache before a recognised"""
     if not blob:
         return None
     return {k: v for k, v in blob.items() if k != "_page_texts"}
 # One recognition at a time per (session, tab). The phone autosaves every few
-# strokes and each spawns a thread; without this they'd fire N concurrent
-# vision calls into the provider's small per-minute budget and all get 429'd.
-# Threads queue on the lock, and every one but the newest bails instantly once
-# it's their turn (their "at" token is stale) — so a burst collapses to a
-# single recognition on the freshest pages.
 _RECOG_LOCKS = {}
 _RECOG_LOCKS_GUARD = threading.Lock()
-_RECOG_LOCK_WAIT = 200  # seconds a queued thread will wait its turn before giving up
+_RECOG_LOCK_WAIT = 200
 # done is better than a bare empty, which is better than failed, which is
-# better than the pending placeholder. A completed recognition must be allowed
-# to replace a WORSE result a sibling thread landed while this one was still
-# retrying — otherwise a good transcription is thrown away behind a "failed".
 _RESULT_RANK = {"pending": 0, "failed": 1, "empty": 2, "done": 3}
 def _session_recog_lock(session_id, tab):
     key = (session_id, tab)
@@ -4518,9 +3704,7 @@ def _session_recog_lock(session_id, tab):
             _RECOG_LOCKS[key] = lk
         return lk
 def _land_recognition(session_id, field, blob, pending_token):
-    """Compare-and-swap the recognised blob onto the row: land it when it
-    outranks (or ties-newer) what's stored, or when we're still the exact
-    pending marker we came in on. Retries on a lost CAS."""
+    """Compare-and-swap the recognised blob onto the row: land it when it"""
     for _ in range(4):
         cur = (ConsultSession.objects.using("default")
                .filter(id=session_id).values(field).first())
@@ -4544,18 +3728,7 @@ def _land_recognition(session_id, field, blob, pending_token):
             return True
     return False
 def _run_tab_recognition(session_id, tab: str, pending_token: str):
-    """
-    Background worker: recognise one tab's pages and write the structured
-    result onto ConsultSession.<tab>_recognised. Runs in a plain thread
-    (no task queue in this project). Never raises.
-
-    `pending_token` is the "at" stamp written by the recognise trigger that
-    spawned this thread. The thread bails if the stamp changed (the doctor
-    hit Load again), queues on a per-tab lock so a double-click can't run two
-    at once, and re-uses already-transcribed pages via the page-text cache so
-    only NEW pages hit the model. The write-back is rank-aware — a completed
-    result replaces a worse one landed meanwhile.
-    """
+    """Background worker: recognise one tab's pages and write the structured"""
     from apps.patients.services import recognise
     field = "rx_recognised" if tab == "rx" else "note_recognised"
     pages_attr = "rx_pages" if tab == "rx" else "note_pages"
@@ -4625,14 +3798,7 @@ def _open_session_for_token(token: str):
         return identity, None
     return identity, session
 class ConsultPadView(APIView):
-    """
-    GET  /api/v1/consult-pad/<token>/   — patient header + both tabs' saved state
-    PUT  /api/v1/consult-pad/<token>/   — autosave one tab
-                                          Body: { "tab": "rx"|"note", "pages": ["data:image/png;base64,...", ...] }
-
-    No auth. GET's "active" is false when the doctor hasn't started a session
-    yet. PUT is a no-op (404-ish) once the session is signed/expired.
-    """
+    """GET  /api/v1/consult-pad/<token>/   — patient header + both tabs' saved state"""
     permission_classes = [AllowAny]
     authentication_classes = []
     throttle_classes = [ScopedRateThrottle]
@@ -4651,7 +3817,6 @@ class ConsultPadView(APIView):
         return success(data={
             "active": True,
             # Identifies THIS consultation, so the phone can tell whether crash-saved local writing belongs to the
-            # session it's resuming or to a previous one (which it then discards).
             "session_id": sess.id,
             "patient_name": identity.full_name,
             "patient_awpid": identity.awpid,
@@ -4694,11 +3859,6 @@ class ConsultPadView(APIView):
         recog_field = "rx_recognised" if tab == "rx" else "note_recognised"
 
         # Autosave saves the strokes ONLY — it never triggers recognition.
-        # Transcription is lazy: it runs when the doctor presses "Load
-        # handwritten note" (EncounterConsultSessionView, action=recognise),
-        # re-using pages already transcribed so only new strokes hit the model.
-        # Here we just keep any prior compiled result and mark the tab "dirty"
-        # so the encounter screen knows there's un-loaded content.
         prev = getattr(sess, recog_field) or {}
         now = timezone.now()
         marker = now.isoformat()

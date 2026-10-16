@@ -6,4 +6,4 @@ class PatientsConfig(AppConfig):
     name = "apps.patients"
     label = "patients"
     verbose_name = "Patients (shared)"
-    database = "atomwalk"    # which database the tables of this app live in (read by core/db_router.py)
+    database = "atomwalk"

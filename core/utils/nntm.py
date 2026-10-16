@@ -1,18 +1,4 @@
-"""
-core/utils/nntm.py
-------------------
-Next Number Table Manager (NNTM) — generates sequential, collision-free IDs.
-
-All sequential numbers in the system go through here:
-  - UHID (patient hospital ID)
-  - Invoice number
-  - Lab report number
-  - Prescription (Rx) number
-  - Queue token
-
-CRITICAL: Uses SELECT FOR UPDATE inside an atomic transaction.
-Never generate IDs in application code — always call get_next_number().
-"""
+"""core/utils/nntm.py"""
 
 import logging
 from django.db import transaction
@@ -21,39 +7,11 @@ logger = logging.getLogger(__name__)
 
 
 def get_next_number(branch_id: int, entity: str, using: str = "default") -> tuple[str, int]:
-    """
-    Atomically increment the counter for a given branch+entity and return
-    the formatted ID string and the raw integer number.
-
-    Args:
-        branch_id: The branch this number belongs to. For 'employee_id',
-                   which is a hospital-wide (not per-branch) sequence, pass 0
-                   — see apps.hospital_setup.staff_services.next_employee_id.
-        entity:    One of: 'uhid', 'invoice', 'lab_report', 'lab_test', 'lab_request', 'prescription', 'queue', 'employee_id', 'drug', 'admission'.
-        using:     The database alias to use (hospital DB name).
-
-    Returns:
-        Tuple of (formatted_id: str, number: int)
-        e.g. ("UHID-000042", 42)
-
-    Raises:
-        NextNumber.DoesNotExist if the entity is not configured for this branch.
-        ValueError if entity is not a recognized type.
-    """
+    """Atomically increment the counter for a given branch+entity and return"""
     # Import here to avoid circular imports
     from apps.hospital_setup.models import NextNumber
 
     # 'drug' was missing here even though DrugCatalogView._next_drug_code()
-    # (apps/prescriptions/views.py) has called get_next_number(entity="drug")
-    # since the drug catalog was built — every manual "Add Drug" submission
-    # with a blank code was hitting this ValueError. Added alongside the
-    # drug-form-configurability work when the same bug showed up seeding
-    # demo data.
-    # 'admission' added for apps.ipd (Phase 1 — admission intake). Every
-    # existing branch is seeded a NextNumber(entity="admission") row by
-    # apps/ipd/migrations/0002_seed_admission_catalogs.py — if that
-    # migration hasn't been run on a given hospital DB yet, this will raise
-    # NextNumber.DoesNotExist the same way a missing 'drug' row used to.
     VALID_ENTITIES = {"uhid", "invoice", "lab_report", "lab_test", "lab_request", "prescription", "queue", "employee_id", "drug", "admission"}
     if entity not in VALID_ENTITIES:
         raise ValueError(f"Unknown entity '{entity}'. Must be one of: {VALID_ENTITIES}")
@@ -68,8 +26,6 @@ def get_next_number(branch_id: int, entity: str, using: str = "default") -> tupl
         nn.save(using=using, update_fields=["last_number"])
 
         # Counters are per branch but most number columns are unique
-        # hospital-wide, so every branch except the first gets "B<id>-" after
-        # the prefix (first branch keeps its historical format).
         infix = ""
         if branch_id:
             from apps.hospital_setup.models import Branch

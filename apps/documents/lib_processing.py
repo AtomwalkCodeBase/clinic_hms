@@ -1,13 +1,4 @@
-"""
-The database side of the pediatric health timeline: the services folder judges, this saves and reads.
-
-    process_document(document)    the LLM's facts from one document -> events, measurements, vaccines, labs, birth history
-    rebuild_patient(patient_id)   episodes, recurrence flags and growth z-scores recomputed from the patient's rows
-    build_timeline_payload(...)   the rows -> the timeline the API returns
-
-Running a document again is safe: what it extracted before is replaced, while a row a person verified, rejected or
-entered is never touched.
-"""
+"""The database side of the pediatric health timeline: the services folder judges, this saves and reads."""
 from datetime import date, timedelta
 
 from django.db import transaction
@@ -49,8 +40,7 @@ SCORED_AS = {"head_circumference_cm": "head_circ_cm"}
 
 
 def growth_dob(dob, birth_history):
-    """A baby born early is plotted on its corrected age until 24 months: the date of birth moves forward by the weeks
-    it was early. Vaccines keep the chronological age."""
+    """A baby born early is plotted on its corrected age until 24 months: the date of birth moves forward by the weeks"""
     weeks = birth_history.gestational_age_weeks if birth_history else None
     return dob + timedelta(weeks=40 - weeks) if weeks and weeks < 37 else dob
 
@@ -88,7 +78,7 @@ def process_document(document, llm=None, force=False):
         return {"status": "SKIPPED", "reason": "already processed"}
 
     text = ig.doc_text(document)
-    extraction.refresh_from_db()            # doc_text may have just stored the text of a document that had none yet
+    extraction.refresh_from_db()
     reason = ("no date of birth" if dob is None else "outside pediatric age scope" if (date.today() - dob).days > ig.MAX_AGE_DAYS
               else "no extracted text" if len(text.strip()) < 20 else "")
     if reason:

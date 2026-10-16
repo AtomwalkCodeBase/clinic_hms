@@ -1,14 +1,4 @@
-"""
-Hospital DB — OPD domain models.
-
-Covers:
-  - Appointment    : booking + queue state machine
-  - OPDEncounter   : SOAP consultation notes
-  - Prescription   : Rx header linked to encounter
-  - PrescriptionItem: individual drug lines
-  - PrescriptionFavourite: doctor's saved drug templates
-  - the visit's vitals are not here: they are kept in Atomwalk (apps/vitals.py), read through Appointment.vitals
-"""
+"""Hospital DB — OPD domain models."""
 
 import uuid
 from django.db import models
@@ -36,30 +26,18 @@ class Appointment(models.Model):
     ]
 
     # Was a fixed choices= list — now hospital-configurable via
-    # billing.OptionList(list_type="appointment_type"), same mechanism as
-    # Room.room_type / Drug.form / LabTest.sample_type. Validated at the
-    # serializer layer (AppointmentCreateSerializer), not here. The three
-    # constants below stay as plain Python string literals — backend logic
-    # branches on TYPE_FOLLOWUP specifically (see views.py's
-    # resolve_doctor_consultation_fee) — so they're still seeded as
-    # is_system=True defaults (see apps/opd/migrations/0002_seed_appointment_types.py)
-    # a hospital can add more (e.g. "teleconsult") alongside, never rename/
-    # remove these three.
     TYPE_OPD = "opd"
     TYPE_FOLLOWUP = "followup"
     TYPE_EMERGENCY = "emergency"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     # The hospital's own patient (by its uuid; the code reads and writes it as patient_id). The awpid is the person across hospitals:
-    # a plain value, because that patient lives in another database.
     patient = models.ForeignKey("opd.HospitalPatient", to_field="uuid", db_column="patient_id",
                                 on_delete=models.CASCADE, related_name="appointments")
     patient_awpid = models.CharField(max_length=30, db_index=True)
     doctor_user_id = models.UUIDField(db_index=True)       # atomwalk_user.id
     doctor_name = models.CharField(max_length=255)
     # Nullable: existing rows predate this field. Multi-branch hospitals should
-    # backfill from booked_by_user_id's branch before relying on this filter;
-    # new bookings get it from the booking user automatically (see views.py).
     branch_id = models.IntegerField(null=True, blank=True, db_index=True)  # org.Branch.id (hospital DB)
 
     appointment_type = models.CharField(max_length=15, default=TYPE_OPD)
@@ -70,15 +48,6 @@ class Appointment(models.Model):
     token_number = models.IntegerField(null=True, blank=True)
 
     # Denormalized room/floor — resolved once at booking time from
-    # org.RoomAssignment (doctor + day-of-week + time) and baked in here so
-    # front desk/queue/patient screens can show "Room 204, Floor 2" without
-    # a live lookup, and so the room shown never changes retroactively if
-    # the hospital edits its room assignments later. Nullable: rooms are
-    # opt-in — a hospital that hasn't set any up just gets no room shown,
-    # nothing else breaks. Plain int/text, not a real FK — org.Room lives in
-    # the same hospital DB but in a different app; matches this codebase's
-    # existing convention of not adding cross-app FKs (see Hospital.
-    # active_vaccination_schedule_id for the same reasoning).
     room_id = models.IntegerField(null=True, blank=True)
     room_name = models.CharField(max_length=100, blank=True)
     floor = models.CharField(max_length=30, blank=True)
@@ -93,10 +62,6 @@ class Appointment(models.Model):
     booked_by_user_id = models.UUIDField(null=True, blank=True)
 
     # Captured at booking time (patient portal, or front desk on the patient's
-    # behalf) so front desk knows whether to expect payment at check-in.
-    # "pay_online" is not wired to a real payment gateway yet — see
-    # PatientDoctorProfilePage.jsx; it's collected now so nothing needs to
-    # migrate later once one exists.
     PAYMENT_PAY_AT_DESK = "pay_at_desk"
     PAYMENT_PAY_ONLINE  = "pay_online"
     PAYMENT_PREFERENCE_CHOICES = [
@@ -160,11 +125,6 @@ class OPDEncounter(models.Model):
     follow_up_in_days = models.IntegerField(null=True, blank=True)  # Days until next visit
 
     # Nurse-mediated follow-up booking — a doctor deciding "book this
-    # patient's next visit now" hands it to a nurse rather than booking it
-    # themselves (see apps/opd/views.py FollowUpActionView). This is
-    # independent of follow_up_in_days above (the "send a reminder, let
-    # the patient/front-desk book later" path) — a doctor picks ONE of
-    # the two per consultation, never both at once.
     followup_ask_nurse = models.BooleanField(default=False)
     followup_nurse_note = models.CharField(max_length=255, blank=True)
     followup_nurse_requested_at = models.DateTimeField(null=True, blank=True)
@@ -217,9 +177,6 @@ class Prescription(models.Model):
     ]
 
     # Mirrors apps.lab.models.LabRequest's patient_choice/payment_preference/
-    # payment_status/choice_made_by pattern — same shape, same portal-side
-    # semantics, so a patient sees a consistent "buy in-house or take it
-    # elsewhere" flow for both labs and prescriptions.
     CHOICE_PENDING = "pending"
     CHOICE_IN_HOUSE = "in_house"
     CHOICE_OUTSIDE = "outside"
@@ -253,11 +210,6 @@ class Prescription(models.Model):
     dispensed_at = models.DateTimeField(null=True, blank=True)
 
     # Human-readable, sequential, quotable-over-the-counter token — NNTM
-    # entity="prescription" (prefix "RX-", already seeded per branch, see
-    # apps/org/views.py's NEXT_NUMBER_DEFAULTS). Generated once at creation
-    # in PrescriptionCreateView. Blank on the very few rows that predate
-    # this field; never reused/regenerated after that so it stays a stable
-    # reference the patient can quote at the pharmacy counter.
     rx_number = models.CharField(max_length=30, unique=True, null=True, blank=True)
 
     patient_choice = models.CharField(max_length=10, choices=CHOICE_CHOICES, default=CHOICE_PENDING)
@@ -267,10 +219,6 @@ class Prescription(models.Model):
     choice_made_at = models.DateTimeField(null=True, blank=True)
 
     # Set on first dispense against this prescription (see
-    # apps/pharmacy/views.py::DispenseView) — every subsequent dispense of
-    # another item on the same Rx adds line items to this same invoice
-    # instead of creating a duplicate. Priced from Stock.mrp (sale price),
-    # not Stock.unit_cost (purchase cost) — see InvoiceItem creation there.
     invoice = models.ForeignKey("billing.Invoice", on_delete=models.SET_NULL,
                                 null=True, blank=True, related_name="+")
 
@@ -312,9 +260,6 @@ class PrescriptionItem(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     prescription = models.ForeignKey(Prescription, on_delete=models.CASCADE, related_name="items")
     # Optional link back to the pharmacist-maintained catalog (apps.pharmacy.Drug).
-    # Nullable — a doctor can still type a drug that isn't in the catalog yet.
-    # SET_NULL rather than PROTECT: deactivating/removing a catalog entry must
-    # never block or corrupt a prescription already written against it.
     drug = models.ForeignKey("pharmacy.Drug", on_delete=models.SET_NULL,
                              null=True, blank=True, related_name="+")
     drug_name = models.CharField(max_length=255)
@@ -347,16 +292,10 @@ class PrescriptionFavourite(models.Model):
         unique_together = [("doctor_user_id", "name")]
 
 
-# ==============================================================================
 # Hospital patients: the hospital's own record of a patient, and the allergies noted here
-# ==============================================================================
 
 class HospitalPatient(models.Model):
-    """
-    Per-hospital patient record.
-    awpid links to atomwalk.Patient (different DB — no FK constraint).
-    UHID is hospital-local (generated by NNTM).
-    """
+    """Per-hospital patient record."""
     GENDER_CHOICES = [("M", "Male"), ("F", "Female"), ("O", "Other")]
     PAYER_CHOICES  = [("self", "Self Pay"), ("insurance", "Insurance"), ("corporate", "Corporate")]
 
@@ -384,9 +323,6 @@ class HospitalPatient(models.Model):
     pincode         = models.CharField(max_length=10, blank=True)
 
     # Dependent patients (children, or anyone with no mobile of their own). WHO the guardian is and how they are
-    # related lives in one place only: atomwalk.PatientRelationship (guardian_awpid / guardian_relation below read
-    # it). guardian_name / guardian_mobile are the contact details this hospital was given, kept here because the
-    # atomwalk never stores a plain mobile number and an emergency registration has a name but no guardian identity.
     is_dependent        = models.BooleanField(default=False)
     guardian_name        = models.CharField(max_length=200, blank=True)
     guardian_mobile       = models.CharField(max_length=15, blank=True)
@@ -403,18 +339,10 @@ class HospitalPatient(models.Model):
     tpa_name           = models.CharField(max_length=200, blank=True)
 
     # DPDP consent (Digital Personal Data Protection Act 2023) — consent to
-    # this hospital processing the patient's data at all.
     dpdp_consent_captured = models.BooleanField(default=False)
     dpdp_consent_at       = models.DateTimeField(null=True, blank=True)
 
     # HIE consent — separate from the above: specifically, the patient
-    # agreeing that THIS hospital may pull in their shared cross-hospital
-    # history (diagnoses, allergies, vitals, prescriptions, lab results,
-    # documents) via the Atomwalk DB. Asked once, the first time a patient
-    # books/registers at a new hospital through the patient portal — see
-    # PortalBookView. Defaults False; front-desk walk-in registration
-    # doesn't currently set this (out of scope here — that flow can be
-    # updated separately if paper/verbal consent should be captured too).
     hie_consent_given = models.BooleanField(default=False)
     hie_consent_at    = models.DateTimeField(null=True, blank=True)
 
@@ -423,12 +351,6 @@ class HospitalPatient(models.Model):
     updated_at      = models.DateTimeField(auto_now=True)
 
     # ── Emergency / unidentified patient intake ──────────────────────────
-    # See docs/PENDING_IMPROVEMENTS.md item 1. A patient registered with no
-    # ID and no family present starts "provisional" — enough to open a
-    # chart and treat, not a claim that this is a confirmed identity.
-    # identity_status stays "confirmed" (the default) for every normal
-    # registration; nothing about existing rows or the normal register()
-    # path changes.
     IDENTITY_CONFIRMED   = "confirmed"
     IDENTITY_PROVISIONAL = "provisional"
     IDENTITY_STATUS_CHOICES = [
@@ -450,21 +372,11 @@ class HospitalPatient(models.Model):
 
     identity_status = models.CharField(max_length=12, choices=IDENTITY_STATUS_CHOICES, default=IDENTITY_CONFIRMED)
     # Mirrors ipd.AdmissionReferral.is_mlc, but at the patient level — an
-    # MLC (Medico-Legal Case) flag needs to travel with the patient from
-    # the moment of registration, before any admission referral exists at
-    # all (e.g. an emergency OPD-only encounter that never becomes an
-    # admission is still an MLC case).
     is_mlc          = models.BooleanField(default=False)
     arrival_channel = models.CharField(max_length=25, choices=ARRIVAL_CHANNEL_CHOICES, blank=True)
     # e.g. "Unknown Male, approx. 30yrs" — shown instead of full_name until
-    # the identity is confirmed (see #2 in the same backlog item, "identity
-    # merge", not built yet — this field just makes the label explicit
-    # rather than overloading full_name with a placeholder value).
     placeholder_label = models.CharField(max_length=200, blank=True)
     # Auto-logged reason when DPDP/HIE consent is skipped under the
-    # emergency-treatment doctrine (see ipd.AdmissionDeposit's docstring for
-    # the same legal basis, cited there re: advance-payment gating) — never
-    # left implicit as "consent just wasn't captured".
     consent_deferred_reason = models.CharField(max_length=255, blank=True)
 
     class Meta:
@@ -494,10 +406,7 @@ class HospitalPatient(models.Model):
 
 
 class Allergy(models.Model):
-    """
-    Patient allergy record. On create/update a Django signal writes a
-    sanitized copy to atomwalk.SharedAllergy for cross-hospital visibility.
-    """
+    """Patient allergy record. On create/update a Django signal writes a"""
     SEVERITY_CHOICES = [
         ("mild",     "Mild"),
         ("moderate", "Moderate"),

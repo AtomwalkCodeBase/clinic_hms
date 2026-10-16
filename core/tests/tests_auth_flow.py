@@ -1,10 +1,4 @@
-"""
-core/tests/tests_auth_flow.py
------------------------
-JWTHospitalAuthentication end to end against real rows: what makes a token unusable (expiry, wrong type,
-revocation, hospital suspended/read-only, staff deactivated, patient session stale) and what logout does.
-Needs the hospital_test alias:  python manage.py test core.tests.tests_auth_flow --settings=core.settings.test
-"""
+"""core/tests/tests_auth_flow.py"""
 
 import time
 

@@ -6,4 +6,4 @@ class BillingConfig(AppConfig):
     name = "apps.billing"
     label = "billing"
     verbose_name = "Billing"
-    database = "hospital"    # which database the tables of this app live in (read by core/db_router.py)
+    database = "hospital"

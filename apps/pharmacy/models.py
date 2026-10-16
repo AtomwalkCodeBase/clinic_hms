@@ -1,16 +1,4 @@
-"""
-apps/pharmacy/models.py
------------------------
-Tables: Stock, StockTransaction, Dispense, MedicationDoseLog
-feat_pharmacy gate enforced at API view level.
-
-Dispense.prescription_item points at apps.opd.PrescriptionItem — the live
-model doctors actually write to during a consultation (apps.opd.Prescription
-was previously never touched by Dispense, which pointed at the OLD/legacy
-apps.pharmacy.Prescription instead; nothing in the live OPD flow ever
-created rows there, so a prescription written by a doctor would never reach
-the pharmacist's dispensing queue at all — see PendingPrescriptionsView).
-"""
+"""apps/pharmacy/models.py"""
 
 from django.db import models
 from apps.hospital_setup.models import StaffUser
@@ -20,14 +8,7 @@ from apps.opd.models import PrescriptionItem
 
 
 class Drug(models.Model):
-    """
-    Hospital drug catalog. Hospital-managed.
-    drug_code is the internal code (not a standard code — optional).
-
-    form is free text (validated against apps.billing.OptionList's
-    list_type="drug_form" rows in the frontend/serializer layer, not a
-    DB-level choices= constraint — see OptionList's docstring for why).
-    """
+    """Hospital drug catalog. Hospital-managed."""
     name        = models.CharField(max_length=200)
     generic_name= models.CharField(max_length=200, blank=True)
     drug_code   = models.CharField(max_length=50, blank=True)
@@ -35,12 +16,6 @@ class Drug(models.Model):
     strength    = models.CharField(max_length=50, blank=True)   # e.g. "500mg"
     unit        = models.CharField(max_length=20, default="mg")
     # Reference selling price — pharmacy.Stock.mrp (set per received batch)
-    # is what actually drives dispense billing, since real procurement price
-    # can shift batch to batch. This is just the catalog-level default so
-    # (a) the pharmacist can see "what does this drug cost" without digging
-    # into Stock, and (b) the Receive Stock form can prefill from it instead
-    # of relying on whoever's receiving stock to remember to type a price —
-    # still overridable per batch.
     default_mrp = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     is_active   = models.BooleanField(default=True)
     created_at  = models.DateTimeField(auto_now_add=True)
@@ -75,10 +50,7 @@ class Stock(models.Model):
 
 
 class StockTransaction(models.Model):
-    """
-    Audit trail for every stock movement.
-    quantity_change is positive (in) or negative (out).
-    """
+    """Audit trail for every stock movement."""
     TXN_TYPE_CHOICES = [
         ("purchase",  "Purchase"),
         ("dispense",  "Dispense"),
@@ -120,10 +92,7 @@ class Dispense(models.Model):
 
 
 class MedicationDoseLog(models.Model):
-    """
-    Inpatient medication dose administration log.
-    Recorded by nursing staff per prescription item.
-    """
+    """Inpatient medication dose administration log."""
     STATUS_CHOICES = [
         ("given",   "Given"),
         ("skipped", "Skipped"),

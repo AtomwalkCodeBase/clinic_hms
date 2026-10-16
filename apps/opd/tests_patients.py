@@ -1,17 +1,4 @@
-"""
-apps/hospital_patients/tests.py
-----------------------
-Unit tests for the consultation-pad recognition pipeline's pure helpers —
-parsing, blank/ink detection, dose sanity, and drug-name resolution.
-
-All DB-free (SimpleTestCase). Run:
-    python manage.py test apps.opd
-
-(If the local settings register hospital DB aliases without a TEST config, the
-default runner errors during test-DB setup before any test runs — a
-pre-existing env quirk, see apps/opd/tests.py. These tests need no DB; run
-them through a runner that skips DB setup, e.g. django.setup() + unittest.)
-"""
+"""apps/hospital_patients/tests.py"""
 
 import io
 from unittest import mock
@@ -183,7 +170,6 @@ class RecogniseTests(SimpleTestCase):
 
     def test_page_transcribe_then_structure_done(self):
         # Every page is transcribed (image call), then one text-only structuring
-        # call turns the joined text into the SOAP/Rx JSON.
         transcription = "fever 2d\nTab Dolo 650 mg BD x 3 days"
         structured = ('{"is_clinical_note": true, "confidence": 0.9, "subjective": "fever 2d",'
                       ' "raw_text": "fever 2d", "prescription": [{"drug_name": "Dolo",'
@@ -335,7 +321,6 @@ class NormaliseOrchestratorTests(SimpleTestCase):
 
     def test_resolves_via_seed_table_when_no_catalog(self):
         # hospital lookup fails (no DB in SimpleTestCase) — the standalone seed
-        # drug table must still canonicalise a known brand / misspelling.
         blob = {"prescription": [
             {"drug_name": "Dolo"},          # brand -> generic
             {"drug_name": "Panacetamol"},   # misread -> Paracetamol
@@ -548,7 +533,6 @@ class NormaliseInvestigationsTests(SimpleTestCase):
 
     def test_rewrites_string_and_populates_resolved_without_a_hospital_catalog(self):
         # hospital lookup will fail (no DB in SimpleTestCase) — the seed table
-        # must still canonicalise the tokens it knows.
         blob = {"investigations": "cbc, lft, usg abdomen, made-up-test"}
         V._normalise_investigations_against_catalog(blob, hospital_id=999999)
         self.assertEqual(

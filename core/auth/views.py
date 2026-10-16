@@ -1,17 +1,4 @@
-"""
-core/auth/views.py
------------------------
-Authentication endpoints for all user types.
-
-Endpoints:
-  POST /api/v1/auth/login/staff/      — hospital staff login (profile-based routing, no hospital_code)
-  POST /api/v1/auth/login/platform/   — Atomwalk platform admin login (no hospital_code)
-  POST /api/v1/auth/login/patient/    — patient portal login (email or AWPID)
-  POST /api/v1/auth/token/refresh/    — refresh access token
-  GET  /api/v1/auth/me/               — current user info
-  GET  /api/v1/auth/me/permissions/   — feature flags for the frontend
-  POST /api/v1/auth/setup-password/   — staff invite → set own password
-"""
+"""core/auth/views.py"""
 
 import jwt
 import logging
@@ -44,11 +31,7 @@ from apps.patients.services import accounts, accounts_with_mobile, check_passwor
 
 
 def _make_tokens(payload: dict) -> dict:
-    """
-    Create access + refresh JWT pair from a claims payload.
-    Every token gets a unique jti so it can be individually revoked via
-    BlacklistedToken (see LogoutView below and core/api/authentication.py).
-    """
+    """Create access + refresh JWT pair from a claims payload."""
     now         = timezone.now()
     access_exp  = now + settings.JWT_ACCESS_TOKEN_LIFETIME
     refresh_exp = now + settings.JWT_REFRESH_TOKEN_LIFETIME
@@ -65,21 +48,7 @@ def _make_tokens(payload: dict) -> dict:
 # ── Staff Login ───────────────────────────────────────────────────────────────
 
 class StaffLoginView(APIView):
-    """
-    POST /api/v1/auth/login/staff/
-
-    Two supported request shapes (see StaffLoginSerializer):
-      1. {mobile, password} — profile-based routing, no hospital_code needed.
-         The "mobile" field also accepts an email address (detected by the
-         presence of "@") — either way it's resolved via StaffMobileIndex
-         (atomwalk DB) → hospital db_name → StaffUser → verify password → JWT.
-         This matches the design spec:
-         Request → Authenticated User → Profile → Hospital → DB Name → Hospital DB
-      2. {hospital_code, employee_id, password} — for hospitals using employee
-         IDs. Employee IDs aren't globally unique (two hospitals can both
-         have "EMP-001"), so this path resolves the hospital DIRECTLY from
-         the given hospital_code instead of a atomwalk-wide index lookup.
-    """
+    """POST /api/v1/auth/login/staff/"""
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "login"
@@ -101,9 +70,6 @@ class StaffLoginView(APIView):
             db_name, hospital_id = hospital.db_name, hospital.id
         else:
             # ── Step 1 (mobile/email path): look up which hospital DB this
-            # identifier belongs to. The "mobile" field also accepts an
-            # email address — detected by the presence of "@" — since staff
-            # may not know which identifier a given colleague registered with.
             identifier = d["mobile"]
             try:
                 if "@" in identifier:
@@ -160,14 +126,8 @@ class StaffLoginView(APIView):
             "full_name":    staff.get_full_name(),
             "role":         staff.role,
             # [] for the 6 system roles — see resolve_acts_as() and
-            # core.api.authentication.MockUser. Only non-empty for role="custom"
-            # staff, and only takes effect on their next login if their
-            # custom role's acts_as changes meanwhile (same staleness
-            # tradeoff as everything else baked into the JWT).
             "acts_as":      sorted(resolve_acts_as(staff)),
             # Display-only — lets the sidebar/topbar show "Doctor Clinic"
-            # instead of the generic literal "custom". None for the 6
-            # system roles (their own label is already known client-side).
             "custom_role_name": staff.custom_role.name if staff.role == "custom" and staff.custom_role else None,
             "db_name":      db_name,
             "hospital_id":    hospital_id,
@@ -190,12 +150,7 @@ class StaffLoginView(APIView):
 # ── Platform Admin Login ──────────────────────────────────────────────────────
 
 class PlatformLoginView(APIView):
-    """
-    POST /api/v1/auth/login/platform/
-    Authenticates against Django's built-in auth.User (the superuser created
-    via DJANGO_SUPERUSER_* env vars + --noinput at startup).
-    No hospital_code required — platform admin has no hospital context.
-    """
+    """POST /api/v1/auth/login/platform/"""
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "login"
@@ -242,10 +197,7 @@ class PlatformLoginView(APIView):
 # ── Patient Login ─────────────────────────────────────────────────────────────
 
 class PatientLoginView(APIView):
-    """
-    POST /api/v1/auth/login/patient/
-    Body: {"mobile": ..., "password": ...}  (also accepts AWPID or email in the mobile field)
-    """
+    """POST /api/v1/auth/login/patient/"""
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "login"
@@ -289,11 +241,7 @@ class PatientLoginView(APIView):
 # ── Setup Password (invite flow) ──────────────────────────────────────────────
 
 class SetupPasswordView(APIView):
-    """
-    POST /api/v1/auth/setup-password/
-    Called by newly invited staff to activate their account.
-    The invite_token was returned when hospital admin invited them.
-    """
+    """POST /api/v1/auth/setup-password/"""
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -339,11 +287,7 @@ class SetupPasswordView(APIView):
 # ── Change Password ───────────────────────────────────────────────────────────
 
 class ChangePasswordView(APIView):
-    """
-    POST /api/v1/auth/change-password/
-    For staff who logged in with a temp password (must_change_password=True).
-    Also works as a regular password change.
-    """
+    """POST /api/v1/auth/change-password/"""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -365,9 +309,6 @@ class ChangePasswordView(APIView):
             return error("Staff account not found.")
 
         # Forced first-login change (must_change_password=True) skips this —
-        # they already proved they know the current password by using it to
-        # log in moments ago. A voluntary change from Settings must prove it
-        # again, so a hijacked/left-open session can't lock the real owner out.
         if not staff.must_change_password:
             current = d.get("current_password") or ""
             if not current:
@@ -383,14 +324,6 @@ class ChangePasswordView(APIView):
 
 
 # ── Forgot Password (staff) ───────────────────────────────────────────────────
-# The old DOB-based verification (mobile + date of birth) has been replaced
-# by OTP verification — see core/auth/otp_views.py
-# (OTPRequestView/OTPVerifyView with purpose="password_reset_staff", then
-# StaffForgotPasswordResetView to consume the resulting action_token). DOB
-# was a weak factor (often known to family/colleagues, and many staff never
-# had one on file at all, which locked them out of self-service entirely);
-# every staff member has a phone number (required, unique, the login
-# identifier itself), so OTP is both stronger and universally available.
 
 
 # ── Me / Permissions ──────────────────────────────────────────────────────────
@@ -413,9 +346,6 @@ class MeView(APIView):
         }
 
         # The JWT itself never carries the profile photo (a multi-KB base64
-        # data URI) — it's fetched fresh here from whichever table actually
-        # owns it, per account type, so the sidebar/topbar avatar can stay
-        # up to date without needing a fresh login every time it changes.
         data["photo"] = ""
         try:
             from core import storage as blob_storage
@@ -427,17 +357,9 @@ class MeView(APIView):
                 data["photo"] = blob_storage.signed_url(staff.photo)
         except Exception:
             # Best-effort: platform admins (no row to look up) and missing/
-            # inactive accounts are expected and shouldn't break /me/, but a
-            # genuine DB error here would look identical from the outside —
-            # log it so it's not completely invisible if something's actually
-            # broken (e.g. a schema change on photo).
             logger.debug("MeView: could not resolve photo for user_id=%s role=%s", p.get("user_id"), p.get("role"), exc_info=True)
 
         # Hospital's own logo (Hospital.logo, uploaded via /org/settings/) —
-        # same reasoning as photo above: too big for the JWT, fetched fresh
-        # here so the AppShell topbar picks up a newly-uploaded logo without
-        # requiring every logged-in staff member to log out and back in.
-        # Only meaningful for hospital staff, not platform admin or patient.
         data["logo"] = ""
         if not p.get("is_platform") and p.get("role") != "patient" and p.get("hospital_id"):
             try:
@@ -458,10 +380,6 @@ class PermissionsView(APIView):
     def get(self, request):
         if request.is_platform:
             # Platform admin gets everything — pulled from the enterprise tier's
-            # own feature dict (single source of truth in constants.py) rather
-            # than a hand-copied literal that could silently drift out of sync
-            # with it, same class of bug the TIER_FEATURE_DEFAULTS refactor was
-            # meant to prevent everywhere else.
             return success(data={
                 **TIER_FEATURE_DEFAULTS["enterprise"],
                 "license_tier": "enterprise", "subscription_status": "active",
@@ -476,11 +394,6 @@ class PermissionsView(APIView):
             return error("Subscription not found.")
 
         # Live usage against the tier's limits — lets the frontend disable
-        # "+ Add Branch" / "+ Invite Staff" and show "X of Y used" before the
-        # admin fills out a whole form only to hit a 403 at the end. Kept
-        # best-effort here (unlike the write-time check in apps.hospital_master.services,
-        # which fails closed) since this is read-only display data, not a
-        # gate — worst case the buttons just don't show a live count.
         from apps.hospital_master.services import get_usage_counts
         try:
             usage = get_usage_counts(request.hospital_db)
@@ -538,14 +451,7 @@ class TokenRefreshView(APIView):
 
 
 class LogoutView(APIView):
-    """
-    POST /api/v1/auth/logout/
-    Body (optional): {"refresh": "<refresh token>"}
-
-    Blacklists the current access token's jti immediately, and the refresh
-    token's jti if supplied, so a stolen/left-open session can be killed
-    server-side instead of just waiting out the token's natural expiry.
-    """
+    """POST /api/v1/auth/logout/"""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):

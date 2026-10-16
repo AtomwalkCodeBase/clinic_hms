@@ -1,28 +1,4 @@
-"""
-core/auth/otp_views.py
-----------------------------
-OTP request/verify endpoints shared by every pre-authentication OTP flow:
-staff password reset, patient password reset, patient self-registration,
-and day-to-day passwordless patient login.
-
-  POST /api/v1/auth/otp/request/           — send a code
-  POST /api/v1/auth/otp/verify/            — verify a code, get an action_token
-  POST /api/v1/auth/forgot-password/staff/reset/    — consume action_token, set new password
-  POST /api/v1/auth/forgot-password/patient/reset/  — consume action_token, set new password
-  POST /api/v1/auth/login/patient/otp/     — consume action_token (purpose=login_patient), issue JWT
-
-Patient self-registration's own request/verify pair lives in
-apps/hospital_patients/portal_views.py (PortalRegisterRequestOTPView /
-PortalRegisterVerifyOTPView) since it shares PortalRegisterView's imports
-and is patient-app-specific; contact-change (mobile-number re-verification)
-similarly lives next to PortalProfileView. Both reuse this same core.messaging.otp
-module — there is one OTP engine, not several.
-
-Every response here is deliberately generic on "identifier not found" (same
-wording whether the account exists or not) to avoid leaking which mobile
-numbers/emails have accounts — the one exception is registration, where the
-whole point of the check is telling the user they already have an account.
-"""
+"""core/auth/otp_views.py"""
 
 import logging
 
@@ -54,9 +30,6 @@ PURPOSE_LABELS = {
 }
 
 # Purposes OTPRequestView resolves itself — contact_change_patient's
-# *request* step is authenticated (identifier is derived from the caller's
-# own account, never accepted from the body) and lives in
-# apps.patients.views.PortalMobileChangeRequestOTPView instead.
 _HANDLED_PURPOSES = {
     OTPCode.PURPOSE_PASSWORD_RESET_STAFF,
     OTPCode.PURPOSE_PASSWORD_RESET_PATIENT,
@@ -65,9 +38,6 @@ _HANDLED_PURPOSES = {
 }
 
 # OTPVerifyView additionally accepts contact_change_patient — verifying a
-# code has no side effects on its own (it only yields an action_token), so
-# there's no harm in this step being purpose-agnostic; only the *request*
-# step (which decides who a code gets sent to) needs to stay restricted.
 _VERIFIABLE_PURPOSES = _HANDLED_PURPOSES | {OTPCode.PURPOSE_CONTACT_CHANGE_PATIENT}
 
 
@@ -129,8 +99,6 @@ class OTPRequestView(APIView):
             return error("Invalid request.")
 
         # Normalize case for email-shaped identifiers so the same address
-        # typed with different casing always resolves to the same OTPCode
-        # rows / target lookups.
         if "@" in identifier:
             identifier = identifier.lower()
 
@@ -148,7 +116,6 @@ class OTPRequestView(APIView):
                 return error("We couldn't find an account with those details.")
             target_type, target_id = "patient", acct.id
             # Send to whichever channel the caller actually typed — but if they typed the AWPID (not itself a
-            # deliverable channel), send to the account's email: the mobile is stored only scrambled.
             if identifier.upper().startswith("AWPID-"):
                 if not acct.email:
                     return error("There is no email on this account. Enter your mobile number instead.")
@@ -166,11 +133,6 @@ class OTPRequestView(APIView):
 
         elif purpose == OTPCode.PURPOSE_REGISTRATION_PATIENT:
             # Email-based for now — verifying via mobile requires a paid SMS
-            # gateway (see core/messaging/sms.py) that isn't wired up yet. Email is
-            # free to send (SMTP already live) and PatientAccount.email is
-            # unique, so it works as the verified identifier just as well.
-            # The mobile number is still collected at account-creation time
-            # (PortalRegisterView) as a required field, just not OTP-proven.
             if "@" not in identifier:
                 return error("Enter a valid email address.", errors={"identifier": "Invalid format."})
             if accounts().filter(email__iexact=identifier).exists():
@@ -213,10 +175,6 @@ class OTPVerifyView(APIView):
             identifier = identifier.lower()
 
         # Registration's identifier is the raw mobile; the others may have
-        # been typed as AWPID and normalized to a mobile inside
-        # OTPRequestView — verify_otp keys purely off (purpose, identifier)
-        # as actually stored on the OTPCode row, so re-resolve AWPID here
-        # too for password_reset_patient / login_patient.
         if purpose in (OTPCode.PURPOSE_PASSWORD_RESET_PATIENT, OTPCode.PURPOSE_LOGIN_PATIENT) \
                 and identifier.upper().startswith("AWPID-"):
             acct = _resolve_patient_target(identifier)
@@ -297,23 +255,13 @@ class PatientForgotPasswordResetView(APIView):
         acct.save(using="default", update_fields=["password"])
 
         # Atomwalk-level (cross-hospital) security event — logged, not written
-        # to a new table. apps.hospital_setup.AuditLog is per-hospital and patients have
-        # no hospital context; a second/duplicate audit table was tried once
-        # already in this codebase (apps.hospital_setup.AccessLog) and removed
-        # for exactly that reason — see apps/hospital_setup/models.py's
-        # docstring. A log line is the correct-weight solution here.
         logger.info("Patient password reset via OTP: account_id=%s awpid=%s", acct.id, acct.awpid)
 
         return success(message="Password reset successfully. You can now log in.")
 
 
 class PatientOTPLoginView(APIView):
-    """
-    POST /api/v1/auth/login/patient/otp/  body: {action_token}
-    Day-to-day passwordless sign-in — the action_token proves a
-    login_patient-purpose OTP was just verified for this account.
-    Issues the same JWT pair/payload shape as PatientLoginView.
-    """
+    """POST /api/v1/auth/login/patient/otp/  body: {action_token}"""
     permission_classes = [AllowAny]
 
     def post(self, request):

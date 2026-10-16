@@ -27,8 +27,6 @@ from apps.ipd.views import (
 
 urlpatterns = [
     # Referrals — the enforcement point (see views.py). Doctor-authored via
-    # recommend/; front-desk-logged-from-an-external-letter via
-    # register-external/ — either way accept/ is the same doctor countersign.
     path("referrals/",                   PendingReferralsListView.as_view(),  name="ipd-referral-list"),
     path("referrals/mine/",              MyReferralsListView.as_view(),       name="ipd-referral-mine"),
     path("referrals/recommend/",         RecommendAdmissionView.as_view(),    name="ipd-referral-recommend"),

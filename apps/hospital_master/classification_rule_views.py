@@ -1,13 +1,4 @@
-"""
-Platform Admin → the records report (apps.documents).
-
-  GET    /api/v1/platform/records/report/            MedicalDocument rows: type, who classified, score, status
-  PATCH  /api/v1/platform/records/report/<id>/       a person overwrites one document's type
-  POST   /api/v1/platform/records/reclassify/        run the rules again over the documents they classified
-
-The document types and their keywords are not editable here: they are fixed in code (apps/records/classification.py),
-so changing one is a code change, not a screen.
-"""
+"""Platform Admin → the records report (apps.documents)."""
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
@@ -27,8 +18,7 @@ def _doc_row(d):
 
 
 class DocumentReportView(APIView):
-    """Platform Admin → Records report: every document, newest first.
-    ?method=rule|staff  ?status=<processing_status>  ?page=  ?page_size="""
+    """Platform Admin → Records report: every document, newest first."""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request):
@@ -46,9 +36,7 @@ class DocumentReportView(APIView):
 
 
 class DocumentCorrectView(APIView):
-    """PATCH {doc_type} — a person overriding a wrong rule verdict by hand. The report then shows method="staff":
-    this row is now a human choice, not an automatic one. Works on a failed document too: the file is still there,
-    so it becomes a normal completed document."""
+    """PATCH {doc_type} — a person overriding a wrong rule verdict by hand. The report then shows method="staff":"""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def patch(self, request, pk):
@@ -66,8 +54,7 @@ class DocumentCorrectView(APIView):
 
 
 class ReclassifyView(APIView):
-    """POST — run today's rules again over the documents the rules classified (never a person's choice), using the
-    text already read, no OCR. For after a keyword in classification.py was edited."""
+    """POST — run today's rules again over the documents the rules classified (never a person's choice), using the"""
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def post(self, request):

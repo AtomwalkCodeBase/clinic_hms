@@ -109,14 +109,9 @@ portal_urlpatterns = [
     path("emergency/token/",                PortalEmergencyTokenView.as_view(), name="portal-emergency-token"),
 
     # "Share Records" — patient-authenticated half: create the session, then
-    # approve / deny / end / release a download / list who currently has
-    # access. The public, token-gated half the doctor's laptop reads is at
-    # /api/v1/records-share/ (records_share_urls.py).
     path("records-share/",                            RecordsShareCreateView.as_view(),           name="portal-records-share-create"),
     path("records-share/mine/",                       RecordsShareMineView.as_view(),             name="portal-records-share-mine"),
     # Shared-records privacy — the standing "what a doctor sees" config, the
-    # single-record lock used from My Reports, and the per-visit reveal on a
-    # live grant.
     path("records-privacy/",                          RecordsPrivacyView.as_view(),               name="portal-records-privacy"),
     path("records-privacy/toggle/",                   RecordsPrivacyToggleView.as_view(),         name="portal-records-privacy-toggle"),
     path("records-share/<str:token>/reveal/",         RecordsShareRevealView.as_view(),           name="portal-records-share-reveal"),
@@ -132,9 +127,6 @@ emergency_urlpatterns = [
 
 
 # One path, both verbs — GET fetches the patient header for the phone
-# screen, POST files the finished note. Deliberately its own top-level
-# prefix (see core/urls.py), not under /portal/ or /patients/, since
-# those imply a session; this endpoint is intentionally public.
 consult_pad_urlpatterns = [
     path("<str:token>/", ConsultPadView.as_view(), name="consult-pad"),
 ]
@@ -142,7 +134,6 @@ consult_pad_urlpatterns = [
 
 records_share_urlpatterns = [
     # Must precede "<str:token>/" — the doctor's laptop binds itself here,
-    # by the patient's 6-digit code (typed at /s) or by the link's token.
     path("claim/",                                  RecordsShareClaimView.as_view(),       name="records-share-claim"),
     path("<str:token>/records/",                    RecordsShareRecordsView.as_view(),     name="records-share-records"),
     path("<str:token>/documents/<int:doc_id>/view/", RecordsShareDocumentViewView.as_view(), name="records-share-doc-view"),

@@ -6,13 +6,7 @@ from apps.lab.models import LabTest, LabRequest, LabReport, LabReportItem
 
 
 class SampleTypeSerializer(serializers.ModelSerializer):
-    """Generic read/write serializer for the sample-type catalog — mirrors
-    apps.pharmacy' drug-form-setup shape (name mirrors label on create).
-    `value` is exposed read-only because it's what LabTest.sample_type
-    actually stores and validate_sample_type checks — the seeded defaults
-    have a lowercase value ("blood") distinct from their display label
-    ("Blood"), so a consumer (e.g. CatalogPage.jsx's Sample Type dropdown)
-    must submit `value`, not `name`, as the test's sample_type."""
+    """Generic read/write serializer for the sample-type catalog — mirrors"""
     name = serializers.CharField(source="label")
 
     class Meta:
@@ -46,9 +40,6 @@ class LabReportItemSerializer(serializers.ModelSerializer):
 class LabReportSerializer(serializers.ModelSerializer):
     items = LabReportItemSerializer(many=True, read_only=True)
     # file_url stores an S3 object key (see core/storage.py), not a usable
-    # link — signed fresh on every read. Read-only here: the write side is
-    # handled explicitly in LabReportDeliverView (decode base64 -> verify ->
-    # upload -> store key).
     file_url = serializers.SerializerMethodField()
 
     def get_file_url(self, obj):
@@ -98,11 +89,6 @@ class LabRequestSerializer(serializers.ModelSerializer):
             return ""
 
     # Real age at read time, derived from the patient's real date_of_birth —
-    # same helper used everywhere else in this codebase (see age_utils.py)
-    # — used only to show a real, dynamic pediatric-reference caution on the
-    # report upload screen; never to compute or guess a reference range
-    # itself (lab reference ranges are assay/lab-specific, not something
-    # this system fabricates — see UploadModal in RequestsPage.jsx).
     def get_patient_age(self, obj):
         ym = _age_years_months(obj.patient.date_of_birth) if obj.patient else None
         return ym[0] if ym else None
@@ -125,14 +111,7 @@ class LabRequestSerializer(serializers.ModelSerializer):
         }
 
     def get_attached_document(self, obj):
-        """
-        For "outside" orders — the report the patient (or nurse, on their
-        behalf) uploaded via the patient-document flow, so doctor/nurse
-        logins can open it the same way the patient portal already can.
-        Only a lightweight pointer (id/title) — full content is fetched
-        on demand via PATIENTS.DOCUMENT(id), same as the History sidebar's
-        Attachments section, to keep this list endpoint cheap.
-        """
+        """For "outside" orders — the report the patient (or nurse, on their"""
         if obj.patient_choice != "outside":
             return None
         db = self.context.get("db")

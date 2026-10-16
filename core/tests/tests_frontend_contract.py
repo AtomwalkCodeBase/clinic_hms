@@ -1,9 +1,4 @@
-"""
-core/tests/tests_frontend_contract.py
--------------------------------
-Static checks that the frontend's API calls line up with the Django URL conf.
-They read frontend/src as text, so they need no browser, node or database.
-"""
+"""core/tests/tests_frontend_contract.py"""
 
 import re
 from pathlib import Path
@@ -15,7 +10,6 @@ from django.urls.resolvers import URLResolver
 FRONTEND_SRC = Path(__file__).resolve().parents[2] / "frontend" / "src"
 
 # Every endpoint defined in api.config.js must have a backend route (the 11 stale definitions that
-# used to be allow-listed here were deleted with the frontend cleanup).
 
 def _backend_routes():
     routes = set()
@@ -35,11 +29,7 @@ def _backend_routes():
 
 class FrontendApiContractTests(SimpleTestCase):
     def test_no_client_call_uses_a_path_without_the_api_prefix(self):
-        """
-        apiClient's baseURL is the bare host, so a literal like "/org/settings/" hits
-        http://host/org/settings/ (404) instead of /api/v1/org/settings/. Literal paths
-        must either start with /api/v1/ or come from API_ENDPOINTS.
-        """
+        """apiClient's baseURL is the bare host, so a literal like "/org/settings/" hits"""
         call = re.compile(r"""\b\w*[cC]lient\.(?:get|post|put|patch|delete)\(\s*[`"'](/(?!api/v1/)[^`"']*)""")
         call_api = re.compile(r"""\bapi\.(?:get|post|put|patch|delete)\(\s*[`"'](/(?!api/v1/)[^`"']*)""")
         offenders = []

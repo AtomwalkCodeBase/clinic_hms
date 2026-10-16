@@ -1,31 +1,4 @@
-"""
-core/utils/qr_token.py
-----------------
-Signed tokens for the QR codes the HMS prints on prescriptions and lab
-reports. The token is what the patient's phone scans; the portal verifies it
-before linking an uploaded photo back to the original hospital record.
-
-Format:  <b64url(payload_json)>.<b64url(hmac_sha256(payload_json, secret))>
-
-payload_json = {"v":1, "t":"RX"|"LAB", "id":"<public_document_id>",
-                "awp":"<awpid>", "iat":<unix_ts>}
-
-Verification is: signature valid (it really is a token this HMS issued) AND
-the awpid in the token matches the patient uploading it. A forged or foreign
-code fails at one of those two checks — a bare document id is never trusted
-on its own.
-
-The secret is settings.DOC_QR_SECRET, falling back to SECRET_KEY. It has its
-own env var because rotating it invalidates every previously printed QR.
-
-The QR itself encodes issue_url()'s output — a plain
-"<FRONTEND_URL>/view-report/<token>" link, not the bare token — so a generic
-scanner (Google Lens, any camera app) can open it as a normal webpage
-(apps/hospital_patients/document_view_views.py) showing a view-consent prompt. The app's
-own capture flow (apps/hospital_patients/portal_views.py "My Reports pipeline") still
-works unmodified: it forwards whatever string the camera decoded straight
-through to verify(), which accepts either shape (see _extract_token below).
-"""
+"""core/utils/qr_token.py"""
 
 import base64
 import hashlib
@@ -70,12 +43,7 @@ def issue(*, doc_type: str, public_document_id: str, awpid: str) -> str:
 
 
 def issue_url(*, doc_type: str, public_document_id: str, awpid: str) -> str:
-    """
-    Same as issue(), but wrapped in the public view-report link that's
-    actually drawn into the QR image. This is what apps/opd/pdf.py and
-    apps/lab/archive.py should call — issue() itself stays available for
-    anything that only needs the bare signed token.
-    """
+    """Same as issue(), but wrapped in the public view-report link that's"""
     token = issue(doc_type=doc_type, public_document_id=public_document_id, awpid=awpid)
     return f"{settings.FRONTEND_URL.rstrip('/')}/view-report/{token}"
 
@@ -95,13 +63,7 @@ class QRResult:
 
 
 def _extract_token(raw: str) -> str:
-    """
-    Accepts either a bare token or a full ".../view-report/<token>" URL (a
-    generic scanner opened it, or a debugger pasted the whole link) and
-    returns the bare token. The base64url alphabet issue()/verify() use never
-    contains "/", so a token never has one — anything past the last "/" is
-    the real token, anything without a "/" is passed through unchanged.
-    """
+    """Accepts either a bare token or a full ".../view-report/<token>" URL (a"""
     s = (raw or "").strip()
     if "/" in s:
         s = s.rstrip("/").rsplit("/", 1)[-1]
@@ -109,13 +71,7 @@ def _extract_token(raw: str) -> str:
 
 
 def verify(token: str) -> QRResult:
-    """
-    Parse and authenticate a scanned token — bare, or wrapped in the
-    view-report URL the QR actually encodes (see _extract_token). Never
-    raises — returns a QRResult whose .ok is False (with .reason) on anything
-    malformed, unsigned or incomplete. Callers still have to check .awpid
-    against the current patient.
-    """
+    """Parse and authenticate a scanned token — bare, or wrapped in the"""
     if not token or not isinstance(token, str):
         return QRResult(False, "malformed")
     token = _extract_token(token)

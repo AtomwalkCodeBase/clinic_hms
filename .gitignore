@@ -64,3 +64,5 @@ celerybeat-schedule*
 .coverage
 .coverage.*
 htmlcov/
+
+logs/

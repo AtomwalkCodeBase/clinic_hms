@@ -1,11 +1,4 @@
-"""
-Deterministic clinical rules: age bands, condition grouping, lab thresholds,
-critical-keyword detection. No Django imports - unit-testable on its own.
-
-The LLM only *extracts* facts. Every judgement (chronic vs acute, critical or
-not, recurrent or not) is made here from the reviewed config, so the numbers
-on the timeline are reproducible and auditable.
-"""
+"""Deterministic clinical rules: age bands, condition grouping, lab thresholds,"""
 
 import re
 from datetime import date
@@ -86,8 +79,7 @@ UNCERTAIN = re.compile(r"\?|\br/o\b|rule[ -]?out|suspect|probable|provisional|po
 
 
 def is_uncertain(text: str) -> bool:
-    """A condition is provisional only when the report's own words hedge it ("? dengue", "r/o UTI", "suspected"); the LLM's
-    own guess at that is not trusted, so the same words always give the same answer."""
+    """A condition is provisional only when the report's own words hedge it ("? dengue", "r/o UTI", "suspected"); the LLM's"""
     return bool(UNCERTAIN.search(text or ""))
 
 
@@ -104,11 +96,7 @@ def condition_group_for_text(text: Optional[str], cfg=None) -> Optional[str]:
 
 
 def classify_condition(icd10: Optional[str], cfg=None, text: str = "") -> dict:
-    """
-    -> {"group": "ASTHMA", "label": "Asthma", "category": "CHRONIC", "merge_days": None}
-    The group comes from the ICD code, else from the words of the condition's name. Unknown ones default to ACUTE
-    with their own ICD 3-char stem as the group, so they still get episode grouping; they are surfaced for config review.
-    """
+    """-> {"group": "ASTHMA", "label": "Asthma", "category": "CHRONIC", "merge_days": None}"""
     cfg = cfg or load_config()
     group = condition_group_for_icd(icd10, cfg) or condition_group_for_text(text, cfg)
     if group:
@@ -149,10 +137,7 @@ def resolve_analyte(test_name: str, cfg=None) -> Optional[str]:
 
 
 def evaluate_lab(analyte: str, value: float, age_days: int, cfg=None) -> dict:
-    """
-    -> {"severity": "CRITICAL"|"ABNORMAL"|"NORMAL", "direction": "LOW"|"HIGH"|None,
-        "band": "INFANT", "limits": {...}}
-    """
+    """-> {"severity": "CRITICAL"|"ABNORMAL"|"NORMAL", "direction": "LOW"|"HIGH"|None,"""
     cfg = cfg or load_config()
     spec = cfg["lab_thresholds"].get(analyte)
     if spec is None or value is None:

@@ -12,8 +12,6 @@ class DrugSerializer(serializers.ModelSerializer):
 
 class DrugFormTypeSerializer(serializers.ModelSerializer):
     # `name` kept as the external field name (source="label") so the
-    # /prescriptions/drug-forms/ response shape is unchanged from the
-    # pre-merge DrugFormType table.
     name = serializers.CharField(source="label")
 
     class Meta:
