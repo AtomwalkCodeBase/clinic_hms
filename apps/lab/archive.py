@@ -24,18 +24,18 @@ def store_lab_report_document(report, db, hospital_id):
     from apps.hospital_master.models import Hospital
     from apps.opd.models import HospitalPatient
     from apps.documents.models import MedicalDocument
-    from apps.documents.lib_documents import create_issued_document
+    from apps.documents.lib_documents import create_issued_document, source_uuid
     from core import storage as blob_storage
-    from core import normalise
-    from core.qr_token import issue_url as qr_issue
-    from core.pdf_qr import stamp_qr
+    from apps.lab import normalise
+    from core.utils.qr_token import issue_url as qr_issue
+    from apps.lab.pdf_qr import stamp_qr
 
     patient = HospitalPatient.objects.using(db).filter(pk=report.patient_id).first() if report.patient_id else None
     awpid = getattr(patient, "awpid", "") or ""
     if not awpid:
         return None
 
-    source = {"source_type": MedicalDocument.Source.LAB_REPORT, "source_id": str(report.id)}
+    source = {"source_type": MedicalDocument.Source.LAB_REPORT, "source_id": source_uuid(report.id)}
     existing = MedicalDocument.objects.using("default").filter(**source).first()
     if existing is not None:
         return existing

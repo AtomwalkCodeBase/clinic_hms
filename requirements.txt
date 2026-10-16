@@ -18,9 +18,10 @@ phonenumbers==8.13.45
 dnspython==2.6.1
 requests==2.32.3
 boto3==1.34.144
+django-storages==1.14.4
 rapidfuzz==3.9.7
 pypdf==6.15.0
-# ── OCR for no-QR document classification (core/ocr.py) ──
+# ── OCR for no-QR document classification (apps/documents/ocr.py) ──
 rapidocr-onnxruntime==1.3.24  # primary engine: PaddleOCR's PP-OCR models on ONNX Runtime — pip-only, CPU, no system package (pulls opencv-python-headless, numpy, onnxruntime)
 pymupdf==1.24.10              # rasterise image-only / scanned PDFs so they can be OCR'd
 

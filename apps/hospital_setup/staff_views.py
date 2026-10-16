@@ -13,6 +13,8 @@ All views require IsAuthenticated + IsHospitalAdmin unless noted.
 IsHospitalStaff allows read-only access where indicated.
 """
 
+import base64
+import mimetypes
 import re
 import secrets
 import string
@@ -20,15 +22,16 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 
+from django.core.files.base import ContentFile
 from django.db.models import Q
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 
 
-from core.permissions import IsHospitalAdmin, IsHospitalStaff, IsDoctor, RequireFeature
-from core.response import success, created, error, not_found
-from core.pagination import paginate_queryset
-from core.file_validation import validate_data_uri, FileValidationError
+from core.api.permissions import IsHospitalAdmin, IsHospitalStaff, IsDoctor, RequireFeature
+from core.api.response import success, created, error, not_found
+from core.api.pagination import paginate_queryset
+from core.utils.file_validation import validate_data_uri, FileValidationError
 from core import storage as blob_storage
 from apps.patients.models import StaffMobileIndex
 from apps.hospital_master.services import parameters_of
@@ -107,7 +110,7 @@ def _send_new_account_email(staff, temp_password):
     """Best-effort — a delivery failure must not fail the invite/reset itself."""
     if not staff.email:
         return
-    from core.email import send_temp_password_email
+    from core.messaging.email import send_temp_password_email
     send_temp_password_email(
         to=staff.email, full_name=staff.get_full_name() or staff.phone,
         temp_password=temp_password, login_hint=staff.phone,
@@ -1337,14 +1340,8 @@ class HospitalSettingsView(APIView):
             "registration_fee_amount": str(params.registration_fee_amount),
             "default_tax_rate": str(params.default_tax_rate),
             # ── Branding ───────────────────────────────────────────────
-            # params.logo stores an S3 object key, not a usable URL — sign
-            # it fresh on every read (see core/storage.py).
-            "logo": blob_storage.signed_url(params.logo),
-            # Empty means "using the auto-generated default" (hospital.db_name)
-            # — see core.storage.hospital_folder(). Frontend shows the
-            # effective folder name as a placeholder when this is blank.
-            "storage_folder": params.storage_folder,
-            "storage_folder_default": hospital.db_name,
+            # params.logo holds an S3 key; .url signs it fresh on every read (see core/storage.py).
+            "logo": params.logo.url if params.logo else "",
         })
 
     def patch(self, request):
@@ -1352,7 +1349,7 @@ class HospitalSettingsView(APIView):
         if not hospital:
             return not_found("Hospital not found.")
         params = parameters_of(hospital)
-        allowed = {"fee_ownership", "registration_fee_enabled", "registration_fee_amount", "default_tax_rate", "logo", "storage_folder"}
+        allowed = {"fee_ownership", "registration_fee_enabled", "registration_fee_amount", "default_tax_rate", "logo"}
         for key, val in request.data.items():
             if key not in allowed:
                 return error(f"Field '{key}' is not configurable here.")
@@ -1381,17 +1378,7 @@ class HospitalSettingsView(APIView):
             if rate < 0 or rate > 100:
                 return error("default_tax_rate must be between 0 and 100.")
             params.default_tax_rate = rate
-        if "storage_folder" in request.data:
-            raw = (request.data.get("storage_folder") or "").strip()
-            if not raw:
-                params.storage_folder = ""
-            else:
-                slug = blob_storage.sanitize_folder_name(raw)
-                if not slug:
-                    return error("Storage folder name must contain at least one letter or number.",
-                                 errors={"storage_folder": "Invalid."})
-                params.storage_folder = slug
-        old_logo_key = params.logo
+        old_logo_key = params.logo.name
         if "logo" in request.data:
             logo = request.data["logo"] or ""
             # Client resizes before upload (see HospitalLogoUpload.jsx), but
@@ -1407,23 +1394,20 @@ class HospitalSettingsView(APIView):
                 except FileValidationError as exc:
                     return error(str(exc), errors={"logo": str(exc)})
                 try:
-                    params.logo = blob_storage.upload_data_uri(
-                        logo, prefix=f"hospital-logos/{blob_storage.hospital_folder(hospital)}", mime_type=mime_type,
-                        category="hospital-logo",
-                    )
+                    data = base64.b64decode(logo.split(",", 1)[1])
+                    ext = mimetypes.guess_extension(mime_type) or ".png"
+                    params.logo.save(f"logo{ext}", ContentFile(data), save=False)
                 except blob_storage.StorageError as exc:
                     return error(str(exc), errors={"logo": str(exc)})
         params.save(using="default")
-        if "logo" in request.data and old_logo_key and old_logo_key != params.logo:
+        if "logo" in request.data and old_logo_key and old_logo_key != params.logo.name:
             blob_storage.delete(old_logo_key)
         return success(data={
             "fee_ownership": params.fee_ownership,
             "registration_fee_enabled": params.registration_fee_enabled,
             "registration_fee_amount": str(params.registration_fee_amount),
             "default_tax_rate": str(params.default_tax_rate),
-            "logo": blob_storage.signed_url(params.logo),
-            "storage_folder": params.storage_folder,
-            "storage_folder_default": hospital.db_name,
+            "logo": params.logo.url if params.logo else "",
         }, message="Settings updated.")
 
 

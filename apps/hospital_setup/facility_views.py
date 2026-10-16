@@ -21,8 +21,8 @@ from rest_framework.permissions import IsAuthenticated
 
 from django.db import transaction
 
-from core.permissions import IsHospitalAdmin, IsHospitalStaff, IsFrontDesk
-from core.response import success, created, error, not_found
+from core.api.permissions import IsHospitalAdmin, IsHospitalStaff, IsFrontDesk
+from core.api.response import success, created, error, not_found
 
 from apps.hospital_setup.models import Branch, Department, Floor, Room, Bed
 from apps.hospital_setup.models import StaffUser, RoomAssignment, DoctorSchedule

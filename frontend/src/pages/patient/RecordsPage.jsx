@@ -23,7 +23,7 @@
  * non-vaccine item ActionCenter carried) → VaccinationSidebar's "Upcoming
  * Follow-ups" card, ported as-is.
  */
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ChevronDown, ChevronUp, Calendar, Syringe, Activity, Building2, TrendingUp, Baby } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
@@ -39,7 +39,8 @@ import { openDataUrlInNewTab } from "../../utils/fileViewer";
 import HealthSummaryCard from "./components/HealthSummaryCard";
 import VaccinationStats from "./components/VaccinationStats";
 import VaccinationSidebar, { RecommendedByDoctor } from "./components/VaccinationSidebar";
-import HealthTimeline from "./components/HealthTimeline";
+import HealthJourney from "../../components/healthJourney/HealthJourney";
+import { openDocumentWith } from "../../components/healthJourney/openDocument";
 import GrowthVaccinationChart from "./components/GrowthVaccinationChart";
 import MilestonesRoadmap from "./components/MilestonesRoadmap";
 import { fileToDataUrl } from "../../utils/files";
@@ -624,7 +625,8 @@ function VaccinationTimeline({ patientAwpid, vax, vaxLoading, refetchVax, upload
 const ALL_TABS = [
   { id: "vaccinations",    label: "Vaccinations",    icon: Syringe,   pediatricOnly: true },
   { id: "milestones",      label: "Milestones",      icon: Baby,      pediatricOnly: true },
-  { id: "health-timeline", label: "Health Timeline",  icon: Activity,  pediatricOnly: false },
+  { id: "health-timeline", label: "Insights Timeline", icon: Activity,  pediatricOnly: false },
+  { id: "vaccine-record",  label: "Vaccine Record",   icon: Syringe,   pediatricOnly: true },
   { id: "visits",          label: "Visits",           icon: Building2, pediatricOnly: false },
   { id: "growth",          label: "Growth",           icon: TrendingUp, pediatricOnly: false },
 ];
@@ -665,6 +667,21 @@ function TabBar({ active, onChange, isAdult }) {
         );
       })}
     </div>
+  );
+}
+
+// Sir's health-journey views (insights timeline, growth, immunisation record) for the patient being viewed, one section per tab.
+function InsightsPanel({ awpid, name, section }) {
+  const navigate = useNavigate();
+  const children = useMemo(() => [{ id: awpid, name: name || "Your" }], [awpid, name]);
+  const openDocument = useMemo(
+    () => openDocumentWith(API_ENDPOINTS.PORTAL.DOCUMENT, { patient_awpid: awpid }),
+    [awpid],
+  );
+  if (!awpid) return null;
+  return (
+    <HealthJourney key={`${awpid}-${section}`} http={apiClient} children={children} section={section} onOpenDocument={openDocument}
+      emptyAction={{ label: "Upload a report", onClick: () => navigate(ROUTES.PATIENT.MY_REPORTS) }} />
   );
 }
 
@@ -807,7 +824,7 @@ export default function PatientRecordsPage() {
 
         {/* ── Health Timeline tab ────────────────────────────────── */}
         {activeTab === "health-timeline" && (
-          <HealthTimeline patientAwpid={patientAwpid} />
+          <InsightsPanel awpid={patientAwpid} name={patientName} section="timeline" />
         )}
 
         {/* ── Visits tab ────────────────────────────────────────── */}
@@ -914,14 +931,8 @@ export default function PatientRecordsPage() {
             every patient, adult or pediatric, so vaccination markers are
             only passed through for minors (an adult's "roadmap" is just
             the reference schedule with no real relevance to them). */}
-        {activeTab === "growth" && (
-          <GrowthVaccinationChart
-            growth={growth}
-            growthLoading={growthLoading}
-            roadmap={isAdult ? [] : vax?.roadmap}
-            roadmapLoading={isAdult ? false : vaxLoading}
-          />
-        )}
+        {activeTab === "growth" && <InsightsPanel awpid={patientAwpid} name={patientName} section="growth" />}
+        {activeTab === "vaccine-record" && !isAdult && <InsightsPanel awpid={patientAwpid} name={patientName} section="vaccines" />}
       </PageShell>
     </AppShell>
   );

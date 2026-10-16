@@ -7,6 +7,7 @@ Architecture:
                     via HospitalDatabaseRouter using thread-local context
 """
 
+import os
 from pathlib import Path
 from datetime import timedelta
 from decouple import config
@@ -15,66 +16,22 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 DEBUG = config("DEBUG", default=False, cast=bool)
 
-# SECRET_KEY / ALLOWED_HOSTS: the old hardcoded/"*" fallbacks meant a missing
-# .env would silently boot an insecure server instead of failing loudly. Now
-# that's only tolerated in DEBUG (local dev); anywhere DEBUG=False, both are
-# required and the process refuses to start without them.
 if DEBUG:
     SECRET_KEY = config("SECRET_KEY", default="dev-only-insecure-secret-key")
     ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="*").split(",")
 else:
-    SECRET_KEY = config("SECRET_KEY")           # raises if unset — no insecure fallback in prod
-    ALLOWED_HOSTS = config("ALLOWED_HOSTS").split(",")  # raises if unset — no wildcard in prod
+    SECRET_KEY = config("SECRET_KEY")
+    ALLOWED_HOSTS = config("ALLOWED_HOSTS").split(",")
 
 FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 
-# JWT_SIGNING_KEY: deliberately separate from SECRET_KEY. SECRET_KEY also
-# backs Django's own session cookies, CSRF tokens, and password-reset token
-# hashing — sharing it with the auth JWTs (used for every API request via
-# core/middleware.py + core/auth/views.py's jwt.encode/decode calls)
-# means a leak of either compromises both, and neither can be rotated
-# independently. Falls back to SECRET_KEY only in DEBUG so local dev doesn't
-# need a second env var; production must set it explicitly.
 if DEBUG:
     JWT_SIGNING_KEY = config("JWT_SIGNING_KEY", default=SECRET_KEY)
 else:
-    JWT_SIGNING_KEY = config("JWT_SIGNING_KEY")  # raises if unset — no fallback to SECRET_KEY in prod
+    JWT_SIGNING_KEY = config("JWT_SIGNING_KEY")
 
-# Django's default (2.5MB) is too small for base64-encoded document uploads
-# (patient-attached lab reports / scans as data URIs run larger than raw
-# binary). Raised to comfortably fit a few-MB PDF/photo; the view layer adds
-# its own explicit size guard on top of this so oversized uploads still get
-# a clean validation error instead of a hard 400 from Django itself.
 DATA_UPLOAD_MAX_MEMORY_SIZE = config("DATA_UPLOAD_MAX_MEMORY_SIZE", default=20 * 1024 * 1024, cast=int)
 
-# ── Object storage (S3) ──────────────────────────────────────────────────────
-# Every user-uploaded file — staff/patient profile photos, hospital logos,
-# doctor signatures, lab reports, patient-uploaded documents, vaccination
-# certificates — lives in S3, not as base64 in a Postgres TextField (the old
-# convention; see core/storage.py's module docstring for the full rationale
-# and core/file_validation.py for the magic-byte check every upload still
-# goes through before it reaches here).
-#
-# Bucket must be PRIVATE. Nothing is ever served via a public bucket URL —
-# core.storage.signed_url() mints a short-lived presigned URL per request
-# instead. This matters because several of these fields hold PHI (lab
-# reports, vaccination certificates, discharge summaries).
-#
-# Left blank by default rather than required-at-boot: unlike SECRET_KEY/
-# JWT_SIGNING_KEY, a missing bucket shouldn't crash the whole process on
-# startup (most of the app works fine without it) — core.storage raises a
-# clear, catchable error only at the point a file is actually uploaded, and
-# reads degrade to "no file" instead of a 500.
-AWS_S3_BUCKET         = config("AWS_S3_BUCKET", default="")
-AWS_S3_REGION         = config("AWS_S3_REGION", default="ap-south-1")
-AWS_ACCESS_KEY_ID     = config("AWS_ACCESS_KEY_ID", default="")
-AWS_SECRET_ACCESS_KEY = config("AWS_SECRET_ACCESS_KEY", default="")
-# How long a presigned URL stays valid, in seconds. Short enough that a
-# leaked/cached link (browser history, a forwarded screenshot's link, etc.)
-# stops working soon; long enough that a slow page load doesn't race it.
-AWS_S3_URL_EXPIRY     = config("AWS_S3_URL_EXPIRY", default=3600, cast=int)
-
-# ── Installed Apps ──────────────────────────────────────────────────────────
 DJANGO_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -89,15 +46,13 @@ THIRD_PARTY_APPS = [
     "corsheaders",
     "django_filters",
     "drf_spectacular",
-    "django_celery_beat",   # DB-backed Beat schedule; kept in sync by apps.models.SweepConfig
+    "django_celery_beat",
 ]
 
 LOCAL_APPS = [
-    # apps whose tables live in the Atomwalk database
     "apps.patients",
     "apps.documents",
     "apps.hospital_master",
-    # apps whose tables live in each hospital's own database
     "apps.hospital_setup",
     "apps.ipd",
     "apps.opd",
@@ -108,17 +63,10 @@ LOCAL_APPS = [
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
-# ── Middleware ───────────────────────────────────────────────────────────────
 MIDDLEWARE = [
-    # First, so every log line (including the other middleware's) carries the request id.
-    "core.logging_context.RequestIdMiddleware",
+    "core.utils.logging_context.RequestIdMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
-    # Serves STATIC_ROOT directly from the app process (compressed +
-    # cache-busted via manifest hashing) — with DEBUG=False Django doesn't
-    # serve static files itself, and nothing else was configured to. Fine at
-    # this app's scale; swap for S3+CloudFront later if static traffic
-    # volume ever justifies it. Must sit right after SecurityMiddleware.
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -126,8 +74,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    # Atomwalk: JWT decode + hospital DB routing (must be after Django's auth middleware)
-    "core.middleware.JWTHospitalMiddleware",
+    "core.api.middleware.JWTHospitalMiddleware",
 ]
 
 ROOT_URLCONF = "core.urls"
@@ -151,9 +98,6 @@ TEMPLATES = [
 WSGI_APPLICATION = "core.wsgi.application"
 ASGI_APPLICATION = "core.asgi.application"
 
-# ── Databases ────────────────────────────────────────────────────────────────
-# 'default' is always the Atomwalk DB.
-# Hospital DBs are added dynamically at runtime via HospitalDatabaseRouter.
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -167,8 +111,6 @@ DATABASES = {
     }
 }
 
-# Hospital DB connection template (populated by HospitalDatabaseRouter at runtime)
-# Must include all keys Django's DatabaseWrapper accesses directly (not via .get()).
 HOSPITAL_DB_CONFIG_TEMPLATE = {
     "ENGINE": "django.db.backends.postgresql",
     "NAME": "",
@@ -179,15 +121,13 @@ HOSPITAL_DB_CONFIG_TEMPLATE = {
     "CONN_MAX_AGE": 60,
     "TIME_ZONE": None,
     "OPTIONS": {},
-    "TEST": {"MIRROR": None},   # Django's test runner reads this for every alias
+    "TEST": {"MIRROR": None},
     "AUTOCOMMIT": True,
     "ATOMIC_REQUESTS": False,
 }
 
-# Custom DB router
 DATABASE_ROUTERS = ["core.db_router.HospitalDatabaseRouter"]
 
-# ── Password Validation ──────────────────────────────────────────────────────
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -195,38 +135,45 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# ── Internationalisation ─────────────────────────────────────────────────────
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "Asia/Kolkata"
 USE_I18N = True
 USE_TZ = True
 
-# ── Static / Media ───────────────────────────────────────────────────────────
-STATIC_URL = "/static/"
-STATIC_ROOT = BASE_DIR / "staticfiles"
-MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'static/')
 
-# Compressed + hashed filenames for cache-busting, served by WhiteNoise above.
-# manage.py collectstatic must be run on every deploy for this to pick up
-# fresh files (see DEPLOYMENT.md).
-STORAGES = {
-    "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
-    },
-}
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+CORS_ORIGIN_ALLOW_ALL = True
 
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
-# ── Custom User Model ────────────────────────────────────────────────────────
-# Using Django's built-in User for platform admin (Django admin panel).
-# Per-hospital staff use apps.hospital_setup.StaffUser, which extends AbstractUser separately.
-# AUTH_USER_MODEL is intentionally NOT overridden — StaffUser is a standalone model.
+LOCAL_OR_AWS_S3_MEDIA = 'S3'
+if LOCAL_OR_AWS_S3_MEDIA == "S3":
+    AWS_ACCESS_KEY_ID = config("AWS_ACCESS_KEY_ID", default="")
+    AWS_SECRET_ACCESS_KEY = config("AWS_SECRET_ACCESS_KEY", default="")
+    AWS_STORAGE_BUCKET_NAME = config("AWS_S3_BUCKET", default="")
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_DEFAULT_ACL = None
+    DEFAULT_FILE_STORAGE = 'core.storage_backend.mediaStorage'
+    AWS_S3_REGION_NAME = config("AWS_S3_REGION", default="ap-south-1")
+    AWS_S3_SIGNATURE_VERSION = "s3v4"
+    AWS_S3_URL_EXPIRY = config("AWS_S3_URL_EXPIRY", default=3600, cast=int)
+    AWS_S3_OBJECT_PARAMETERS = {
+        'CacheControl': 'max-age=86400',
+    }
+else:
+    AWS_ACCESS_KEY_ID = ""
+    AWS_SECRET_ACCESS_KEY = ""
+    AWS_STORAGE_BUCKET_NAME = ""
+    AWS_S3_REGION_NAME = ""
+    AWS_S3_URL_EXPIRY = 3600
+    MEDIA_URL = '/media/'
+    MEDIA_ROOT = os.path.join(BASE_DIR, 'media/')
 
-# ── DRF ─────────────────────────────────────────────────────────────────────
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "core.authentication.JWTHospitalAuthentication",
+        "core.api.authentication.JWTHospitalAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -239,14 +186,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 25,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
-    # Reshapes every DRF-raised error (PermissionDenied/AuthenticationFailed from
-    # core.authentication, throttling, serializer errors, 404s) into the same
-    # {success, message, errors} envelope core.response uses — without this they go out
-    # as DRF's bare {"detail": ...} and the frontend loses the message.
-    "EXCEPTION_HANDLER": "core.exceptions.custom_exception_handler",
-    # No rate limiting existed anywhere (including login) before this. Global
-    # defaults are a safety net; auth endpoints get a tighter "login" scope
-    # via ScopedRateThrottle (see core/auth/views.py).
+    "EXCEPTION_HANDLER": "core.api.exceptions.custom_exception_handler",
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
@@ -256,40 +196,14 @@ REST_FRAMEWORK = {
         "anon": "100/min",
         "user": "300/min",
         "login": "10/min",
-        # OTP request/verify endpoints — tighter than login since these are
-        # what a brute-force/SMS-bombing attempt would target. The per-
-        # identifier resend cooldown (core.otp.RESEND_COOLDOWN_SECONDS) and
-        # per-code attempt cap (core.otp.MAX_VERIFY_ATTEMPTS) are the real
-        # defenses; this is a per-IP backstop on top of them.
         "otp": "6/min",
-        # Emergency QR summary view (apps/hospital_patients/emergency_views.py) — public,
-        # unauthenticated, reachable by anyone with the token. The token itself
-        # is an unguessable signed JWT and expires in ~20 minutes, so this is a
-        # per-IP backstop against scripted enumeration, not the primary defense.
         "emergency": "20/min",
-        # Consultation-scratchpad pad (apps/hospital_patients/consult_pad_views.py) —
-        # public, unauthenticated, reached by scanning a permanent per-patient
-        # QR. The 43-char random token is the real gate; this is a per-IP
-        # backstop against someone scripting note spam against a leaked code.
         "consult_pad": "20/min",
-        # "Records Access" break-glass sharing (apps/hospital_patients/records_share_views.py)
-        # — public, unauthenticated, token-gated. Higher than the others
-        # because the doctor's laptop polls the status endpoint every few
-        # seconds while it waits for the patient to approve. The 32-char
-        # random token is the real gate; this is a per-IP backstop.
         "records_share": "90/min",
-        # Public document-view page (apps/hospital_patients/document_view_views.py) —
-        # what a printed prescription/lab-report QR opens for a non-app
-        # scanner (Google Lens etc). Permanent, unguessable signed token is
-        # the real gate; this is a per-IP backstop.
         "view_report": "20/min",
     },
 }
 
-# ── JWT ──────────────────────────────────────────────────────────────────────
-# Lifetimes of the access/refresh tokens issued by core/auth/views.py::_make_tokens. (These
-# used to be a SIMPLE_JWT dict for a library that is not actually used, and _make_tokens ignored
-# them and hard-coded 60 minutes / 7 days — the defaults here are the same values.)
 JWT_ACCESS_TOKEN_LIFETIME = timedelta(
     minutes=config("JWT_ACCESS_TOKEN_LIFETIME_MINUTES", default=60, cast=int)
 )
@@ -297,7 +211,6 @@ JWT_REFRESH_TOKEN_LIFETIME = timedelta(
     days=config("JWT_REFRESH_TOKEN_LIFETIME_DAYS", default=7, cast=int)
 )
 
-# ── CORS ─────────────────────────────────────────────────────────────────────
 from corsheaders.defaults import default_headers as _cors_default_headers
 
 CORS_ALLOWED_ORIGINS = config(
@@ -305,11 +218,8 @@ CORS_ALLOWED_ORIGINS = config(
     default="http://localhost:3000,http://localhost:5173",
 ).split(",")
 CORS_ALLOW_CREDENTIALS = True
-# "Share Records" doctor pages send the per-browser session token as a custom
-# header — must be allow-listed or the browser blocks the request post-preflight.
 CORS_ALLOW_HEADERS = (*_cors_default_headers, "x-share-device")
 
-# ── API Docs (drf-spectacular) ───────────────────────────────────────────────
 SPECTACULAR_SETTINGS = {
     "TITLE": "Atomwalk Healthcare Platform API",
     "DESCRIPTION": "Multi-hospital hospital management system API",
@@ -318,19 +228,6 @@ SPECTACULAR_SETTINGS = {
     "COMPONENT_SPLIT_REQUEST": True,
 }
 
-# ── Field-level encryption (core/encrypted_fields.py) ───────────────────────
-# Not yet applied to any model field — see core/encrypted_fields.py docstring.
-# Required once fields start using EncryptedTextField/EncryptedCharField.
-FIELD_ENCRYPTION_KEY = config("FIELD_ENCRYPTION_KEY", default="") or None
-_fek_fallbacks = config("FIELD_ENCRYPTION_KEY_FALLBACKS", default="")
-FIELD_ENCRYPTION_KEY_FALLBACKS = _fek_fallbacks.split(",") if _fek_fallbacks else []
-
-# ── Email (core/email.py) ────────────────────────────────────────────────────
-# No email transport existed before OTP-based auth needed one. DEBUG defaults
-# to Django's console backend (prints to the server log, zero setup, fully
-# usable for local dev/demo). Production requires real SMTP credentials —
-# same "customer supplies their own account" pattern as the payment gateway
-# (see task history) — Atomwalk cannot provision a mail relay on their behalf.
 if DEBUG:
     EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
 else:
@@ -342,115 +239,46 @@ EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 EMAIL_USE_TLS       = config("EMAIL_USE_TLS", default=True, cast=bool)
 DEFAULT_FROM_EMAIL  = config("DEFAULT_FROM_EMAIL", default="Atomwalk HMS <no-reply@atomwalk.local>")
 
-# ── SMS (core/sms.py) ────────────────────────────────────────────────────────
-# "log" (default) writes the message to the app log instead of sending it —
-# there is no SMS gateway account configured for this deployment. Set to
-# "msg91" (and MSG91_AUTH_KEY/MSG91_TEMPLATE_ID below) once the hospital has
-# its own MSG91 account with a DLT-approved template, or "android_gateway"
-# (and SMS_GATEWAY_* below) to relay through a self-hosted phone+SIM instead
-# of a paid aggregator.
 SMS_BACKEND = config("SMS_BACKEND", default="log")
 MSG91_AUTH_KEY     = config("MSG91_AUTH_KEY", default="")
 MSG91_TEMPLATE_ID  = config("MSG91_TEMPLATE_ID", default="")
-# Must match the variable name used in the DLT-approved template on the
-# MSG91 dashboard (commonly "VAR1" for a single-variable template, e.g.
-# "Your Atomwalk verification code is ##VAR1##.").
 MSG91_OTP_VAR_NAME = config("MSG91_OTP_VAR_NAME", default="VAR1")
-# "SMS Gateway for Android" (github.com/capcom6/android-sms-gateway) app
-# credentials — shown on the app's Home screen. BASE_URL is the phone's own
-# address in Local mode (e.g. "http://192.168.1.50:8080", requires the
-# Django server on the same network) or a Private/Cloud server URL.
 SMS_GATEWAY_BASE_URL = config("SMS_GATEWAY_BASE_URL", default="")
 SMS_GATEWAY_USERNAME = config("SMS_GATEWAY_USERNAME", default="")
 SMS_GATEWAY_PASSWORD = config("SMS_GATEWAY_PASSWORD", default="")
-# Optional one-hop fallback: tried automatically if SMS_BACKEND's actual
-# send attempt fails (not just "unconfigured"). E.g. SMS_BACKEND=
-# android_gateway + SMS_FALLBACK_BACKEND=msg91 means a gateway outage
-# falls through to MSG91 instead of silently failing. See core/sms.py.
 SMS_FALLBACK_BACKEND = config("SMS_FALLBACK_BACKEND", default="")
 
-# ── OTP (core/otp.py) ────────────────────────────────────────────────────────
-# Separate from JWT_SIGNING_KEY so it can be rotated independently — falls
-# back to JWT_SIGNING_KEY only in DEBUG, same pattern as JWT_SIGNING_KEY's
-# own fallback to SECRET_KEY above.
 if DEBUG:
     OTP_HASH_PEPPER = config("OTP_HASH_PEPPER", default=JWT_SIGNING_KEY)
 else:
     OTP_HASH_PEPPER = config("OTP_HASH_PEPPER")
 
-# ── My Reports document QR (core/qr_token.py) ────────────────────────────────
-# HMAC secret for the QR codes printed on prescriptions / lab reports.
-# RECOMMENDED to set a dedicated value in production: it can then be rotated
-# independently of SECRET_KEY (rotating SECRET_KEY would otherwise silently
-# invalidate every printed QR, sending re-uploads down the slower OCR path).
-# Falls back to SECRET_KEY when unset so a deploy never breaks on a missing
-# value — this feature is new, so there are no live QRs to invalidate yet.
 DOC_QR_SECRET = config("DOC_QR_SECRET", default="") or SECRET_KEY
 
-# OCR for classifying uploads (core/ocr.py) is RapidOCR only: there is no engine setting and no second engine.
-
-# ── Handwriting recognition (consultation scratchpad) ───────────────────────
-# The consult-pad QR flow photographs a handwritten SOAP note; a vision model
-# transcribes it and splits it into S/O/A/P. Any OpenAI-compatible chat
-# endpoint works — OpenAI, Groq, OpenRouter, Together, a local vLLM/Ollama —
-# just point BASE + MODEL + KEY at it. A BLANK key is fine: recognition is
-# skipped, the handwritten PDF still saves, and the doctor types the note in.
-#   OpenAI  : BASE=https://api.openai.com/v1        MODEL=gpt-4o-mini
-#   Groq    : BASE=https://api.groq.com/openai/v1   MODEL=meta-llama/llama-4-scout-17b-16e-instruct
-#   OpenRouter: BASE=https://openrouter.ai/api/v1   MODEL=google/gemini-2.0-flash-001
 CONSULT_PAD_LLM_BASE  = config("CONSULT_PAD_LLM_BASE", default="https://api.groq.com/openai/v1")
 CONSULT_PAD_LLM_MODEL = config("CONSULT_PAD_LLM_MODEL", default="qwen/qwen3.8-27b")
-# Falls back to GROQ_API_KEY so an existing Groq key already in .env just works.
 CONSULT_PAD_LLM_KEY   = config("CONSULT_PAD_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
 
-# ── Pediatric health timeline (apps/documents/services.py) ─────────────
-# The company LLM api only reads facts out of a document's text; the rules judge them.
-# The rules, thresholds and schedules are in documents/health_config.json (override the path with
-# PEDIATRIC_HEALTH_CONFIG); the WHO growth tables are CSV files in documents/growth_reference/.
 LLM_API_URL = config("LLM_API_URL", default="https://atomwalk.com/llm_api/ask/")
 LLM_API_TOKEN = config("LLM_API_TOKEN", default="")
-# "company" (default, production) or "ollama" for a local test: LLM_API_URL=http://localhost:11434/api/chat, LLM_API_MODEL=<an installed model>
 LLM_API_STYLE = config("LLM_API_STYLE", default="company")
 LLM_API_MODEL = config("LLM_API_MODEL", default="")
 PEDIATRIC_HEALTH_CONFIG = config("PEDIATRIC_HEALTH_CONFIG", default="") or None
 
-# All three sweep settings (instant-upload file limit, per-run dispatch limit, and how often the
-# sweep runs) are Platform Admin-editable at runtime — apps.models.SweepConfig, via
-# apps/hospital_master/classification_rule_views.py. No env vars, no restart, for any of them: the
-# interval is DB-backed (django_celery_beat's DatabaseScheduler below), kept in sync by
-# SweepConfig.save() creating/updating its PeriodicTask + IntervalSchedule rows.
-
-# ── Celery (core/celery.py) ──────────────────────────────────────────────
-#   Two queues (apps/records/services.py): "instant" for a single-file upload, "bulk" for several. ONE worker serves
-#   both (the legacy "celery" queue too); Redis hands it tasks from the queues in turn, so an instant file waits for at
-#   most the one task already running, never for a whole bulk backlog:
-#   worker: celery -A core worker -Q instant,bulk,celery --loglevel=info --pool=solo
-#   beat:           celery -A core beat --loglevel=info
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default="redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default="redis://localhost:6379/0")
 CELERY_TASK_ALWAYS_EAGER = config("CELERY_TASK_ALWAYS_EAGER", default=False, cast=bool)
-# OCR calls are long-running: don't let a worker reserve a backlog of them while it is busy.
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
-# Keep retrying the broker connection at worker start-up (Celery 5.3 only does so by default with a warning).
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
-# Redis re-delivers an unacknowledged (acks_late) task after this long, which is how a task lost when the worker was
-# killed comes back. It must exceed the longest a task can legitimately hold its message: a retry waits up to 300s
-# (retry_backoff_max) and then runs for at most 180s (the extract time limit), 480s in all (apps/records/tasks.py).
 CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 600}
-# Beat reads its schedule from the DB (django_celery_beat), not from a fixed dict here, so
-# SweepConfig can change the sweep interval live with no restart.
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
-# When the "confirm the type" step began (ISO date-time, e.g. 2026-10-07T00:00:00+00:00). Documents uploaded before
-# it are already the patient's and never need review; later uploads wait for the patient to confirm their type. Set it
-# to the deploy time. Left empty the review step is off (every upload is treated as already confirmed).
 RECORDS_REVIEW_FROM = config("RECORDS_REVIEW_FROM", default="")
 
 CACHES = {
     "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
 }
 
-# ── License tier constants ───────────────────────────────────────────────────
 class LicenseTier:
     TRIAL = "trial"
     ESSENTIAL = "essential"

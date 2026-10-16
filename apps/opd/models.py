@@ -125,7 +125,7 @@ class Appointment(models.Model):
     @cached_property
     def vitals(self):
         """This visit's vitals (apps/vitals.py), or None. A list of appointments loads them in one go with attach_vitals()."""
-        from apps.documents.lib_documents import visit_vitals
+        from apps.documents.lib_vitals import visit_vitals
         return visit_vitals(self.id)
 
 

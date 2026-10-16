@@ -25,7 +25,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.throttling import ScopedRateThrottle
 
-from core.response import success, error
+from core.api.response import success, error
 from apps.hospital_master.models import Hospital, Subscription
 from apps.hospital_master.services import TIER_FEATURE_DEFAULTS
 from apps.hospital_setup.models import StaffUser
@@ -47,7 +47,7 @@ def _make_tokens(payload: dict) -> dict:
     """
     Create access + refresh JWT pair from a claims payload.
     Every token gets a unique jti so it can be individually revoked via
-    BlacklistedToken (see LogoutView below and core/authentication.py).
+    BlacklistedToken (see LogoutView below and core/api/authentication.py).
     """
     now         = timezone.now()
     access_exp  = now + settings.JWT_ACCESS_TOKEN_LIFETIME
@@ -160,7 +160,7 @@ class StaffLoginView(APIView):
             "full_name":    staff.get_full_name(),
             "role":         staff.role,
             # [] for the 6 system roles — see resolve_acts_as() and
-            # core.authentication.MockUser. Only non-empty for role="custom"
+            # core.api.authentication.MockUser. Only non-empty for role="custom"
             # staff, and only takes effect on their next login if their
             # custom role's acts_as changes meanwhile (same staleness
             # tradeoff as everything else baked into the JWT).

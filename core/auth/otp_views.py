@@ -15,7 +15,7 @@ Patient self-registration's own request/verify pair lives in
 apps/hospital_patients/portal_views.py (PortalRegisterRequestOTPView /
 PortalRegisterVerifyOTPView) since it shares PortalRegisterView's imports
 and is patient-app-specific; contact-change (mobile-number re-verification)
-similarly lives next to PortalProfileView. Both reuse this same core.otp
+similarly lives next to PortalProfileView. Both reuse this same core.messaging.otp
 module — there is one OTP engine, not several.
 
 Every response here is deliberately generic on "identifier not found" (same
@@ -32,13 +32,13 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 from rest_framework.throttling import ScopedRateThrottle
 
-from core.response import success, error
-from core.otp import (
+from core.api.response import success, error
+from core.messaging.otp import (
     create_otp, verify_otp, make_action_token, decode_action_token,
     mask_identifier, OTPError,
 )
-from core.email import send_otp_email
-from core.sms import send_otp_sms
+from core.messaging.email import send_otp_email
+from core.messaging.sms import send_otp_sms
 from apps.patients.models import OTPCode
 from apps.patients.models import Patient
 from apps.patients.services import accounts, accounts_with_mobile, set_password
@@ -166,7 +166,7 @@ class OTPRequestView(APIView):
 
         elif purpose == OTPCode.PURPOSE_REGISTRATION_PATIENT:
             # Email-based for now — verifying via mobile requires a paid SMS
-            # gateway (see core/sms.py) that isn't wired up yet. Email is
+            # gateway (see core/messaging/sms.py) that isn't wired up yet. Email is
             # free to send (SMTP already live) and PatientAccount.email is
             # unique, so it works as the verified identifier just as well.
             # The mobile number is still collected at account-creation time
@@ -175,7 +175,7 @@ class OTPRequestView(APIView):
                 return error("Enter a valid email address.", errors={"identifier": "Invalid format."})
             if accounts().filter(email__iexact=identifier).exists():
                 return error("An account with this email already exists. Please log in.")
-            from core.realworld_validation import validate_email_domain
+            from core.utils.realworld_validation import validate_email_domain
             is_valid, reason = validate_email_domain(identifier)
             if not is_valid:
                 return error(reason, errors={"identifier": reason})
@@ -263,7 +263,7 @@ class StaffForgotPasswordResetView(APIView):
         staff.must_change_password = False
         staff.save(using=db_name, update_fields=["password", "must_change_password"])
 
-        from core.audit import log_action
+        from core.utils.audit import log_action
         log_action(None, db_name, action="auth.password_reset_via_otp",
                    resource_type="StaffUser", resource_id=str(staff.id))
 

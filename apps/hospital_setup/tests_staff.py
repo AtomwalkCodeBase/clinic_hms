@@ -1,6 +1,6 @@
 from apps.hospital_setup.staff_views import HospitalSettingsView
 from apps.hospital_master.models import Hospital, HospitalParameters
-from core.testing import HospitalDBTestCase, requires_hospital_db
+from core.tests.testing import HospitalDBTestCase, requires_hospital_db
 
 
 @requires_hospital_db

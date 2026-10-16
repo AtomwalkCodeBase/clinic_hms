@@ -26,8 +26,8 @@ class DocumentClassificationInline(admin.StackedInline):
 
 @admin.register(MedicalDocument)
 class MedicalDocumentAdmin(admin.ModelAdmin):
-    list_display = ["id", "patient", "file_name", "doc_classifiaction", "status", "created_at"]
-    list_filter = ["status", "doc_classifiaction", "created_by"]
+    list_display = ["id", "patient", "file_name", "doc_classification", "status", "created_at"]
+    list_filter = ["status", "doc_classification", "created_by_type"]
     search_fields = ["patient__awpid", "file_name"]
     readonly_fields = ["error_message", "created_at"]
     inlines = [DocumentExtractionInline, DocumentClassificationInline]

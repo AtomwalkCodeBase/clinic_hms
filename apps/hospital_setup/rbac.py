@@ -7,7 +7,7 @@ Two things live here:
   PERMISSION_CATALOG        — the fixed, deploy-time list of grantable actions.
   SYSTEM_ROLE_PERMISSIONS   — which of those every one of the 6 system roles
                                grants by default (mirrors the hardcoded Is*
-                               DRF permission classes in core/permissions.py —
+                               DRF permission classes in core/api/permissions.py —
                                this is a parallel, additive description of
                                the same reality, not a replacement for them).
 
@@ -93,7 +93,7 @@ def resolve_acts_as(staff):
     """
     Which system-role identities this staff member should be treated as,
     for every "is this person a doctor/nurse/..." check throughout the app
-    (core.permissions Is* classes, DoctorListView, hospitals.limits doctor
+    (core.api.permissions Is* classes, DoctorListView, hospitals.limits doctor
     counting, patient-facing doctor search, etc.) — not just permission
     codes, but actual identity/discoverability.
 

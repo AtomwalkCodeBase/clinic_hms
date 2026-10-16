@@ -9,15 +9,15 @@ from django.core.exceptions import FieldDoesNotExist
 from core.auth.otp_views import OTPRequestView
 from core.auth.views import PatientLoginView
 from apps.patients.models import OTPCode, Patient, ConsultSession, RecordsShareRequest
-from core.authentication import MockUser
+from core.api.authentication import MockUser
 from django.urls import NoReverseMatch, reverse
-from apps.documents.lib_documents import CHOOSABLE_TYPES
-from apps.documents.models import DocumentBatch, MedicalDocument, PatientDocumentClassification
-from apps.documents.tests import identity, make_doc, reload
+from apps.documents.models import CHOOSABLE_TYPES
+from apps.documents.models import DocumentBatch, MedicalDocument, DocumentClassification
+from apps.documents.tests.tests import identity, make_doc, reload
 from datetime import timedelta
 from django.utils import timezone
 from apps.patients.views import ConsultPadView, _open_session_for_token
-from core.testing import ensure_hospital
+from core.tests.testing import ensure_hospital
 from apps.patients.views import _vault_documents
 from apps.opd.patient_services import PatientService
 from apps.patients.services import accounts, create_account, set_password, check_password
@@ -29,8 +29,8 @@ class PortalAccountTests(TestCase):
 
     def register(self):
         request = APIRequestFactory().post("/api/v1/portal/register/", BODY, format="json")
-        with mock.patch("core.otp.decode_action_token", return_value={"identifier": "asha@example.com"}), \
-                mock.patch("core.realworld_validation.validate_mobile_real", return_value=(True, "")):
+        with mock.patch("core.messaging.otp.decode_action_token", return_value={"identifier": "asha@example.com"}), \
+                mock.patch("core.utils.realworld_validation.validate_mobile_real", return_value=(True, "")):
             return PortalRegisterView.as_view()(request)
 
     def test_signing_up_creates_one_row_that_is_both_the_identity_and_the_login(self):
@@ -52,8 +52,8 @@ class PortalAccountTests(TestCase):
         self.register()
         self.assertEqual(self.register().status_code, 400)
         self.assertEqual(Patient.objects.count(), 1)
-class MobileIsOnlyStoredScrambledTests(TestCase):
-    """The mobile number exists once, scrambled: hospitals match on it and the patient logs in with it."""
+class MobileIsStoredAsTheNumberTests(TestCase):
+    """The mobile number exists once, as the plain 10 digits: hospitals match on it and the patient logs in with it."""
     databases = {"default"}
 
     def setUp(self):
@@ -65,9 +65,9 @@ class MobileIsOnlyStoredScrambledTests(TestCase):
     def post(self, view, data):
         return view.as_view()(APIRequestFactory().post("/x/", data, format="json"))
 
-    def test_there_is_no_plain_mobile_column(self):
+    def test_the_mobile_is_stored_as_the_plain_number_and_there_is_no_hash_column(self):
         with self.assertRaises(FieldDoesNotExist):
-            Patient._meta.get_field("mobile")
+            Patient._meta.get_field("mobile_hash")
         self.assertEqual(self.acct.mobile, "9876543210")
 
     def test_a_patient_logs_in_with_the_number_however_they_type_it(self):
@@ -144,7 +144,7 @@ class PortalDocumentTests(TestCase):
 
     def test_a_failed_file_can_be_dismissed_and_its_stored_copy_is_removed(self):
         doc = make_doc(self.acct.awpid, status="failed", error_message="boom")
-        name = doc.file.name
+        name = doc.file_name.name
         with mock.patch("core.storage.delete") as delete:
             resp = self.dismiss(doc)
         self.assertEqual(resp.status_code, 200)
@@ -205,24 +205,24 @@ class PortalDocumentTests(TestCase):
         self.assertTrue(MedicalDocument.objects.filter(pk=other.pk).exists())
 
     def test_a_hospital_issued_file_cannot_be_dismissed(self):
-        doc = make_doc(self.acct.awpid, status="failed", uploaded_by="staff")
+        doc = make_doc(self.acct.awpid, status="failed", created_by_type="H")
         self.assertEqual(self.dismiss(doc).status_code, 400)
         self.assertTrue(MedicalDocument.objects.filter(pk=doc.pk).exists())
 
     # ── the list ──
-    def test_the_list_shows_status_type_and_size(self):
-        doc = self.make_doc(name="rx.pdf", size=1234)
+    def test_the_list_shows_status_and_type(self):
+        doc = self.make_doc(name="rx.pdf")
         results = self.call(PortalDocumentListCreateView, "get").data["results"]
-        self.assertEqual([(r["id"], r["file_name"], r["title"], r["processing_status"], r["doc_type"], r["size"])
-                          for r in results], [(doc.id, "rx.pdf", "rx.pdf", "completed", "lab_report", 1234)])
+        self.assertEqual([(r["id"], r["file_name"], r["title"], r["processing_status"], r["doc_type"])
+                          for r in results], [(doc.id, "rx.pdf", "rx.pdf", "completed", "lab_report")])
 
     def test_someone_elses_documents_are_not_listed(self):
         make_doc("AW-OTHER", status="completed", document_type="lab_report")
         self.assertEqual(self.call(PortalDocumentListCreateView, "get").data["results"], [])
 
     def test_the_row_carries_the_number_a_hospital_printed_on_the_document(self):
-        make_doc(self.acct.awpid, status="completed", document_type="prescription", by="issued", uploaded_by="staff",
-                 source_hospital_id="7", document_ref="RX-1")
+        make_doc(self.acct.awpid, status="completed", document_type="prescription", by="issued", created_by_type="H",
+                 source_hospital_id="7", name="RX-1")
         row = self.call(PortalDocumentListCreateView, "get").data["results"][0]
         self.assertEqual((row["public_document_id"], row["source_hospital_id"], row["method"]), ("RX-1", 7, "staff"))
         self.assertNotIn("hospital_label", row)
@@ -230,7 +230,7 @@ class PortalDocumentTests(TestCase):
 
     def test_an_unclassified_row_shows_no_guess_at_all(self):
         doc = make_doc(self.acct.awpid, status="review_required", by="rules", name="u.pdf")
-        PatientDocumentClassification.objects.filter(document=doc).update(ai_document_type="lab_report")
+        DocumentClassification.objects.filter(document=doc).update(ai_classification="lab_report")
         row = self.call(PortalDocumentListCreateView, "get").data["results"][0]
         self.assertEqual((row["doc_type"], row["suggested_type"], row["confirmed"], row["processing_status"]),
                          ("not_classified", None, False, "review_required"))
@@ -255,17 +255,17 @@ class PortalDocumentTests(TestCase):
         resp = self.patch(doc, doc_type="prescription")
         self.assertEqual(resp.status_code, 200)
         doc = reload(doc)
-        self.assertEqual((doc.document_type, doc.status), ("prescription", "completed"))
+        self.assertEqual((doc.doc_classification, doc.status), ("prescription", "completed"))
         self.assertEqual(resp.data["data"]["method"], "staff")
 
     def test_the_patient_can_only_choose_one_of_the_fixed_types(self):
         doc = make_doc(self.acct.awpid, status="review_required", by="rules")
         for bad in ("made_up", "not_classified", "LAB_REPORT"):
             self.assertEqual(self.patch(doc, doc_type=bad).status_code, 400, bad)
-        self.assertEqual(reload(doc).document_type, "not_classified")
+        self.assertEqual(reload(doc).doc_classification, "not_classified")
 
     def test_the_type_of_a_hospital_issued_report_cannot_be_changed(self):
-        doc = self.make_doc(uploaded_by="staff", source_hospital_id="7", source_type="encounter", source_id="abc")
+        doc = self.make_doc(created_by_type="H", source_hospital_id="7", source_type="encounter", source_id=uuid.UUID(int=1))
         self.assertEqual(self.patch(doc, doc_type="imaging_report").status_code, 400)
 
     def test_the_detail_offers_the_fixed_types(self):
@@ -303,7 +303,7 @@ class PortalDocumentTests(TestCase):
 
     def test_the_activity_of_a_document_that_needs_review_and_of_a_failure(self):
         review = make_doc(self.acct.awpid, status="review_required", by="rules")
-        PatientDocumentClassification.objects.filter(document=review).update(ai_document_type="lab_report")
+        DocumentClassification.objects.filter(document=review).update(ai_classification="lab_report")
         failed = make_doc(self.acct.awpid, status="failed", error_message="The file is empty.")
         self.assertEqual(self.events(review)[-1], "The rules couldn’t tell what it is - choose its type")
         self.assertEqual(self.events(failed)[-1], "We couldn’t read it — The file is empty.")
@@ -368,7 +368,7 @@ class WaitingUploadsAreNotSharedTests(TestCase):
         self.waiting = make_doc(AWPID, status="completed", document_type="lab_report", by="rules", name="waiting.pdf")
         self.confirmed = make_doc(AWPID, status="completed", document_type="lab_report", by="human", name="confirmed.pdf")
         self.issued = make_doc(AWPID, status="completed", document_type="prescription", by="issued", name="issued.pdf",
-                               uploaded_by="staff")
+                               created_by_type="H")
         self.grant = RecordsShareRequest.objects.using("default").create(
             token="tok-wait-1", code="654321", patient=identity(AWPID), status=RecordsShareRequest.STATUS_APPROVED,
             expires_at=timezone.now() + timedelta(hours=1),

@@ -1,4 +1,11 @@
+import os
+import uuid
+
 from django.db import models
+
+
+def get_hospital_logo_path(instance, filename):
+    return f"hospitals/{instance.hospital.hospital_code}/logo/{filename}"
 
 
 class Hospital(models.Model):
@@ -15,6 +22,9 @@ class Hospital(models.Model):
     class Meta:
         db_table  = "hospitals"
 
+    def __str__(self):
+        return f"{self.name} ({self.hospital_code})"
+
 
 class HospitalParameters(models.Model):
     FEE_OWNERSHIP_DOCTOR   = "doctor"
@@ -29,14 +39,11 @@ class HospitalParameters(models.Model):
     about                    = models.TextField(blank=True)
     latitude                 = models.FloatField(null=True, blank=True)
     longitude                = models.FloatField(null=True, blank=True)
-    logo                     = models.TextField(blank=True)
-    storage_folder           = models.CharField(max_length=60, blank=True)
+    logo                     = models.ImageField(upload_to=get_hospital_logo_path, blank=True, null=True)
     fee_ownership            = models.CharField(max_length=10, choices=FEE_OWNERSHIP_CHOICES, default=FEE_OWNERSHIP_DOCTOR)
     registration_fee_enabled = models.BooleanField(default=False)
     registration_fee_amount  = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     default_tax_rate         = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-    created_at               = models.DateTimeField(auto_now_add=True)
-    updated_at               = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table  = "hospital_parameters"
@@ -99,10 +106,10 @@ class HospitalAuditLog(models.Model):
         ("tier_change",      "Tier Change"),
         ("status_change",    "Subscription Status Change"),
         ("active_change",    "Active/Suspended Toggle"),
-        ("subdomain_change", "Hospital Code Change"),
+        ("code_change",      "Hospital Code Change"),
     ]
 
-    hospital       = models.ForeignKey(Hospital, on_delete=models.CASCADE, related_name="h_audit_logs")
+    hospital       = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_audit_logs")
     action       = models.CharField(max_length=20, choices=ACTION_CHOICES)
     actor_email  = models.CharField(max_length=255, blank=True)
     before_value = models.CharField(max_length=100, blank=True)

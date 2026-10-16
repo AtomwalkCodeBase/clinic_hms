@@ -2,9 +2,9 @@ import logging
 from django.db import transaction
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
-from core.response import success, created, error, not_found
-from core.permissions import IsPharmacist, RequireFeature
-from core.pagination import paginate_queryset
+from core.api.response import success, created, error, not_found
+from core.api.permissions import IsPharmacist, RequireFeature
+from core.api.pagination import paginate_queryset
 from apps.pharmacy.serializers import StockSerializer, DispenseSerializer
 from apps.pharmacy.models import Stock, StockTransaction, Dispense
 

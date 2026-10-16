@@ -75,7 +75,7 @@ def resolve_source_hospital_id(db_alias) -> int:
     code stamps into `source_hospital_id`. For code that has no request to read
     `request.hospital_id` from (model signals, helpers).
 
-    core.middleware only sets the DB alias on the thread-local, never a hospital id, so the
+    core.api.middleware only sets the DB alias on the thread-local, never a hospital id, so the
     old `getattr(_thread_local, "hospital_id", 0)` was always 0 outside the seed commands
     (which do set it, and still win here). 0 means "unknown".
     """

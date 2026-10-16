@@ -8,7 +8,7 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.views import APIView
 from apps.patients.services import resolve_target_awpid_and_dob
-from core.permissions import (
+from core.api.permissions import (
     IsDoctorOrNurse,
     IsPatient,
     IsHospitalAdmin,
@@ -17,48 +17,34 @@ from core.permissions import (
     IsDoctor,
     IsDoctorOrFrontDesk,
 )
-from core.response import error, not_found, success, created
-from apps.documents import lib_documents as rules
+from core.api.response import error, not_found, success, created
 from apps.documents.models import (
-    BirthHistory, ClinicalEvent, DocumentBatch, GrowthMeasurement, ImmunizationRecord, MilestoneRecord, RecurrenceFlag,
+    BirthHistory, DocumentBatch, ImmunizationRecord, MilestoneRecord,
 )
 from apps.documents.serializers import SubmitSerializer, UploadSerializer
-from django.shortcuts import get_object_or_404
-from rest_framework import serializers, status
-from rest_framework.response import Response
-from apps.documents import lib_integration as ig
-from apps.documents.lib_processing import SHOWN_VACCINES, build_timeline_payload, growth_dob, rebuild_patient
-from apps.documents.services import (
-    INDICATORS, age_in_months, classify_condition, immunization_status, load_config, next_due, reference_curves, resolve_vaccines,
-)
-from apps.documents.lib_documents import (
-    BULK_QUEUE,
-    INSTANT_QUEUE,
-    awaiting_review_q,
-    batch_summary,
-    save_upload,
-    start_processing,
-    submit_decisions,
-)
+from apps.documents.lib_documents import BULK_QUEUE, INSTANT_QUEUE, awaiting_review_q, batch_summary, save_upload, start_processing, submit_decisions
 from rest_framework.throttling import ScopedRateThrottle
-from apps.documents.tasks import rebuild_patient_task
-from core import qr_token as _qt, storage as blob_storage
-from apps.documents.lib_documents import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
+from core.utils import qr_token as _qt
+from core import storage as blob_storage
+from apps.documents.lib_roadmap import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
 from django.utils import timezone
-from core.file_validation import validate_data_uri, FileValidationError
+from core.utils.file_validation import validate_data_uri, FileValidationError
 from core.utils.age import age_years_months
 from apps.documents.lib_documents import PATIENT_NOT_FOUND, get_patient, parse_date, staff_name as _staff_name, text as _text
-from apps.documents.lib_documents import add_percentiles
-from apps.documents.lib_documents import active_schedule, rules_for, schedule_usage
+from apps.documents.lib_vitals import add_percentiles
+from apps.documents.lib_roadmap import active_schedule, rules_for, schedule_usage
 from apps.patients.models import Patient, PatientRelationship
-from apps.documents.lib_documents import growth_points
-from core.audit import log_action
+from apps.documents.lib_vitals import growth_points
+from core.utils.audit import log_action
 from apps.opd.patient_serializers import BirthHistorySerializer
 from apps.opd.patient_services import PatientService
 from apps.patients.services import accounts
+from apps.documents import lib_documents as classification
+from apps.documents import lib_documents as records
 
 
 logger = logging.getLogger(__name__)
+
 class UploadView(APIView):
     """
     POST /api/v1/records/upload/   multipart: files=<file> (repeat for more), mode=instant|bulk, patient_awpid=<optional>
@@ -92,17 +78,18 @@ class UploadView(APIView):
         started = time.monotonic()
         try:
             batch, docs = save_upload(awpid, files)
-            logger.info("records: batch %s — %d file(s), %.1f MB stored in %.1fs", batch.id, len(docs),
-                        sum(d.size or 0 for d in docs) / 1048576, time.monotonic() - started)
+            logger.info("records: batch %s — %d file(s) stored in %.1fs", batch.id, len(docs), time.monotonic() - started)
         except Exception:
             logger.exception("records: upload to S3 failed")
             return error("Upload to storage failed — nothing was saved. Please try again.", status=503)
         start_processing([d.id for d in docs], INSTANT_QUEUE if mode == "instant" else BULK_QUEUE)
-        docs = list(batch.d_documents.order_by("id"))      # fresh: a file that couldn't be queued is already "failed"
+        docs = list(batch.b_documents.order_by("id"))      # fresh: a file that couldn't be queued is already "failed"
         return success(data={
             "batch_id": batch.id, "mode": mode,
-            "documents": [{"id": d.id, "file_name": d.file_name, "processing_status": d.status} for d in docs],
+            "documents": [{"id": d.id, "file_name": records.display_name(d), "processing_status": d.status} for d in docs],
         }, status=202)
+
+
 class BatchDetailView(APIView):
     """GET /api/v1/records/batches/<id>/ — the batch, its counts by status, then each of its documents.
     The patient (or the family member they act for) can only read their own batches."""
@@ -116,13 +103,17 @@ class BatchDetailView(APIView):
         if not batch:
             return not_found("Batch not found.")
         return success(data=batch_summary(batch))
+
+
 class TypesView(APIView):
     """GET /api/v1/records/types/ - the categories a document can be filed under (the one list every app reads).
     {"types": [{"code", "label"}]}"""
     permission_classes = [IsPatient]
 
     def get(self, request):
-        return success(data={"types": rules.document_type_choices()})
+        return success(data={"types": classification.document_type_choices()})
+
+
 class SubmitView(APIView):
     """
     POST /api/v1/records/submit/   {"decisions": [{"document_id": 1, "document_type": "lab_report"}]}   (1 to 100)
@@ -147,242 +138,7 @@ class SubmitView(APIView):
                             .filter(awaiting_review_q(), patient__awpid=awpid,
                                     status__in=(MedicalDocument.Status.COMPLETED, MedicalDocument.Status.REVIEW_REQUIRED)).count()}
         return success(data=result)
-# ── the pediatric health timeline: GET patients/<id>/health-timeline/ ... (urls.py, under peds/) ──
-def _patient_or_403(request, awpid):
-    patient = get_object_or_404(Patient, awpid=awpid)
-    if not ig.can_view_patient(request.user, patient):
-        return None, Response({"detail": "Not allowed"}, status=status.HTTP_403_FORBIDDEN)
-    return patient, None
-
-
-def _clinician_or_403(request):
-    if not ig.is_clinician(request.user):
-        return Response({"detail": "Clinician access required"}, status=status.HTTP_403_FORBIDDEN)
-    return None
-
-
-def _staff_id(request):
-    return request.user.id if isinstance(request.user.id, int) else None
-
-
-def _parse_period(request, dob):
-    try:
-        p_to = date.fromisoformat(request.query_params.get("to")) if request.query_params.get("to") \
-            else date.today()
-        p_from = date.fromisoformat(request.query_params.get("from")) if request.query_params.get("from") \
-            else dob
-    except ValueError:
-        return None, None
-    return max(p_from, dob), p_to
-
-
-# ----------------------------------------------------------------- timeline
-class PatientHealthTimelineView(APIView):
-    permission_classes = (IsAuthenticated,)
-
-    def get(self, request, awpid):
-        patient, err = _patient_or_403(request, awpid)
-        if err:
-            return err
-        dob, _ = ig.patient_dob_sex(patient)
-        p_from, p_to = _parse_period(request, dob)
-        if not p_from or p_from > p_to:
-            return Response({"detail": "Invalid period"}, status=status.HTTP_400_BAD_REQUEST)
-        audience = "doctor" if (request.query_params.get("view") == "doctor"
-                                and ig.is_clinician(request.user)) else "guardian"
-        return Response(build_timeline_payload(patient, p_from, p_to, audience))
-
-
-# ------------------------------------------------------------------- growth
-class GrowthMeasurementIn(serializers.Serializer):
-    measured_on = serializers.DateField()
-    weight_kg = serializers.DecimalField(max_digits=6, decimal_places=3, required=False, allow_null=True)
-    height_cm = serializers.DecimalField(max_digits=5, decimal_places=1, required=False, allow_null=True)
-    head_circ_cm = serializers.DecimalField(max_digits=4, decimal_places=1, required=False, allow_null=True)
-
-    def validate(self, attrs):
-        rng = load_config()["growth"]["plausible_ranges"]
-        if not any(attrs.get(k) is not None for k in ("weight_kg", "height_cm", "head_circ_cm")):
-            raise serializers.ValidationError("At least one measurement is required")
-        for k in ("weight_kg", "height_cm", "head_circ_cm"):
-            v = attrs.get(k)
-            if v is not None and not (rng[k][0] <= float(v) <= rng[k][1]):
-                raise serializers.ValidationError({k: f"Outside plausible range {rng[k]}"})
-        if attrs["measured_on"] > date.today():
-            raise serializers.ValidationError({"measured_on": "Cannot be in the future"})
-        return attrs
-
-
-class PatientGrowthView(APIView):
-    permission_classes = (IsAuthenticated,)
-
-    def get(self, request, awpid):
-        patient, err = _patient_or_403(request, awpid)
-        if err:
-            return err
-        indicator = request.query_params.get("indicator", "weight_kg")
-        if indicator not in INDICATORS:
-            return Response({"detail": f"indicator must be one of {list(INDICATORS)}"}, status=400)
-        dob, sex = ig.patient_dob_sex(patient)
-        bh = BirthHistory.objects.filter(patient=patient).first()
-        corrected = growth_dob(dob, bh)
-        age_now = age_in_months(dob, date.today())
-        column = {"head_circ_cm": "head_circumference_cm"}.get(indicator, indicator)
-        z_field, pct_field = {"weight_kg": ("weight_z", "weight_pct"),
-                              "height_cm": ("height_z", "height_pct"),
-                              "head_circ_cm": ("head_circ_z", "head_circ_pct")}[indicator]
-        points = [{"date": g.measured_on.isoformat(), "age_months": round(age_in_months(corrected, g.measured_on), 2),
-                   "value": float(getattr(g, column)), "z": getattr(g, z_field),
-                   "percentile": getattr(g, pct_field), "flag": g.flags.get(column),
-                   "document_id": g.document_id, "source": g.source}
-                  for g in GrowthMeasurement.objects.filter(patient_id=patient.pk, is_rejected=False)
-                  .exclude(**{f"{column}__isnull": True}).order_by("measured_on")]
-        max_m = max([age_now + 3] + [p["age_months"] + 3 for p in points])
-        max_m = min(max_m, 60 if indicator == "head_circ_cm" else 216)
-        return Response({
-            "indicator": indicator, "sex": sex,
-            "uses_corrected_age": corrected != dob,
-            "reference": reference_curves(INDICATORS[indicator], sex, max_m,
-                                          step=0.5 if max_m <= 24 else 1.0),
-            "reference_note": "WHO 2006 (0-5 y), IAP 2015 (5-18 y)",
-            "points": points,
-        })
-
-    def post(self, request, awpid):
-        patient, err = _patient_or_403(request, awpid)
-        if err:
-            return err
-        err = _clinician_or_403(request)
-        if err:
-            return err
-        ser = GrowthMeasurementIn(data=request.data)
-        ser.is_valid(raise_exception=True)
-        values = dict(ser.validated_data)
-        values["head_circumference_cm"] = values.pop("head_circ_cm", None)
-        GrowthMeasurement.objects.create(patient_id=patient.pk, source="manual", **values)
-        rebuild_patient(patient.pk)  # cheap; gives z-scores immediately
-        return Response({"status": "created"}, status=status.HTTP_201_CREATED)
-
-
-# ------------------------------------------------------------- immunization
-class ImmunizationIn(serializers.Serializer):
-    vaccine_text = serializers.CharField(max_length=100)
-    given_on = serializers.DateField()
-
-    def validate(self, attrs):
-        if not resolve_vaccines(attrs["vaccine_text"]):
-            raise serializers.ValidationError({"vaccine_text": "Vaccine not recognised"})
-        if attrs["given_on"] > date.today():
-            raise serializers.ValidationError({"given_on": "Cannot be in the future"})
-        return attrs
-
-
-class PatientImmunizationView(APIView):
-    permission_classes = (IsAuthenticated,)
-
-    def get(self, request, awpid):
-        patient, err = _patient_or_403(request, awpid)
-        if err:
-            return err
-        dob, _ = ig.patient_dob_sex(patient)
-        given = [{"vaccine_text": v.vaccine_name, "given_on": v.administered_date, "document_id": v.document_id,
-                  "id": v.pk, "source": v.source}
-                 for v in ImmunizationRecord.objects.filter(patient_id=patient.pk, verification_status__in=SHOWN_VACCINES,
-                                                            administered_date__isnull=False)]
-        st = immunization_status(dob, given, date.today())
-        labels = load_config().get("patient_labels", {})
-        for r in st["rows"]:
-            r["status_label"] = labels.get(r["status"], r["status"])
-        st["next_due"] = next_due(st)
-        return Response(st)
-
-    def post(self, request, awpid):
-        patient, err = _patient_or_403(request, awpid)
-        if err:
-            return err
-        ser = ImmunizationIn(data=request.data)
-        ser.is_valid(raise_exception=True)
-        ImmunizationRecord.objects.create(
-            patient_id=patient.pk, source=ImmunizationRecord.SOURCE_MANUAL,
-            verification_status=ImmunizationRecord.STATUS_VERIFIED if ig.is_clinician(request.user) else ImmunizationRecord.STATUS_PENDING,
-            vaccines=resolve_vaccines(ser.validated_data["vaccine_text"]), vaccine_name=ser.validated_data["vaccine_text"],
-            administered_date=ser.validated_data["given_on"])
-        return Response({"status": "created"}, status=status.HTTP_201_CREATED)
-
-
-# ------------------------------------------------------------ clinician ops
-class ClinicalEventPatch(serializers.Serializer):
-    action = serializers.ChoiceField(choices=["verify", "reject", "recode"])
-    icd10 = serializers.CharField(max_length=10, required=False)
-    condition_text = serializers.CharField(max_length=255, required=False)
-    is_provisional = serializers.BooleanField(required=False)
-
-
-class ClinicalEventView(APIView):
-    permission_classes = (IsAuthenticated,)
-
-    def patch(self, request, event_id):
-        err = _clinician_or_403(request)
-        if err:
-            return err
-        ev = get_object_or_404(ClinicalEvent, pk=event_id)
-        patient, err = _patient_or_403(request, ev.patient.awpid)
-        if err:
-            return err
-        ser = ClinicalEventPatch(data=request.data)
-        ser.is_valid(raise_exception=True)
-        d = ser.validated_data
-        if d["action"] == "reject":
-            ev.is_rejected, ev.is_verified = True, False
-        else:
-            if d["action"] == "recode":
-                if "icd10" in d:
-                    ev.icd10 = d["icd10"].upper()
-                    cls = classify_condition(ev.icd10, text=ev.condition_text)
-                    ev.condition_group, ev.category = cls["group"], cls["category"]
-                if "condition_text" in d:
-                    ev.condition_text = d["condition_text"]
-            if "is_provisional" in d:
-                ev.is_provisional = d["is_provisional"]
-            ev.is_verified, ev.is_rejected = True, False
-        ev.verified_by_id = _staff_id(request)
-        ev.verified_at = timezone.now()
-        ev.save()
-        rebuild_patient_task.delay(ev.patient_id)
-        return Response({"status": "ok", "event_id": ev.pk})
-
-
-class RecurrenceAckView(APIView):
-    permission_classes = (IsAuthenticated,)
-
-    def post(self, request, flag_id):
-        err = _clinician_or_403(request)
-        if err:
-            return err
-        flag = get_object_or_404(RecurrenceFlag, pk=flag_id)
-        _, err = _patient_or_403(request, flag.patient.awpid)
-        if err:
-            return err
-        flag.acknowledged_by_id, flag.acknowledged_at = _staff_id(request), timezone.now()
-        flag.save(update_fields=["acknowledged_by_id", "acknowledged_at", "updated_at"])
-        return Response({"status": "ok"})
-
-
-class PatientRebuildView(APIView):
-    permission_classes = (IsAuthenticated,)
-
-    def post(self, request, awpid):
-        err = _clinician_or_403(request)
-        if err:
-            return err
-        patient, err = _patient_or_403(request, awpid)
-        if err:
-            return err
-        rebuild_patient_task.delay(patient.pk)
-        return Response({"status": "queued"}, status=status.HTTP_202_ACCEPTED)
-
-
-logger = logging.getLogger(__name__)
+# ------------------------------------------------------------------- view-report   
 class DocumentViewView(APIView):
     """
     GET /api/v1/view-report/<token>/
@@ -409,8 +165,8 @@ class DocumentViewView(APIView):
             MedicalDocument.objects.using("default")
             .filter(
                 patient__awpid=v.awpid,
-                document_ref=v.public_document_id,
-                document_type=v.doc_type,
+                document_ref_name=v.public_document_id,
+                doc_classification=v.doc_type,
             )
             .order_by("-created_at")
             .first()
@@ -419,14 +175,14 @@ class DocumentViewView(APIView):
             return error(message="This document could not be found.", status=404)
 
         try:
-            file_url = blob_storage.signed_url(doc.file.name, download_name=doc.file_name or None)
+            file_url = blob_storage.signed_url(doc.file_name.name, download_name=records.display_name(doc) or None)
         except Exception:
             logger.exception("view-report: signed_url failed for MedicalDocument id=%s", doc.id)
             return error(message="This document could not be opened right now. Please try again.", status=500)
 
         return success(data={
-            "doc_type": doc.document_type,
-            "title": doc.file_name,
+            "doc_type": doc.doc_classification,
+            "title": records.display_name(doc),
             "document_date": doc.document_date,
             "file_url": file_url,
         })
@@ -481,7 +237,7 @@ class _Kind:
         }
 
     def rules_json(self, schedule):
-        rules = schedule.rules.all().order_by("sort_order")
+        rules = schedule.s_rules.all().order_by("sort_order")
         return rules, [self.rule_dict(r) for r in rules]
 VACCINATION = _Kind("vaccination", "vaccine_name", "dose_number", 1,
                     vaccination_rule_dict, "Vaccination schedule template created.")
@@ -491,7 +247,7 @@ def _edit(kind, schedule, d):
     """Apply a PATCH body to a schedule and its rules. Returns how many rule changes were made. Raises _InvalidRule, before
     anything is saved, when a rule's numbers are wrong."""
     rules_in = [rd for rd in (d["rules"] if isinstance(d.get("rules"), list) else []) if isinstance(rd, dict)]
-    existing = {str(r.id): r for r in schedule.rules.all()}
+    existing = {str(r.id): r for r in schedule.s_rules.all()}
     checked = {}
     for rd in rules_in:
         if rd.get("_delete"):
@@ -638,7 +394,6 @@ def template_views(kind):
         permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
         def get(self, request):
-            from apps.hospital_master.models import Hospital
             templates = (kind.schedules()
                          .filter(owner_hospital_id__isnull=True, is_template=True).order_by("name"))
             using = schedule_usage(kind.noun)
@@ -686,7 +441,6 @@ def template_views(kind):
                            message=f"Template updated ({touched} rule change(s)).")
 
         def delete(self, request, pk):
-            from apps.hospital_master.models import Hospital
             template = get_template(pk)
             if not template:
                 return not_found("Template not found.")
@@ -741,14 +495,13 @@ def _certificate(patient, data, vaccine_name):
     name = blob_storage.display_file_name("vaccination-certificate", mime_type, detail=vaccine_name,
                                           name=patient.full_name, identifier=patient.awpid)
     return name, mime_type, key, None
-# ── growth ────────────────────────────────────────────────────────────────────────────────────────────────────────
 # ── vaccinations ──────────────────────────────────────────────────────────────────────────────────────────────────
 class PatientVaccinationListCreateView(APIView):
     def get_permissions(self):
         return [IsHospitalStaff() if self.request.method == "GET" else IsDoctorOrNurse()]
 
     def get(self, request, pk):
-        from apps.documents.lib_documents import build_roadmap
+        from apps.documents.lib_roadmap import build_roadmap
 
         patient = get_patient(request, pk)
         if not patient:
@@ -906,7 +659,6 @@ class PatientVaccinationAdministerView(APIView):
         return success(data=_given_json(record), message="Vaccination recorded as administered.")
 
 
-logger = logging.getLogger(__name__)
 def _shared_patient(patient):
     """The patient's row in Atomwalk, where the birth history is kept for every hospital."""
     return Patient.objects.using("default").filter(awpid=patient.awpid).first()
@@ -965,7 +717,7 @@ class PatientMilestoneListCreateView(APIView):
     permission_classes = [IsDoctorOrNurse]
 
     def get(self, request, pk):
-        from apps.documents.lib_documents import milestone_roadmap_build_roadmap as build_roadmap
+        from apps.documents.lib_roadmap import milestone_roadmap_build_roadmap as build_roadmap
 
         patient = get_patient(request, pk)
         if not patient:
@@ -1039,7 +791,7 @@ class PortalVaccinationListView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.documents.lib_documents import build_roadmap, summarize_roadmap
+        from apps.documents.lib_roadmap import build_roadmap, summarize_roadmap
 
         awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
@@ -1053,10 +805,7 @@ class PortalMilestoneListView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.documents.lib_documents import (
-            milestone_roadmap_build_roadmap as build_roadmap,
-            milestone_roadmap_summarize_roadmap as summarize_roadmap,
-        )
+        from apps.documents.lib_roadmap import milestone_roadmap_build_roadmap as build_roadmap, milestone_roadmap_summarize_roadmap as summarize_roadmap
 
         awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:

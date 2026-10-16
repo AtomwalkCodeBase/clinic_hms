@@ -23,9 +23,9 @@ from django.utils.text import slugify
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 
-from core.permissions import IsPlatformAdmin
-from core.response import success, created, error, not_found
-from core.pagination import paginate_list
+from core.api.permissions import IsPlatformAdmin
+from core.api.response import success, created, error, not_found
+from core.api.pagination import paginate_list
 from apps.hospital_master.models import Hospital, Subscription, HospitalAuditLog
 from apps.hospital_master.services import create_hospital_database, run_hospital_migrations, drop_hospital_database
 from apps.hospital_master.services import TIER_FEATURE_DEFAULTS
@@ -209,7 +209,7 @@ class HospitalListCreateView(APIView):
             return error("Admin email is required.", errors={"admin_email": "Required."})
         if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", admin_email):
             return error("Enter a valid email address.", errors={"admin_email": "Invalid format."})
-        from core.realworld_validation import validate_email_domain
+        from core.utils.realworld_validation import validate_email_domain
         email_ok, email_reason = validate_email_domain(admin_email)
         if not email_ok:
             return error(email_reason, errors={"admin_email": email_reason})
@@ -301,7 +301,7 @@ class HospitalListCreateView(APIView):
             # fail provisioning itself; the API response still carries the
             # password as a fallback so the platform admin can hand it over
             # another way if the email bounces.
-            from core.email import send_hospital_provisioned_email
+            from core.messaging.email import send_hospital_provisioned_email
             email_sent = send_hospital_provisioned_email(
                 to=admin_email, hospital_name=name, hospital_code=hospital_code,
                 employee_id=admin_employee_id, admin_mobile=admin_mobile,
@@ -393,7 +393,7 @@ class HospitalDetailView(APIView):
             hospital.save(update_fields=["hospital_code"])
             updated_fields.append("hospital_code")
             if before_hospital_code != new_hospital_code:
-                _log_change(hospital, "subdomain_change", before_hospital_code, new_hospital_code, actor_email)
+                _log_change(hospital, "code_change", before_hospital_code, new_hospital_code, actor_email)
 
         # ── Profile fields — plain edits, no audit-log entry (that's reserved
         # for tier/status/active lifecycle changes; a name/city typo fix isn't
@@ -417,7 +417,7 @@ class HospitalDetailView(APIView):
             updated_fields.append("profile")
 
         # ── Coordinates — power the patient app's "hospitals near me"
-        # (apps.patients.views, core.geo.haversine_km). Sent as
+        # (apps.patients.views, core.utils.geo.haversine_km). Sent as
         # numbers, not the free-text profile fields above: validated to
         # real-world lat/lng ranges so a typo can't quietly break every
         # distance sort. Either key alone clears just that one field
@@ -476,7 +476,7 @@ class HospitalDetailView(APIView):
         # Manually move a hospital through the subscription lifecycle — e.g.
         # mark them 'suspended' for a serious issue, or roll back a mistaken
         # 'frozen' state, without having to touch/reset their tier. Enforced
-        # in core/authentication.py: frozen/suspended blocks all API access
+        # in core/api/authentication.py: frozen/suspended blocks all API access
         # for that hospital's staff, read_only blocks writes only.
         new_status = d.get("status")
         if new_status:
@@ -562,7 +562,7 @@ class PlatformStatsView(APIView):
         recent_logs = HospitalAuditLog.objects.select_related("hospital").order_by("-created_at")[:15]
         activity = [{
             "id": log.id,
-            "hospital_name": log.hospital.name,
+            "hospital_name": log.hospital.name if log.hospital else "",
             "action": log.action,
             "action_label": dict(HospitalAuditLog.ACTION_CHOICES).get(log.action, log.action),
             "before_value": log.before_value,

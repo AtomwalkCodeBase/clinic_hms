@@ -1,6 +1,5 @@
 """
-Celery tasks of the records pipeline: orchestration only — the work is in lib_documents.py, lib_processing.py and
-services.py.
+Celery tasks of the records pipeline: orchestration only — the work is in the services folder and processing.py.
 
     extract_document_task    file → content check → text (DocumentExtraction), then queues classify_document_task
     classify_document_task   rule engine → PatientDocumentClassification and the document's type, then queues
@@ -17,9 +16,9 @@ import logging
 
 from celery import shared_task
 
-from apps.documents import lib_documents as services
-from apps.documents import lib_processing
 from apps.documents.models import DocumentExtraction, MedicalDocument
+from apps.documents import lib_documents as records
+from apps.documents import lib_processing
 
 logger = logging.getLogger(__name__)
 
@@ -34,16 +33,16 @@ _TASK_OPTS = dict(
 
 
 @shared_task(soft_time_limit=120, time_limit=180, **_TASK_OPTS)
-def extract_document_task(self, document_id, queue=services.BULK_QUEUE):
+def extract_document_task(self, document_id, queue=records.BULK_QUEUE):
     """File → content check → text, then queue classify_document_task on the same `queue` (so a single instant file
     is never stuck behind a bulk upload). Time-limited so a hung OCR call can't tie up a worker for ever; a limit
     hit is retried like any other error."""
     try:
-        ready = services.extract_document(document_id)
+        ready = records.extract_document(document_id)
     except Exception as exc:
         if self.request.retries >= self.max_retries:
             logger.exception("records: extracting %s failed for good", document_id)
-            services.fail_document_by_id(document_id, f"Couldn't read this file: {exc}")
+            records.fail_document_by_id(document_id, f"Couldn't read this file: {exc}")
             return
         raise
     if ready:
@@ -51,15 +50,15 @@ def extract_document_task(self, document_id, queue=services.BULK_QUEUE):
 
 
 @shared_task(soft_time_limit=60, time_limit=90, **_TASK_OPTS)
-def classify_document_task(self, document_id, queue=services.BULK_QUEUE):
+def classify_document_task(self, document_id, queue=records.BULK_QUEUE):
     """Rule engine → classification, status and batch counters. Its own task so extraction of the next document
     never waits on it."""
     try:
-        services.classify_document(document_id)
+        records.classify_document(document_id)
     except Exception as exc:
         if self.request.retries >= self.max_retries:
             logger.exception("records: classifying %s failed for good", document_id)
-            services.fail_document_by_id(document_id, f"Couldn't classify this file: {exc}")
+            records.fail_document_by_id(document_id, f"Couldn't classify this file: {exc}")
             return
         raise
     process_document_task.apply_async(args=[document_id], queue=queue)
@@ -74,7 +73,7 @@ def _is_transient(exc):
 
 
 @shared_task(bind=True, max_retries=6, acks_late=True, ignore_result=True)
-def process_document_task(self, document_id, queue=services.BULK_QUEUE, force=False):
+def process_document_task(self, document_id, queue=records.BULK_QUEUE, force=False):
     """The LLM and the rules on one document's text. It never fails the document, which is already finished: when the LLM
     server is down or answers badly the extraction is marked failed and, for a connection problem, retried later (10
     minutes, then longer). A document without a result simply has no timeline entries until backfill_task fills it in."""
@@ -100,7 +99,7 @@ def rebuild_patient_task(patient_id):
 
 
 @shared_task(ignore_result=True)
-def backfill_task(queue=services.BULK_QUEUE, limit=None):
+def backfill_task(queue=records.BULK_QUEUE, limit=None):
     """Queues process_document_task for every document that has text and has not been processed, oldest first, so episodes
     and recurrence build up in the right order."""
     done = DocumentExtraction.objects.filter(status__in=[DocumentExtraction.Status.DONE, DocumentExtraction.Status.SKIPPED])

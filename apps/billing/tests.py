@@ -11,7 +11,7 @@ from decimal import Decimal
 from django.db import connections
 
 from core.db_router import set_hospital_db
-from core.testing import HospitalDBTestCase, HospitalDBTransactionTestCase, requires_hospital_db
+from core.tests.testing import HospitalDBTestCase, HospitalDBTransactionTestCase, requires_hospital_db
 
 from apps.billing.models import Invoice, Payment
 from apps.billing.views import PaymentCreateView

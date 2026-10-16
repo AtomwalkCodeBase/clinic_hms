@@ -213,7 +213,7 @@ class BirthHistorySerializer(serializers.ModelSerializer):
     Writable by both front desk (at registration) and doctor (edited later
     at consultation) per the pediatric workflow design; the view layer
     (apps.documents.views.BirthHistoryView) gates who can write via
-    core.permissions.IsDoctorOrFrontDesk, not this serializer.
+    core.api.permissions.IsDoctorOrFrontDesk, not this serializer.
     """
     delivery_mode_display = serializers.CharField(source="get_delivery_mode_display", read_only=True)
 
@@ -224,6 +224,6 @@ class BirthHistorySerializer(serializers.ModelSerializer):
             "delivery_mode", "delivery_mode_display", "multiple_birth",
             "nicu_admission", "nicu_days", "birth_complications",
             "congenital_conditions",
-            "notes", "recorded_by", "recorded_at", "updated_by", "updated_at",
+            "notes", "created_at",
         ]
-        read_only_fields = ["id", "patient", "recorded_by", "recorded_at", "updated_by", "updated_at"]
+        read_only_fields = ["id", "patient", "created_at"]

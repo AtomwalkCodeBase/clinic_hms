@@ -162,7 +162,6 @@ export const ROUTES = {
     PRESCRIPTIONS:      "/patient/prescriptions",
     LAB_REPORTS:        "/patient/lab-reports",
     MY_REPORTS:         "/patient/my-reports",
-    INSIGHTS_TIMELINE:  "/patient/health-timeline",
     SHARED_RECORDS_PRIVACY: "/patient/shared-records-privacy",
     HEALTH_SUMMARY:     "/patient/health-summary",
     NOTIFICATIONS:      "/patient/notifications",

@@ -3,7 +3,7 @@ apps/hospital_setup/compliance_services.py
 -----------------------------
 record_consent() — single entry point for writing a ConsentRecord row.
 
-Mirrors core.audit.log_action()'s never-break-the-caller contract: consent
+Mirrors core.utils.audit.log_action()'s never-break-the-caller contract: consent
 was already captured (the boolean flag on Patient is the source of truth
 checked at request time), this is writing the durable proof of that event
 after the fact, so a failure here must not turn a successful registration

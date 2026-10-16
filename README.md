@@ -11,6 +11,14 @@ core/        project settings (core/settings/), urls, wsgi/asgi, Celery app, db 
 apps/
   patients/          atomwalk DB   patient accounts, portal, guardians
   documents/         atomwalk DB   uploaded reports, extraction, health timeline
+      services/        sir's timeline rules: config, clinical_rules, episodes, extraction, growth, immunization, timeline
+      lib_processing.py   the LLM's facts -> rows, episodes, recurrence, the timeline payload
+      integration.py      where the rules get a patient's date of birth, sex and a document's type, text and date from
+      lib_documents.py    upload, extraction, classification rules, review step, hospital-issued documents
+      lib_vitals.py       visit vitals and growth readings, hospital write-through, growth reference percentiles
+      lib_roadmap.py      vaccination and milestone roadmaps, schedules as the API returns them
+      views.py / views_timeline.py   the document views / sir's timeline views
+      tests/           the document tests
   hospital_master/   atomwalk DB   hospitals, subscriptions, platform-admin views
   hospital_setup/    hospital DB   branches, rooms, beds, staff, roles, compliance, notifications
   ipd/               hospital DB   admissions

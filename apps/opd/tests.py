@@ -34,7 +34,7 @@ class EncounterSignSideEffectsTests(TestCase):
         a full hospital DB fixture, by calling the helper with a patient that
         has no awpid (the guaranteed-skip path).
         """
-        from apps.documents.lib_documents import sync_encounter_to_hie
+        from apps.documents.lib_vitals import sync_encounter_to_hie
 
         class FakeEncounter:
             id = "test-encounter-id"
@@ -56,7 +56,7 @@ class EncounterSignSideEffectsTests(TestCase):
         Encounters commonly have no vitals recorded yet or no prescription
         (e.g. advice-only visit) — sync_encounter_to_hie must not assume either exists.
         """
-        from apps.documents.lib_documents import sync_encounter_to_hie
+        from apps.documents.lib_vitals import sync_encounter_to_hie
 
         class FakeAppointment:
             @property
@@ -88,7 +88,7 @@ import uuid as _uuid
 from decimal import Decimal as _Decimal
 from unittest import mock as _mock
 
-from core.testing import HospitalDBTestCase, requires_hospital_db
+from core.tests.testing import HospitalDBTestCase, requires_hospital_db
 
 
 @requires_hospital_db

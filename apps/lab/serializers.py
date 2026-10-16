@@ -143,12 +143,14 @@ class LabRequestSerializer(serializers.ModelSerializer):
         except Exception:
             return None
         from apps.documents.models import MedicalDocument
+        from apps.documents.lib_documents import source_uuid
         doc = (MedicalDocument.objects.using("default")
-               .filter(patient__awpid=awpid, source_type=MedicalDocument.Source.LAB_REQUEST, source_id=f"{db}:{obj.id}")
+               .filter(patient__awpid=awpid, source_type=MedicalDocument.Source.LAB_REQUEST, source_id=source_uuid(f"{db}:{obj.id}"))
                .order_by("-created_at").first())
         if not doc:
             return None
-        return {"id": doc.id, "title": doc.file_name, "created_at": doc.created_at}
+        from apps.documents.lib_documents import display_name
+        return {"id": doc.id, "title": display_name(doc), "created_at": doc.created_at}
 
 
 class LabRequestChoiceSerializer(serializers.Serializer):

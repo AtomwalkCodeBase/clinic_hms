@@ -3,12 +3,12 @@ import logging
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
-from core.response import success, created, error, not_found
-from core.permissions import IsHospitalStaff, IsLabTech
-from core.permissions import RequireFeature
+from core.api.response import success, created, error, not_found
+from core.api.permissions import IsHospitalAdmin, IsHospitalStaff, IsLabTech
+from core.api.permissions import RequireFeature
 from core.utils.nntm import get_next_number
-from core.pagination import paginate_queryset
-from core.file_validation import validate_data_uri, FileValidationError
+from core.api.pagination import paginate_queryset
+from core.utils.file_validation import validate_data_uri, FileValidationError
 from core import storage as blob_storage
 from apps.billing.models import OptionList
 from apps.lab.serializers import (
@@ -31,6 +31,11 @@ class LabCatalogView(APIView):
     POST /api/v1/lab/catalog/  — lab tech adds a new test to the catalog.
     """
     permission_classes = [IsAuthenticated, IsHospitalStaff, RequireFeature("feat_lab")]
+
+    def get_permissions(self):
+        if self.request.method == "POST":                 # only the lab (or the hospital admin) edits the catalogue
+            return [IsAuthenticated(), (IsLabTech | IsHospitalAdmin)(), RequireFeature("feat_lab")()]
+        return super().get_permissions()
 
     def get(self, request):
         tests = LabTest.objects.using(request.hospital_db)
@@ -381,9 +386,9 @@ class LabRequestAttachDocumentView(APIView):
         except FileValidationError as exc:
             return error(str(exc), errors={"file_data": str(exc)})
 
-        from apps.documents.lib_documents import CHOOSABLE_TYPES
+        from apps.documents.models import CHOOSABLE_TYPES
         from apps.documents.models import MedicalDocument
-        from apps.documents.lib_documents import create_issued_document
+        from apps.documents.lib_documents import create_issued_document, display_name, mime_of
 
         doc_type = request.data.get("doc_type") or "lab_report"
         if doc_type not in CHOOSABLE_TYPES:
@@ -428,8 +433,8 @@ class LabRequestAttachDocumentView(APIView):
             req.save(using=db, update_fields=update_fields)
 
         return created(data={
-            "id": doc.id, "title": doc.file_name, "doc_type": doc.document_type,
-            "file_name": doc.file_name, "mime_type": doc.mime_type,
+            "id": doc.id, "title": display_name(doc), "doc_type": doc.doc_classification,
+            "file_name": display_name(doc), "mime_type": mime_of(doc),
             "source_ref": f"{doc.source_type}:{doc.source_id}" if doc.source_id else "", "created_at": doc.created_at,
         }, message="Report attached.")
 

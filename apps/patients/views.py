@@ -15,16 +15,15 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework.throttling import ScopedRateThrottle
-from apps.documents.lib_documents import rules_for
-from core.permissions import IsPatient
-from core.response import success, error, not_found
-from core.pagination import paginate_list, paginate_queryset
+from apps.documents.lib_roadmap import rules_for
+from core.api.permissions import IsPatient
+from core.api.response import success, error, not_found
+from core.api.pagination import paginate_list, paginate_queryset
 from apps.hospital_master.services import parameters_of
 from apps.patients.services import resolve_target_awpid_and_dob
 from apps.hospital_master.services import ensure_hospital_db
-from core.file_validation import validate_data_uri, FileValidationError
-from core.geo import haversine_km, parse_lat_lng
-from apps.documents import lib_documents as doc_rules
+from core.utils.file_validation import validate_data_uri, FileValidationError
+from core.utils.geo import haversine_km, parse_lat_lng
 from core import storage as blob_storage
 from apps.hospital_master.models import Hospital
 from apps.patients.models import (
@@ -35,13 +34,15 @@ from apps.patients.models import (
     RecordsPrivacy,
     ConsultSession,
 )
-from core.emergency_access import decode_emergency_token, EmergencyTokenError
+from apps.patients.emergency_access import decode_emergency_token, EmergencyTokenError
 from apps.documents.models import LabResult, ImmunizationRecord, MedicalDocument
 from core.utils.age import age_years_months as _age_years_months
-from apps.documents.lib_documents import DOCUMENT_TYPES
+from apps.documents.models import DOCUMENT_TYPES
 from apps.documents.lib_documents import awaiting_review_q
 from collections import Counter
 from apps.patients.services import accounts, accounts_with_mobile, awpid_of, privacy_for_awpid, pending_stale, device_matches, is_live, lapse_if_due, seconds_left, set_password, check_password
+from apps.documents import lib_documents as classification
+from apps.documents import lib_documents as records
 
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ def _patient_app_enabled(hospital):
     """
     True only if this hospital's subscription has feat_patient_app on.
     Patients authenticate with a hospital-independent JWT (no MockUser.subscription
-    to lean on — that's only populated for staff, see core/authentication.py),
+    to lean on — that's only populated for staff, see core/api/authentication.py),
     so every portal endpoint that touches a specific hospital re-checks this
     directly rather than trusting a JWT claim.
     """
@@ -85,7 +86,7 @@ class PortalRegisterView(APIView):
     the caller actually received an OTP at the EMAIL address they're
     registering — see core/auth/otp_views.py. Email-based for now since
     verifying via mobile requires a paid SMS gateway that isn't wired up yet
-    (see core/sms.py). The email used to create the account is taken from
+    (see core/messaging/sms.py). The email used to create the account is taken from
     the TOKEN (what was actually verified), not from the request body, so a
     verified-but-different address can't be swapped in at the last step.
     The mobile number is still required (PatientAccount.mobile is the
@@ -98,7 +99,7 @@ class PortalRegisterView(APIView):
         from apps.patients.models import OTPCode
         from core.utils.hashing import stored_mobile, normalize_mobile
         from core.utils.awpid import generate_unique_awpid
-        from core.otp import decode_action_token, OTPError
+        from core.messaging.otp import decode_action_token, OTPError
 
         d = request.data
         token = d.get("action_token") or ""
@@ -123,7 +124,7 @@ class PortalRegisterView(APIView):
             return error("Enter a valid 10-digit mobile number.", errors={"mobile": "Invalid format."})
         if accounts_with_mobile(mobile).exists():
             return error("An account with this mobile number already exists. Please log in.")
-        from core.realworld_validation import validate_mobile_real
+        from core.utils.realworld_validation import validate_mobile_real
         is_valid, reason = validate_mobile_real(mobile)
         if not is_valid:
             return error(reason, errors={"mobile": reason})
@@ -850,13 +851,8 @@ class PortalBookView(APIView):
             branch = Branch.objects.using(db).filter(is_active=True).order_by("id").first()
             if not branch:
                 return Response({"error": "Hospital is not accepting registrations yet."}, status=400)
-            # next UHID number
-            max_num = 0
-            for uhid in HospitalPatient.objects.using(db).values_list("uhid", flat=True):
-                try:
-                    max_num = max(max_num, int(uhid.split("-")[-1]))
-                except (ValueError, IndexError):
-                    pass
+            from core.utils.nntm import get_next_number
+            uhid, _ = get_next_number(branch_id=branch.id, entity="uhid", using=db)
             # These Patient columns are all NOT NULL (blank=True, no null=True) —
             # a mobile-only portal signup has acct.email = None (and a
             # Patient can carry a null gender), so every value sourced
@@ -864,7 +860,7 @@ class PortalBookView(APIView):
             # NotNullViolation on the first booking at a hospital.
             patient = HospitalPatient.objects.using(db).create(
                 awpid=target_awpid,
-                uhid=f"UHID-{max_num + 1:06d}",
+                uhid=uhid,
                 branch=branch,
                 full_name=target_name or "",
                 gender=target_gender or "",
@@ -993,7 +989,7 @@ class PortalMyRecordsView(APIView):
     def get(self, request):
         from apps.opd.models import HospitalPatient
         from apps.opd.models import Appointment, OPDEncounter, Prescription
-        from apps.documents.lib_documents import visit_vitals
+        from apps.documents.lib_vitals import visit_vitals
 
         acct = accounts().get(pk=request.user.id)
 
@@ -1526,13 +1522,13 @@ def _handwritten_siblings(awpid):
     return by_base, list(by_base.values())
 def _document_row(d, handwritten_doc_id=None):
     return {
-        "id": d.id, "title": d.file_name, "doc_type": d.document_type,
-        "file_name": d.file_name, "mime_type": d.mime_type, "size": d.size,
-        "uploaded_by": d.uploaded_by, "created_at": d.created_at,
-        "document_date": d.document_date, "public_document_id": d.document_ref,
+        "id": d.id, "title": records.display_name(d), "doc_type": d.doc_classification,
+        "file_name": records.display_name(d), "mime_type": records.mime_of(d), "size": None,
+        "uploaded_by": records.uploaded_by_of(d), "created_at": d.created_at,
+        "document_date": d.document_date, "public_document_id": d.document_ref_name,
         "source_hospital_id": d.source_hospital_id,
-        "processing_status": d.status, "score": doc_rules.score_of(d), "method": doc_rules.method_of(d),
-        "suggested_type": doc_rules.suggested_type_of(d), "confirmed": doc_rules.is_confirmed(d),
+        "processing_status": d.status, "score": classification.score_of(d), "method": classification.method_of(d),
+        "suggested_type": classification.suggested_type_of(d), "confirmed": classification.is_confirmed(d),
         "error": d.error_message if d.status == "failed" else "",
         "batch_id": d.batch_id, "handwritten_doc_id": handwritten_doc_id,
     }
@@ -1545,10 +1541,10 @@ def _events(doc):
     if doc.status == S.FAILED:
         events.append({"at": doc.updated_at, "text": f"We couldn’t read it — {doc.error_message}".rstrip(" —")})
     elif doc.status in (S.COMPLETED, S.REVIEW_REQUIRED) and not doc.source_hospital_id:
-        if doc_rules.method_of(doc) == "staff":
-            events.append({"at": doc.updated_at, "text": f"You set the type to {label(doc.document_type)}"})
+        if classification.method_of(doc) == "staff":
+            events.append({"at": doc.updated_at, "text": f"You set the type to {label(doc.doc_classification)}"})
         elif doc.status == S.COMPLETED:
-            events.append({"at": doc.updated_at, "text": f"Filed as {label(doc.document_type)} by the rules"})
+            events.append({"at": doc.updated_at, "text": f"Filed as {label(doc.doc_classification)} by the rules"})
         else:
             events.append({"at": doc.updated_at, "text": "The rules couldn’t tell what it is - choose its type"})
     elif doc.status in type(doc).IN_PROGRESS:
@@ -1556,7 +1552,7 @@ def _events(doc):
     return events
 def _choosable_types():
     """What a patient may file a report under: the fixed document types (apps/records/classification.py)."""
-    from apps.documents.lib_documents import CHOOSABLE_TYPES
+    from apps.documents.models import CHOOSABLE_TYPES
     return list(CHOOSABLE_TYPES)
 def _own_document(request, doc_id):
     """(doc, None) if the caller (or a linked family member) owns it, else (None, error)."""
@@ -1593,15 +1589,14 @@ class PortalDocumentListCreateView(APIView):
         statuses = [s for s in (request.query_params.get("status") or "").split(",") if s]
         if statuses:
             qs = qs.filter(status__in=statuses)
-        from apps.documents import lib_documents as records_services
         review = (request.query_params.get("review") or "confirmed").lower()
         if review == "pending":
-            qs = qs.filter(records_services.awaiting_review_q())
+            qs = qs.filter(records.awaiting_review_q())
         elif review != "all":
-            qs = qs.exclude(records_services.awaiting_review_q())
+            qs = qs.exclude(records.awaiting_review_q())
         doc_type = request.query_params.get("doc_type")
         if doc_type:
-            qs = qs.filter(document_type=doc_type)
+            qs = qs.filter(doc_classification=doc_type)
         page_items, meta = paginate_queryset(request, qs)
         return Response({"results": [_document_row(d, hw_by_base.get(d.source_id) if d.source_type == d.Source.ENCOUNTER else None) for d in page_items],
                          "pagination": meta})
@@ -1611,11 +1606,10 @@ class PortalDocumentCountsView(APIView):
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.documents import lib_documents as records_services
         awpid, _dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
-        return success(data=records_services.document_counts(awpid))
+        return success(data=records.document_counts(awpid))
 class PortalDocumentDetailView(APIView):
     """
     GET    /api/v1/portal/documents/<id>/[?download=1]  — metadata + a short-lived signed file URL, and the
@@ -1630,14 +1624,13 @@ class PortalDocumentDetailView(APIView):
     permission_classes = [IsPatient]
 
     def delete(self, request, doc_id):
-        from apps.documents import lib_documents as services
         doc, err = _own_document(request, doc_id)
         if err:
             return err
-        if doc.source_hospital_id or doc.uploaded_by == "staff":
+        if doc.source_hospital_id or doc.created_by_type == "H":
             return error("This report was issued by your hospital, so it can't be removed here.")
         try:
-            services.dismiss_document(doc)
+            records.dismiss_document(doc)
         except ValueError as exc:
             return error(str(exc), errors={"code": "not_removable"}, status=409)
         return success(data={"dismissed": True, "id": doc_id})
@@ -1648,39 +1641,39 @@ class PortalDocumentDetailView(APIView):
         if err:
             return err
         want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
-        dl_name = doc.file_name or "document.pdf"
+        dl_name = records.display_name(doc) or "document.pdf"
         hw_id = None
-        if doc.document_type == "prescription" and doc.source_type == MedicalDocument.Source.ENCOUNTER:
+        if doc.doc_classification == "prescription" and doc.source_type == MedicalDocument.Source.ENCOUNTER:
             hw_id = (MedicalDocument.objects.using("default")
                      .filter(patient_id=doc.patient_id, source_type=MedicalDocument.Source.ENCOUNTER_HANDWRITTEN_RX,
                              source_id=doc.source_id)
                      .values_list("id", flat=True).first())
         return success(data={
             **_document_row(doc, hw_id),
-            "file_data": blob_storage.signed_url(doc.file.name, download_name=dl_name if want_download else None),
+            "size": records.size_of(doc),
+            "file_data": blob_storage.signed_url(doc.file_name.name, download_name=dl_name if want_download else None),
             "download": want_download,
             "doc_types": _choosable_types(),
             "events": _events(doc),
         })
 
     def patch(self, request, doc_id):
-        from apps.documents import lib_documents as services
         doc, err = _own_document(request, doc_id)
         if err:
             return err
-        if doc.source_hospital_id or doc.uploaded_by == "staff":
+        if doc.source_hospital_id or doc.created_by_type == "H":
             return error("This report was issued by your hospital, so it can't be changed here.")
         action = request.data.get("action")
         try:
             if action == "retry":
-                services.retry_document(doc)
-                services.start_processing([doc.id], services.INSTANT_QUEUE)
+                records.retry_document(doc)
+                records.start_processing([doc.id], records.INSTANT_QUEUE)
             else:
                 doc_type = request.data.get("doc_type")
                 if doc_type not in _choosable_types():
                     return error("Choose one of the available types.")
-                services.correct_document(doc, doc_type)
-        except doc_rules.DocumentLocked as exc:
+                records.correct_document(doc, doc_type)
+        except classification.DocumentLocked as exc:
             return error(str(exc), errors={"code": "locked"}, status=409)
         except ValueError as exc:
             return error(str(exc))
@@ -1714,11 +1707,11 @@ class PortalDocumentZipView(APIView):
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for d in docs:
                 try:
-                    content = blob_storage.get_bytes(d.file.name)
+                    content = blob_storage.get_bytes(d.file_name.name)
                 except Exception:
                     logger.warning("zip: could not read document %s", d.id, exc_info=True)
                     continue
-                name = d.file_name or f"document-{d.id}.pdf"
+                name = records.display_name(d) or f"document-{d.id}.pdf"
                 if name in used:
                     name = f"{d.id}-{name}"
                 used.add(name)
@@ -1797,10 +1790,10 @@ class PortalLabOrderListView(APIView):
                     if r.patient_choice == "outside":
                         from apps.documents.models import MedicalDocument
                         doc = (MedicalDocument.objects.using("default")
-                               .filter(patient__awpid=target_awpid, source_type=MedicalDocument.Source.LAB_REQUEST, source_id=f"{db}:{r.id}")
+                               .filter(patient__awpid=target_awpid, source_type=MedicalDocument.Source.LAB_REQUEST, source_id=records.source_uuid(f"{db}:{r.id}"))
                                .order_by("-created_at").first())
                         if doc:
-                            attached_doc = {"id": doc.id, "title": doc.file_name, "created_at": doc.created_at}
+                            attached_doc = {"id": doc.id, "title": records.display_name(doc), "created_at": doc.created_at}
 
                     results.append({
                         "id": r.id,
@@ -1954,7 +1947,7 @@ class PortalPrescriptionListView(APIView):
                 hw_by_enc = {
                     d.source_id: d.id
                     for d in MedicalDocument.objects.using("default").filter(
-                        patient__awpid=target_awpid, document_type="prescription",
+                        patient__awpid=target_awpid, doc_classification="prescription",
                         source_type=MedicalDocument.Source.ENCOUNTER_HANDWRITTEN_RX,
                     )
                 }
@@ -2206,7 +2199,7 @@ class PortalMobileChangeRequestOTPView(APIView):
     currently on file (not a caller-supplied one), so changing a mobile
     number requires proving control of the account first. Email-based for
     now — verifying via the old mobile requires a paid SMS gateway that
-    isn't wired up yet (see core/sms.py); email is free to send and just as
+    isn't wired up yet (see core/messaging/sms.py); email is free to send and just as
     good a proof of account ownership. The follow-up
     PATCH /api/v1/portal/profile/ (mobile field) requires the resulting
     action_token, obtained via POST /api/v1/auth/otp/verify/
@@ -2217,8 +2210,8 @@ class PortalMobileChangeRequestOTPView(APIView):
     throttle_scope = "otp"
 
     def post(self, request):
-        from core.otp import create_otp, mask_identifier, OTPError
-        from core.email import send_otp_email
+        from core.messaging.otp import create_otp, mask_identifier, OTPError
+        from core.messaging.email import send_otp_email
         from apps.patients.models import OTPCode
 
         try:
@@ -2311,7 +2304,7 @@ class PortalProfileView(APIView):
             # the patient through an OTP for a no-op.
             mobile_changed = bool(mobile) and mobile_of(mobile) != acct.mobile
             if mobile_changed:
-                from core.otp import decode_action_token, OTPError
+                from core.messaging.otp import decode_action_token, OTPError
                 from apps.patients.models import OTPCode
                 token = d.get("action_token") or ""
                 try:
@@ -2459,7 +2452,7 @@ class PortalHealthSummaryView(APIView):
         )
         diagnoses = list(
             ClinicalEvent.objects.using("default")
-            .filter(patient__awpid=target_awpid, event_type="DIAGNOSIS", clinical_status="active", is_rejected=False)
+            .filter(patient__awpid=target_awpid, event_type="DIAGNOSIS", clinical_status="active").exclude(verification_status="rejected")
             .order_by("-event_date")
             .values(description=F("condition_text"), onset_date=F("event_date"))[:5]
         )
@@ -2521,9 +2514,9 @@ class PortalHealthTimelineView(APIView):
         from apps.opd.models import HospitalPatient
         from apps.opd.models import Appointment, OPDEncounter
         from apps.lab.models import LabRequest
-        from apps.documents.lib_documents import history_readings
+        from apps.documents.lib_vitals import history_readings
         from apps.documents.models import MedicalDocument
-        from apps.documents.lib_documents import build_roadmap
+        from apps.documents.lib_roadmap import build_roadmap
 
         target_awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
@@ -2663,8 +2656,8 @@ class PortalHealthTimelineView(APIView):
                     "date":      str(d.created_at.date() if hasattr(d.created_at, "date") else d.created_at),
                     "type":      "document",
                     "icon_hint": "file",
-                    "title":     d.file_name,
-                    "subtitle":  d.document_type.replace("_", " ").title() if d.document_type else None,
+                    "title":     records.display_name(d),
+                    "subtitle":  d.doc_classification.replace("_", " ").title() if d.doc_classification else None,
                     "detail":    {"id": d.id},
                 })
         except Exception as e:
@@ -2687,7 +2680,7 @@ class PortalNotificationsView(APIView):
         across every active hospital the same way PortalMyRecordsView does,
         since a patient's hospitals aren't known in advance.
       - Vaccination-due reminders — NOT stored anywhere. Computed live from
-        apps.documents.lib_documents.build_roadmap() every time this is
+        apps.documents.lib_roadmap.build_roadmap() every time this is
         called, because due-ness is just today's date vs. the patient's age
         against the schedule — persisting it would just be a second copy
         that could silently go stale (e.g. after a dose gets logged).
@@ -2701,7 +2694,7 @@ class PortalNotificationsView(APIView):
     def get(self, request):
         from apps.opd.models import HospitalPatient
         from apps.hospital_setup.models import NotificationLog
-        from apps.documents.lib_documents import build_roadmap
+        from apps.documents.lib_roadmap import build_roadmap
 
         target_awpid, dob, err = resolve_target_awpid_and_dob(request)
         if err:
@@ -2834,7 +2827,7 @@ class PortalChangePasswordView(APIView):
         acct.save(using="default", update_fields=["password"])
         return success(message="Password changed successfully.")
 # ── Emergency QR ─────────────────────────────────────────────────────────────
-# See core/emergency_access.py for the token mechanics and the security
+# See apps/patients/emergency_access.py for the token mechanics and the security
 # reasoning (why the token payload carries only an awpid, never PHI). This
 # generation endpoint is patient-authenticated (IsPatient); the endpoint
 # that actually serves the summary a scanned QR opens is deliberately
@@ -2908,7 +2901,7 @@ class PortalEmergencyTokenView(APIView):
                 ),
             }, status=428)
 
-        from core.emergency_access import make_emergency_token, EMERGENCY_TOKEN_TTL_MINUTES
+        from apps.patients.emergency_access import make_emergency_token, EMERGENCY_TOKEN_TTL_MINUTES
         from apps.patients.models import EmergencyAccessLog
 
         token = make_emergency_token(target_awpid)
@@ -3014,7 +3007,7 @@ def _milestone_concerns(awpid):
     the only milestone information an ER doctor treating an unfamiliar
     child actually needs in an emergency (a full achieved/not-yet roadmap is
     a well-child-visit concern, not an acute-care one; see
-    apps.documents.lib_documents for that fuller view, used by the
+    apps.documents.lib_vitals for that fuller view, used by the
     doctor's own consultation screen and the parent's portal). Sourced
     straight from MilestoneRecord — no schedule merge needed here,
     just "what has a clinician actually flagged."
@@ -3095,7 +3088,7 @@ class EmergencySummaryView(APIView):
         # endpoints with), so resolve every file to a signed URL right here.
         lab_result_ids = [r["id"] for r in history["lab_results"] if r.get("has_file")]
         lab_files = {
-            r.id: blob_storage.signed_url(r.document.file.name)
+            r.id: blob_storage.signed_url(r.document.file_name.name)
             for r in LabResult.objects.using("default").filter(id__in=lab_result_ids, document__isnull=False).select_related("document")
         }
         for r in history["lab_results"]:
@@ -3103,7 +3096,7 @@ class EmergencySummaryView(APIView):
 
         doc_ids = [d["id"] for d in history["documents"]]
         doc_files = {
-            d.id: blob_storage.signed_url(d.file.name)
+            d.id: blob_storage.signed_url(d.file_name.name)
             for d in MedicalDocument.objects.using("default").filter(id__in=doc_ids)
         }
         for d in history["documents"]:
@@ -3241,13 +3234,13 @@ def _vault_documents(awpid, limit=200):
     )
     return [{
         "id":                d.id,
-        "title":             d.file_name,
-        "doc_type":          d.document_type,
-        "file_name":         d.file_name,
-        "mime_type":         d.mime_type,
-        "uploaded_by":       d.uploaded_by,
+        "title":             records.display_name(d),
+        "doc_type":          d.doc_classification,
+        "file_name":         records.display_name(d),
+        "mime_type":         records.mime_of(d),
+        "uploaded_by":       records.uploaded_by_of(d),
         "document_date":     d.document_date,
-        "public_document_id": d.document_ref,
+        "public_document_id": d.document_ref_name,
         "created_at":        d.created_at,
         "source_hospital_id":  d.source_hospital_id,
         "handwritten_doc_id": hw_by_base.get(d.source_id) if d.source_type == Source.ENCOUNTER else None,
@@ -3296,7 +3289,7 @@ def _pending_download_payload(grant):
     ).first()
     return {
         "id": grant.pending_download_id,
-        "title": doc.file_name if doc else "a document",
+        "title": records.display_name(doc) if doc else "a document",
     }
 # ─────────────────────────────────────────────────────────────── patient: create
 
@@ -3593,7 +3586,7 @@ class RecordsShareDownloadView(APIView):
             return error("That document isn't part of this patient's records.", status=404)
 
         if doc_id in (grant.download_unlocked_ids or []):
-            return success(data={"state": "unlocked", "file_url": blob_storage.signed_url(doc.file.name)})
+            return success(data={"state": "unlocked", "file_url": blob_storage.signed_url(doc.file_name.name)})
 
         RecordsShareRequest.objects.using("default").filter(pk=grant.pk).update(
             pending_download_id=doc_id)
@@ -3612,7 +3605,7 @@ class RecordsShareDocumentViewView(APIView):
     carries its own Download/Print buttons — a doctor could bypass the
     per-file patient-approval gate entirely just by using those, with no
     audit trail. So for a PDF, this rasterises each page to a PNG
-    server-side (same renderer core.ocr uses for OCR) and returns those
+    server-side (same renderer apps.documents.ocr uses for OCR) and returns those
     instead of a URL — a page rendered as an <img> in our own page carries
     no native viewer chrome to download or print from. For an image
     document there's no separate "native viewer" risk (the frontend fetches
@@ -3642,11 +3635,12 @@ class RecordsShareDocumentViewView(APIView):
         if not doc:
             return error("That document isn't part of this patient's records.", status=404)
 
-        if doc.mime_type == "application/pdf":
+        mime_type = records.mime_of(doc)
+        if mime_type == "application/pdf":
             import base64
-            from core import ocr as _ocr
+            from apps.documents import ocr as _ocr
 
-            pages = _ocr.pdf_page_images(blob_storage.get_bytes(doc.file.name), max_pages=12, dpi=150)
+            pages = _ocr.pdf_page_images(blob_storage.get_bytes(doc.file_name.name), max_pages=12, dpi=150)
             if not pages:
                 return error("Couldn't render this document for viewing.", status=500)
             return success(data={
@@ -3654,7 +3648,7 @@ class RecordsShareDocumentViewView(APIView):
                 "pages": [f"data:image/png;base64,{base64.b64encode(p).decode()}" for p in pages],
             })
 
-        return success(data={"mime_type": doc.mime_type, "file_url": blob_storage.signed_url(doc.file.name)})
+        return success(data={"mime_type": mime_type, "file_url": blob_storage.signed_url(doc.file_name.name)})
 class RecordsShareCloseView(APIView):
     """
     POST /api/v1/records-share/<token>/close/

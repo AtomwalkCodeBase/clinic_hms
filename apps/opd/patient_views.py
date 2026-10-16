@@ -10,12 +10,12 @@ import logging
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 
-from core.response import success, created, error, not_found
-from core.pagination import paginate_queryset
+from core.api.response import success, created, error, not_found
+from core.api.pagination import paginate_queryset
 from core import storage as blob_storage
 
 logger = logging.getLogger(__name__)
-from core.permissions import IsHospitalStaff, IsDoctorOrNurse, IsFrontDesk
+from core.api.permissions import IsHospitalStaff, IsDoctorOrNurse, IsFrontDesk
 
 from apps.opd.patient_serializers import (
     PatientRegisterSerializer,
@@ -97,7 +97,7 @@ class PatientRegisterView(APIView):
             )
         _maybe_charge_registration_fee(patient, request.hospital_id, request.hospital_db, request.user)
 
-        from core.audit import log_action
+        from core.utils.audit import log_action
         log_action(request, request.hospital_db, action="patient.register",
                     resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
 
@@ -137,7 +137,7 @@ class PatientEmergencyRegisterView(APIView):
             logger.exception("Emergency patient registration failed: %s", exc)
             return error(message=f"Registration failed: {exc}", status=500)
 
-        from core.audit import log_action
+        from core.utils.audit import log_action
         log_action(
             request, request.hospital_db, action="patient.register_emergency",
             resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk,
@@ -286,7 +286,7 @@ class PatientDetailView(APIView):
         except HospitalPatient.DoesNotExist:
             return not_found("Patient not found.")
 
-        from core.audit import log_action
+        from core.utils.audit import log_action
         log_action(request, request.hospital_db, action="patient.view",
                     resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
 
@@ -316,7 +316,7 @@ class PatientHistoryView(APIView):
             return not_found("Patient not found.")
 
         if not patient.hie_consent_given:
-            from core.audit import log_action
+            from core.utils.audit import log_action
             log_action(request, request.hospital_db, action="patient.history.view_blocked_no_consent",
                         resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
             # Documents THIS hospital captured for THIS visit — the consult
@@ -328,12 +328,10 @@ class PatientHistoryView(APIView):
             # null). Everything else stays gated.
             from django.db.models import F
             from apps.documents.models import MedicalDocument
-            own_notes = list(
+            from apps.documents.lib_documents import document_rows
+            own_notes = document_rows(
                 MedicalDocument.objects.using("default")
                 .filter(patient__awpid=patient.awpid, source_hospital_id=request.hospital_id)
-                .values("id", "file_name", "mime_type", "uploaded_by", "created_at",
-                        title=F("file_name"), doc_type=F("document_type"))
-                .order_by("-created_at")[:50]
             )
             return success(data={
                 "awpid": patient.awpid, "consent_given": False,
@@ -344,7 +342,7 @@ class PatientHistoryView(APIView):
         history = PatientService.get_shared_history(awpid=patient.awpid)
         history["consent_given"] = True
 
-        from core.audit import log_action
+        from core.utils.audit import log_action
         log_action(request, request.hospital_db, action="patient.history.view",
                     resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
 
@@ -379,12 +377,12 @@ class PatientDocumentDetailView(APIView):
         # PatientHistoryView's no-consent branch.
         own_hospital_doc = doc.source_hospital_id == request.hospital_id
         if not own_hospital_doc and (not owner or not owner.hie_consent_given):
-            from core.audit import log_action
+            from core.utils.audit import log_action
             log_action(request, request.hospital_db, action="patient.document.view_blocked_no_consent",
                         resource_type="SharedDocument", resource_id=doc.id)
             return error("This patient hasn't consented to cross-hospital record sharing.", status=403)
 
-        from core.audit import log_action
+        from core.utils.audit import log_action
         log_action(request, request.hospital_db, action="patient.document.view",
                     resource_type="SharedDocument", resource_id=doc.id)
 
@@ -395,12 +393,13 @@ class PatientDocumentDetailView(APIView):
         # S3 URL gets a Content-Disposition override; a "data:" URI is saved
         # client-side (utils/fileViewer.downloadFile).
         want_download = (request.query_params.get("download") or "").lower() in ("1", "true", "yes")
-        dl_name = doc.file_name or "document.pdf"
-        file_data = blob_storage.signed_url(doc.file.name, download_name=dl_name if want_download else None)
+        from apps.documents.lib_documents import display_name, mime_of
+        dl_name = display_name(doc) or "document.pdf"
+        file_data = blob_storage.signed_url(doc.file_name.name, download_name=dl_name if want_download else None)
 
         return success(data={
-            "id": doc.id, "title": doc.file_name, "doc_type": doc.document_type,
-            "file_name": doc.file_name, "mime_type": doc.mime_type,
+            "id": doc.id, "title": display_name(doc), "doc_type": doc.doc_classification,
+            "file_name": display_name(doc), "mime_type": mime_of(doc),
             "file_data": file_data, "created_at": doc.created_at,
             "download": want_download,
         })
@@ -427,19 +426,20 @@ class PatientLabResultDetailView(APIView):
         # that view's comment.
         owner = HospitalPatient.objects.using(request.hospital_db).filter(awpid=r.patient.awpid if r.patient_id else "").first()
         if not owner or not owner.hie_consent_given:
-            from core.audit import log_action
+            from core.utils.audit import log_action
             log_action(request, request.hospital_db, action="patient.lab_result.view_blocked_no_consent",
                         resource_type="LabResult", resource_id=r.id)
             return error("This patient hasn't consented to cross-hospital record sharing.", status=403)
 
-        from core.audit import log_action
+        from core.utils.audit import log_action
         log_action(request, request.hospital_db, action="patient.lab_result.view",
                     resource_type="LabResult", resource_id=r.id)
 
+        from apps.documents.lib_documents import mime_of
         return success(data={
             "id": r.id, "test_name": r.test_name, "result_summary": r.result_summary,
-            "mime_type": r.document.mime_type if r.document_id else "",
-            "file_data": blob_storage.signed_url(r.document.file.name) if r.document_id else "", "delivered_at": r.delivered_at,
+            "mime_type": mime_of(r.document) if r.document_id else "",
+            "file_data": blob_storage.signed_url(r.document.file_name.name) if r.document_id else "", "delivered_at": r.delivered_at,
         })
 
 

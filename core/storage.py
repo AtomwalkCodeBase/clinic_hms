@@ -21,7 +21,7 @@ via signed_url() at request time, not returning the stored key to the
 frontend directly.
 
 Callers should always run the incoming data URI through
-core.file_validation.validate_data_uri() FIRST (verifies real magic bytes,
+core.utils.file_validation.validate_data_uri() FIRST (verifies real magic bytes,
 not just the client's claimed mime_type) and pass the verified mime_type
 into upload_data_uri() here — this module doesn't re-validate content type.
 """
@@ -58,22 +58,8 @@ def sanitize_folder_name(name: str) -> str:
 
 
 def hospital_folder(hospital) -> str:
-    """
-    The S3 folder segment to use for this hospital's uploads — their own
-    chosen Hospital.storage_folder (hospital admin editable via
-    /api/v1/org/settings/) if they've set one, otherwise the auto-generated
-    db_name. This is the ONE place that fallback is resolved, so every
-    upload call site (staff photos, doctor signatures, hospital logo, lab
-    reports) picks up a folder rename automatically instead of needing to
-    be updated one by one.
-
-    Takes the Hospital model instance, not just its id/db_name, since
-    storage_folder already went through sanitize_folder_name() at write
-    time (see HospitalSettingsView.patch()) — no re-sanitizing needed here.
-    """
-    from apps.hospital_master.services import parameters_of
-
-    return parameters_of(hospital).storage_folder or hospital.db_name
+    """The S3 folder segment for this hospital's uploads: its db_name, which is unique and already a safe slug."""
+    return hospital.db_name
 
 
 def identity_slug(*, name: str = "", identifier: str = "") -> str:
@@ -98,7 +84,7 @@ def identity_slug(*, name: str = "", identifier: str = "") -> str:
     parts = " ".join(p for p in (name, identifier) if p)
     return sanitize_folder_name(parts)
 
-# Maps a verified mime_type (see core.file_validation.ALLOWED_MIME_TYPES) to
+# Maps a verified mime_type (see core.utils.file_validation.ALLOWED_MIME_TYPES) to
 # the extension used for the stored S3 key — cosmetic only (S3 doesn't care),
 # but makes keys human-readable in the AWS console when debugging.
 _EXT_BY_MIME = {
@@ -165,73 +151,35 @@ def display_file_name(category: str, mime_type: str, *, detail: str = "", name: 
 
 
 class StorageError(Exception):
-    """Raised when S3 isn't configured, or an upload/delete genuinely fails."""
+    """Raised when file storage isn't configured, or an upload genuinely fails."""
 
 
-def _client():
-    if not settings.AWS_S3_BUCKET:
+def _storage():
+    """The project's default file storage (settings.DEFAULT_FILE_STORAGE): S3 through core.storage_backend.mediaStorage,
+    or the media folder when LOCAL_OR_AWS_S3_MEDIA is not "S3". Every helper below goes through it, so a key given to
+    one is the same key the models' FileFields use."""
+    if getattr(settings, "DEFAULT_FILE_STORAGE", "").endswith("mediaStorage") and not settings.AWS_STORAGE_BUCKET_NAME:
         raise StorageError(
             "File storage isn't configured yet — set AWS_S3_BUCKET, AWS_S3_REGION, "
             "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the environment."
         )
-    import boto3
-    from botocore.config import Config
-    return boto3.client(
-        "s3",
-        region_name=settings.AWS_S3_REGION,
-        aws_access_key_id=settings.AWS_ACCESS_KEY_ID or None,
-        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY or None,
-        # Without this, boto3 can fall back to the legacy global
-        # "s3.amazonaws.com" host for presigned URLs, whose requests get
-        # routed to the us-east-1 frontend — but the URL is still SIGNED
-        # for AWS_S3_REGION, so AWS rejects it with "AuthorizationQuery
-        # ParametersError: the region '<region>' is wrong; expecting
-        # 'us-east-1'". Pinning the regional endpoint explicitly keeps the
-        # host and the signature's credential scope in agreement for any
-        # bucket region, not just us-east-1.
-        endpoint_url=f"https://s3.{settings.AWS_S3_REGION}.amazonaws.com",
-        # Explicit, short timeouts — botocore's defaults (60s connect, 60s
-        # read, "legacy" retries) mean a genuinely unreachable S3 endpoint
-        # (blocked network, wrong region/bucket, bad credentials) hangs the
-        # whole Django request for minutes. The frontend's own axios
-        # timeout (api.client.js, 15s) fires long before that, so the user
-        # sees a generic "Could not reach the server" toast instead of the
-        # real StorageError message below — and the upload "hangs" for a
-        # long time before ever surfacing that. Failing fast here (well
-        # under 15s total, even with one retry) means a real network/config
-        # problem shows up as a clear, immediate error instead of a stall.
-        config=Config(connect_timeout=4, read_timeout=6, retries={"max_attempts": 1}),
-    )
+    from django.core.files.storage import storages
+    return storages["default"]
+
+
+def put_bytes(key: str, data: bytes, *, mime_type: str) -> str:
+    """Write raw bytes under `key`; returns the name it was stored under."""
+    content = ContentFile(data)
+    content.content_type = mime_type
+    return _storage().save(key, content)
 
 
 def upload_data_uri(data_uri: str, *, prefix: str, mime_type: str, category: str, identity: str = "") -> str:
     """
-    Decode a "data:<mime>;base64,<payload>" string and upload it to S3 under
-    a key namespaced by `prefix` (e.g. "staff-photos/aw_sunrise_clinic") and
-    named after `category` (a key from UPLOAD_CATEGORIES, e.g. "staff-photo")
-    — never after whatever filename the uploader's device gave it. `mime_type`
-    should already be the VERIFIED type from
-    core.file_validation.validate_data_uri(), not the client's raw claim.
-
-    `identity` (from identity_slug() above) — when given, becomes a folder
-    segment between `prefix` and the file itself, e.g.
-    "patient-documents/riya-sharma-awp1029384/patient-document-a1b2c3.pdf".
-    This is what makes "find every file for this patient/staff member"
-    a matter of browsing/listing one S3 prefix instead of opening files one
-    by one — pass it whenever the caller has a patient AWPID or staff email
-    on hand. Optional (defaults to no identity folder) since a few upload
-    types genuinely aren't tied to one person — the hospital logo belongs to
-    the clinic, not an individual.
-
-    Returns the S3 object key to store in the model field — never a URL.
-    Callers must call signed_url() separately whenever the file is actually
-    served back to a client. Callers that also store a user-facing file_name
-    (LabReport, MedicalDocument, ImmunizationRecord) should set it from
-    display_file_name(category, mime_type), not from client input either.
-
-    Raises StorageError if S3 isn't configured or the upload fails — callers
-    should catch this and turn it into a 503/500 response via core.response,
-    the same way they already catch FileValidationError for a 400.
+    Decode a "data:<mime>;base64,<payload>" string and store it under `prefix` (and `identity`, when given), named after
+    `category` — never after the uploader's file name. `mime_type` should be the VERIFIED type from
+    core.utils.file_validation.validate_data_uri(). Returns the stored name to keep in the model field, never a URL.
+    Raises StorageError if storage isn't configured or the upload fails.
     """
     try:
         _, b64_payload = data_uri.split(",", 1)
@@ -243,37 +191,19 @@ def upload_data_uri(data_uri: str, *, prefix: str, mime_type: str, category: str
         raise StorageError("File data is not valid base64.") from exc
 
     ext = _EXT_BY_MIME.get(mime_type, "bin")
-    # Short random suffix (not a full UUID) keeps keys unique without making
-    # them unreadable — e.g. "staff-photo-a1b2c3d4e5f6.jpg", so the category
-    # is legible at a glance in the S3 console, not just in the folder path.
     base = f"{prefix.strip('/')}/{identity}" if identity else prefix.strip('/')
     key = f"{base}/{category}-{uuid.uuid4().hex[:16]}.{ext}"
-
-    client = _client()
     try:
-        client.put_object(
-            Bucket=settings.AWS_S3_BUCKET,
-            Key=key,
-            Body=raw,
-            ContentType=mime_type,
-            ServerSideEncryption="AES256",
-        )
+        return put_bytes(key, raw, mime_type=mime_type)
+    except StorageError:
+        raise
     except Exception as exc:
-        logger.error("S3 upload failed for key=%s", key, exc_info=True)
+        logger.error("Upload failed for key=%s", key, exc_info=True)
         raise StorageError("Upload to storage failed. Please try again.") from exc
-    return key
 
 
 def _attachment_disposition(name: str) -> str:
-    """
-    A `Content-Disposition: attachment` value that S3 will accept for any title.
-
-    S3 rejects a response-content-disposition that isn't representable in
-    ISO-8859-1, so a raw `filename="Rx — 2026-09-07.pdf"` (long dash, accents,
-    Indic scripts...) made every View/Download link fail with InvalidArgument.
-    RFC 6266: send a plain-ASCII `filename=` fallback for old clients plus the
-    real name percent-encoded in `filename*=UTF-8''...`. Both are pure ASCII.
-    """
+    """A `Content-Disposition: attachment` value S3 accepts for any title (ASCII fallback plus RFC 6266 filename*)."""
     import unicodedata
     from urllib.parse import quote
 
@@ -286,119 +216,41 @@ def _attachment_disposition(name: str) -> str:
 
 def signed_url(key: str, *, expires_in: int = None, download_name: str = None) -> str:
     """
-    Generate a time-limited presigned GET URL for an S3 key.
-
-    Deliberately forgiving rather than raising: returns "" for a blank/None
-    key (so callers can do signed_url(obj.photo) unconditionally, no
-    `if obj.photo else ""` guard needed everywhere), and also returns "" —
-    instead of raising — if S3 isn't configured or the presign call fails,
-    since a missing avatar/signature/report shouldn't 500 an entire profile
-    or history page; it just renders as no-file, same as an empty field
-    always has.
-
-    `download_name`: when given, the URL carries a `Content-Disposition:
-    attachment; filename="..."` override so the browser SAVES the file (with
-    that name) instead of rendering it inline. Used by the "Download" actions
-    on prescription / handwriting PDFs.
+    A time-limited link to the stored file. Forgiving: returns "" for a blank key, or when storage isn't configured or
+    signing fails, so a missing file renders as "no file" instead of a 500. `download_name` makes the browser save the
+    file under that name instead of showing it.
     """
     if not key:
         return ""
     try:
-        client = _client()
+        storage = _storage()
     except StorageError:
         return ""
-    expires_in = expires_in or settings.AWS_S3_URL_EXPIRY
-    params = {"Bucket": settings.AWS_S3_BUCKET, "Key": key}
-    if download_name:
-        params["ResponseContentDisposition"] = _attachment_disposition(download_name)
     try:
-        return client.generate_presigned_url(
-            "get_object",
-            Params=params,
-            ExpiresIn=expires_in,
-        )
+        try:
+            kwargs = {"expire": expires_in or settings.AWS_S3_URL_EXPIRY}
+            if download_name:
+                kwargs["parameters"] = {"ResponseContentDisposition": _attachment_disposition(download_name)}
+            return storage.url(key, **kwargs)
+        except TypeError:                              # a local storage takes no signing options
+            return storage.url(key)
     except Exception:
-        logger.error("S3 presign failed for key=%s", key, exc_info=True)
+        logger.error("Signing a link failed for key=%s", key, exc_info=True)
         return ""
 
 
 def delete(key: str) -> None:
-    """
-    Best-effort delete — e.g. when a photo/signature/logo is replaced or
-    removed. Never raises; a failed cleanup shouldn't block the request that
-    triggered it (the new file has already been uploaded and saved by the
-    time this runs in every call site below).
-    """
+    """Best-effort delete (a replaced photo or logo). Never raises."""
     if not key:
         return
     try:
-        _client().delete_object(Bucket=settings.AWS_S3_BUCKET, Key=key)
+        _storage().delete(key)
     except Exception:
-        logger.warning("S3 delete failed for key=%s", key, exc_info=True)
+        logger.warning("Delete failed for key=%s", key, exc_info=True)
 
 
 def get_bytes(key: str) -> bytes:
-    """Read an object's full body. Raises StorageError if storage is unset."""
-    client = _client()
-    obj = client.get_object(Bucket=settings.AWS_S3_BUCKET, Key=key)
-    return obj["Body"].read()
-
-
-def put_bytes(key: str, data: bytes, *, mime_type: str) -> str:
-    """Write raw bytes to `key` with SSE-AES256. Returns the key."""
-    client = _client()
-    client.put_object(
-        Bucket=settings.AWS_S3_BUCKET,
-        Key=key,
-        Body=data,
-        ContentType=mime_type,
-        ServerSideEncryption="AES256",
-    )
-    return key
-
-
-@deconstructible
-class PrivateS3Storage(Storage):
-    """Django storage over the private bucket, so a FileField holds an S3 key and `.file.url` is a presigned
-    link (put_bytes / get_bytes / signed_url / delete above). Names given by `upload_to` are random, so a name is
-    never checked for a clash."""
-
-    def _open(self, name, mode="rb"):
-        return ContentFile(get_bytes(name), name=name)
-
-    def _save(self, name, content):
-        data = content.read()
-        mime_type = getattr(content, "content_type", None) or mimetypes.guess_type(name)[0] or "application/octet-stream"
-        put_bytes(name, data, mime_type=mime_type)
-        return name
-
-    def generate_filename(self, filename):
-        """An S3 key always uses "/", whatever the server's OS (Django's default would use "\\" on Windows)."""
-        filename = str(filename).replace("\\", "/")
-        dirname, name = posixpath.split(filename)
-        if ".." in dirname.split("/"):
-            raise SuspiciousFileOperation(f"Detected path traversal attempt in '{dirname}'")
-        return posixpath.normpath(posixpath.join(dirname, self.get_valid_name(name)))
-
-    def get_available_name(self, name, max_length=None):
-        return name
-
-    def exists(self, name):
-        return False
-
-    def delete(self, name):
-        delete(name)
-
-    def url(self, name):
-        return signed_url(name)
-
-    def size(self, name):
-        return _client().head_object(Bucket=settings.AWS_S3_BUCKET, Key=name)["ContentLength"]
-
-
-def documents_storage():
-    return PrivateS3Storage()
-
-
-def document_file_path(instance, filename):
-    return f"documents/{instance.patient.awpid}/{instance.batch_id or 'NA'}/{filename}"
+    """A stored file's full body. Raises StorageError if storage is unset."""
+    storage = _storage()
+    with storage.open(key, "rb") as fh:
+        return fh.read()

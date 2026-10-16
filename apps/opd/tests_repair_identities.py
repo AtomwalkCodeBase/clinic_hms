@@ -3,7 +3,7 @@ import datetime as dt
 
 from apps.opd.management.commands.repair_patient_identities import restore_identities
 from apps.patients.models import Patient
-from core.testing import HospitalDBTestCase, requires_hospital_db
+from core.tests.testing import HospitalDBTestCase, requires_hospital_db
 
 
 @requires_hospital_db

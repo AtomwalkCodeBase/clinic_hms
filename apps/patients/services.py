@@ -8,7 +8,7 @@ import re
 import time
 import requests
 from apps.patients.models import Patient
-from core.response import error
+from core.api.response import error
 from django.conf import settings
 
 
@@ -90,7 +90,7 @@ def sync_patient_booking(appointment, db_name):
             patient=Patient.objects.using("default").filter(awpid=patient_awpid).first(),
         )
     except Exception:
-        # Same graceful-degradation pattern as core.audit.log_action — a
+        # Same graceful-degradation pattern as core.utils.audit.log_action — a
         # booking that already succeeded in the hospital DB must not fail (or
         # roll back) just because this best-effort portal-visibility sync hit
         # an unexpected error.

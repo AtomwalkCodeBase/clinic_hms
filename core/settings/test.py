@@ -7,7 +7,7 @@ This module adds a single extra alias ("hospital_test") so hospital-app tests ca
 
     python manage.py test --settings=core.settings.test
 
-Tests opt in with core.testing.HospitalDBTestCase. Under the normal settings those
+Tests opt in with core.tests.testing.HospitalDBTestCase. Under the normal settings those
 tests are skipped, so `python manage.py test` keeps working unchanged.
 """
 
@@ -19,3 +19,5 @@ DATABASES["hospital_test"] = {
     "NAME": "aw_hospital_test",
     "TEST": {"NAME": "test_aw_hospital_test"},
 }
+
+DEFAULT_FILE_STORAGE = "django.core.files.storage.InMemoryStorage"

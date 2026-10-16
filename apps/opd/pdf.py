@@ -63,7 +63,7 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
     when = visit_date or prescription.created_at
 
     # ── QR: "scan to save in My Reports" ────────────────────────────────
-    # Encodes a view-report link (core.qr_token.issue_url) whose token ties
+    # Encodes a view-report link (core.utils.qr_token.issue_url) whose token ties
     # this Rx number to the patient's AWPID — the app's own camera forwards
     # whatever it scans straight to the verify() path and files it under
     # Prescriptions automatically; any other scanner (Google Lens etc.) just
@@ -75,7 +75,7 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
         awpid = getattr(patient, "awpid", "") if patient else ""
         if prescription.rx_number and awpid:
             import qrcode
-            from core.qr_token import issue_url as _qr_issue_url
+            from core.utils.qr_token import issue_url as _qr_issue_url
             _tok = _qr_issue_url(doc_type="prescription",
                                   public_document_id=prescription.rx_number, awpid=awpid)
             _qr = qrcode.QRCode(box_size=4, border=1)

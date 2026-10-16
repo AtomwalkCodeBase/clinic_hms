@@ -443,7 +443,7 @@ class Role(models.Model):
     # show up in the front-desk doctor picker / doctor working-hours setup /
     # patient booking search" needs an explicit identity signal, not an
     # inference from which permission codes happen to be checked. Every
-    # hardcoded Is* check in core/permissions.py and every "list all
+    # hardcoded Is* check in core/api/permissions.py and every "list all
     # doctors"-style query (apps.hospital_setup.staff_views.DoctorListView, apps.hospital_master.
     # limits, apps.patients.views) treats role="custom" staff whose
     # custom_role.acts_as contains a key the same as staff whose literal
@@ -569,7 +569,7 @@ class StaffProfile(models.Model):
 class AuditLog(models.Model):
     """
     Who did what to which patient record, when. Lives per-hospital since
-    patient records are per-hospital; use core.audit.log_action() to write
+    patient records are per-hospital; use core.utils.audit.log_action() to write
     entries rather than creating rows directly.
 
     Deliberately append-only from the application layer — no update/delete

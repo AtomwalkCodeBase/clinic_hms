@@ -11,17 +11,18 @@ so changing one is a code change, not a screen.
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from apps.documents import lib_documents as rules
-from apps.documents import lib_documents as services
 from apps.documents.models import MedicalDocument
-from core.pagination import paginate_queryset
-from core.permissions import IsPlatformAdmin
-from core.response import error, not_found, success
+from core.api.pagination import paginate_queryset
+from core.api.permissions import IsPlatformAdmin
+from core.api.response import error, not_found, success
+from apps.documents import lib_documents as classification
+from apps.documents import lib_documents as records
+from apps.documents.models import CHOOSABLE_TYPES, HUMAN_CLASSIFIED, ISSUED, REVIEW_REQUIRED, RULE_CLASSIFIED
 
 
 def _doc_row(d):
-    return {"id": d.id, "title": d.file_name, "doc_type": d.document_type, "method": rules.method_of(d),
-            "score": rules.score_of(d), "best_guess": rules.best_guess_of(d), "processing_status": d.status,
+    return {"id": d.id, "title": records.display_name(d), "doc_type": d.doc_classification, "method": classification.method_of(d),
+            "score": classification.score_of(d), "best_guess": classification.best_guess_of(d), "processing_status": d.status,
             "awpid": d.patient.awpid, "created_at": d.created_at}
 
 
@@ -34,14 +35,14 @@ class DocumentReportView(APIView):
         qs = MedicalDocument.objects.select_related("patient", "d_classification").order_by("-created_at")
         method = request.query_params.get("method")
         if method == "staff":
-            qs = qs.filter(d_classification__status__in=(rules.HUMAN_CLASSIFIED, rules.ISSUED))
+            qs = qs.filter(d_classification__status__in=(HUMAN_CLASSIFIED, ISSUED))
         elif method == "rule":
-            qs = qs.filter(d_classification__status__in=(rules.RULE_CLASSIFIED, rules.REVIEW_REQUIRED))
+            qs = qs.filter(d_classification__status__in=(RULE_CLASSIFIED, REVIEW_REQUIRED))
         if request.query_params.get("status"):
             qs = qs.filter(status=request.query_params["status"])
         page, meta = paginate_queryset(request, qs)
         return success(data={"results": [_doc_row(d) for d in page], "pagination": meta,
-                              "doc_types": rules.CHOOSABLE_TYPES})
+                              "doc_types": CHOOSABLE_TYPES})
 
 
 class DocumentCorrectView(APIView):
@@ -55,10 +56,10 @@ class DocumentCorrectView(APIView):
         if not doc:
             return not_found("Document not found.")
         doc_type = request.data.get("doc_type")
-        if doc_type not in rules.CHOOSABLE_TYPES:
+        if doc_type not in CHOOSABLE_TYPES:
             return error("doc_type must be one of the known document types.")
         try:
-            services.correct_document(doc, doc_type)
+            records.correct_document(doc, doc_type)
         except ValueError as exc:
             return error(str(exc))
         return success(data=_doc_row(MedicalDocument.objects.get(pk=doc.pk)))
@@ -70,4 +71,4 @@ class ReclassifyView(APIView):
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def post(self, request):
-        return success(data=services.reclassify_existing())
+        return success(data=records.reclassify_existing())

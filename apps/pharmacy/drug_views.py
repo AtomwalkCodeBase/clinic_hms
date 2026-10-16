@@ -1,10 +1,10 @@
 from django.db.models import Q
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
-from core.response import success, created, error, not_found
-from core.permissions import IsPharmacist, IsHospitalStaff, RequireFeature
+from core.api.response import success, created, error, not_found
+from core.api.permissions import IsPharmacist, IsHospitalStaff, RequireFeature
 from core.utils.nntm import get_next_number
-from core.pagination import paginate_queryset
+from core.api.pagination import paginate_queryset
 from apps.billing.models import OptionList
 from apps.pharmacy.drug_serializers import DrugSerializer, DrugFormTypeSerializer
 from apps.pharmacy.models import Drug

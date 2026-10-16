@@ -6,9 +6,9 @@ from apps.documents.views import (
     TypesView,
     UploadView,
 )
-from apps.documents.views import (
+from apps.documents.views import DocumentViewView
+from apps.documents.views_timeline import (
     ClinicalEventView,
-    DocumentViewView,
     PatientGrowthView,
     PatientHealthTimelineView,
     PatientImmunizationView,

@@ -11,9 +11,9 @@ from django.db.models import Q
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 
-from core.response import success, created, error, not_found
-from core.permissions import IsDoctor, IsFrontDesk, IsHospitalStaff
-from core.audit import log_action
+from core.api.response import success, created, error, not_found
+from core.api.permissions import IsDoctor, IsFrontDesk, IsHospitalStaff
+from core.utils.audit import log_action
 from core.utils.nntm import get_next_number
 
 from apps.billing.models import OptionList

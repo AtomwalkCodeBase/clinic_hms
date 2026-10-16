@@ -1,5 +1,5 @@
 """
-The database side of the pediatric health timeline: services.py judges, this saves and reads.
+The database side of the pediatric health timeline: the services folder judges, this saves and reads.
 
     process_document(document)    the LLM's facts from one document -> events, measurements, vaccines, labs, birth history
     rebuild_patient(patient_id)   episodes, recurrence flags and growth z-scores recomputed from the patient's rows
@@ -13,8 +13,9 @@ from datetime import date, timedelta
 from django.db import transaction
 from django.utils import timezone
 
-from apps.documents import lib_integration as ig
-from apps.documents.models import (
+from . import integration as ig
+from .models import (
+    Admission,
     BirthHistory,
     ClinicalEvent,
     DocumentExtraction,
@@ -22,27 +23,21 @@ from apps.documents.models import (
     HealthEpisode,
     ImmunizationRecord,
     LabResult,
-    RecurrenceFlag,
 )
-from apps.documents.services import (
-    EXTRACTOR_VERSION,
-    EventIn,
+from .services.clinical_rules import (
     age_band,
-    build_episodes,
-    build_timeline,
     classify_condition,
-    detect_faltering,
-    detect_recurrence,
     evaluate_lab,
-    extract_document,
     find_critical_keywords,
-    immunization_status,
     is_uncertain,
-    load_config,
-    resolve_vaccines,
-    score_measurement,
 )
-from apps.patients.models import Patient
+from .services.config import load_config
+from .services.episodes import EventIn, build_episodes, detect_recurrence
+from .services.extraction import EXTRACTOR_VERSION, extract_document
+from .services.growth import detect_faltering, score_measurement
+from .services.immunization import immunization_status, resolve_vaccines
+from .services.timeline import build_timeline
+from apps.patients.models import Patient, RecurrenceFlag
 
 CORRECTED_AGE_UNTIL_MONTHS = 24
 ICU_WARDS = ("ICU", "PICU", "NICU")
@@ -93,6 +88,7 @@ def process_document(document, llm=None, force=False):
         return {"status": "SKIPPED", "reason": "already processed"}
 
     text = ig.doc_text(document)
+    extraction.refresh_from_db()            # doc_text may have just stored the text of a document that had none yet
     reason = ("no date of birth" if dob is None else "outside pediatric age scope" if (date.today() - dob).days > ig.MAX_AGE_DAYS
               else "no extracted text" if len(text.strip()) < 20 else "")
     if reason:
@@ -113,7 +109,8 @@ def process_document(document, llm=None, force=False):
 @transaction.atomic
 def persist_extraction(document, dob, dtype, text, result, cfg):
     patient, hospital_id, doc_date = document.patient, document.source_hospital_id, result["document_date"]
-    ClinicalEvent.objects.filter(document=document, source="EXTRACTED", is_verified=False, is_rejected=False).delete()
+    ClinicalEvent.objects.filter(document=document, source="EXTRACTED", verification_status="pending").delete()
+    Admission.objects.filter(document=document).delete()
     GrowthMeasurement.objects.filter(document=document, source="extracted", is_rejected=False).delete()
     ImmunizationRecord.objects.filter(document=document, source=ImmunizationRecord.SOURCE_EXTRACTED,
                                       verification_status=ImmunizationRecord.STATUS_PENDING).delete()
@@ -126,10 +123,10 @@ def persist_extraction(document, dob, dtype, text, result, cfg):
         is_critical = bool(critical_terms) or bool(admission and admission["ward"] in ICU_WARDS)
         severity = "CRITICAL" if is_critical else "ABNORMAL"
         first = next((d["condition_text"] for d in result["diagnoses"] if not d["is_provisional"]), "")
-        ClinicalEvent.objects.create(
-            **here, event_type="ADMISSION", event_date=(admission or {}).get("admitted_on") or doc_date,
+        Admission.objects.create(
+            patient=patient, document=document, admitted_on=(admission or {}).get("admitted_on") or doc_date,
             discharged_on=(admission or {}).get("discharged_on"), ward=(admission or {}).get("ward") or ("ICU" if is_critical else "WARD"),
-            is_critical=is_critical, critical_terms=critical_terms, reason=first[:255], severity=severity, source="EXTRACTED")
+            is_critical=is_critical, critical_terms=critical_terms, reason=first[:255])
 
     kept = set(ClinicalEvent.objects.filter(document=document).values_list("icd10", "event_date"))
     events = 0
@@ -183,7 +180,7 @@ def rebuild_patient(patient_id):
     if dob is None:
         return {"episodes": 0, "recurrent": [], "growth_points": 0}
 
-    rows = list(ClinicalEvent.objects.filter(patient=patient, event_type="DIAGNOSIS", is_rejected=False, event_date__isnull=False))
+    rows = list(ClinicalEvent.objects.filter(patient=patient, event_type="DIAGNOSIS", event_date__isnull=False).exclude(verification_status="rejected"))
     for row in rows:
         cls = classify_condition(row.icd10, cfg, row.condition_text)
         row.condition_group, row.category = cls["group"], cls["category"]
@@ -235,8 +232,9 @@ def build_timeline_payload(patient, p_from, p_to, audience="guardian", hospital_
     cfg = load_config()
     dob, sex = ig.patient_dob_sex(patient)
     own = {"source_hospital_id": hospital_id} if hospital_id is not None else {}
+    own_admission = {"document__source_hospital_id": hospital_id} if hospital_id is not None else {}
 
-    event_rows = list(ClinicalEvent.objects.filter(patient=patient, event_type="DIAGNOSIS", is_rejected=False, event_date__isnull=False, **own))
+    event_rows = list(ClinicalEvent.objects.filter(patient=patient, event_type="DIAGNOSIS", event_date__isnull=False, **own).exclude(verification_status="rejected"))
     episodes = build_episodes([_event_in(r) for r in event_rows], cfg)
     events_by_id = {r.pk: {"date": r.event_date, "severity": r.severity, "document_id": r.document_id,
                            "condition_text": r.condition_text, "is_verified": r.is_verified} for r in event_rows}
@@ -256,9 +254,9 @@ def build_timeline_payload(patient, p_from, p_to, audience="guardian", hospital_
     given = [{"vaccine_text": v.vaccine_name, "given_on": v.administered_date, "document_id": v.document_id, "id": v.pk}
             for v in ImmunizationRecord.objects.filter(patient=patient, verification_status__in=SHOWN_VACCINES,
                                                        administered_date__isnull=False, **own)]
-    admissions = [{"admitted_on": a.event_date, "discharged_on": a.discharged_on, "ward": a.ward, "is_critical": a.is_critical,
+    admissions = [{"admitted_on": a.admitted_on, "discharged_on": a.discharged_on, "ward": a.ward, "is_critical": a.is_critical,
                    "reason": a.reason, "document_id": a.document_id}
-                  for a in ClinicalEvent.objects.filter(patient=patient, event_type="ADMISSION", is_rejected=False, event_date__isnull=False, **own)]
+                  for a in Admission.objects.filter(patient=patient, **own_admission)]
     critical_labs = [{"date": lab.collected_on, "analyte": lab.analyte, "value": lab.value, "direction": lab.direction,
                       "severity": lab.severity, "document_id": lab.document_id}
                      for lab in LabResult.objects.filter(patient=patient, severity="CRITICAL", collected_on__isnull=False, **own)]

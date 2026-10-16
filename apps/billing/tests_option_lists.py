@@ -1,6 +1,6 @@
 """The generic OptionList views moved to billing.option_list_views; every consumer must still list."""
 
-from core.testing import HospitalDBTestCase, requires_hospital_db
+from core.tests.testing import HospitalDBTestCase, requires_hospital_db
 
 from apps.billing.views import ServiceCategoryListCreateView
 from apps.ipd.views import AdmissionTypeListCreateView

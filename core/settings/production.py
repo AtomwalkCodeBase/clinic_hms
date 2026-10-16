@@ -47,7 +47,7 @@ LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "filters": {
-        "request_context": {"()": "core.logging_context.RequestContextFilter"},
+        "request_context": {"()": "core.utils.logging_context.RequestContextFilter"},
     },
     "formatters": {
         "json": {

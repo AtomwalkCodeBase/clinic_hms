@@ -14,7 +14,7 @@ on a schedule (there's no Celery/cron runner in this stack yet — see that
 command's docstring for how to actually schedule it).
 
 Vaccination-due reminders are NOT generated here. They're computed live, per
-request, in PortalNotificationsView via apps.documents.lib_documents.build_roadmap()
+request, in PortalNotificationsView via apps.documents.lib_roadmap.build_roadmap()
 — vaccination due-ness is inherently always-current (it's just today's date
 vs. the patient's age), so persisting a stale "reminder" row for it would be
 wrong the moment the underlying roadmap changes (e.g. a dose gets logged).

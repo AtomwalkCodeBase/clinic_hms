@@ -1,5 +1,6 @@
 // Health Journey screen for the guardian portal (also usable in the clinician view with view="doctor").
 //
+// `section` ('timeline' | 'growth' | 'vaccines') shows just that part, for a host page that has its own tabs.
 // <HealthJourney http={axiosInstance} children={[{id, name}]} onOpenDocument={(docId) => ...} emptyAction={{label, onClick}} />
 //
 // `id` is the patient's awpid. deps: react >= 17, echarts 5, echarts-for-react, lucide-react
@@ -92,13 +93,13 @@ function EmptyState({ view, emptyAction }) {
 }
 
 export default function HealthJourney({
-  http, children, initialChildId, initialPeriod = 'all', view = 'guardian', onOpenDocument, emptyAction,
+  http, children, initialChildId, initialPeriod = 'all', view = 'guardian', onOpenDocument, emptyAction, section,
 }) {
   const api = useMemo(() => makePedsApi(http), [http]);
   const [childId, setChildId] = useState(initialChildId || children?.[0]?.id);
   const [period, setPeriod] = useState(initialPeriod);
   const [axisMode, setAxisMode] = useState('age');
-  const [tab, setTab] = useState('timeline');
+  const [tab, setTab] = useState(section || 'timeline');
   const [showList, setShowList] = useState(false);
   const [payload, setPayload] = useState(null);
   const [error, setError] = useState(null);
@@ -120,7 +121,7 @@ export default function HealthJourney({
   return (
     <div className="phj">
       <header className="phj-hero">
-        <div className="phj-who">
+        <div className="phj-who" style={section ? { display: 'none' } : undefined}>
           <span className="phj-avatar" aria-hidden="true">{(child?.name || '?').trim().charAt(0).toUpperCase()}</span>
           <div className="phj-who-text">
             <div className="phj-eyebrow">Health journey</div>
@@ -156,14 +157,14 @@ export default function HealthJourney({
 
       {payload && (
         <>
-          <SummaryTiles s={payload.summary} />
+          {(!section || section === 'timeline') && <SummaryTiles s={payload.summary} />}
           {payload.notes.map((n) => <p key={n} className="phj-callout">{n}</p>)}
 
-          <div className="phj-tabs" role="tablist">
+          {!section && <div className="phj-tabs" role="tablist">
             {[['timeline', 'Timeline'], ['growth', 'Growth'], ['vaccines', 'Vaccinations']].map(([k, l]) => (
               <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>
             ))}
-          </div>
+          </div>}
 
           {tab === 'timeline' && (!hasReportData
             ? <EmptyState view={view} emptyAction={emptyAction} />

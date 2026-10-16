@@ -13,7 +13,7 @@
  *
  * Percentile bands (WHO growth reference, ages 0-5y): PortalGrowthView now
  * computes a per-point `percentiles.<metric>` block (see
- * apps.atomwalk.growth_reference) once the child is a minor with a WHO-
+ * apps.growth_reference) once the child is a minor with a WHO-
  * covered age/gender — `percentile_available` on the growth payload says
  * whether ANY point in the series actually carries one. When it's false
  * (adult patient, age outside 0-5y, unsupported gender, or simply no data

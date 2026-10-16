@@ -32,18 +32,18 @@ from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-from core.permissions import IsHospitalStaff as IsHospitalStaff, IsDoctor, IsDoctorOrNurse, RequireFeature
-from core.pagination import paginate_queryset
-from core.response import error as api_error, not_found as api_not_found, forbidden as api_forbidden, success
+from core.api.permissions import IsHospitalStaff as IsHospitalStaff, IsDoctor, IsDoctorOrNurse, RequireFeature
+from core.api.pagination import paginate_queryset
+from core.api.response import error as api_error, not_found as api_not_found, forbidden as api_forbidden, success
 
 from apps.billing.models import OptionList
 from apps.billing.option_list_views import DropdownListCreateView, DropdownDetailView
-from apps.documents.lib_documents import sync_encounter_to_hie
+from apps.documents.lib_vitals import sync_encounter_to_hie
 from apps.opd.services import auto_generate_invoice
 
 from apps.opd.models import Appointment, OPDEncounter, Prescription, PrescriptionItem, PrescriptionFavourite
 from apps.opd.vitals_service import record_vitals
-from apps.documents.lib_documents import attach_vitals, recorded
+from apps.documents.lib_vitals import attach_vitals, recorded
 from apps.opd.serializers import (
     AppointmentSerializer,
     AppointmentCreateSerializer,
@@ -416,11 +416,11 @@ class AppointmentHistoryView(APIView):
             for d in (MedicalDocument.objects.using("default")
                       .filter(source_type__in=(Source.ENCOUNTER, Source.ENCOUNTER_HANDWRITTEN_RX),
                               source_id__in=[str(i) for i in enc_ids])
-                      .values("id", "source_type", "source_id", "document_type")):
-                eid = d["source_id"]
+                      .values("id", "source_type", "source_id", "doc_classification")):
+                eid = str(d["source_id"])
                 if d["source_type"] == Source.ENCOUNTER_HANDWRITTEN_RX:
                     hw_rx_docs[eid] = d["id"]
-                elif d["document_type"] == "prescription":
+                elif d["doc_classification"] == "prescription":
                     typeset_rx_docs[eid] = d["id"]
             noted = {str(e) for e in ConsultSession.objects.using("default")
                      .filter(encounter_id__in=enc_ids, hospital_id=request.hospital_id)
@@ -1259,7 +1259,7 @@ class EncounterConsultSessionView(APIView):
         from apps.patients.models import Patient
         from apps.patients.models import ConsultSession
         from apps.opd.models import HospitalPatient
-        from core.qr import render_qr_data_uri
+        from apps.opd.qr import render_qr_data_uri
 
         try:
             enc = self._enc(request, pk)
@@ -1420,7 +1420,7 @@ class EncounterSignView(APIView):
                 status=ConsultSession.STATUS_SIGNED, signed_at=timezone.now(),
             )
 
-        from core.audit import log_action
+        from core.utils.audit import log_action
         log_action(request, db, action="encounter.sign", resource_type="OPDEncounter",
                     resource_id=enc.id, patient_id=enc.patient_id)
 
@@ -1476,7 +1476,7 @@ class FollowUpActionView(APIView):
 
         enc.save(using=db)
 
-        from core.audit import log_action
+        from core.utils.audit import log_action
         log_action(request, db, action=f"encounter.followup.{v['mode']}", resource_type="OPDEncounter",
                     resource_id=enc.id, patient_id=enc.patient_id)
 
@@ -1756,7 +1756,7 @@ class FollowupMarkBookedView(APIView):
         enc.followup_nurse_booked_at = timezone.now()
         enc.save(using=db)
 
-        from core.audit import log_action
+        from core.utils.audit import log_action
         log_action(request, db, action="encounter.followup.marked_booked", resource_type="OPDEncounter",
                     resource_id=enc.id, patient_id=enc.patient_id)
 

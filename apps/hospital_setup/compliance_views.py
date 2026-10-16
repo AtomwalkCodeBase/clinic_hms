@@ -22,9 +22,9 @@ import logging
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 
-from core.response import success, error, created, not_found
-from core.pagination import paginate_queryset, paginate_list
-from core.permissions import IsHospitalAdmin, IsHospitalStaff, IsPatient
+from core.api.response import success, error, created, not_found
+from core.api.pagination import paginate_queryset, paginate_list
+from core.api.permissions import IsHospitalAdmin, IsHospitalStaff, IsPatient
 
 from apps.hospital_setup.models import RecordAmendment, ConsentRecord
 from apps.hospital_setup.compliance_serializers import (

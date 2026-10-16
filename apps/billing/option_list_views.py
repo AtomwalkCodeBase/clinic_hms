@@ -10,8 +10,8 @@ at its own list_type / serializer.
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
-from core.permissions import IsHospitalAdmin, IsHospitalStaff
-from core.response import created, error, not_found, success
+from core.api.permissions import IsHospitalAdmin, IsHospitalStaff
+from core.api.response import created, error, not_found, success
 
 from apps.billing.models import OptionList
 
@@ -43,7 +43,7 @@ class DropdownListCreateView(APIView):
         # e.g. the front-desk "record a payment" dropdown, should keep
         # seeing — an admin-only escape hatch, not a behavior change).
         if request.query_params.get("all") == "1":
-            from core.permissions import IsHospitalAdmin as _IsHospitalAdmin
+            from core.api.permissions import IsHospitalAdmin as _IsHospitalAdmin
             if not _IsHospitalAdmin().has_permission(request, self):
                 return error("Only hospital admins can view inactive entries.", status=403)
         else:

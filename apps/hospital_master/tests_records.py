@@ -4,8 +4,8 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.hospital_master.classification_rule_views import DocumentCorrectView, DocumentReportView, ReclassifyView
 from apps.documents.models import MedicalDocument
-from apps.documents.tests import make_doc
-from core.authentication import MockUser
+from apps.documents.tests.tests import make_doc
+from core.api.authentication import MockUser
 
 
 def call(view, method, data=None, params=None, **kwargs):
@@ -68,7 +68,7 @@ class DocumentCorrectViewTests(TestCase):
         resp = call(DocumentCorrectView, "patch", {"doc_type": "prescription"}, pk=doc.id)
         self.assertEqual(resp.status_code, 200)
         doc = MedicalDocument.objects.get(pk=doc.pk)
-        self.assertEqual((doc.document_type, doc.status), ("prescription", "completed"))
+        self.assertEqual((doc.doc_classification, doc.status), ("prescription", "completed"))
         self.assertEqual(resp.data["data"]["method"], "staff")
 
     def test_rejects_an_unknown_doc_type(self):

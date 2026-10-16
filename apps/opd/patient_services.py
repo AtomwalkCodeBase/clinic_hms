@@ -16,7 +16,7 @@ from core.utils.nntm     import get_next_number
 from apps.hospital_setup.models import Branch
 from apps.patients.models import Patient, PatientRelationship
 from apps.documents.models import ClinicalEvent, SharedAllergy, LabResult
-from apps.documents.lib_documents import history_readings
+from apps.documents.lib_vitals import history_readings
 from apps.documents.models import MedicalDocument
 from apps.opd.models import HospitalPatient
 
@@ -74,7 +74,7 @@ class PatientService:
         `request` is optional and only used to attach an IP/user-agent to
         the ConsentRecord proof rows written below (see
         apps.hospital_setup.compliance_services.record_consent) — registration itself
-        works fine without it, same graceful-degradation as core.audit.log_action.
+        works fine without it, same graceful-degradation as core.utils.audit.log_action.
 
         Two identity-resolution paths:
 
@@ -130,7 +130,7 @@ class PatientService:
                             "awpid": generate_unique_awpid(),
                             "full_name": data.get("guardian_name", "") or "Guardian",
                             "preferred_language": data.get("preferred_language", "en"),
-                            "created_by": "hospital", "created_hospital_id": hospital_id,
+                            "created_by": "hospital", "source_hospital_id": hospital_id,
                         },
                     )
                 guardian_awpid = guardian_identity.awpid
@@ -147,7 +147,7 @@ class PatientService:
                 email=data.get("email", ""),
                 blood_group=data.get("blood_group", ""),
                 preferred_language=data.get("preferred_language", "en"),
-                created_by="hospital", created_hospital_id=hospital_id,
+                created_by="hospital", source_hospital_id=hospital_id,
             )
         else:
             mobile_raw  = data.get("mobile", "")
@@ -166,7 +166,7 @@ class PatientService:
                         "email":              data.get("email", ""),
                         "blood_group":        data.get("blood_group", ""),
                         "preferred_language": data.get("preferred_language", "en"),
-                        "created_by": "hospital", "created_hospital_id": hospital_id,
+                        "created_by": "hospital", "source_hospital_id": hospital_id,
                     },
                 )
 
@@ -293,7 +293,7 @@ class PatientService:
                 mobile=None,
                 is_dependent=False,
                 preferred_language=data.get("preferred_language", "en"),
-                created_by="hospital", created_hospital_id=getattr(request, "hospital_id", None),
+                created_by="hospital", source_hospital_id=getattr(request, "hospital_id", None),
             )
 
         uhid, _ = get_next_number(branch_id=branch.id, entity="uhid", using=db_name)
@@ -347,7 +347,7 @@ class PatientService:
                                     date_of_birth, gender: str = "", relationship: str = "other",
                                     email: str = "", blood_group: str = "",
                                     preferred_language: str = "en", created_by: str = "patient",
-                                    created_hospital_id=None):
+                                    source_hospital_id=None):
         """
         Find-or-create a dependent's Patient under a guardian.
 
@@ -408,7 +408,7 @@ class PatientService:
                     email=email,
                     blood_group=blood_group,
                     preferred_language=preferred_language,
-                    created_by=created_by, created_hospital_id=created_hospital_id,
+                    created_by=created_by, source_hospital_id=source_hospital_id,
                 )
             # Covers all three paths above uniformly: brand-new identity (no
             # relationship exists yet), still-linked identity (already
@@ -712,9 +712,9 @@ class PatientService:
         """
         diagnoses = list(
             ClinicalEvent.objects.using("default")
-            .filter(patient__awpid=awpid, event_type="DIAGNOSIS", is_rejected=False)
-            .order_by("-created_at")
-            .values("clinical_status", "created_at", icd10_code=F("icd10"), description=F("condition_text"), onset_date=F("event_date"))
+            .filter(patient__awpid=awpid, event_type="DIAGNOSIS").exclude(verification_status="rejected")
+            .order_by("-event_date", "-id")
+            .values("clinical_status", created_at=F("event_date"), icd10_code=F("icd10"), description=F("condition_text"), onset_date=F("event_date"))
         )
 
         vitals = history_readings(awpid, 20)  # last 20 vital records
@@ -756,14 +756,12 @@ class PatientService:
         # over the HIE until the patient has confirmed it (the same rule My
         # Documents applies).
         from apps.documents.lib_documents import awaiting_review_q
-        documents = list(
+        from apps.documents.lib_documents import document_rows
+        documents = document_rows(
             MedicalDocument.objects.using("default")
             .filter(patient__awpid=awpid)
             .exclude(awaiting_review_q())
             .filter(status="completed")
-            .values("id", "file_name", "mime_type", "uploaded_by", "created_at",
-                    title=F("file_name"), doc_type=F("document_type"))
-            .order_by("-created_at")[:50]
         )
 
         return {

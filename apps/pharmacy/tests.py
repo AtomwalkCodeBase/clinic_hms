@@ -14,7 +14,7 @@ from unittest import mock
 from django.db import connections
 from django.test.utils import CaptureQueriesContext
 
-from core.testing import HospitalDBTestCase, HospitalDBTransactionTestCase, requires_hospital_db
+from core.tests.testing import HospitalDBTestCase, HospitalDBTransactionTestCase, requires_hospital_db
 
 from apps.billing.models import Invoice
 from apps.opd.models import Appointment, OPDEncounter, Prescription, PrescriptionItem

@@ -2,14 +2,11 @@ import os
 import uuid
 
 from django.db import models
-
-from core.storage import documents_storage
 from core.utils.tokens import new_pad_token
 from apps.hospital_master.models import Hospital
 
 def get_patient_photo_path(instance, filename):
-    ext = os.path.splitext(filename)[1].lower()
-    return f"patients/{instance.awpid}/photo/{uuid.uuid4().hex}{ext}"
+    return f"patients/{instance.patient.awpid}/photos/{filename}"
 
 
 class Patient(models.Model):
@@ -21,28 +18,31 @@ class Patient(models.Model):
     full_name           = models.CharField(max_length=100)
     date_of_birth       = models.DateField(null=True, blank=True)
     gender              = models.CharField(max_length=1, choices=GENDER_CHOICES, blank=True)
-    mobile              = models.CharField(max_length=10, unique=True, null=True, blank=True)
-    guardian_mobile     = models.CharField(max_length=15, blank=True, db_index=True)
+    mobile              = models.CharField(max_length=15, null=True, blank=True)
+    guardian_mobile     = models.CharField(max_length=15, blank=True, null=True)
     is_dependent        = models.BooleanField(default=False)
     email               = models.EmailField(blank=True)
     blood_group         = models.CharField(max_length=3, choices=BLOOD_GROUP_CHOICES, blank=True)
     preferred_language  = models.CharField(max_length=10, default="en")
 
     password      = models.CharField(max_length=128, blank=True)
-    photo         = models.ImageField(upload_to=get_patient_photo_path, storage=documents_storage, blank=True, null=True)
+    photo         = models.ImageField(upload_to=get_patient_photo_path, blank=True, null=True)
     is_active     = models.BooleanField(default=True)
     last_login    = models.DateTimeField(null=True, blank=True)
 
     emergency_contact_name     = models.CharField(max_length=100, blank=True)
     emergency_contact_phone    = models.CharField(max_length=15, blank=True)
     emergency_contact_relation = models.CharField(max_length=30, blank=True)
+    source_hospital    = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_patients")
 
     created_by          = models.CharField(max_length=10, choices=CREATED_BY_CHOICES, default="patient")
-    created_hospital    = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL, related_name="h_patients")
     created_at          = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table  = "patient"
+
+    def __str__(self):
+        return f"{self.full_name} ({self.awpid})"
 
 
 class PatientRelationship(models.Model):
@@ -59,13 +59,16 @@ class PatientRelationship(models.Model):
         db_table  = "patient_relationship"
         unique_together = [("dependent", "guardian")]
 
+    def __str__(self):
+        return f"{self.guardian.awpid} -> {self.dependent.awpid} ({self.relationship})"
+
 
 class PatientBooking(models.Model):
     STATUS_CHOICES = [
         ("scheduled", "Scheduled"), ("waiting", "Waiting"), ("vitals_done", "Vitals done"),
         ("in_progress", "In progress"), ("done", "Done"), ("cancelled", "Cancelled"), ("no_show", "No show"),
     ]
-    booked_by       = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.SET_NULL, related_name="p_bookings_made")
+    booked_by       = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.SET_NULL, related_name="p_bookings_made") # check & delete if not needed
     patient         = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_bookings")
     hospital        = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_bookings")
     appointment_id  = models.UUIDField(db_index=True)
@@ -80,7 +83,29 @@ class PatientBooking(models.Model):
         db_table  = "patient_booking"
         ordering  = ["-created_at"]
 
+    def __str__(self):
+        return f"Booking {self.id} for patient {self.patient_id} on {self.scheduled_date} - {self.status}"
 
+
+class RecurrenceFlag(models.Model):
+    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_recurrence_flags")
+    condition_group = models.CharField(max_length=40)
+    label = models.CharField(max_length=255)
+    triggered_on = models.DateField()
+    rule = models.JSONField(default=dict)
+    episodes_last_12m = models.PositiveIntegerField(default=0)
+    clinical_hint = models.CharField(max_length=255, blank=True)
+    acknowledged_by_id = models.IntegerField(null=True, blank=True)
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "recurrence_flag"
+        constraints = [models.UniqueConstraint(fields=["patient", "condition_group"], name="uniq_recurrence_per_patient_group")]
+
+
+# Not Reviewed Below
 class BlacklistedToken(models.Model):
     jti        = models.CharField(max_length=64, unique=True, db_index=True)
     expires_at = models.DateTimeField()
