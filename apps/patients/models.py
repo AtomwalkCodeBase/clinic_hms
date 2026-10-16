@@ -5,7 +5,7 @@ from django.db import models
 
 from core.storage import documents_storage
 from core.utils.tokens import new_pad_token
-
+from apps.hospital_master.models import Hospital
 
 def get_patient_photo_path(instance, filename):
     ext = os.path.splitext(filename)[1].lower()
@@ -50,10 +50,9 @@ class PatientRelationship(models.Model):
         ("child", "Child"), ("parent", "Parent"), ("spouse", "Spouse"),
         ("sibling", "Sibling"), ("ward", "Ward"), ("other", "Other"),
     ]
-    dependent       = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_dependent")
-    guardian        = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_guardian")
+    dependent       = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_dependent")
+    guardian        = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_guardian")
     relationship    = models.CharField(max_length=20, choices=REL_CHOICES, default="other")
-    is_primary      = models.BooleanField(default=True)
     created_at      = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -62,15 +61,19 @@ class PatientRelationship(models.Model):
 
 
 class PatientBooking(models.Model):
-    booked_by       = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_bookings_made")
-    patient         = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE)
-    hospital        = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.CASCADE)
-    appointment_id  = models.UUIDField()
+    STATUS_CHOICES = [
+        ("scheduled", "Scheduled"), ("waiting", "Waiting"), ("vitals_done", "Vitals done"),
+        ("in_progress", "In progress"), ("done", "Done"), ("cancelled", "Cancelled"), ("no_show", "No show"),
+    ]
+    booked_by       = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_bookings_made")
+    patient         = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_bookings")
+    hospital        = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_bookings")
+    appointment_id  = models.UUIDField(db_index=True)
 
-    doctor_name     = models.CharField(max_length=255, blank=True)
+    doctor_name     = models.CharField(max_length=100, blank=True)
     scheduled_date  = models.DateField()
     chief_complaint = models.TextField(blank=True)
-    status          = models.CharField(max_length=15, default="scheduled", db_index=True)
+    status          = models.CharField(max_length=15, choices=STATUS_CHOICES, default="scheduled", db_index=True)
     created_at      = models.DateTimeField(auto_now_add=True)
 
     class Meta:

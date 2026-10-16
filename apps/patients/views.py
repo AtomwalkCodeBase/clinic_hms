@@ -2976,10 +2976,7 @@ def _resolve_emergency_contact(awpid):
             "relation": account.emergency_contact_relation or "Emergency contact",
         }
 
-    rel = (
-        PatientRelationship.objects.using("default").filter(dependent__awpid=awpid, is_primary=True).first()
-        or PatientRelationship.objects.using("default").filter(dependent__awpid=awpid).first()
-    )
+    rel = PatientRelationship.objects.using("default").filter(dependent__awpid=awpid).first()
     if rel:
         guardian = accounts().filter(awpid=rel.guardian.awpid).first()
         if guardian:
