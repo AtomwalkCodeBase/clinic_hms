@@ -99,11 +99,11 @@ LOCAL_APPS = [
     "apps.hospital_master",
     # apps whose tables live in each hospital's own database
     "apps.hospital_setup",
-    "apps.opd",
     "apps.ipd",
+    "apps.opd",
+    "apps.billing",
     "apps.lab",
     "apps.pharmacy",
-    "apps.billing",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
