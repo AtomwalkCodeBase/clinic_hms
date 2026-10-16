@@ -975,9 +975,9 @@ from django.utils import timezone
 from apps.patients.models import RecordsPrivacy
 
 
-def mobile_hash_of(raw):
-    from core.utils.hashing import hash_mobile, normalize_mobile
-    return hash_mobile(normalize_mobile(raw))
+def mobile_of(raw):
+    from core.utils.hashing import stored_mobile
+    return stored_mobile(raw)
 
 
 def set_password(patient, raw):
@@ -994,14 +994,14 @@ def accounts():
 
 def accounts_with_mobile(raw):
     try:
-        return accounts().filter(mobile_hash=mobile_hash_of(raw))
+        return accounts().filter(mobile=mobile_of(raw))
     except ValueError:
         return Patient.objects.none()
 
 
 def create_account(**fields):
     if "mobile" in fields:
-        fields["mobile_hash"] = mobile_hash_of(fields.pop("mobile"))
+        fields["mobile"] = mobile_of(fields["mobile"])
     identity, _ = Patient._base_manager.using("default").get_or_create(
         awpid=fields["awpid"], defaults={"full_name": fields.get("full_name") or "Patient"})
     for name, value in fields.items():

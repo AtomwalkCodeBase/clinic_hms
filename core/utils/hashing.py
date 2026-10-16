@@ -3,12 +3,9 @@ core/utils/hashing.py
 ---------------------
 DPDP Act 2023 compliant hashing utilities.
 
-mobile_hash: SHA-256 of the normalized phone number (+91XXXXXXXXXX format).
-We never store plain mobile numbers in the Atomwalk DB — only the hash.
-This allows patient lookup by phone without storing the phone number itself.
+patient.mobile: the 10-digit mobile number, stored as is (see stored_mobile).
 """
 
-import hashlib
 import re
 import logging
 
@@ -49,36 +46,14 @@ def normalize_mobile(mobile: str) -> str:
     return f"{DEFAULT_COUNTRY_CODE}{digits}"
 
 
-def hash_mobile(mobile: str) -> str:
+def stored_mobile(mobile: str) -> str:
     """
-    Return the SHA-256 hash of a normalized mobile number.
-
-    This is the value stored in patient.mobile_hash.
-    Used for patient lookup and deduplication without storing PII.
+    The mobile number as it is stored in patient.mobile: the 10 digits only (no +91, spaces or dashes).
 
     Args:
         mobile: Raw mobile number in any supported format.
 
-    Returns:
-        64-character hex string (SHA-256 digest).
+    Raises:
+        ValueError if the number is not a valid 10-digit mobile number.
     """
-    normalized = normalize_mobile(mobile)
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-
-def verify_mobile(mobile: str, stored_hash: str) -> bool:
-    """
-    Check if a given mobile number matches a stored hash.
-
-    Args:
-        mobile:      Raw mobile number to check.
-        stored_hash: The SHA-256 hash stored in patient.mobile_hash.
-
-    Returns:
-        True if the mobile matches the hash, False otherwise.
-    """
-    try:
-        computed = hash_mobile(mobile)
-        return computed == stored_hash
-    except ValueError:
-        return False
+    return normalize_mobile(mobile)[len(DEFAULT_COUNTRY_CODE):]

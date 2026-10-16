@@ -9,9 +9,9 @@ class Patient(models.Model):
     date_of_birth       = models.DateField(null=True, blank=True)
     gender              = models.CharField(max_length=10, blank=True)
 
-    mobile_hash         = models.CharField(max_length=64, unique=True, db_index=True, null=True, blank=True)
+    mobile              = models.CharField(max_length=10, unique=True, db_index=True, null=True, blank=True)
 
-    guardian_mobile_hash = models.CharField(max_length=64, blank=True, db_index=True)
+    guardian_mobile     = models.CharField(max_length=10, blank=True, db_index=True)
     is_dependent        = models.BooleanField(default=False)
     email               = models.EmailField(blank=True)
     blood_group         = models.CharField(max_length=5, blank=True)

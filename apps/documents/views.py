@@ -1145,7 +1145,7 @@ class PortalFamilyListCreateView(APIView):
         account, d = _account(request), request.data
         try:
             member = PatientService.add_family_member(
-                guardian_awpid=account.awpid, guardian_mobile_hash=account.mobile_hash,
+                guardian_awpid=account.awpid, guardian_mobile=account.mobile,
                 data={"full_name": text(d, "full_name"), "date_of_birth": d.get("date_of_birth"),
                       "gender": d.get("gender", ""), "relationship": d.get("relationship", "other")})
         except ValueError as exc:

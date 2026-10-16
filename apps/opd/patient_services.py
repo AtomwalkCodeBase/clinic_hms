@@ -10,7 +10,7 @@ from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
-from core.utils.hashing  import hash_mobile, normalize_mobile
+from core.utils.hashing  import stored_mobile, normalize_mobile
 from core.utils.awpid    import generate_unique_awpid
 from core.utils.nntm     import get_next_number
 from apps.hospital_setup.models import Branch
@@ -45,7 +45,7 @@ class PatientService:
         """
         mobile_norm = normalize_mobile(mobile_raw)
         identity = Patient.objects.using("default").filter(
-            mobile_hash=hash_mobile(mobile_norm)
+            mobile=stored_mobile(mobile_norm)
         ).first()
         if not identity:
             raise ValueError("No Atomwalk patient was found for this mobile number.")
@@ -79,7 +79,7 @@ class PatientService:
         Two identity-resolution paths:
 
           Adults (has their own mobile) — unchanged: normalize + hash the
-          mobile, look up/create a Patient by mobile_hash.
+          mobile, look up/create a Patient by mobile.
 
           Dependents (data["is_dependent"] — a child, or anyone with no
           mobile of their own) — identity is never tied to a mobile number
@@ -117,15 +117,15 @@ class PatientService:
                 # existing guardian AWPID to pick from (e.g. "the patient is
                 # my mom" from a cold call) — resolve/create the caller's
                 # network identity from their mobile number alone, same
-                # dedup-by-mobile_hash rule used for any adult patient. This
+                # dedup-by-mobile rule used for any adult patient. This
                 # only touches the shared atomwalk identity table, not any
                 # hospital's hospital Patient table, so the caller isn't
                 # registered as a patient here just by being a guardian.
                 guardian_mobile_norm = normalize_mobile(guardian_mobile_raw)
-                guardian_mobile_hash = hash_mobile(guardian_mobile_norm)
+                guardian_mobile = stored_mobile(guardian_mobile_norm)
                 with transaction.atomic(using="default"):
                     guardian_identity, _ = Patient.objects.using("default").get_or_create(
-                        mobile_hash=guardian_mobile_hash,
+                        mobile=guardian_mobile,
                         defaults={
                             "awpid": generate_unique_awpid(),
                             "full_name": data.get("guardian_name", "") or "Guardian",
@@ -138,7 +138,7 @@ class PatientService:
 
             identity, created = PatientService.resolve_dependent_identity(
                 guardian_awpid=guardian_awpid,
-                guardian_mobile_hash=guardian_identity.mobile_hash,
+                guardian_mobile=guardian_identity.mobile,
                 full_name=data["full_name"],
                 date_of_birth=data.get("date_of_birth"),
                 gender=data.get("gender", ""),
@@ -150,12 +150,12 @@ class PatientService:
         else:
             mobile_raw  = data.get("mobile", "")
             mobile_norm = normalize_mobile(mobile_raw)
-            mobile_hash = hash_mobile(mobile_norm)
+            mobile_value = stored_mobile(mobile_norm)
 
             # ── Find or create Patient in Atomwalk DB ─────────────
             with transaction.atomic(using="default"):
                 identity, created = Patient.objects.using("default").get_or_create(
-                    mobile_hash=mobile_hash,
+                    mobile=mobile_value,
                     defaults={
                         "awpid":              generate_unique_awpid(),
                         "full_name":          data["full_name"],
@@ -287,7 +287,7 @@ class PatientService:
                 full_name=full_name,
                 date_of_birth=data.get("date_of_birth"),
                 gender=_normalize_gender(data.get("gender", "")),
-                mobile_hash=None,
+                mobile=None,
                 is_dependent=False,
                 preferred_language=data.get("preferred_language", "en"),
             )
@@ -339,7 +339,7 @@ class PatientService:
     # portal's self-service "Family Members" section — one identity-
     # resolution path so a dependent added either way dedupes the same way.
     @staticmethod
-    def resolve_dependent_identity(guardian_awpid: str, guardian_mobile_hash, full_name: str,
+    def resolve_dependent_identity(guardian_awpid: str, guardian_mobile, full_name: str,
                                     date_of_birth, gender: str = "", relationship: str = "other",
                                     email: str = "", blood_group: str = "",
                                     preferred_language: str = "en"):
@@ -359,7 +359,7 @@ class PatientService:
         plain "currently linked?" lookup can no longer find them, and would
         otherwise mint a brand-new AWPID here — silently orphaning that
         person's prior appointment/prescription/lab/document history under
-        the old, now-permanently-disconnected identity. guardian_mobile_hash
+        the old, now-permanently-disconnected identity. guardian_mobile
         lives on Patient itself (set once at creation, untouched by
         removal) precisely so this guardian's dependents can still be found
         by mobile after a relationship row is gone — reused here as the
@@ -382,9 +382,9 @@ class PatientService:
                     date_of_birth=date_of_birth,
                 ).first()
 
-            if identity is None and guardian_mobile_hash:
+            if identity is None and guardian_mobile:
                 identity = Patient.objects.using("default").filter(
-                    guardian_mobile_hash=guardian_mobile_hash,
+                    guardian_mobile=guardian_mobile,
                     full_name__iexact=full_name,
                     date_of_birth=date_of_birth,
                     is_dependent=True,
@@ -397,8 +397,8 @@ class PatientService:
                     full_name=full_name,
                     date_of_birth=date_of_birth,
                     gender=_normalize_gender(gender),
-                    mobile_hash=None,
-                    guardian_mobile_hash=guardian_mobile_hash or "",
+                    mobile=None,
+                    guardian_mobile=guardian_mobile or "",
                     is_dependent=True,
                     email=email,
                     blood_group=blood_group,
@@ -445,7 +445,7 @@ class PatientService:
         return members
 
     @staticmethod
-    def add_family_member(guardian_awpid: str, guardian_mobile_hash: str, data: dict) -> dict:
+    def add_family_member(guardian_awpid: str, guardian_mobile: str, data: dict) -> dict:
         """
         Portal self-service equivalent of the dependent path in register() —
         adds a family member under the logged-in account without needing a
@@ -460,7 +460,7 @@ class PatientService:
 
         identity, created = PatientService.resolve_dependent_identity(
             guardian_awpid=guardian_awpid,
-            guardian_mobile_hash=guardian_mobile_hash or "",
+            guardian_mobile=guardian_mobile or "",
             full_name=data["full_name"],
             date_of_birth=data.get("date_of_birth"),
             gender=data.get("gender", ""),
@@ -635,9 +635,9 @@ class PatientService:
         that they exist in the network at all.
         """
         mobile_norm = normalize_mobile(mobile_raw)
-        mobile_hash = hash_mobile(mobile_norm)
+        mobile_value = stored_mobile(mobile_norm)
 
-        identity = Patient.objects.using("default").filter(mobile_hash=mobile_hash).first()
+        identity = Patient.objects.using("default").filter(mobile=mobile_value).first()
         if not identity:
             return {"exists_in_network": False, "already_registered_here": False}
 

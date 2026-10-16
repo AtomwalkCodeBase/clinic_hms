@@ -18,7 +18,7 @@ from apps.opd.models import HospitalPatient
 from apps.patients.models import Patient
 from apps.hospital_master.models import Hospital
 from apps.hospital_master.services import ensure_hospital_db
-from core.utils.hashing import hash_mobile, normalize_mobile
+from core.utils.hashing import stored_mobile
 
 
 def restore_identities(db_name, apply=False):
@@ -30,14 +30,14 @@ def restore_identities(db_name, apply=False):
         missing.append(patient)
         if not apply:
             continue
-        mobile_hash = None
+        mobile = None
         if patient.mobile and not patient.is_dependent:
-            candidate = hash_mobile(normalize_mobile(patient.mobile))
-            if not Patient.objects.using("default").filter(mobile_hash=candidate).exists():
-                mobile_hash = candidate
+            candidate = stored_mobile(patient.mobile)
+            if not Patient.objects.using("default").filter(mobile=candidate).exists():
+                mobile = candidate
         Patient.objects.using("default").create(
             awpid=patient.awpid, full_name=patient.full_name, date_of_birth=patient.date_of_birth,
-            gender=(patient.gender or "")[:10], is_dependent=patient.is_dependent, mobile_hash=mobile_hash,
+            gender=(patient.gender or "")[:10], is_dependent=patient.is_dependent, mobile=mobile,
             email=patient.email or "", blood_group=patient.blood_group or "")
     return missing
 

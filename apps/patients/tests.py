@@ -10,7 +10,6 @@ from core.auth.otp_views import OTPRequestView
 from core.auth.views import PatientLoginView
 from apps.patients.models import OTPCode, Patient, ConsultSession, RecordsShareRequest
 from core.authentication import MockUser
-from core.utils.hashing import hash_mobile, normalize_mobile
 from django.urls import NoReverseMatch, reverse
 from apps.documents.lib_documents import CHOOSABLE_TYPES
 from apps.documents.models import DocumentBatch, MedicalDocument, PatientDocumentClassification
@@ -38,12 +37,12 @@ class PortalAccountTests(TestCase):
         self.assertEqual(self.register().status_code, 200)
         self.assertEqual(Patient.objects.count(), 1)
         account = accounts().get()
-        self.assertEqual((account.mobile_hash, account.email), (hash_mobile(normalize_mobile("9876543210")), "asha@example.com"))
+        self.assertEqual((account.mobile, account.email), ("9876543210", "asha@example.com"))
         self.assertTrue(check_password(account, "Str0ng!pass"))
 
     def test_a_walk_in_who_later_signs_up_keeps_the_awpid_they_already_have(self):
         walk_in = Patient.objects.create(
-            awpid="AW-WALKIN", full_name="Asha Rao", mobile_hash=hash_mobile(normalize_mobile("9876543210")))
+            awpid="AW-WALKIN", full_name="Asha Rao", mobile="9876543210")
         self.assertEqual(accounts().count(), 0)          # registered at a front desk: no login yet
         self.assertEqual(self.register().status_code, 200)
         self.assertEqual(Patient.objects.count(), 1)
@@ -69,7 +68,7 @@ class MobileIsOnlyStoredScrambledTests(TestCase):
     def test_there_is_no_plain_mobile_column(self):
         with self.assertRaises(FieldDoesNotExist):
             Patient._meta.get_field("mobile")
-        self.assertEqual(self.acct.mobile_hash, hash_mobile(normalize_mobile("9876543210")))
+        self.assertEqual(self.acct.mobile, "9876543210")
 
     def test_a_patient_logs_in_with_the_number_however_they_type_it(self):
         for typed in ("9876543210", "+91 98765 43210", "98765-43210"):
@@ -81,7 +80,7 @@ class MobileIsOnlyStoredScrambledTests(TestCase):
             self.assertEqual(self.post(PatientLoginView, {"mobile": junk, "password": "x"}).status_code, 400, junk)
 
     def test_a_walk_in_with_the_same_number_but_no_password_cannot_log_in(self):
-        Patient.objects.using("default").create(awpid="AW-WALK", full_name="Walk In", mobile_hash=hash_mobile(normalize_mobile("9111111111")))
+        Patient.objects.using("default").create(awpid="AW-WALK", full_name="Walk In", mobile="9111111111")
         self.assertEqual(self.post(PatientLoginView, {"mobile": "9111111111", "password": ""}).status_code, 400)
 
     def test_the_profile_says_a_number_is_on_file_without_showing_it(self):
