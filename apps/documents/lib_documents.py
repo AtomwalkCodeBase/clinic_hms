@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import date, datetime
 
 from apps.documents import ocr
+from apps.documents.doctor_names import find_doctor_name
 from apps.documents.models import CHOOSABLE_TYPES, CLASSIFIER_HOSPITAL, CLASSIFIER_RULES, DOCUMENT_TYPES, DocumentBatch, DocumentClassification, DocumentExtraction, HUMAN_CLASSIFIED, ISSUED, MedicalDocument, NOT_CLASSIFIED, REVIEW_REQUIRED, RULE_CLASSIFIED
 from apps.documents.serializers import MAX_FILE_BYTES
 from apps.opd.models import HospitalPatient
@@ -23,6 +24,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.core.files.base import ContentFile
 from django.db import connections, transaction
 from django.db.models import Count, Q
+from django.db.models.functions import ExtractYear, TruncDate
 from django.utils.dateparse import parse_datetime
 
 logger = logging.getLogger(__name__)
@@ -459,7 +461,9 @@ def extract_document(document_id):
         text, engine = extract_text(raw, mime)
         DocumentExtraction.objects.update_or_create(document=doc, defaults={"extracted_text": text, "engine": engine})
         doc.status = Status.CLASSIFYING
-        doc.save(update_fields=["status", "updated_at"])
+        if not doc.doctor_name and is_patient_upload(doc):
+            doc.doctor_name = find_doctor_name(text)        # a hint read from the text; the patient can correct it
+        doc.save(update_fields=["status", "doctor_name", "updated_at"])
         return True
 def classify_document(document_id):
     """Stage 2: the rule engine on the extracted text → the document's classification. A person's choice is never"""
@@ -530,6 +534,24 @@ def document_counts(awpid):
         "unclassified": docs.exclude(awaiting).filter(status__in=done, doc_classification=NOT_CLASSIFIED).count(),
         "by_type": by_type,
     }
+def documents_by_day(qs, year=None):
+    """The By-date view of My Documents, over `qs` (the patient's documents, already narrowed to what the list shows)."""
+    qs = qs.order_by()
+    years = [{"year": r["y"], "count": r["n"]}
+             for r in qs.annotate(y=ExtractYear("created_at")).values("y").annotate(n=Count("id")).order_by("-y")]
+    if year is None and years:
+        year = years[0]["year"]
+    hospital_q = Q(source_hospital__isnull=False) | Q(created_by_type="H")
+    days = {}
+    in_year = qs.filter(created_at__year=year) if year else qs.none()
+    for r in (in_year.annotate(day=TruncDate("created_at")).values("day")
+              .annotate(total=Count("id"), hospital=Count("id", filter=hospital_q)).order_by("-day")):
+        days[r["day"]] = {"date": r["day"].isoformat(), "total": r["total"], "hospital": r["hospital"],
+                          "yours": r["total"] - r["hospital"], "by_type": {}}
+    for r in (in_year.annotate(day=TruncDate("created_at")).values("day", "doc_classification")
+              .annotate(n=Count("id"))):
+        days[r["day"]]["by_type"][r["doc_classification"]] = r["n"]
+    return {"year": year, "years": years, "days": list(days.values())}
 def submit_decisions(awpid, decisions):
     """The patient's final answer for a list of files: [{"document_id", "document_type"}]. Each file is checked on"""
     wanted = [d["document_id"] for d in decisions]
@@ -578,6 +600,20 @@ def can_discard(doc):
     if doc.status not in (Status.COMPLETED, Status.REVIEW_REQUIRED):
         return False
     return MedicalDocument.objects.using("default").filter(pk=doc.pk).filter(awaiting_review_q()).exists()
+def is_patient_upload(doc):
+    """True for a file the patient put there themselves; False for one a hospital issued (it has a source hospital,
+    or was created by hospital staff)."""
+    return not doc.source_hospital_id and doc.created_by_type != "H"
+def discardable_ids(docs):
+    """The ids among `docs` (a page of documents) the patient may remove: `can_discard` for each, but with one query for the
+    whole page instead of one per document. Never a document a hospital issued."""
+    candidates = [d for d in docs if is_patient_upload(d) and d.status in (Status.FAILED, Status.COMPLETED, Status.REVIEW_REQUIRED)]
+    waiting = set()
+    unsure = [d.pk for d in candidates if d.status != Status.FAILED]
+    if unsure:
+        waiting = set(MedicalDocument.objects.using("default").filter(pk__in=unsure).filter(awaiting_review_q())
+                      .values_list("pk", flat=True))
+    return {d.pk for d in candidates if d.status == Status.FAILED or d.pk in waiting}
 def dismiss_document(doc):
     """The patient removes an upload (see `can_discard`): its stored copy and its rows. A document that is being read"""
     if not can_discard(doc):

@@ -39,6 +39,7 @@ from apps.documents.models import LabResult, ImmunizationRecord, MedicalDocument
 from core.utils.age import age_years_months as _age_years_months
 from apps.documents.models import DOCUMENT_TYPES
 from apps.documents.lib_documents import awaiting_review_q
+from apps.documents.doctor_names import clean_doctor_name
 from collections import Counter
 from apps.patients.services import accounts, accounts_with_mobile, awpid_of, privacy_for_awpid, pending_stale, device_matches, is_live, lapse_if_due, seconds_left, set_password, check_password
 from apps.documents import lib_documents as classification
@@ -1256,7 +1257,28 @@ def _handwritten_siblings(awpid):
         if encounter_id in typeset:
             by_base[encounter_id] = hid
     return by_base, list(by_base.values())
-def _document_row(d, handwritten_doc_id=None):
+def _my_documents_qs(awpid, review="confirmed"):
+    """(queryset, {typeset encounter id: handwriting doc id}) - the one definition of "the patient's documents".
+    review "confirmed" is My Documents (everything except new uploads still waiting for the patient's confirmation),
+    "pending" is exactly those uploads, "all" is both. The By-date counts and the list use this same set, so a day that
+    says 53 files lists 53."""
+    from apps.documents.models import MedicalDocument
+    hw_by_base, linked_hw_ids = _handwritten_siblings(awpid)
+    qs = (MedicalDocument.objects.using("default")
+          .filter(patient__awpid=awpid)
+          .exclude(id__in=linked_hw_ids)
+          .select_related("d_classification")
+          .order_by("-created_at"))
+    if review == "pending":
+        qs = qs.filter(records.awaiting_review_q())
+    elif review != "all":
+        qs = qs.exclude(records.awaiting_review_q())
+    return qs, hw_by_base
+def _document_row(d, handwritten_doc_id=None, deletable=None):
+    """`deletable`: whether the app should offer Delete. A list passes it worked out for the whole page (one query);
+    left out, it is worked out for this document alone."""
+    if deletable is None:
+        deletable = records.is_patient_upload(d) and records.can_discard(d)
     return {
         "id": d.id, "title": records.display_name(d), "doc_type": d.doc_classification,
         "file_name": records.display_name(d), "mime_type": records.mime_of(d), "size": None,
@@ -1267,6 +1289,7 @@ def _document_row(d, handwritten_doc_id=None):
         "suggested_type": classification.suggested_type_of(d), "confirmed": classification.is_confirmed(d),
         "error": d.error_message if d.status == "failed" else "",
         "batch_id": d.batch_id, "handwritten_doc_id": handwritten_doc_id,
+        "doctor_name": d.doctor_name, "deletable": bool(deletable),
     }
 def _events(doc):
     """What has happened to a report, oldest first, in words — the Activity tab. Built from what is stored"""
@@ -1351,35 +1374,52 @@ class PortalDocumentPreviewView(APIView):
             resp[k] = v
         return resp
 class PortalDocumentListCreateView(APIView):
-    """GET /api/v1/portal/documents/?status=queued,extracting&review=pending|confirmed|all&doc_type=lab_report"""
+    """GET /api/v1/portal/documents/?status=queued,extracting&review=pending|confirmed|all&doc_type=lab_report
+        &uploaded_on=2026-05-12
+    uploaded_on: only the files uploaded on that day (India time) - what a day card of the By-date view opens."""
     permission_classes = [IsPatient]
 
     def get(self, request):
-        from apps.documents.models import MedicalDocument
-
         target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
         if err:
             return err
-        hw_by_base, linked_hw_ids = _handwritten_siblings(target_awpid)
-        qs = (MedicalDocument.objects.using("default")
-              .filter(patient__awpid=target_awpid)
-              .exclude(id__in=linked_hw_ids)
-              .select_related("d_classification")
-              .order_by("-created_at"))
+        qs, hw_by_base = _my_documents_qs(target_awpid, (request.query_params.get("review") or "confirmed").lower())
         statuses = [s for s in (request.query_params.get("status") or "").split(",") if s]
         if statuses:
             qs = qs.filter(status__in=statuses)
-        review = (request.query_params.get("review") or "confirmed").lower()
-        if review == "pending":
-            qs = qs.filter(records.awaiting_review_q())
-        elif review != "all":
-            qs = qs.exclude(records.awaiting_review_q())
         doc_type = request.query_params.get("doc_type")
         if doc_type:
             qs = qs.filter(doc_classification=doc_type)
+        uploaded_on = request.query_params.get("uploaded_on")
+        if uploaded_on:
+            try:
+                qs = qs.filter(created_at__date=date.fromisoformat(uploaded_on))
+            except ValueError:
+                return error("uploaded_on must be a date like 2026-05-12.", errors={"code": "invalid_date"})
         page_items, meta = paginate_queryset(request, qs)
-        return Response({"results": [_document_row(d, hw_by_base.get(d.source_id) if d.source_type == d.Source.ENCOUNTER else None) for d in page_items],
+        discardable = records.discardable_ids(page_items)
+        return Response({"results": [_document_row(d, hw_by_base.get(d.source_id) if d.source_type == d.Source.ENCOUNTER else None,
+                                                   deletable=d.pk in discardable) for d in page_items],
                          "pagination": meta})
+class PortalDocumentDaysView(APIView):
+    """GET /api/v1/portal/documents/days/?year=2026[&patient_awpid=...]
+    - the By-date view of My Documents: one entry per upload day (India time) with how many files that day holds,
+    how many the patient uploaded vs a hospital filed, and the count per type; plus the years that have files.
+    The files of a day are then listed with GET /portal/documents/?uploaded_on=<date>."""
+    permission_classes = [IsPatient]
+
+    def get(self, request):
+        target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        year = request.query_params.get("year")
+        if year:
+            try:
+                year = int(year)
+            except ValueError:
+                return error("year must be a number like 2026.", errors={"code": "invalid_year"})
+        qs, _hw = _my_documents_qs(target_awpid)
+        return success(data=records.documents_by_day(qs, year or None))
 class PortalDocumentCountsView(APIView):
     """GET /api/v1/portal/documents/counts/ - {"total", "awaiting_review", "unclassified", "by_type": {code: n}} for the"""
     permission_classes = [IsPatient]
@@ -1434,6 +1474,14 @@ class PortalDocumentDetailView(APIView):
         if doc.source_hospital_id or doc.created_by_type == "H":
             return error("This report was issued by your hospital, so it can't be changed here.")
         action = request.data.get("action")
+        if "doctor_name" in request.data and not action and "doc_type" not in request.data:
+            name = clean_doctor_name(request.data.get("doctor_name"))
+            if name is None:
+                return error("The doctor's name can only have letters and spaces, up to 60 characters.",
+                             errors={"code": "invalid_doctor_name"})
+            doc.doctor_name = name
+            doc.save(update_fields=["doctor_name", "updated_at"])
+            return success(data=_document_row(type(doc).objects.using("default").get(pk=doc.pk)))
         try:
             if action == "retry":
                 records.retry_document(doc)

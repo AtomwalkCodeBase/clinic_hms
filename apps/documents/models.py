@@ -122,6 +122,8 @@ class MedicalDocument(models.Model):
     source_id = models.UUIDField(null=True, blank=True)
     source_hospital = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_documents")
     document_ref_name = models.CharField(max_length=50, blank=True)
+    # The doctor named on the document, without "Dr." — read from its text when it is processed, or typed by the patient.
+    doctor_name = models.CharField(max_length=60, blank=True, default="")
     created_by_type = models.CharField(max_length=1, choices=CREATED_BY_CHOICES, default="P")
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="u_documents")
     created_at = models.DateTimeField(auto_now_add=True)
