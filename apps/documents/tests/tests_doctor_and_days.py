@@ -3,13 +3,12 @@ row), the `deletable` flag, the By-date view (GET /portal/documents/days/) and t
 import datetime
 from unittest import mock
 
-from django.core.management import call_command
 from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.documents import lib_documents as records
-from apps.documents.doctor_names import clean_doctor_name, find_doctor_name
-from apps.documents.models import DocumentExtraction, MedicalDocument
+from apps.documents.lib_documents import clean_doctor_name, find_doctor_name
+from apps.documents.models import MedicalDocument
 from apps.documents.tasks import extract_document_task
 from apps.documents.tests.tests import PDF, identity, make_doc
 from apps.patients.views import (
@@ -18,7 +17,6 @@ from apps.patients.views import (
     PortalDocumentListCreateView,
 )
 from core.api.authentication import MockUser
-from io import StringIO
 
 S = MedicalDocument.Status
 UTC = datetime.timezone.utc
@@ -358,47 +356,3 @@ class UploadedOnTests(TestCase):
     def test_a_bad_date_is_refused(self, _r):
         response, _ids = self.listing(uploaded_on="12-05-2026")
         self.assertEqual(response.status_code, 400)
-
-
-# ── the one-time backfill for documents processed before the field existed ───────────────────────────────────
-
-class BackfillDoctorNamesTests(TestCase):
-    databases = {"default"}
-
-    def setUp(self):
-        identity("AWP-T1")
-
-    def doc(self, text, **fields):
-        doc = make_doc("AWP-T1", status="completed", document_type="lab_report", by="human", **fields)
-        DocumentExtraction.objects.create(document=doc, extracted_text=text, engine="ocr")
-        return doc
-
-    def run_command(self, *args):
-        out = StringIO()
-        call_command("backfill_doctor_names", *args, stdout=out)
-        return out.getvalue()
-
-    def test_fills_the_name_from_the_stored_text(self):
-        doc = self.doc("Consultant Dr. Anita Rao MBBS")
-        self.run_command()
-        self.assertEqual(row(doc).doctor_name, "Anita Rao")
-
-    def test_a_dry_run_changes_nothing_and_says_what_it_would_do(self):
-        doc = self.doc("Consultant Dr. Anita Rao MBBS")
-        output = self.run_command("--dry-run")
-        self.assertEqual(row(doc).doctor_name, "")
-        self.assertIn("Anita Rao", output)
-        self.assertIn("would be filled", output)
-
-    def test_a_name_already_there_and_a_hospital_issued_file_are_left_alone(self):
-        typed = self.doc("Dr. Anita Rao")
-        MedicalDocument.objects.filter(pk=typed.pk).update(doctor_name="Sunil Kumar")
-        issued = self.doc("Dr. Anita Rao", created_by_type="H", source_hospital_id=7)
-        self.run_command()
-        self.assertEqual(row(typed).doctor_name, "Sunil Kumar")
-        self.assertEqual(row(issued).doctor_name, "")
-
-    def test_text_without_a_doctor_leaves_it_empty(self):
-        doc = self.doc("hemoglobin glucose")
-        self.run_command()
-        self.assertEqual(row(doc).doctor_name, "")

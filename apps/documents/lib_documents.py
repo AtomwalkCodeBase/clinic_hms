@@ -11,7 +11,6 @@ from contextlib import contextmanager
 from datetime import date, datetime
 
 from apps.documents import ocr
-from apps.documents.doctor_names import find_doctor_name
 from apps.documents.models import CHOOSABLE_TYPES, CLASSIFIER_HOSPITAL, CLASSIFIER_RULES, DOCUMENT_TYPES, DocumentBatch, DocumentClassification, DocumentExtraction, HUMAN_CLASSIFIED, ISSUED, MedicalDocument, NOT_CLASSIFIED, REVIEW_REQUIRED, RULE_CLASSIFIED
 from apps.documents.serializers import MAX_FILE_BYTES
 from apps.opd.models import HospitalPatient
@@ -542,16 +541,83 @@ def documents_by_day(qs, year=None):
     if year is None and years:
         year = years[0]["year"]
     hospital_q = Q(source_hospital__isnull=False) | Q(created_by_type="H")
-    days = {}
     in_year = qs.filter(created_at__year=year) if year else qs.none()
-    for r in (in_year.annotate(day=TruncDate("created_at")).values("day")
-              .annotate(total=Count("id"), hospital=Count("id", filter=hospital_q)).order_by("-day")):
-        days[r["day"]] = {"date": r["day"].isoformat(), "total": r["total"], "hospital": r["hospital"],
-                          "yours": r["total"] - r["hospital"], "by_type": {}}
+    days = {}
     for r in (in_year.annotate(day=TruncDate("created_at")).values("day", "doc_classification")
-              .annotate(n=Count("id"))):
-        days[r["day"]]["by_type"][r["doc_classification"]] = r["n"]
+              .annotate(n=Count("id"), h=Count("id", filter=hospital_q)).order_by("-day")):
+        day = days.setdefault(r["day"], {"date": r["day"].isoformat(), "total": 0, "hospital": 0, "yours": 0, "by_type": {}})
+        day["total"] += r["n"]
+        day["hospital"] += r["h"]
+        day["yours"] += r["n"] - r["h"]
+        day["by_type"][r["doc_classification"]] = r["n"]
     return {"year": year, "years": years, "days": list(days.values())}
+# doctor names: read from a document's text, or typed by the patient
+DOCTOR_NAME_MAX = 60
+_DOCTOR_PREFIX = re.compile(r"\bdr\b\.?", re.IGNORECASE)
+_NAME_WORD = re.compile(r"^[A-Za-z][A-Za-z'’\-]*$")
+_GLUED_WORDS = re.compile(r"[a-z][A-Z]")
+_TYPED_NAME = re.compile(r"^[A-Za-z][A-Za-z '’.\-]*$")
+_NAME_STOP = {
+    "mbbs", "md", "ms", "dnb", "bds", "mds", "dgo", "dch", "frcs", "dm", "mch", "phd", "msc", "bams", "bhms",
+    "uhid", "reg", "regd", "registration", "regn", "no", "number", "id", "mob", "mobile", "ph", "phone", "tel",
+    "consultant", "specialist", "physician", "surgeon", "radiologist", "pathologist", "officer", "medical",
+    "date", "age", "sex", "gender", "patient", "name", "ref", "referred", "by", "signature", "sign", "stamp",
+    "department", "dept", "hospital", "clinic", "laboratory", "laboratories", "lab", "labs", "pathlabs", "diagnostics",
+    "centre", "center", "institute", "technique", "modality", "findings", "impression", "report", "address",
+    "and", "the", "for", "of", "at", "on", "in", "to", "from", "with", "dr", "doctor",
+    # a speciality printed after the name: "Dr. Veena Kulkarni - ENT", "Dr. Ravi Thakur Pulmonology"
+    "ent", "general", "medicine", "surgery", "surgical", "paediatrics", "pediatrics", "paediatrician", "pediatrician",
+    "orthopaedics", "orthopedics", "orthopaedic", "orthopedic", "cardiology", "cardiologist", "dermatology",
+    "dermatologist", "neurology", "neurologist", "urology", "urologist", "ophthalmology", "ophthalmologist",
+    "pulmonology", "pulmonologist", "endocrinology", "endocrinologist", "gastroenterology", "gastroenterologist",
+    "gynaecology", "gynecology", "gynaecologist", "gynecologist", "nephrology", "oncology", "psychiatry", "psychiatrist",
+    "radiology", "pathology", "geriatrics", "ger", "dentist", "dental", "diabetology", "rheumatology", "anaesthesia",
+}
+
+
+def _strip_token(token):
+    return token.strip(",;:()[]{}|")
+def find_doctor_name(text):
+    """The first believable name after "Dr." in `text`, without the prefix, or ""; a hint the patient can correct."""
+    for match in _DOCTOR_PREFIX.finditer(text or ""):
+        rest = (text[match.end():match.end() + 90]).split("\n")[0]
+        words, broken = [], False
+        for token in rest.split():
+            closes = token[-1:] in ",;:)]|"
+            word = _strip_token(token).rstrip(".")
+            if not word:
+                break
+            if "-" in word:                              # "Kulkarni-ENT": the name is the part before a speciality
+                head, _, tail = word.partition("-")
+                if head and tail.lower() in _NAME_STOP:
+                    word, closes = head, True
+            if word.lower() in _NAME_STOP:
+                break
+            if not _NAME_WORD.match(word) or _GLUED_WORDS.search(word) or word.lower().endswith(("'s", "’s")):
+                broken = True
+                break
+            words.append(word)
+            if closes or len(words) == 3:
+                break
+        if broken or not words or not any(len(w) >= 3 for w in words):
+            continue
+        name = " ".join(w.title() if (w.isupper() or w.islower()) else w for w in words)
+        return name[:DOCTOR_NAME_MAX]
+    return ""
+
+
+def clean_doctor_name(value):
+    """A patient-typed doctor name, tidied, or None when not acceptable ("" clears it)."""
+    if value is None:
+        return None
+    name = re.sub(r"\s+", " ", str(value)).strip()
+    if name.lower().startswith("dr.") or name.lower().startswith("dr "):
+        name = name[3:].strip()                     # the app adds "Dr." itself
+    if not name:
+        return ""
+    if len(name) > DOCTOR_NAME_MAX or not _TYPED_NAME.match(name):
+        return None
+    return name
 def submit_decisions(awpid, decisions):
     """The patient's final answer for a list of files: [{"document_id", "document_type"}]. Each file is checked on"""
     wanted = [d["document_id"] for d in decisions]

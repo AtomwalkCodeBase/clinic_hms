@@ -39,7 +39,7 @@ from apps.documents.models import LabResult, ImmunizationRecord, MedicalDocument
 from core.utils.age import age_years_months as _age_years_months
 from apps.documents.models import DOCUMENT_TYPES
 from apps.documents.lib_documents import awaiting_review_q
-from apps.documents.doctor_names import clean_doctor_name
+from apps.documents.lib_documents import clean_doctor_name
 from collections import Counter
 from apps.patients.services import accounts, accounts_with_mobile, awpid_of, privacy_for_awpid, pending_stale, device_matches, is_live, lapse_if_due, seconds_left, set_password, check_password
 from apps.documents import lib_documents as classification
