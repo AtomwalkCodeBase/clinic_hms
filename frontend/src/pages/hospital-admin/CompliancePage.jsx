@@ -1,15 +1,4 @@
-/**
- * pages/hospital-admin/CompliancePage.jsx
- * ------------------------------------------
- * Hospital admin: DPDP Act compliance tooling. Three tabs:
- *   - Audit Log — every PHI access recorded via core.audit.log_action()
- *     (apps.org.AuditLog), read through apps.compliance.AuditLogListView.
- *   - Correction Requests — patient-submitted RecordAmendment rows
- *     (DPDP Art. 13); approve/reject here, apply the actual field edit
- *     through the normal record screen first.
- *   - Consent Records — the append-only ConsentRecord proof trail behind
- *     each patient's dpdp_consent_captured / hie_consent_given flags.
- */
+/** pages/hospital-admin/CompliancePage.jsx */
 import { useState } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";

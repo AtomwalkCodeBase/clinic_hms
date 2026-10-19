@@ -1,23 +1,4 @@
-/**
- * components/common/PaginationControls.jsx
- * -------------------------------------------
- * Reusable pagination footer: a page-size picker (5 / 10 / 15 / 20 / 25) plus
- * Previous / Next buttons and a "Page X of Y" label. Pairs with the backend's
- * `paginate_queryset` helper (core/pagination.py), which already reads
- * ?page=&page_size= and returns { page, page_size, total_count, total_pages,
- * has_next, has_previous } — this component just renders that meta and
- * reports page/page_size changes back to the caller.
- *
- * Usage:
- *   const [page, setPage] = useState(1);
- *   const [pageSize, setPageSize] = useState(10);
- *   const { data } = useApi(ENDPOINT, { params: { page, page_size: pageSize } });
- *   <PaginationControls
- *     pagination={data?.pagination}
- *     page={page} pageSize={pageSize}
- *     onPageChange={setPage} onPageSizeChange={setPageSize}
- *   />
- */
+/** components/common/PaginationControls.jsx */
 const PAGE_SIZE_OPTIONS = [5, 10, 15, 20, 25];
 
 export default function PaginationControls({

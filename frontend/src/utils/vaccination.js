@@ -1,6 +1,4 @@
 // Which roadmap bucket a vaccination item falls in ("Completed" / "Needs Review" / "Upcoming").
-// Shared by the records timeline (RecordsPage) and the growth chart (GrowthVaccinationChart) so the
-// marker colours on the chart always agree with the pill colours on the timeline.
 export function vaxBucket(item) {
   const status = item.status;
   if (status === "completed" || status === "declined") return "Completed";

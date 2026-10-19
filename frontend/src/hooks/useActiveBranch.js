@@ -1,16 +1,4 @@
-/**
- * hooks/useActiveBranch.js
- * --------------------------
- * For staff assigned to more than one branch (today, realistically just
- * doctors — see StaffBranchMapping / docs/onboarding_auth_rbac_architecture.md
- * 4.4) — fetches their own branch assignment and tracks which one is
- * "active" for branch-scoped views (queue, dashboard), persisted in
- * localStorage so the choice survives a refresh.
- *
- * Staff with 0 or 1 branch get `hasMultiple: false` and nothing changes
- * for them — no switcher UI, no explicit branch_id sent, same behavior as
- * before this existed.
- */
+/** hooks/useActiveBranch.js */
 
 import { useState, useEffect, useCallback } from "react";
 import apiClient from "../services/api.client";

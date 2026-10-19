@@ -1,6 +1,4 @@
 // Swimlane health-journey timeline (ECharts custom series).
-// One lane per row from the API: Birth, Growth, Vaccines, each chronic condition,
-// each acute condition group, Hospital & critical. X axis toggles child-age / calendar.
 import React, { useMemo } from 'react';
 import ReactECharts from './EChart';
 import {
@@ -207,7 +205,7 @@ export default function TimelineChart({ payload, axisMode = 'age', onOpenDocumen
       },
       series: [{
         type: 'custom',
-        clip: true,   // an episode that began before the period is cut at the axis, not drawn over the lane labels
+        clip: true,
         encode: { x: [0, 1], y: 2 },
         data: items,
         renderItem: (params, api) => {

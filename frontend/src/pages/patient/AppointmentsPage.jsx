@@ -1,13 +1,4 @@
-/**
- * pages/patient/AppointmentsPage.jsx
- * ------------------------------------
- * My Appointments — leads with the next upcoming visit (the thing the
- * patient actually came here to check), splits the rest into Upcoming /
- * Past, and shows real queue position (people ahead, who's currently being
- * seen) computed live from Appointment.status in the same hospital DB rather
- * than an invented "estimated wait" — we don't track per-consult timing,
- * so a minutes estimate would just be a guess dressed up as data.
- */
+/** pages/patient/AppointmentsPage.jsx */
 import { useMemo, useState, useEffect, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -30,8 +21,6 @@ import { todayLocal, toLocalISODate } from "../../utils/dates";
 
 const TODAY = todayLocal();
 // Mirrors the 2-month booking window enforced server-side (see
-// AppointmentRescheduleView / PortalRescheduleBookingView) — a reschedule is
-// just a move within the same booking rules as a fresh booking.
 const MAX_RESCHEDULE_DATE = (() => {
   const d = new Date();
   d.setDate(d.getDate() + 62);
@@ -60,10 +49,6 @@ const INVOICE_STATUS_META = {
 };
 
 // An appointment that never got closed out (still scheduled/waiting/in_progress
-// etc.) by the end of its own calendar day is stale, not upcoming — the hospital
-// simply never marked it done. We don't mutate the real backend status for this
-// (that's the hospital's record of what happened), we just stop presenting it as
-// "upcoming" once its day has passed.
 function isExpired(b) {
   const todayStr = todayLocal();
   return ACTIVE_STATUSES.includes(b.status) && b.date < todayStr;
@@ -95,12 +80,6 @@ function relativeDate(dateStr) {
 }
 
 // Appointment.doctor_name is captured raw at booking time from whatever the
-// hospital typed into the staff account's first/last name — some accounts
-// already have "Dr." baked into the name, some don't (same root cause as
-// the doctor-card display-name fix in portal_views.py, but that fix only
-// covers newly-read doctor cards, not names already stored on past
-// bookings). Strip any existing prefix before adding one, so it's always
-// "Dr. X" exactly once regardless of how the underlying data looks.
 function formatDoctorName(raw) {
   const stripped = (raw || "").replace(/^dr\.?\s+/i, "").trim();
   return stripped ? `Dr. ${stripped}` : raw;
@@ -122,9 +101,6 @@ function getInitials(rawName) {
 }
 
 // Real address text (hospital + city/state, whatever we actually have) piped
-// into a Google Maps search link — not a fabricated pin/coordinate, just the
-// standard "search this address" pattern, so "View on map" only appears when
-// there's real location text to search for.
 function mapsUrl(hospital, city, state) {
   const q = [hospital, city, state].filter(Boolean).join(", ");
   if (!q) return null;
@@ -143,8 +119,6 @@ function formatBookedOn(iso) {
 }
 
 // Doctor photo when the hospital uploaded one (same source as "Find
-// Doctors"), otherwise a colored initials circle — never a fabricated stock
-// photo or placeholder avatar.
 function DoctorAvatar({ photo, name, size = 44 }) {
   if (photo) {
     return (
@@ -181,9 +155,6 @@ function FamilyTag({ b, ownAwpid }) {
 }
 
 // `variant="buttons"` renders real outlined buttons (used in the hero
-// card's "Appointment for" column, next to the reference layout's
-// Reschedule/Cancel pair); the default `variant="links"` keeps the plain
-// text-link treatment used inline in list rows.
 function AppointmentActions({ b, onCancel, onReschedule, size = 12, direction = "row", variant = "links" }) {
   const canCancel = CANCELLABLE_STATUSES.includes(b.status);
   const canReschedule = RESCHEDULABLE_STATUSES.includes(b.status);
@@ -244,9 +215,6 @@ function AppointmentActions({ b, onCancel, onReschedule, size = 12, direction = 
 }
 
 // Same slot grid used at booking time (PortalSlotListView), reused here so
-// rescheduling shows real live availability rather than a freeform time
-// field — a freeform field could collide with another booked slot the
-// patient can't see, or with the doctor's actual working hours.
 function RescheduleModal({ booking, onClose, onDone }) {
   const { toastSuccess, toastApiError } = useToast();
   const [date, setDate] = useState(booking.date >= TODAY ? booking.date : TODAY);
@@ -355,18 +323,12 @@ function RescheduleModal({ booking, onClose, onDone }) {
 function HeroAppointment({ b, ownAwpid, onCancel, onReschedule }) {
   const meta = STATUS_META[b.status] || STATUS_META.scheduled;
   // Blank patient_name means "the account owner, booked before family
-  // members existed" (see FamilyTag) — either way, resolve to a real label
-  // so "who is this for" is never left to a small, easy-to-miss badge.
   const isSelf = !b.patient_name || (ownAwpid && b.patient_awpid === ownAwpid);
   const dateObj = new Date(b.date + "T00:00:00");
   const dateWord = relativeDate(b.date);
   return (
     <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 22 }}>
-      {/* Narrow-window/mobile tightening — the desktop padding/gaps below
-          are sized for a wide card; at phone widths the same values leave
-          large, empty-looking gaps between short wrapped lines. Scoped via
-          classNames + !important since the rest of this card is inline-
-          styled (same pattern as RecordsPage.jsx's vax-stats-grid). */}
+      {/* Narrow-window/mobile tightening — the desktop padding/gaps below */}
       <style>{`
         @media (max-width: 640px) {
           .hero-top-grid  { flex-direction: column !important; }
@@ -403,8 +365,7 @@ function HeroAppointment({ b, ownAwpid, onCancel, onReschedule }) {
       </div>
 
       <div className="hero-content" style={{ padding: "22px 24px" }}>
-        {/* Horizontal layout: date box, doctor/hospital info, and "who this
-            is for" all readable in one glance instead of stacked rows. */}
+        {/* Horizontal layout: date box, doctor/hospital info, and "who this */}
         <div className="hero-top-grid" style={{
           display: "flex", alignItems: "flex-start",
           flexWrap: "wrap", gap: 24, marginBottom: 18,
@@ -423,9 +384,7 @@ function HeroAppointment({ b, ownAwpid, onCancel, onReschedule }) {
             {b.time && <div style={{ fontSize: 10.5, fontWeight: 700, opacity: 0.9, marginTop: 2 }}>{formatTime12h(b.time)}</div>}
           </div>
 
-          {/* Appointment meta — the time/status/booking-reference block,
-              packed tight against the date box (not off in the middle of
-              a stretchy gap). */}
+          {/* Appointment meta — the time/status/booking-reference block, */}
           <div className="hero-meta-panel" style={{
             flexShrink: 0, borderLeft: "1px solid var(--color-border)", paddingLeft: 24, minWidth: 170,
           }}>
@@ -444,11 +403,7 @@ function HeroAppointment({ b, ownAwpid, onCancel, onReschedule }) {
             </div>
           </div>
 
-          {/* Doctor detail — photo/initials, specialisation, hospital +
-              city/state, a real "View on map" link built from that address
-              text. Everything here is a real field from PortalMyBookingsView;
-              nothing invented (no rating, no fabricated address beyond
-              city/state). */}
+          {/* Doctor detail — photo/initials, specialisation, hospital + */}
           <div className="hero-doctor-panel" style={{
             display: "flex", gap: 12, alignItems: "flex-start", minWidth: 0,
             borderLeft: "1px solid var(--color-border)", paddingLeft: 24,
@@ -486,10 +441,7 @@ function HeroAppointment({ b, ownAwpid, onCancel, onReschedule }) {
             </div>
           </div>
 
-          {/* "Who this is for" panel — pushed to the far right edge of the
-              row (margin-left: auto) while the first three sections stay
-              packed together on the left, instead of everything spreading
-              out evenly with dead space in between. */}
+          {/* "Who this is for" panel — pushed to the far right edge of the */}
           <div className="hero-who-panel" style={{
             flexShrink: 0, minWidth: 170, marginLeft: "auto",
             borderLeft: "1px solid var(--color-border)", paddingLeft: 24,
@@ -519,9 +471,7 @@ function HeroAppointment({ b, ownAwpid, onCancel, onReschedule }) {
                 </div>
               )}
             </div>
-            {/* Reschedule/Cancel live right under "Appointment for" — same
-                spot the reference layout puts them, instead of a separate
-                action row at the bottom of the whole card. */}
+            {/* Reschedule/Cancel live right under "Appointment for" — same */}
             <AppointmentActions b={b} onCancel={onCancel} onReschedule={onReschedule} size={12} direction="column" variant="buttons" />
           </div>
         </div>
@@ -591,8 +541,6 @@ function HeroAppointment({ b, ownAwpid, onCancel, onReschedule }) {
 }
 
 // Table-row-style list item — a scannable strip (date, doctor/hospital,
-// token, status, actions) rather than a tall card, so a list of many
-// appointments reads like a list rather than a wall of tiles.
 function AppointmentRow({ b, onOpenPrescriptions, ownAwpid, onCancel, onReschedule }) {
   const expired = isExpired(b);
   const displayStatus = expired ? "expired" : b.status;
@@ -719,8 +667,6 @@ function StatCard({ icon: Icon, label, value, color, onClick, active }) {
 }
 
 // Quick-glance counts, doubling as tab shortcuts — clicking a card jumps
-// straight to that tab. "Total" stays informational since there's no
-// single "everything" tab to jump to.
 function StatsRow({ stats, activeTab, onSetTab }) {
   const cards = [
     { key: "upcoming",  label: "Upcoming",           value: stats.upcomingCount,  color: "var(--color-primary)", icon: CalendarClock, tab: "upcoming" },
@@ -815,8 +761,6 @@ function BillRow({ inv }) {
 function BillsSection() {
   const { familyMembers } = usePatientContext();
   // Invoices are a single-target list (see PortalInvoiceListView), unlike
-  // My Bookings' merged-then-client-filtered list — so "whose bills" is its
-  // own selector here rather than a client-side filter over one big list.
   const [billsFor, setBillsFor] = useState(""); // "" = self, else a family member's awpid
   const {
     items: invoices, isLoading, pagination, loadMore, isLoadingMore, hasMore,
@@ -888,8 +832,6 @@ export default function PatientAppointmentsPage() {
   const [activeTab, setActiveTab] = useState("upcoming");
 
   // Search + filter — applied within whichever tab is active. The hero
-  // card always shows the true next active appointment regardless of
-  // filters (it's a status callout, not a list item).
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [familyFilter, setFamilyFilter] = useState(""); // patient_awpid, "" = everyone
@@ -954,9 +896,6 @@ export default function PatientAppointmentsPage() {
   }
 
   // Three real buckets, straight off the same status field the rest of the
-  // app trusts: active-and-not-expired ("upcoming"), cancelled/no_show
-  // ("cancelled"), and everything else closed out ("past" — done, or
-  // expired without ever being closed by the hospital).
   const { hero, upcoming, past, cancelled } = useMemo(() => {
     const active = bookings.filter(b => ACTIVE_STATUSES.includes(b.status) && !isExpired(b));
     const closed = bookings.filter(b => !ACTIVE_STATUSES.includes(b.status) || isExpired(b));
@@ -969,10 +908,6 @@ export default function PatientAppointmentsPage() {
   }, [bookings]);
 
   // Quick-glance counts for the stat-card row — derived client-side from
-  // the same bookings list already loaded for the page (no separate
-  // aggregate endpoint exists, and doesn't need to: this page only ever
-  // loads a patient's own bookings, a small list). Total uses the API's
-  // real total_count so it stays correct even before every page is loaded.
   const listStats = useMemo(() => ({
     upcomingCount: upcoming.length + (hero ? 1 : 0),
     pastCount: past.length,
@@ -981,10 +916,6 @@ export default function PatientAppointmentsPage() {
   }), [upcoming, past, cancelled, hero, bookings, bookingsPagination]);
 
   // The hero card is a spotlight on "your next visit," not a list item —
-  // pulled out of the Upcoming list while unfiltered. With only one active
-  // booking, that spotlight IS the whole Upcoming tab, and searching would
-  // silently show nothing — so once a filter is active the hero folds back
-  // into the searched pool.
   const filteredUpcoming = useMemo(() => {
     const pool = hasActiveFilters && hero ? [hero, ...upcoming] : upcoming;
     return pool.filter(matchesFilters);
@@ -1027,9 +958,7 @@ export default function PatientAppointmentsPage() {
           </div>
         ) : (
           <>
-            {/* Tab bar — Upcoming / Past / Cancelled, each backed by a real
-                status bucket (see the hero/upcoming/past/cancelled useMemo
-                above), with counts straight off the same data. */}
+            {/* Tab bar — Upcoming / Past / Cancelled, each backed by a real */}
             <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--color-border)", marginBottom: 20 }}>
               {TABS.map(t => {
                 const count = t.key === "upcoming" ? listStats.upcomingCount : t.key === "past" ? listStats.pastCount : listStats.cancelledCount;
@@ -1070,12 +999,7 @@ export default function PatientAppointmentsPage() {
               </div>
             )}
 
-            {/* Search + filter bar — hospital is the dimension patients
-                reach for most, so it sits inline (always visible) rather
-                than behind a toggle; the rest (family member, doctor, date
-                range) stay in "More filters" since most patients never need
-                them. Status isn't filterable here — the active tab is
-                already the status bucket. */}
+            {/* Search + filter bar — hospital is the dimension patients */}
             <div className="card" style={{ padding: 14, marginBottom: 18 }}>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <div style={{ position: "relative", flex: "1 1 220px", minWidth: 200 }}>
@@ -1150,9 +1074,7 @@ export default function PatientAppointmentsPage() {
               )}
             </div>
 
-            {/* Row-list responsive tightening — kept as one shared block
-                rather than per-row so it's not duplicated across every
-                AppointmentRow instance. */}
+            {/* Row-list responsive tightening — kept as one shared block */}
             <style>{`
               @media (max-width: 560px) {
                 .appt-row-actions { flex-direction: row !important; align-items: center !important; justify-content: space-between !important; width: 100% !important; margin-left: 0 !important; }

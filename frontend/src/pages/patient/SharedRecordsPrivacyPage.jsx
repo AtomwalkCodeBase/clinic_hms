@@ -1,24 +1,4 @@
-/**
- * pages/patient/SharedRecordsPrivacyPage.jsx
- * -----------------------------------------
- * "Shared records privacy" — the patient chooses what a doctor sees when they
- * share their records (Share Records / RecordsShareRequest). One screen:
- *
- *   - a live readout of how many records are visible right now
- *   - independent filters: Category (multi) · Type (multi) · Month · search
- *   - the vault, grouped by category, each row a Shared / Hidden status pill
- *   - a per-category group pill and a multi-select + bulk Hide / Show
- *
- * "Private" is sticky — a hidden record stays hidden in every future share.
- * The ONLY dialog is the this-visit-vs-always choice, and it appears only
- * while a doctor is actively viewing; otherwise a plain confirm. Hiding is
- * always instant, with Undo.
- *
- * Backend: apps/hospital_patients/records_share_views.py
- *   GET/PUT /portal/records-privacy/            config + annotated vault
- *   POST    /portal/records-privacy/toggle/     one-record lock
- *   POST    /portal/records-share/<token>/reveal/  per-visit reveal (scope: visit|always|conceal)
- */
+/** pages/patient/SharedRecordsPrivacyPage.jsx */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "react-toastify";
 import {
@@ -47,7 +27,6 @@ const monthLabel = (k) => { const [y, m] = k.split("-"); return `${MONTHS[(+m) -
 const fmtDate = (iso) => { if (!iso) return "—"; const dt = new Date(iso); return `${String(dt.getDate()).padStart(2, "0")} ${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`; };
 
 // The one bucket a document is grouped under here (its first known panel, or
-// a kind bucket). Filtering by Category still matches every panel it carries.
 function bucketOf(d) {
   const cats = (d.report_categories || []).filter((c) => CATEGORY_LABELS[c]);
   if (cats.length) return { key: `c:${cats[0]}`, label: catLabel(cats[0]) };
@@ -160,7 +139,6 @@ function MultiFilter({ label, options, selected, onChange }) {
 const linkBtn = { font: "inherit", fontSize: 11, fontWeight: 600, color: "var(--color-primary)", background: "none", border: 0, cursor: "pointer", textTransform: "none", letterSpacing: 0 };
 
 // debounce a fast-changing value (the search box) so it drives one request
-// when the user pauses, not one per keystroke.
 function useDebounced(value, ms) {
   const [v, setV] = useState(value);
   useEffect(() => {
@@ -171,8 +149,6 @@ function useDebounced(value, ms) {
 }
 
 // ── page navigator ────────────────────────────────────────────────────────
-// The list is paged on category boundaries server-side (whole panels per
-// page), so this only ever steps between page numbers.
 function Pager({ meta, onPage }) {
   const { page, total_pages, has_next, has_previous } = meta;
   if (total_pages <= 1) return null;
@@ -197,7 +173,6 @@ function Pager({ meta, onPage }) {
   );
 }
 
-// ───────────────────────────────────────────────────────────────────────────
 export default function SharedRecordsPrivacyPage() {
   const { toastApiError } = useToast();
   const [data, setData] = useState(null);
@@ -215,8 +190,6 @@ export default function SharedRecordsPrivacyPage() {
   const listTopRef = useRef(null);
 
   // Any filter change: back to page 1 and drop a selection that spanned the
-  // old result set. Wrapped setters keep both updates in one render so the
-  // fetch fires once.
   const onFilter = (fn) => (v) => { fn(v); setPage(1); setSel(new Set()); };
   const setCat = onFilter(setCatSel);
   const setKind = onFilter(setKindSel);
@@ -266,7 +239,6 @@ export default function SharedRecordsPrivacyPage() {
   const monthOptions = summary.months || [];
 
   // `docs` is already this page's rows in category order; just re-bucket them
-  // for the section headers. The server never splits a group across pages.
   const groups = useMemo(() => {
     const m = new Map();
     docs.forEach((d) => {

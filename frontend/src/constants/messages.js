@@ -1,9 +1,4 @@
-/**
- * constants/messages.js
- * ---------------------
- * User-facing message strings. Centralised to make future i18n easy.
- * Never hardcode user-facing strings in components.
- */
+/** constants/messages.js */
 
 export const MESSAGES = {
   // Generic

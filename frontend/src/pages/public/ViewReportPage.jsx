@@ -1,21 +1,4 @@
-/**
- * pages/public/ViewReportPage.jsx
- * --------------------------------
- * What opens when the QR printed on a prescription/lab report is scanned by
- * anything other than the patient app itself — Google Lens, any other
- * camera app, a second phone. The app's own capture screen never lands
- * here: it decodes the same QR and posts straight to the My Reports upload
- * pipeline (apps/hospital_patients/portal_views.py) instead of opening a link.
- *
- * Deliberately outside AppShell/ProtectedRoute — the person opening this
- * may have no Atomwalk login at all. Deliberately does NOT fetch or show
- * anything until the patient explicitly taps "Yes, view it" — a bare
- * "Do you want to view this report?" prompt is the only thing rendered on
- * load, so nobody's name/diagnosis/file is exposed to whoever merely
- * pointed a camera at the page. See apps/hospital_patients/document_view_views.py
- * for the backend half and core/qr_token.py for how the token in the URL
- * is verified.
- */
+/** pages/public/ViewReportPage.jsx */
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { publicClient } from "../../services/api.client";

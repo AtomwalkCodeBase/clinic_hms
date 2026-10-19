@@ -1,23 +1,4 @@
-/**
- * pages/patient/MyProfilePage.jsx
- * ---------------------------------
- * Patient portal's own account page. Cards: identity (AWPID/email,
- * read-only — these are the keys the cross-hospital HIE matching relies
- * on), editable basics, health summary, emergency contact, family members,
- * linked hospitals, and change-password.
- *
- * Everything shown is real data already tracked elsewhere in the system —
- * blood group comes from Patient, allergies/diagnoses from the same
- * shared HIE tables doctors see, linked hospitals from actual booking
- * history. Nothing here is fabricated (no invented "primary doctor",
- * "chronic conditions" classifier, login-device list, or notification
- * toggles — none of that is tracked anywhere in the backend yet).
- *
- * Styled with the same premium hero-card / icon-chip language used on
- * DashboardPage and DoctorProfilePage, rather than flat white cards with
- * plain label/value stacks — this is the patient's identity page, it
- * should read as such.
- */
+/** pages/patient/MyProfilePage.jsx */
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -38,8 +19,6 @@ import { formatAgeYM } from "../../utils/age";
 import { labelStyle, inputStyle } from "../../styles/formStyles";
 
 
-
-
 const cardStyle = { padding: 0, marginTop: 16, overflow: "hidden" };
 
 const EMPTY_PW = { current_password: "", new_password: "", confirm_password: "" };
@@ -48,8 +27,6 @@ const REL_LABELS = { child: "Child", parent: "Parent", spouse: "Spouse", sibling
 const REL_ICONS  = { child: Baby, parent: User, spouse: Heart, sibling: Users, ward: UserRound, other: User };
 
 // Plain, light section header — small text label + thin bottom border.
-// Kept deliberately quiet (no color banner) so a page full of cards reads
-// as calm data, not a stack of billboards.
 function SectionHeader({ title, action }) {
   return (
     <div style={{
@@ -66,7 +43,6 @@ function SectionHeader({ title, action }) {
 }
 
 // Field row with a colored icon chip — replaces bare label/value stacks so
-// a glance at the card reads as data, not empty space.
 function InfoField({ icon: Icon, chip = "green", label, value, empty = "Not set" }) {
   return (
     <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
@@ -122,10 +98,6 @@ export default function MyProfilePage() {
   const [pwOpen, setPwOpen] = useState(false);
 
   // Changing the mobile number requires OTP re-verification, sent to the
-  // EMAIL on file (email-based for now — see PortalMobileChangeRequestOTPView
-  // / PortalProfileView.patch in apps/hospital_patients/portal_views.py). Every other
-  // field saves immediately; only a real mobile-number change routes
-  // through this extra step.
   const [mobileOtp, setMobileOtp] = useState({ awaitingCode: false, code: "", actionToken: "", sending: false });
 
   const [family, setFamily] = useState(null); // null = loading
@@ -133,9 +105,6 @@ export default function MyProfilePage() {
   const [memberForm, setMemberForm] = useState(EMPTY_MEMBER);
   const [memberSaving, setMemberSaving] = useState(false);
   // Editing an existing family member reuses the same field shape as adding
-  // one, just keyed to which member's card is currently expanded for
-  // editing (awpid, or null when none is) — only one edit form open at a
-  // time, same as the add-member form above.
   const [editingMemberAwpid, setEditingMemberAwpid] = useState(null);
   const [editMemberForm, setEditMemberForm] = useState(EMPTY_MEMBER);
   const [memberEditSaving, setMemberEditSaving] = useState(false);
@@ -214,7 +183,7 @@ export default function MyProfilePage() {
       gender: m.gender || "",
       relationship: m.relationship || "other",
     });
-    setFamilyOpen(false); // don't show both the add-member and edit-member forms at once
+    setFamilyOpen(false);
   }
 
   function cancelEditMember() {
@@ -299,8 +268,6 @@ export default function MyProfilePage() {
     e.preventDefault();
 
     // A real mobile-number change needs a verified action_token before the
-    // PATCH is even attempted — start (or continue) the OTP step instead of
-    // saving.
     if (mobileChanged && !mobileOtp.actionToken) {
       if (!mobileOtp.awaitingCode) await requestMobileChangeCode();
       return;
@@ -319,8 +286,6 @@ export default function MyProfilePage() {
       toastSuccess("Profile updated.");
     } catch (err) {
       // The token can go stale (expired / wrong number) between verify and
-      // save — reset back to "need a fresh code" rather than leaving a
-      // dead token the user can't do anything with.
       if (mobileChanged) setMobileOtp({ awaitingCode: false, code: "", actionToken: "", sending: false });
       toastApiError(err, "Failed to update profile.");
     } finally {
@@ -410,10 +375,7 @@ export default function MyProfilePage() {
         {/* Hero header — dark gradient with avatar in gold ring */}
         <div className="hero-card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-            {/* Gold ring lives on the avatar circle itself (not a wrapper around
-                the whole upload control) — wrapping the avatar+button row in a
-                border-radius:50% box clipped/overlapped the "Change photo"
-                button against the photo. */}
+            {/* Gold ring lives on the avatar circle itself (not a wrapper around */}
             <ProfilePhotoUpload
               photo={profile?.photo} initials={initials} size={62} variant="dark"
               avatarBorderColor="color-mix(in srgb, var(--color-accent) 70%, transparent)"

@@ -1,27 +1,4 @@
-/**
- * pages/front-desk/TriagePage.jsx
- * -----------------------------------
- * Front desk's entry point for a walk-in with no prior appointment — step 1
- * of the approved intake mockup (Triage -> OPD Booking -> Emergency
- * Registration -> Referral Queue -> Complete Admission + Bed). Markup and
- * styling here follow that mockup exactly (see intake-workspace.css) rather
- * than the app's default page look — this is the shared step-wizard
- * workspace, so it stays visually consistent with the other 4 steps.
- *
- * Checks real per-department doctor availability (org.DepartmentAvailabilityView,
- * see docs/PENDING_IMPROVEMENTS.md item 1) and routes the decision from
- * there: a free doctor today sends the patient into normal OPD booking;
- * nobody free doesn't block registration — it routes to Emergency instead,
- * since identity/registration never waits on OPD capacity.
- *
- * Exports both a standalone routed page (default export, used directly at
- * ROUTES.FRONT_DESK.TRIAGE — kept working for backward compatibility/deep
- * links) and a bare content component (`TriagePageContent`) that the
- * Patient Intake hub (PatientIntakePage.jsx) embeds as one of its internal
- * tabs — same component, same API calls, no duplicated implementation.
- * `embedded` just suppresses this page's own PageShell, since the hub
- * already supplies an equivalent page title and tab bar.
- */
+/** pages/front-desk/TriagePage.jsx */
 import { useNavigate } from "react-router-dom";
 import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";

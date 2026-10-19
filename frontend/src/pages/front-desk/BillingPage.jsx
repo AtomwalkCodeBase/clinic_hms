@@ -1,13 +1,4 @@
-/**
- * pages/front-desk/BillingPage.jsx
- * ------------------------------------
- * Front desk billing. Two panels:
- *   - Today's appointments needing billing (payment_preference = pay at
- *     desk) — "Bill" opens a line-item invoice builder pulled from the
- *     BillingService catalog.
- *   - Recent invoices — "Record Payment" collects cash/card/UPI against
- *     whatever's still outstanding.
- */
+/** pages/front-desk/BillingPage.jsx */
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Filter, X, FileText, Wallet, Clock3, CheckCircle2 } from "lucide-react";
@@ -24,8 +15,6 @@ import { INVOICE_STATUS_BADGE as INVOICE_BADGE } from "../../constants/badges";
 import { todayLocal } from "../../utils/dates";
 
 const TODAY = todayLocal();
-
-
 
 
 const labelStyle = { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 5 };
@@ -476,9 +465,6 @@ export default function BillingPage() {
   const location = useLocation();
   const navigate = useNavigate();
   // Arriving from the OPD Queue's "Bill" button for one specific patient —
-  // open straight to their invoice builder instead of landing on the
-  // generic billing page and making front desk hunt for the right row
-  // themselves in "Today's patients".
   const [billModal, setBillModal] = useState(() => location.state?.appointment || null);
   const [payModal, setPayModal] = useState(null);
   const [detailModalId, setDetailModalId] = useState(null);
@@ -497,10 +483,6 @@ export default function BillingPage() {
   const invoices = useMemo(() => invData?.results || [], [invData]);
 
   // Real stat-strip figures — all derived from the same invoices already
-  // fetched above (bumped to page_size 100 so "today" isn't cut short by
-  // pagination), not a separate summary endpoint. "Bills Today"/"Total
-  // Amount (Today)" only count invoices created today; Pending/Completed
-  // cover every fetched invoice regardless of date.
   const todayInvoices = useMemo(
     () => invoices.filter(inv => inv.created_at && inv.created_at.slice(0, 10) === TODAY),
     [invoices]
@@ -524,7 +506,6 @@ export default function BillingPage() {
 
   const needsBillingAll = appointments.filter(a => a.payment_preference !== "pay_online" || true);
   // ^ show every non-cancelled appointment today — front desk may need to
-  // bill a "pay online" patient too if online payment didn't go through.
 
   // ── Today's patients: search ────────────────────────────────────────────
   const [patientSearch, setPatientSearch] = useState("");

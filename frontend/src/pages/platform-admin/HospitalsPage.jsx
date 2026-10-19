@@ -1,11 +1,4 @@
-/**
- * pages/platform-admin/HospitalsPage.jsx
- * -----------------------------------------
- * Full sortable/filterable hospital directory — the "spreadsheet" view of
- * every hospital on the platform, complementary to DashboardPage's card list.
- * Click a row to open that hospital's full detail page (Overview / Users &
- * Roles / Subscription / Audit Log tabs).
- */
+/** pages/platform-admin/HospitalsPage.jsx */
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowUp, ArrowDown, Building2 } from "lucide-react";
@@ -32,7 +25,6 @@ export default function HospitalsPage() {
   const api = apiClient;
   const navigate = useNavigate();
   // Supports being deep-linked from Subscriptions' plan table, e.g.
-  // /platform/hospitals?tier=growth — filter pre-set from the URL on load.
   const [searchParams, setSearchParams] = useSearchParams();
   const [hospitals, setHospitals] = useState([]);
   const [loading, setLoading] = useState(true);

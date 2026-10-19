@@ -3,10 +3,6 @@ import API_ENDPOINTS from "../../../config/api.config";
 import { useState, useRef, useEffect } from "react";
 
 // Searchable dropdown over the pharmacist-maintained drug catalog (see
-// pages/pharmacist/CatalogPage.jsx) — same load-once-then-client-filter
-// pattern as LabOrderSection's test picker just above. Selecting an entry
-// fills in the name and its catalogued dosage; free text is still allowed
-// for a drug the pharmacist hasn't added yet (drug stays null in that case).
 export function DrugNameSearch({ value, onChange, onSelectCatalog, disabled }) {
   const { data: catalogData } = useApi(API_ENDPOINTS.PRESCRIPTIONS.DRUGS);
   const catalog = catalogData || [];

@@ -1,9 +1,4 @@
 // Health Journey screen for the guardian portal (also usable in the clinician view with view="doctor").
-//
-// `section` ('timeline' | 'growth' | 'vaccines') shows just that part, for a host page that has its own tabs.
-// <HealthJourney http={axiosInstance} children={[{id, name}]} onOpenDocument={(docId) => ...} emptyAction={{label, onClick}} />
-//
-// `id` is the patient's awpid. deps: react >= 17, echarts 5, echarts-for-react, lucide-react
 import React, { useEffect, useMemo, useState } from 'react';
 import { Building2, FileUp, HeartPulse, Repeat, Stethoscope, Syringe, TrendingUp } from 'lucide-react';
 import { makePedsApi } from './api';

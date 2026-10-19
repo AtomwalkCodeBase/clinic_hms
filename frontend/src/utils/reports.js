@@ -5,10 +5,6 @@ export const IN_PROGRESS = new Set(["queued", "extracting", "classifying"]);
 export const PROGRESS_TEXT = { queued: "Waiting to be read…", extracting: "Reading the pages…", classifying: "Working out what it is…" };
 
 // One report is always in exactly one of these states; the message and the actions below follow from it, so
-// every screen says the same thing.
-//   processing    being read       ready         filed under a type
-//   unclassified  no type fit      failed        could not be read
-//   duplicate     same file as one already in the reports
 export function stateOf(d) {
   const s = d.processing_status;
   if (IN_PROGRESS.has(s)) return "processing";

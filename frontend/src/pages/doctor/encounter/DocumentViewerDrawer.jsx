@@ -49,15 +49,12 @@ export function DocumentViewerDrawer({ doc, onClose }) {
       display: "flex", flexDirection: "column",
       userSelect: dragging ? "none" : undefined,
     }}>
-      {/* Full-viewport overlay while dragging — keeps the mousemove/mouseup
-          listeners reliable even when the cursor passes over the PDF <iframe>,
-          which otherwise "eats" mouse events since it's a separate document. */}
+      {/* Full-viewport overlay while dragging — keeps the mousemove/mouseup */}
       {dragging && (
         <div style={{ position: "fixed", inset: 0, zIndex: 600, cursor: "col-resize" }} />
       )}
 
-      {/* Drag handle — an always-visible, Overleaf-style resize bar rather than
-          an invisible hit zone, so it reads as adjustable at a glance. */}
+      {/* Drag handle — an always-visible, Overleaf-style resize bar rather than */}
       <div
         onMouseDown={() => { draggingRef.current = true; setDragging(true); }}
         onMouseEnter={() => setHandleHover(true)}

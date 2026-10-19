@@ -249,7 +249,6 @@ class PatientHistoryView(APIView):
             log_action(request, request.hospital_db, action="patient.history.view_blocked_no_consent",
                         resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
             # Documents THIS hospital captured for THIS visit — the consult
-            from django.db.models import F
             from apps.documents.models import MedicalDocument
             from apps.documents.lib_documents import document_rows
             own_notes = document_rows(

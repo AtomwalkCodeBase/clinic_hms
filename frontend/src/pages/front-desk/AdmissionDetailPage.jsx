@@ -1,27 +1,4 @@
-/**
- * pages/front-desk/AdmissionDetailPage.jsx
- * -------------------------------------------
- * Single-admission workspace — everything front desk needs to do with an
- * admission AFTER intake + initial bed allotment are done, closing the gap
- * flagged from the Admissions page ("anything else i wanna edit or add,
- * no place to click and update it? like discharge date or handle payments
- * and the rest"):
- *   - edit the registration fields captured at intake (attendant, payer,
- *     insurance, expected discharge date) — PATCH ipd/admissions/{id}/
- *   - move/assign/release the bed — reuses ASSIGN_BED / RELEASE_BED
- *   - record advance deposits — POST ipd/admissions/{id}/deposit/
- *   - discharge the patient once Active — POST .../discharge/
- *   - generate the IPD stay invoice (room charges × nights + deposits
- *     folded in as payments) and record further payments against it —
- *     POST .../generate-invoice/, then billing.PAYMENTS same as BillingPage
- *
- * Invoices generated here are NOT linked to the admission by a foreign key
- * (billing.Invoice only ever links to a patient) — GenerateInvoiceView
- * stamps a recognizable note instead ("IPD stay — {admission_number}"), so
- * this page finds "its" invoice(s) by filtering the patient's invoice list
- * for that exact note rather than a real relation. Good enough for a
- * front-desk workspace; not a general-purpose invoice lookup.
- */
+/** pages/front-desk/AdmissionDetailPage.jsx */
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
@@ -44,8 +21,6 @@ const inputStyle = {
 };
 
 
-
-
 function formatDate(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString();
@@ -53,7 +28,6 @@ function formatDate(iso) {
 
 
 // ── Registration details — inline-editable, same display/edit-swap pattern
-// as platform-admin/HospitalDetailPage.jsx's OverviewTab. ───────────────────
 function RegistrationCard({ admission, onSaved }) {
   const { toastSuccess, toastApiError } = useToast();
   const [editing, setEditing] = useState(false);
@@ -201,8 +175,6 @@ function BedCard({ admission, branchId, onChanged }) {
   const canAssign = admission.status === "requested" || admission.status === "admitted";
   const canRelease = !!admission.bed && (admission.status === "active" || admission.status === "admitted");
   // Transfer only makes sense once a stay is genuinely under way (ACTIVE,
-  // bed allocated) — Release above already covers "never really occupied,
-  // undo the assignment" for the ADMITTED case.
   const canTransfer = !!admission.bed && admission.status === "active";
   const canDischarge = admission.status === "active";
   const terminal = admission.status === "discharged" || admission.status === "cancelled";
@@ -270,9 +242,6 @@ function BedCard({ admission, branchId, onChanged }) {
 }
 
 // Move an ACTIVE admission's patient from their current bed straight into a
-// different available one — one atomic call (IPD.ADMISSION_TRANSFER_BED),
-// unlike Release-then-Assign. The vacated bed goes to `cleaning`, not
-// `available` — see apps.ipd.views.TransferBedView.
 function TransferBedModal({ admission, branchId, onClose, onDone }) {
   const { toastSuccess, toastApiError } = useToast();
   const [rooms, setRooms] = useState([]);
@@ -404,9 +373,6 @@ function MovementHistoryCard({ admissionId, version }) {
 }
 
 // Lightweight room -> bed picker (plain selects, not the visual bedgrid
-// AdmissionsPage.jsx uses for first-time assignment — that grid isn't
-// exported from that file, and a second bed-picking screen on the detail
-// page doesn't need the full visual treatment, just a reliable one).
 function BedPickerModal({ admission, branchId, onClose, onDone }) {
   const { toastSuccess, toastApiError } = useToast();
   const [rooms, setRooms] = useState([]);
@@ -681,7 +647,6 @@ function PaymentModal({ invoice, onClose, onRecorded }) {
     </div>
   );
 }
-
 
 
 function InvoiceView({ invoice, onChanged }) {

@@ -1,9 +1,4 @@
-/**
- * pages/nurse/HistoryPage.jsx
- * ------------------------------
- * Searchable visit history — not limited to today like the live monitoring
- * list. Shows the whole hospital, same scoping as the live queue.
- */
+/** pages/nurse/HistoryPage.jsx */
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import VisitHistoryView from "../../components/history/VisitHistoryView";

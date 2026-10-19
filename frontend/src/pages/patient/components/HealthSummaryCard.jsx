@@ -1,12 +1,5 @@
-/**
- * pages/patient/components/HealthSummaryCard.jsx
- * -----------------------------------------------
- * Rich hero header for the Health Journey page — gradient dark-green
- * background (matching the app sidebar), prominent avatar, patient
- * identity row, and a dismissible "add records" nudge banner below.
- */
-import { useState } from "react";
-import { X, Building2, CalendarDays, Plus } from "lucide-react";
+/** Hero header for the Health Journey page: avatar, name, age, gender, last visit and hospital. */
+import { Building2, CalendarDays } from "lucide-react";
 import { formatYearsMonths } from "../../../utils/age";
 
 function ageFromYears(ageYears, ageMonths) {
@@ -17,12 +10,10 @@ function ageFromYears(ageYears, ageMonths) {
 const GENDER_LABEL = { M: "Male", F: "Female", O: "Other" };
 
 export default function HealthSummaryCard({
-  patientAwpid, displayName, photo, gender,
+  displayName, photo, gender,
   summary, summaryLoading, summaryError,
-  growth, vax,
-  onAddRecords,
+  growth,
 }) {
-  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   if (summaryLoading) {
     return (
@@ -58,9 +49,6 @@ export default function HealthSummaryCard({
     : null;
 
   const ageYears = growth?.age_years ?? null;
-  const isAdult  = ageYears !== null && ageYears >= 18;
-  // Vaccination nudge banner is only relevant for children under 18
-  const noVaxHistory = !isAdult && (vax ? (vax.total_count > 0 && vax.completed_count === 0) : true);
 
   return (
     <div style={{ borderRadius: 20, marginBottom: 20, overflow: "hidden" }}>
@@ -117,44 +105,6 @@ export default function HealthSummaryCard({
           </div>
         </div>
       </div>
-
-      {/* ── Nudge banner ───────────────────────────────────────────── */}
-      {noVaxHistory && !bannerDismissed && (
-        <div style={{
-          background: "#FFFDF5",
-          borderTop: "1px solid color-mix(in srgb, var(--color-accent) 25%, transparent)",
-          padding: "14px 24px",
-          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap",
-        }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--color-text)", marginBottom: 2 }}>
-              Vaccination history not complete
-            </div>
-            <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
-              Add previous records to get a personalised recommendation.
-            </div>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-            <button
-              onClick={onAddRecords}
-              style={{
-                background: "var(--color-primary)", color: "#fff",
-                border: "none", borderRadius: 10, padding: "7px 16px",
-                fontSize: 12, fontWeight: 600, cursor: "pointer",
-                display: "flex", alignItems: "center", gap: 6,
-              }}
-            >
-              <Plus size={13} /> Add Records
-            </button>
-            <button
-              onClick={() => setBannerDismissed(true)}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)", display: "flex", padding: 2 }}
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

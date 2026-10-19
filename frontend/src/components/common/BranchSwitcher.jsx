@@ -1,10 +1,4 @@
-/**
- * components/common/BranchSwitcher.jsx
- * ----------------------------------------
- * Small inline dropdown for staff assigned to more than one branch to pick
- * which branch's data they're currently viewing. Renders nothing if the
- * staff member has 0 or 1 branch — see hooks/useActiveBranch.
- */
+/** components/common/BranchSwitcher.jsx */
 export default function BranchSwitcher({ branches, activeBranchId, onChange, style }) {
   if (!branches || branches.length <= 1) return null;
   return (

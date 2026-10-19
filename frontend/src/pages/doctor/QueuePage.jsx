@@ -1,11 +1,4 @@
-/**
- * pages/doctor/QueuePage.jsx
- * ---------------------------
- * Doctor's live OPD queue for today.
- * Calls GET /api/v1/opd/appointments/?date=today
- * Status actions: waiting → in_progress → done
- * "Start" opens the encounter page.
- */
+/** pages/doctor/QueuePage.jsx */
 
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { useNavigate }      from "react-router-dom";
@@ -31,10 +24,7 @@ const TOMORROW = addDays(TODAY, 1);
 const WEEK_END = addDays(TODAY, 7);
 
 
-
-/** Buckets a flat, date-ascending appointment list into Today / Tomorrow /
- * This Week / Later sections so a doctor can see their whole upcoming
- * schedule at a glance instead of just today's queue. */
+/** Buckets a flat, date-ascending appointment list into Today / Tomorrow / */
 function groupUpcoming(list) {
   const groups = { today: [], tomorrow: [], thisWeek: [], later: [] };
   for (const a of list) {
@@ -102,7 +92,6 @@ export default function DoctorQueuePage() {
   );
 
   // ── Upcoming schedule (today onward) — filters everything the schema
-  // exposes: status, room, patient name/UHID/mobile, date range ──────────
   const [showFilters,   setShowFilters]   = useState(false);
   const [statusFilter,  setStatusFilter]  = useState("");
   const [roomFilter,    setRoomFilter]    = useState("");
@@ -134,7 +123,6 @@ export default function DoctorQueuePage() {
   const appointments = apptData?.results || [];
   const pagination   = apptData?.pagination || null;
   // Stat cards use server-computed totals for the whole day, not just the
-  // current page, so they stay accurate regardless of how many pages there are.
   const counts = apptData?.status_counts || {};
   const waiting     = counts.waiting ?? 0;
   const vitalsReady = counts.vitals_done ?? 0;

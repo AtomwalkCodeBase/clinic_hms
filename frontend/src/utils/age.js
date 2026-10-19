@@ -1,10 +1,4 @@
-/**
- * utils/age.js
- * ------------
- * Shared age-from-date-of-birth helpers — used wherever a DOB is shown
- * as read-only context (patients and, where tracked, staff) so age is
- * computed the same way everywhere instead of copy-pasted per page.
- */
+/** utils/age.js */
 
 /** Returns whole years as a number, or null if dob is missing/invalid. */
 export function calcAge(dob) {
@@ -25,12 +19,7 @@ export function formatAge(dob) {
   return age != null ? `${age}y` : "";
 }
 
-/**
- * Returns { years, months } elapsed since dob, or null if dob is
- * missing/invalid/in the future. Used wherever whole-year age is too
- * coarse — in particular infants under 1 year, where "0y" alone reads as
- * "unknown" rather than "newborn".
- */
+/** Returns { years, months } elapsed since dob, or null if dob is */
 export function calcAgeYM(dob) {
   if (!dob) return null;
   const d = new Date(dob);
@@ -44,22 +33,13 @@ export function calcAgeYM(dob) {
   return { years, months };
 }
 
-/**
- * "5y 2m" / "0y 3m" (or "" if dob is missing/invalid) — combined
- * years+months display so an infant's age reads as e.g. "0y 3m" instead
- * of being indistinguishable from "unknown".
- */
+/** "5y 2m" / "0y 3m" (or "" if dob is missing/invalid) — combined */
 export function formatAgeYM(dob) {
   const a = calcAgeYM(dob);
   return a ? `${a.years}y ${a.months}m` : "";
 }
 
-/**
- * "5y 2m" (or "" if either part is missing) — for backend responses that
- * already computed years/months server-side (e.g. from a patient's linked
- * identity record where the raw DOB isn't sent to the client), so the
- * frontend doesn't need the DOB itself to render the same format.
- */
+/** "5y 2m" (or "" if either part is missing) — for backend responses that */
 export function formatYearsMonths(years, months) {
   if (years == null || months == null) return "";
   return `${years}y ${months}m`;

@@ -1,21 +1,10 @@
-/**
- * pages/doctor/IpdPatientsPage.jsx
- * -------------------------------------
- * "My Inpatients" — every admission where this doctor is the ordering
- * doctor, so a doctor doing rounds has one place to see who's admitted
- * under their care, which bed/ward, and how long they've been in —
- * without that information only existing on front desk's own Admissions/
- * Bed Board screens. Read-only (bed assignment, transfer, and discharge
- * stay front-desk actions, same role boundary as everywhere else in this
- * app — see the Front Desk role-boundary notes).
- */
+/** pages/doctor/IpdPatientsPage.jsx */
 import { useState } from "react";
 import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useApi } from "../../hooks/useApi";
 import API_ENDPOINTS from "../../config/api.config";
 import { ADMISSION_STATUS_BADGE as STATUS_BADGE } from "../../constants/badges";
-
 
 
 function daysSince(iso) {

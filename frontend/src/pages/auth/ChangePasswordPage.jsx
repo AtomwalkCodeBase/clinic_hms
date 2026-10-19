@@ -1,9 +1,4 @@
-/**
- * pages/auth/ChangePasswordPage.jsx
- * -----------------------------------
- * Shown after staff logs in with a temporary password.
- * Forces them to set a new password before accessing anything else.
- */
+/** pages/auth/ChangePasswordPage.jsx */
 
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";

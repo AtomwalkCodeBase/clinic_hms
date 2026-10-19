@@ -1,13 +1,4 @@
-/**
- * pages/patient/HospitalsPage.jsx
- * ---------------------------------
- * Step 1 of booking: browse hospitals as cards instead of a dropdown.
- * Also doubles as a cross-hospital search — a text box, a specialty
- * dropdown (built from every doctor's specialisation across every active
- * hospital, not a hardcoded list — see PortalSpecialtyListView), and a
- * city filter. Reuses the same /portal/search/ endpoint the dashboard's
- * search box already calls, so results stay consistent platform-wide.
- */
+/** pages/patient/HospitalsPage.jsx */
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Building2, MapPin, ShieldCheck, Search, SlidersHorizontal, X, LocateFixed, LoaderCircle } from "lucide-react";

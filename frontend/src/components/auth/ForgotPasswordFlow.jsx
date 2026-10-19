@@ -1,17 +1,4 @@
-/**
- * components/auth/ForgotPasswordFlow.jsx
- * -----------------------------------------
- * Shared 3-step OTP forgot-password flow: Identify -> Enter code -> New
- * password. Driven entirely by the generic OTP endpoints
- * (apps/auth_app/otp_views.py) — `audience` picks the purpose + the
- * reset endpoint that consumes the resulting action_token, everything
- * else is identical between staff and patient.
- *
- * Rendered by two separate routed pages (StaffForgotPasswordPage /
- * PatientForgotPasswordPage) rather than a shared tab-switcher — each
- * audience gets its own URL, its own copy, and never sees the other's
- * form, which is one less place to pick the wrong tab by mistake.
- */
+/** components/auth/ForgotPasswordFlow.jsx */
 
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";

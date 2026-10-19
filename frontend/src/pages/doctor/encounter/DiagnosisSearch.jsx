@@ -3,11 +3,6 @@ import { ICD10_CODES } from "./constants";
 import { matchICD } from "./diagnosis";
 
 // ─── ICD-10 search + add ─────────────────────────────────────────────────────
-// `chiefComplaint` (the appointment's booked complaint) drives a "Suggested
-// for this visit" chip row via matchICD — the same complaint→code matching
-// used for voice dictation, just run against the typed booking reason
-// instead of a transcript. `existingCodes` filters out anything already
-// added so suggestions/results don't offer a duplicate.
 export function DiagnosisSearch({ onAdd, disabled, chiefComplaint, existingCodes = [] }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);

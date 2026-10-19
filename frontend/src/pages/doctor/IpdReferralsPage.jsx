@@ -1,23 +1,4 @@
-/**
- * pages/doctor/IpdReferralsPage.jsx
- * -------------------------------------
- * "IPD Referrals" — a persistent, findable place for a doctor's admission
- * referrals, added directly in response to feedback that "Recommend
- * Admission" was hard to find (it only existed as a button inside an
- * active encounter, with no way afterward to see what happened to that
- * referral — front desk still needs to register it, and an external-source
- * one still needs a colleague's countersign before that can happen).
- *
- * Two things live here:
- *   - Every referral this doctor has personally recommended or
- *     countersigned, any status (IPD.REFERRALS_MINE) — a history/tracking
- *     view, distinct from IPD.REFERRALS (an action worklist elsewhere).
- *   - "+ New Referral", for starting one without first opening a specific
- *     patient's encounter (e.g. after a phone consult, or reviewing a
- *     transfer-in case) — the same fields/behavior as EncounterPage.jsx's
- *     own AdmissionReferralModal, just patient-search-first instead of
- *     already having a patientId from an open consultation.
- */
+/** pages/doctor/IpdReferralsPage.jsx */
 import { useState, useEffect } from "react";
 import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -27,8 +8,6 @@ import apiClient from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 
 // Mirrors AdmissionReferral.SOURCES_REQUIRING_ACCEPTANCE (apps/ipd/models.py)
-// — sources that need a hospital doctor's own countersign before front desk
-// can register the admission.
 const EXTERNAL_ADMISSION_SOURCES = new Set(["external_referral", "transfer_in", "ambulance_ems", "medical_tourism"]);
 
 const STATUS_BADGE = {

@@ -1,15 +1,4 @@
-/**
- * services/api.client.js
- * ----------------------
- * Axios instance with:
- *   - Base URL from VITE_API_BASE_URL
- *   - Automatic JWT attachment from localStorage
- *   - 401 → token refresh → retry once
- *   - 403 → dispatch forbidden event
- *   - Standardised error shape passed to callers
- *
- * Import `apiClient` (authenticated) or `publicClient` (no auth) in service files.
- */
+/** services/api.client.js */
 
 import axios from "axios";
 import APP_CONFIG from "../config/app.config";
@@ -33,34 +22,16 @@ export const tokenStore = {
 };
 
 // Turns an axios error into { message, errors, status, data } using the
-// backend's own response body when there is one, instead of axios's generic
-// "Request failed with status code NNN". Shared by both clients so login
-// failures are just as informative as authenticated-request failures.
-//
-// `data` carries the full, unmodified response body — callers that need
-// endpoint-specific fields beyond message/errors (e.g. PortalBookView's 428
-// consent_required/hospital_name/share_categories payload) must read them
-// from `err.data`, not `err.response.data` — `.response` does not exist on
-// the object this function returns, it's replaced entirely.
 function normaliseError(error) {
   // When the backend didn't send a JSON `message` (network failure, CORS,
-  // timeout, or a 500 with no body), fall back to a real sentence — not the
-  // bare support email, which used to render as a lone, meaningless toast
-  // like "support@atomwalk.com" with no indication anything went wrong.
   const fallback = error.response
     ? `Something went wrong. If this keeps happening, contact ${APP_CONFIG.SUPPORT_EMAIL}.`
     : `Could not reach the server. Check your connection, or contact ${APP_CONFIG.SUPPORT_EMAIL} if it persists.`;
   // Most views return the standard {message: ...} shape (core/response.py),
-  // but a chunk of apps/hospital_patients/portal_views.py predates that helper and
-  // hand-rolls Response({"error": "..."}, status=...) instead — same intent,
-  // different key. Without this fallback every real, specific reason (hospital
-  // not found, not enrolled for online booking, etc.) silently collapsed into
-  // the generic "Something went wrong" toast.
   return {
     message: error.response?.data?.message
       || error.response?.data?.error
       // Bare DRF errors ({"detail": "..."}) — normally reshaped server-side by
-      // core.exceptions.custom_exception_handler, kept here as a safety net.
       || (typeof error.response?.data?.detail === "string" ? error.response.data.detail : "")
       || fallback,
     errors:  error.response?.data?.errors  || {},
@@ -139,9 +110,6 @@ apiClient.interceptors.response.use(
         });
 
         // The server wraps every reply as { success, message, data: {...} } (see
-        // core/response.py) — login reads data.data.access, and so must this. Reading
-        // data.access stored the string "undefined" as the token, so every request
-        // after the first 60-minute expiry failed with "Invalid token." until re-login.
         const tokens = data?.data ?? data;
         if (!tokens?.access) throw new Error("Token refresh returned no access token");
 

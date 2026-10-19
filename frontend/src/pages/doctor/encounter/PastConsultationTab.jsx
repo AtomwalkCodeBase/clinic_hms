@@ -2,7 +2,6 @@ import { useApi } from "../../../hooks/useApi";
 import API_ENDPOINTS from "../../../config/api.config";
 
 // ─── Past Consultation tab ─── read-only view of the prior signed encounter,
-// shown only when today's own appointment is itself a follow-up visit.
 export function PastConsultationTab({ encounterId }) {
   const { data: prev, isLoading } = useApi(API_ENDPOINTS.OPD.ENCOUNTER_PREVIOUS(encounterId));
   const previous = prev?.data;
@@ -14,11 +13,6 @@ export function PastConsultationTab({ encounterId }) {
 
   if (!previous && sharedRef) {
     // No local encounter here at all — but "follow-up" doesn't mean "has a
-    // prior visit at THIS hospital"; the patient can be following up on
-    // care from elsewhere. We DO have their shared cross-hospital record
-    // (same data the Patient History sidebar draws from), so show the most
-    // recent documented visit from that instead of a dead end — clearly
-    // labeled as a shared-record summary, not a full local SOAP note.
     const rxItems = (sharedRef.prescriptions || []).flatMap(rx => rx.items || []);
     return (
       <div style={{ display: "grid", gap: 16 }}>
@@ -78,11 +72,6 @@ export function PastConsultationTab({ encounterId }) {
 
   if (!previous) {
     // Only SIGNED encounters are citable here — a draft could still change.
-    // unsigned_pending tells us whether that's actually why nothing showed
-    // up (an earlier visit exists but isn't signed & closed yet) versus
-    // this genuinely being the first visit for this patient anywhere on
-    // file — two very different situations that read identically without
-    // this distinction.
     return (
       <div className="card" style={{ padding: 30, textAlign: "center", color: "var(--color-text-muted)" }}>
         {prev?.unsigned_pending ? (

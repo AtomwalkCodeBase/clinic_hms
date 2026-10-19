@@ -1,8 +1,4 @@
-/**
- * Add reports: pick files, drop files or folders, or take a photo; review; upload. A folder or a big selection is
- * sent as several uploads of at most 50 files / 250 MB (one batch each). The dialog can be closed while the
- * upload goes on; `onUploaded` then tells the page how it ended.
- */
+/** Add reports: pick files, drop files or folders, or take a photo; review; upload. A folder or a big selection is */
 import { useEffect, useRef, useState } from "react";
 import { Camera, CheckSquare, FileText, FolderUp, HelpCircle, Plus, Upload, X } from "lucide-react";
 import { useToast } from "../../../hooks/useToast";
@@ -11,10 +7,10 @@ import API_ENDPOINTS from "../../../config/api.config";
 import { chunkBySize } from "../../../utils/files";
 import { backdrop, h3, iconBtn, sheet, sub } from "./reportStyles";
 
-const MAX_FILE_BYTES = 250 * 1024 * 1024;   // same limits as POST /records/upload/ (apps/records/serializers.py)
-const CHUNK_BYTES = 250 * 1024 * 1024;     // one upload (= one batch) takes at most 50 files and 250 MB; a bigger
-const CHUNK_FILES = 50;                    // selection or folder is sent as several uploads, one after another
-const HARD_PICK_LIMIT = 1500;              // a folder pick past this is a whole drive, not a reports folder
+const MAX_FILE_BYTES = 250 * 1024 * 1024;
+const CHUNK_BYTES = 250 * 1024 * 1024;
+const CHUNK_FILES = 50;
+const HARD_PICK_LIMIT = 1500;
 const OK_EXT = /\.(pdf|jpe?g|png)$/i;
 
 function isMobile() {
@@ -26,8 +22,6 @@ function isMobile() {
 
 /* ─────────────────────────────────────────────────────────── add flow */
 // Walk a dropped FileSystemEntry (file or directory, any depth) into a flat
-// File[]. Lets one "Upload" drop take a single file, many files, a folder,
-// or several folders at once — the browser can't do that through one <input>.
 function readEntry(entry, out) {
   return new Promise((resolve) => {
     if (entry.isFile) {
@@ -55,10 +49,10 @@ async function filesFromDrop(dt) {
 
 export default function AddReportsModal({ onClose, onDone, onUploaded, patientAwpid }) {
   const { toastError } = useToast();
-  const alive = useRef(true);                    // false once the dialog was closed while the upload carried on
+  const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
   const mob = isMobile();
-  const [phase, setPhase] = useState(mob ? "pick" : "choose");   // pick (phone: camera or files) | choose | stage | upload | done
+  const [phase, setPhase] = useState(mob ? "pick" : "choose");
   const [items, setItems] = useState([]);            // {file, name, size, skip}
   const [prog, setProg] = useState({ done: 0, total: 0, name: "" });
   const [result, setResult] = useState({ sent: 0, skipped: 0, error: "" });
@@ -79,7 +73,6 @@ export default function AddReportsModal({ onClose, onDone, onUploaded, patientAw
     if (!incoming.length) return;
 
     // Picking a whole drive (or a huge tree) dumps tens of thousands of files
-    // here — reject it before doing any per-file work.
     if (incoming.length > HARD_PICK_LIMIT) {
       toastError(`That selection has ${incoming.length.toLocaleString()} files — that's an entire drive, not a reports folder. Pick the folder that actually holds your prescriptions and reports.`);
       return;

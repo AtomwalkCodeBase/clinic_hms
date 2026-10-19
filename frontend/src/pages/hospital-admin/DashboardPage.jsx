@@ -1,9 +1,4 @@
-/**
- * pages/hospital-admin/DashboardPage.jsx
- * ----------------------------------------
- * Hospital admin home — premium theme.
- * Serif greeting + dark revenue-style hero + schedule / action center + KPI grid.
- */
+/** pages/hospital-admin/DashboardPage.jsx */
 
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
@@ -119,15 +114,6 @@ export default function DashboardPage() {
   const photo = meData?.photo;
 
   // Live branch/doctor/staff counts + tier limits — same source of truth as
-  // the capacity banners on StaffPage/BranchesPage/RolesPage (backend
-  // computes these from a live DB count each time, see
-  // apps.hospitals.limits.get_usage_counts). Previously this page re-fetched
-  // /org/branches/ + /org/staff/ itself and hand-rolled the counts, but
-  // /org/staff/ returns a *paginated* {results, pagination} object (not a
-  // flat array) — the old code did staff.filter(...) directly on that
-  // object, which throws, gets swallowed by an empty catch, and silently
-  // leaves every count at 0 forever. Reusing usePermissions() sidesteps
-  // that entirely and keeps this page in sync with every other admin page.
   const { permissions, isLoading: permsLoading, refresh: refreshPermissions } = usePermissions();
   const orgStats = {
     branches: permissions?.usage?.branches ?? 0,
@@ -158,9 +144,6 @@ export default function DashboardPage() {
         const body  = opdRes.value.data;
         const appts = body?.results || body?.data?.results || [];
         // "Patients today" should reflect patients actually expected/seen
-        // today — a cancelled or no-show booking isn't that, so it's
-        // excluded from the headline total (same fix applied to front-desk's
-        // equivalent "Appointments today" stat, which had the same bug).
         const notCancelled = appts.filter(a => a.status !== "cancelled" && a.status !== "no_show");
         setOpdStats({
           total:       notCancelled.length,

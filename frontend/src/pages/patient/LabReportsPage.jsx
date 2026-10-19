@@ -1,13 +1,4 @@
-/**
- * pages/patient/LabReportsPage.jsx
- * ----------------------------------
- * Every test a doctor has ordered, each as its own card — no retyping the
- * test name or guessing the type, it's already known from the order. Patient
- * picks in-house (see price/turnaround, pick how to pay) or outside (upload
- * the report once they have it). A generic "Attach a report" card stays
- * below for anything not tied to a specific order (old records, scans,
- * prescriptions from elsewhere).
- */
+/** pages/patient/LabReportsPage.jsx */
 import { useState, useRef } from "react";
 import { FlaskConical } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
@@ -21,7 +12,6 @@ import { openDataUrlInNewTab } from "../../utils/fileViewer";
 import { fileToDataUrl } from "../../utils/files";
 
 // Prescriptions are intentionally NOT offered here — they live on My Reports /
-// the Prescriptions page. This page is lab work: reports, scans, summaries.
 const DOC_TYPES = [
   { value: "lab_report",        label: "Lab Report" },
   { value: "scan",              label: "Scan / Imaging" },
@@ -29,8 +19,6 @@ const DOC_TYPES = [
   { value: "other",             label: "Other" },
 ];
 // Types shown in "Your attached reports" on this page. A prescription filed
-// elsewhere (or the consult-pad handwriting) is not a lab report and must not
-// appear here — see MyReportsPage for the full vault.
 const LAB_PAGE_DOC_TYPES = new Set(["lab_report", "scan", "discharge_summary", "other"]);
 
 const MAX_FILE_BYTES = 11 * 1024 * 1024; 
@@ -42,8 +30,6 @@ function estimatedReady(orderedAt, turnaroundHours) {
 }
 
 // Same statuses the doctor and nurse already see for this order — the
-// patient was only ever shown a generic "In progress", which hid real
-// progress (sample collected, being processed, etc.).
 const LAB_STATUS_BADGE = {
   ordered:    { label: "Order placed",      bg: "var(--color-border)", color: "var(--color-text-muted)" },
   collected:  { label: "Sample collected",  bg: "#DBEAFE", color: "#1E40AF" },
@@ -53,9 +39,6 @@ const LAB_STATUS_BADGE = {
 };
 
 // Plain-language line shown in the body — the badge alone is easy to miss,
-// and "completed" is deliberately NOT called "done" here: the status can
-// reach completed a moment before the report itself is released, so calling
-// it "Completed" with no result to show is what confused this exact case.
 const LAB_PROGRESS_MESSAGE = {
   ordered:    "Awaiting sample collection at the lab.",
   collected:  "Sample collected — awaiting processing.",
@@ -67,9 +50,6 @@ const LAB_PROGRESS_MESSAGE = {
 const PAY_PREF_LABEL = { pay_at_lab: "Pay at the lab", pay_online: "Pay online (coming soon)" };
 
 // Payment can only be picked/changed while the test is still just an order —
-// once the lab has actually collected the sample, switching "how I'll pay"
-// no longer makes operational sense, so it locks (matches the same
-// confirm-then-lock pattern used on the nurse's Tasks page).
 function InHouseBody({ order, saving, chooseAndSave }) {
   const [editingPayment, setEditingPayment] = useState(!order.payment_preference);
   const canEditPayment = order.status === "ordered";
@@ -145,9 +125,6 @@ function InHouseBody({ order, saving, chooseAndSave }) {
 }
 
 // Fetches the actual file for a delivered in-house report on demand and
-// opens it in a new tab — the list endpoint only ever sends has_file (a
-// boolean) to keep the payload light, same pattern as the doctor/nurse
-// document viewers.
 function ViewInHouseReportButton({ hospitalDb, requestId }) {
   const { toastApiError } = useToast();
   const [loading, setLoading] = useState(false);
@@ -412,7 +389,6 @@ function UploadReportCard({ onUploaded, patientAwpid }) {
 
 function MyDocumentsList({ docs, isLoading }) {
   // Lab work only — a prescription (or an unsorted upload still awaiting the
-  // patient's confirmation) is not a lab report and belongs on My Reports.
   const shown = docs.filter(
     d => LAB_PAGE_DOC_TYPES.has(d.doc_type) && d.processing_status === "completed",
   );
@@ -447,16 +423,6 @@ export default function PatientLabReportsPage() {
   const patientAwpid = selectedPatient.awpid || "";
 
   // NOTE: patient_awpid is wired through here so the query fires with the
-  // right param the moment the backend supports it, but as of this change
-  // neither endpoint actually filters by it yet — see PortalLabOrderListView
-  // and PortalDocumentListCreateView.get in apps/hospital_patients/portal_views.py,
-  // both of which always resolve to `acct.awpid` (the logged-in account
-  // owner) with no patient_awpid query-param handling at all (unlike
-  // PortalMyRecordsView / PortalHealthSummaryView / PortalGrowthView /
-  // PortalVaccinationListView, which already support it via
-  // _resolve_target_awpid_and_dob). Until that backend follow-up lands,
-  // selecting a dependent on this page will still silently show the
-  // account owner's own lab tests/documents.
   const { items: orders, isLoading: ordersLoading, refetch: refetchOrders } =
     usePaginatedList(API_ENDPOINTS.PORTAL.LAB_ORDERS, {
       pageSize: 20,

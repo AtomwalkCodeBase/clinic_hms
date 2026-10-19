@@ -1,9 +1,4 @@
-/**
- * config/app.config.js
- * --------------------
- * Application-level configuration constants.
- * Update this file to rebrand or change global app settings.
- */
+/** config/app.config.js */
 
 export const APP_CONFIG = {
   /** Application display name */

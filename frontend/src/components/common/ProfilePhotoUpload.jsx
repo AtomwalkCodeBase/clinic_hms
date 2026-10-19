@@ -1,14 +1,4 @@
-/**
- * components/common/ProfilePhotoUpload.jsx
- * --------------------------------------------
- * Circular avatar with an upload button. Reads the chosen image, downsizes
- * it client-side (max 480px, JPEG ~0.82 quality) so it comfortably fits the
- * base64-in-a-TextField storage used by StaffUser.photo, then uploads it via
- * PATCH /org/me/profile/ and calls onUploaded(newPhoto) with the result.
- *
- * No object storage is wired up yet, so photos live as base64 data URIs —
- * fine for avatar-sized images, not meant for anything larger.
- */
+/** components/common/ProfilePhotoUpload.jsx */
 import { useRef, useState } from "react";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
@@ -49,7 +39,6 @@ export default function ProfilePhotoUpload({
   photo, onUploaded, size = 72, initials = "?",
   endpoint = API_ENDPOINTS.ORG.MY_PROFILE,
   // "dark" renders the button legible on a dark hero/gradient background
-  // (My Profile's hero header) instead of the default green outline button.
   variant = "light",
   avatarBorderColor,
 }) {
@@ -84,8 +73,6 @@ export default function ProfilePhotoUpload({
     setRemoving(true);
     try {
       // Both StaffUser.photo and PatientAccount.photo are TextField(blank=True)
-      // with no null=True, so "no photo" is represented as "" — not null —
-      // matching the model's own storage convention.
       await apiClient.patch(endpoint, { photo: "" });
       onUploaded?.("");
       toastSuccess("Photo removed.");

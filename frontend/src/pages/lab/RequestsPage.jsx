@@ -1,13 +1,4 @@
-/**
- * pages/lab/RequestsPage.jsx
- * ----------------------------
- * Lab tech's working queue — in-house tests only (outside ones are the
- * patient's own responsibility to get done and attach). Move a sample
- * through ordered -> collected -> processing, then upload the result
- * (summary + optional file) and deliver it in one step. Delivering fires
- * the existing HIE signal, so it shows up on the doctor's and nurse's
- * views automatically without anything extra on their end.
- */
+/** pages/lab/RequestsPage.jsx */
 import { useState, useMemo } from "react";
 import { Filter, X, Baby, Plus } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
@@ -21,10 +12,8 @@ import { fileToDataUrl } from "../../utils/files";
 import { LAB_STATUS_BADGE as STATUS_BADGE } from "../../constants/badges";
 
 
-
 const NEXT_STATUS = { ordered: "collected", collected: "processing" };
 const NEXT_LABEL   = { ordered: "Mark Collected", collected: "Start Processing" };
-
 
 
 const EMPTY_ITEM = { parameter_name: "", result_value: "", unit: "", reference_range: "", is_abnormal: false };
@@ -35,10 +24,6 @@ function UploadModal({ order, onClose, onDone }) {
   const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
   // Structured per-parameter results — optional, additive to the summary
-  // text + file above. Each row becomes a LabReportItem (see
-  // apps.lab.models) with its own reference_range, so the doctor/patient
-  // portal can show "13.2 g/dL (12.0–15.5)" per value instead of only a
-  // free-text summary paragraph.
   const [items, setItems] = useState([]);
 
   const isMinor = order.patient_age != null && order.patient_age < 18;
@@ -170,10 +155,6 @@ function UploadModal({ order, onClose, onDone }) {
 }
 
 // The counter workflow: a patient walks up and quotes their request number
-// (shown to them in the portal once they choose in-house). This looks it
-// up directly — regardless of the queue's own filters/pagination — and
-// pops up the full request with patient details, same idea as the
-// pharmacist's Rx-number search bar.
 function RequestLookupBar({ onFound }) {
   const { toastApiError, toastError } = useToast();
   const [q, setQ] = useState("");
@@ -271,7 +252,6 @@ export default function RequestsPage() {
   const orders = (data?.results || [])
     .filter(o => o.patient_choice === "in_house" && o.status !== "cancelled")
     // FIFO — oldest ordered first, so the queue is worked in the order
-    // samples actually came in rather than newest-on-top.
     .sort((a, b) => new Date(a.ordered_at) - new Date(b.ordered_at));
 
   const [showFilters, setShowFilters] = useState(false);

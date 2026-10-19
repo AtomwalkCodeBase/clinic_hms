@@ -1,26 +1,8 @@
-/**
- * components/auth/NewPasswordFields.jsx
- * ---------------------------------------
- * Shared "choose a new password" pair — used everywhere a password is set
- * or reset: OTP-based forgot-password (staff + patient), patient
- * registration, staff first-login setup, and voluntary password change
- * from Settings. Each password field has its own show/hide toggle, and a
- * live match indicator appears under Confirm as soon as both fields have
- * content — so a typo is caught before submit instead of after a 400.
- *
- * Controlled component — parent owns the state:
- *   <NewPasswordFields
- *     password={password} onPasswordChange={setPassword}
- *     confirmPassword={confirm} onConfirmPasswordChange={setConfirm}
- *     errors={fieldErrors}
- *   />
- */
+/** components/auth/NewPasswordFields.jsx */
 
 import { useState } from "react";
 import { authBareInput as bareInput, authFieldWrap as fieldWrap, authLabelStyle as labelStyle } from "../../styles/formStyles";
 import { IconEyeOff, IconEye, IconLock } from "./authIcons";
-
-
 
 
 const IconCheck = (props) => (
@@ -35,9 +17,6 @@ const IconX = (props) => (
     <path d="M18 6 6 18M6 6l12 12" />
   </svg>
 );
-
-
-
 
 
 function PwField({ value, onChange, placeholder, error, minLength, autoComplete }) {

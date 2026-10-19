@@ -1,47 +1,22 @@
-/**
- * config/routes.config.js
- * -----------------------
- * All application route paths defined in one place.
- * Import ROUTES wherever you need to navigate or check the current path.
- * Never hardcode route strings in components.
- */
+/** config/routes.config.js */
 
 export const ROUTES = {
   // Public
   LOGIN:                "/login",
   SETUP_PASSWORD:       "/setup-password",
   // Separate flow/page per audience (not a shared tab-switcher) — see
-  // components/auth/ForgotPasswordFlow.jsx.
   FORGOT_PASSWORD_STAFF:   "/forgot-password/staff",
   FORGOT_PASSWORD_PATIENT: "/forgot-password/patient",
   // Emergency QR scan target — deliberately outside every ProtectedRoute/
-  // PatientRoute guard below, since a doctor scanning this at a hospital
-  // that isn't even on this platform has no Atomwalk login at all. See
-  // apps/hospital_patients/emergency_views.py for the backend half.
   EMERGENCY_VIEW: (token) => `/emergency/${token}`,
   // Consultation scratchpad — opened by scanning a patient's permanent
-  // handwriting-pad QR on a phone. Also outside every route guard: the
-  // doctor's phone browser has no Atomwalk session. See
-  // pages/public/ConsultPadPage.jsx + apps/hospital_patients/consult_pad_views.py.
   CONSULT_PAD: (token) => `/consult-pad/${token}`,
   // What the QR printed on a prescription/lab report opens when scanned by
-  // anything other than the patient app itself (Google Lens, any camera
-  // app). The app's own capture flow never routes here — it decodes the
-  // same QR and posts straight to the My Reports upload pipeline instead.
-  // Outside every route guard: no Atomwalk login. See
-  // pages/public/ViewReportPage.jsx + apps/hospital_patients/document_view_views.py.
   VIEW_REPORT: (token) => `/view-report/${token}`,
   // "Share Records" break-glass — the doctor-has-a-laptop flow. The
-  // clinician opens the base path on their laptop (or a shared /:token
-  // link); a QR is shown; the patient scans it and approves (opening the
-  // /:token path with their patient session), and the clinician's page then
-  // renders the records read-only for 2 hours. Outside every route guard —
-  // a clinician here has no Atomwalk login. See
-  // pages/public/ShareRecordsPage.jsx + apps/hospital_patients/records_share_views.py.
   SHARE_RECORDS:          "/share-records",
   SHARE_RECORDS_TOKEN: (token) => `/share-records/${token}`,
   // Front door the patient reads out: the doctor opens this and types the
-  // 6-digit code from the patient's phone. `/s` kept as a short alias.
   SHARE_RECORDS_ENTRY:    "/share",
   SHARE_RECORDS_ENTRY_ALT: "/s",
 
@@ -102,12 +77,6 @@ export const ROUTES = {
   FRONT_DESK: {
     DASHBOARD:          "/front-desk/dashboard",
     // Consolidated Patient Intake workspace — ONE sidebar item (an
-    // expandable group, see AppShell.jsx) covering all five intake steps
-    // as tabs on ONE page (PatientIntakePage.jsx), each embedding the
-    // exact same content component the standalone Triage/Register/
-    // Emergency/Appointments/Admissions pages use — no duplicated
-    // implementation, no separate step-wizard bar repeated on those
-    // standalone pages. INTAKE (bare) redirects to INTAKE_REGISTER.
     INTAKE:              "/front-desk/intake",
     INTAKE_REGISTER:     "/front-desk/intake/register",
     INTAKE_TRIAGE:       "/front-desk/intake/triage",

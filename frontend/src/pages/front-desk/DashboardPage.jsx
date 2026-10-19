@@ -1,28 +1,4 @@
-/**
- * pages/front-desk/DashboardPage.jsx
- * ------------------------------------
- * Front desk home — rebuilt to match the reference "command centre" design
- * (see styles/front-desk-command-centre.css): stat tiles, quick actions,
- * a live queue table, today's-appointments table, an IPD bed-status donut,
- * and a recent-activity feed.
- *
- * Every number here comes from an API this app already calls elsewhere —
- * nothing is invented to fill a tile:
- *   - Active OPD Visits / Waiting in Queue: OPD.APPOINTMENTS (as before)
- *   - Admission Referrals / Beds Awaiting: the same IPD.REFERRALS /
- *     ADMISSION_AWAITING_BED lists AdmissionsPage.jsx already uses
- *   - IPD Bed Status: ORG.BEDS (same endpoint the bed picker uses),
- *     bucketed by its real `status` field
- *   - Collections Today: summed from each invoice's own embedded
- *     `payments` list (apps/billing/serializers.py InvoiceSerializer),
- *     filtered to payments actually recorded today
- * There's no "avg wait time" or "recent activity/audit log" API for front
- * desk to read from, so those are computed from real, already-fetched
- * records (see avgWaitMins/activity below) rather than shown as fixed or
- * fabricated numbers — and the reference's "Print Document" / "View All
- * Actions" quick actions were left out, since neither has a real
- * destination in this app yet.
- */
+/** pages/front-desk/DashboardPage.jsx */
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -127,8 +103,6 @@ export default function FrontDeskDashboardPage() {
   const activeToday = appointments.filter(a => a.status !== "cancelled" && a.status !== "no_show").length;
 
   // Real avg time-in-queue — minutes since each waiting patient's slot
-  // time, averaged, computed from data already on screen rather than shown
-  // as a fixed figure.
   const avgWaitMins = useMemo(() => {
     const now = Date.now();
     const waits = appointments
@@ -177,9 +151,6 @@ export default function FrontDeskDashboardPage() {
   });
 
   // Recent activity — assembled from real, already-fetched records
-  // (referrals, awaiting-bed admissions, today's appointments). There's no
-  // generic activity/audit-log API for front desk to read from, so this is
-  // not a substitute for one — just what's genuinely on screen already.
   const activity = useMemo(() => {
     const items = [];
     (referrals || []).slice(0, 3).forEach(r => items.push({

@@ -1,10 +1,4 @@
-/**
- * pages/platform-admin/HospitalDetailPage.jsx
- * ------------------------------------------------
- * Full profile view for one hospital — Overview / Users & Roles /
- * Subscription / Audit Log tabs. Reached by clicking a hospital on the
- * Hospitals table or Dashboard card list.
- */
+/** pages/platform-admin/HospitalDetailPage.jsx */
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Building2, Users, KeyRound, Ban, CheckCircle2 } from "lucide-react";
@@ -20,7 +14,6 @@ import {
 import { STAFF_ROLE_LABELS as ROLE_LABELS } from "../../constants/labels";
 
 const TABS = ["Overview", "Users & Roles", "Subscription", "Audit Log"];
-
 
 
 function OverviewTab({ hospital, overview, onChanged }) {

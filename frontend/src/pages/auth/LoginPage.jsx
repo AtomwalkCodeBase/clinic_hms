@@ -1,15 +1,4 @@
-/**
- * pages/auth/LoginPage.jsx
- * -------------------------
- * Unified login page with three tabs:
- *   - Staff Login    (email + password + hospital hospital_code)
- *   - Platform Admin (username + password, no hospital_code)
- *   - Patient Login  (AWPID + password)
- *
- * Premium split-screen layout: dark hero brand panel on the left,
- * sign-in card on the right. Matches the app-wide "Private Practice"
- * theme (deep green + cream + gold, Fraunces serif display type).
- */
+/** pages/auth/LoginPage.jsx */
 
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
@@ -26,12 +15,6 @@ import { authBareInput as bareInput } from "../../styles/formStyles";
 import { IconEyeOff, IconEye, IconLock } from "../../components/auth/authIcons";
 
 // The login screen is shared brand identity, shown before any user is
-// signed in — it must always render in "Emerald Glass", never whatever
-// in-app theme a previous user on this browser last picked. ThemeProvider
-// applies the active theme's CSS vars globally on <html>, so we re-pin them
-// back to Emerald Glass right here on the root wrapper; CSS custom
-// properties cascade, so this override wins for this whole subtree without
-// touching ThemeProvider or any other page.
 const FIXED_BRAND_VARS = deriveThemeVars(getThemeById("emerald-glass"));
 
 const TABS = [
@@ -65,10 +48,6 @@ const IconPhone = (props) => (
 );
 
 // Shared field wrapper — MUST live at module scope, not inside LoginPage.
-// A component defined inside another component's body gets a fresh function
-// reference on every render, so React treats it as a brand-new component type
-// each time and remounts its DOM (including the <input>) on every keystroke —
-// that's what was causing focus to drop after every character.
 const fieldWrap = (hasError) => ({
   display: "flex",
   alignItems: "center",
@@ -79,7 +58,6 @@ const fieldWrap = (hasError) => ({
   background: "var(--color-bg)",
   transition: "border-color 160ms ease, box-shadow 160ms ease, background 160ms ease",
 });
-
 
 
 function Field({ icon: Icon, error, children }) {
@@ -96,11 +74,7 @@ function Field({ icon: Icon, error, children }) {
   );
 }
 
-/**
- * Password input with a show/hide toggle — lets people check exactly what
- * they've typed (autofill, caps lock, stray spaces, etc.) before submitting,
- * instead of guessing from a row of dots.
- */
+/** Password input with a show/hide toggle — lets people check exactly what */
 function PasswordField({ value, onChange, error, placeholder = "••••••••", ...rest }) {
   const [visible, setVisible] = useState(false);
   return (
@@ -144,8 +118,6 @@ export default function LoginPage() {
   const [mobile,   setMobile]   = useState("");
   const [password, setPassword] = useState("");
   // Employee-ID login (enterprise hospitals with an HR/payroll ID scheme) —
-  // needs the hospital's hospital_code too, since employee IDs aren't globally
-  // unique the way mobile numbers are. See docs/onboarding_auth_rbac_architecture.md 3.1.2.
   const [useEmployeeId, setUseEmployeeId] = useState(false);
   const [hospital_code,     setHospitalCode]     = useState("");
   const [employeeId,    setEmployeeId]    = useState("");
@@ -158,11 +130,8 @@ export default function LoginPage() {
   const [awpid,       setAwpid]       = useState("");
   const [patientPass, setPatientPass] = useState("");
   // ?register=1 (linked from the "Don't have an account?" prompt on the
-  // patient forgot-password page) opens straight to the patient tab's
-  // registration flow instead of dropping them on the sign-in form.
   const [showRegister, setShowRegister] = useState(() => new URLSearchParams(window.location.search).get("register") === "1");
   // Day-to-day passwordless sign-in — an alternative to password login, not
-  // a replacement for it. otpStep: "identify" -> "code".
   const [useOtpLogin, setUseOtpLogin] = useState(false);
   const [otpStep,     setOtpStep]     = useState("identify");
   const [otpIdentifier, setOtpIdentifier] = useState("");

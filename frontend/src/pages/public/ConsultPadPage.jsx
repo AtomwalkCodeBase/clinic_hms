@@ -1,18 +1,4 @@
-/**
- * pages/public/ConsultPadPage.jsx
- * --------------------------------
- * The phone side of the consultation handwriting pad.
- *
- * The doctor starts a ConsultSession from an encounter, shows the patient's
- * permanent QR, and the phone lands here: a two-tab writing pad —
- * **Prescription** and **Internal Note** — each a multi-page canvas. Every
- * stroke autosaves to the session (PUT one tab at a time); nothing is
- * "submitted". The session stays live, surviving this tab being closed and
- * re-scanned, until the doctor signs the encounter on the web.
- *
- * Outside AppShell/ProtectedRoute — the phone has no Atomwalk session.
- * Fetched with publicClient. Backend: apps/hospital_patients/consult_pad_views.py.
- */
+/** pages/public/ConsultPadPage.jsx */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { publicClient } from "../../services/api.client";
@@ -27,8 +13,6 @@ const PEN_SIZES = [
   { key: "l", label: "L", width: 6 },
 ];
 // Pen colours the doctor can pick on the phone. First is the default. The
-// colour bakes into the saved PNG, so no backend change is needed — a page
-// reloads/restores exactly as it was drawn.
 const PEN_COLORS = [
   { key: "ink",   value: "#1f2937" },
   { key: "blue",  value: "#1d4ed8" },
@@ -38,8 +22,6 @@ const PEN_COLORS = [
 const PEN_COLOR = PEN_COLORS[0].value;
 
 // Zoom range for the pad. Applied as CSS display size (not a transform) so
-// scrolling/panning to any corner keeps working and pointer-to-canvas
-// mapping stays exact — see pointFrom().
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 3;
 const ZOOM_STEP = 0.25;
@@ -47,8 +29,6 @@ const clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 10
 const UNDO_LIMIT = 25;
 const AUTOSAVE_MS = 1500;
 // Background sync: while a tab has unsaved strokes, retry the PUT on this
-// cadence and the instant the browser reports the connection is back — no
-// stroke or tap needed.
 const RETRY_MS = 4000;
 
 const TABS = [
@@ -60,18 +40,11 @@ let _pid = 0;
 const nextPageId = () => `p${++_pid}`;
 
 // Per-device crash safety net. Every stroke also writes the tab images here
-// synchronously, so a power cut / tab kill between autosaves loses nothing —
-// on the next open we offer to restore anything not yet acknowledged by the
-// server. Keyed by the pad token; cleared once everything is saved.
 const LS_KEY = (t) => `consultpad:v1:${t}`;
 
 function pageDims(containerW) {
   const vw = typeof window !== "undefined" ? window.innerWidth : 800;
   // Base the A4-ish portrait page on the ACTUAL width the pad column has to
-  // work with (measured from the live container), not a guess off
-  // window.innerWidth — that's what made it mis-fit on some phones. Height
-  // just follows the 1.414 aspect; the column scrolls, and the doctor can
-  // zoom out if a page is too tall for their screen.
   const avail = Math.max(240, (containerW || vw) - 20);
   const w = Math.round(Math.max(280, Math.min(avail, 860)));
   return { w, h: Math.round(w * 1.414), dpr: (typeof window !== "undefined" && window.devicePixelRatio) || 1 };
@@ -121,7 +94,7 @@ export default function ConsultPadPage() {
   const dims = useRef(pageDims());
   const rootRef = useRef(null);       // stable shell element — measured for responsive page width
   const padScrollRef = useRef(null);  // the scrolling pad column (pinch surface)
-  const pinch = useRef(null);         // { id1, id2, startDist, startZoom } while a 2-finger pinch is active
+  const pinch = useRef(null);
   const pointers = useRef(new Map()); // live pointerId -> {x,y} on the pad column
   const sessionIdRef = useRef(null); // id of the consultation this pad is bound to
   const canvases = useRef(new Map()); // pageId -> { el, ctx }
@@ -168,14 +141,12 @@ export default function ConsultPadPage() {
               const sid = d.session_id ?? null;
               if (local.sid != null && sid != null && local.sid !== sid) {
                 // Crash-saved writing from a PREVIOUS consultation on this
-                // reused QR token — not ours. Drop it silently.
                 clearLocal();
               } else if (local.synced === false) {
                 const serverAt = d.updated_at ? Date.parse(d.updated_at) : 0;
                 const localFresher = !serverAt || (local.at && local.at >= serverAt - 2000);
                 if (local.sid != null && local.sid === sid && localFresher) {
                   // Same consultation, and this phone holds the freshest copy —
-                  // just put it back, no decision to make.
                   auto = local;
                 } else {
                   setRecovery(local); // ambiguous — let a human confirm
@@ -189,8 +160,6 @@ export default function ConsultPadPage() {
         .catch((err) => {
           if (!alive) return;
           // No HTTP status = network/timeout (e.g. power just came back and
-          // the server isn't reachable yet). Retry a few times with backoff
-          // before showing the dead-end "code not valid" screen.
           if (!err?.status && tries < 4) { tries += 1; setTimeout(attempt, 1500 * tries); return; }
           setErrorMsg(err?.message || "This code is not valid. Ask the front desk for a fresh QR.");
           setStatus("invalid");
@@ -210,9 +179,6 @@ export default function ConsultPadPage() {
   const flash = (m) => setNotice(m);
 
   // Flush on background/close, and warn before an accidental navigation away
-  // while a stroke hasn't been saved yet. `pagehide` is the reliable one on
-  // iOS (visibilitychange and beforeunload are both flaky there when the tab
-  // is discarded or the user swipes to the home screen).
   useEffect(() => {
     const stash = () => {
       persistLocal();                                    // synchronous — always lands
@@ -236,13 +202,6 @@ export default function ConsultPadPage() {
   }, []);
 
   // ── Responsive geometry ────────────────────────────────────────────────
-  // Canvas geometry is fixed at mount. When the space the pad has to work
-  // with changes — a rotate, the on-screen keyboard, browser chrome showing
-  // / hiding, split-screen — re-lay-out every page at the new size, carrying
-  // the drawing across: snapshot each canvas, drop the old-sized contexts +
-  // undo stacks, bump `geom` so the pad remounts and repaints from those
-  // snapshots. Width is measured off the live container (rootRef), not
-  // window.innerWidth, so it fits every device.
   const relayout = useCallback(() => {
     const next = pageDims(rootRef.current?.clientWidth);
     const cur = dims.current;
@@ -285,7 +244,6 @@ export default function ConsultPadPage() {
   }, [relayout]);
 
   // Background sync — the moment the connection is back (or every few seconds
-  // while offline), push any unsaved strokes on their own. No stroke, no tap.
   useEffect(() => {
     const drain = () => {
       if (dirtyTabs.current.size && !savingRef.current && navigator.onLine !== false) {
@@ -297,7 +255,6 @@ export default function ConsultPadPage() {
     window.addEventListener("online", goOnline);
     window.addEventListener("offline", goOffline);
     // The `online` event is unreliable on some mobile browsers, so also poll
-    // while there's unsaved work — a cheap no-op when everything's saved.
     const ticker = setInterval(drain, RETRY_MS);
     return () => {
       window.removeEventListener("online", goOnline);
@@ -335,9 +292,6 @@ export default function ConsultPadPage() {
     }));
 
   // Mirror both tabs to localStorage. Synchronous, so it survives an
-  // instant power loss the way an in-flight PUT does not. `synced` records
-  // whether the server has everything — recovery only offers itself when
-  // it's false.
   const persistLocal = () => {
     try {
       const active = activeTabRef.current;
@@ -355,7 +309,6 @@ export default function ConsultPadPage() {
   const clearLocal = () => { try { localStorage.removeItem(LS_KEY(token)); } catch { /* ignore */ } };
 
   // A tab has unsaved work the moment a stroke lands; cleared when its PUT
-  // succeeds. Drives the save pill and the "Done" sheet's copy.
   const markDirty = () => {
     dirtyTabs.current.add(activeTabRef.current);
     setSaveState((s) => (s === "saving" ? s : "unsaved"));
@@ -384,7 +337,6 @@ export default function ConsultPadPage() {
   }
 
   // Force-save the active tab plus any other tab still marked dirty. Returns
-  // true when everything is saved.
   async function saveAll() {
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     const active = activeTabRef.current;
@@ -419,7 +371,6 @@ export default function ConsultPadPage() {
   };
 
   // "Done" — save straight away, then show the confirmation sheet so the
-  // patient can either hand the phone back or keep writing.
   const openDoneSheet = async () => {
     setDoneSheet(true);
     if (dirtyTabs.current.size) await saveAll();
@@ -440,8 +391,6 @@ export default function ConsultPadPage() {
   };
 
   // Recovery — pull the crash-saved images straight to the server (not via
-  // the canvases, which haven't repainted yet). Called from the banner
-  // (no arg → uses `recovery` state) or auto on load with an explicit record.
   const restoreLocal = async (rec) => {
     rec = rec || recovery;
     setRecovery(null);
@@ -457,8 +406,6 @@ export default function ConsultPadPage() {
   const dismissRecovery = () => { setRecovery(null); clearLocal(); };
 
   // drawing — map a screen point to canvas coordinates. getBoundingClientRect
-  // already reflects the element's rendered (zoomed) size, so dividing by it
-  // gives exact canvas-space coords at any zoom level.
   const pointFrom = (el, e) => {
     const r = el.getBoundingClientRect();
     const sx = r.width ? dims.current.w / r.width : 1;
@@ -503,9 +450,6 @@ export default function ConsultPadPage() {
   };
 
   // ── Pinch-to-zoom ─────────────────────────────────────────────────────
-  // Two pointers on the pad column drive `zoom`; a third+ is ignored. While a
-  // pinch is live the draw handlers bail (see onDown/onMove), so a stray
-  // stroke can't be drawn mid-gesture.
   const pinchDist = () => {
     const pts = Array.from(pointers.current.values());
     if (pts.length < 2) return 0;
@@ -576,9 +520,6 @@ export default function ConsultPadPage() {
   };
 
   // Does this page carry any pen? Compares the live canvas against a fresh
-  // paint of the ruled paper — so a page that was written on then erased, or
-  // one restored from `src`, is both handled. Errs towards "yes" (→ prompt)
-  // on any failure.
   const pageHasInk = (id) => {
     try {
       const rec = canvases.current.get(id);
@@ -745,9 +686,7 @@ export default function ConsultPadPage() {
         </button>
       </div>
 
-      {/* Pad — remounts per tab; each canvas restores from its page.src.
-          Zoom is applied as CSS display size on the page + canvas, so the
-          column simply scrolls to reach any corner. */}
+      {/* Pad — remounts per tab; each canvas restores from its page.src. */}
       <div key={`${activeTab}:${geom}`} ref={padScrollRef}
         onPointerDown={onPadPointerDown} onPointerMove={onPadPointerMove}
         onPointerUp={onPadPointerUp} onPointerCancel={onPadPointerUp}
@@ -794,8 +733,7 @@ export default function ConsultPadPage() {
         </button>
       </div>
 
-      {/* Bottom bar — a live save pill (nothing is ever "submitted"; every
-          stroke autosaves) plus the Done affordance. */}
+      {/* Bottom bar — a live save pill (nothing is ever "submitted"; every */}
       <div style={{ padding: 12, display: "flex", gap: 10, alignItems: "center",
         borderTop: "1px solid #e2e8f0", background: "#fff" }}>
         <SavePill saveState={saveState} pageCount={pages.length} online={online} />
@@ -860,7 +798,6 @@ export default function ConsultPadPage() {
 }
 
 // Always-visible save indicator. The pad has no "submit" — every stroke
-// autosaves — so this pill is how the patient knows their work is safe.
 const PILL = {
   idle:    { bg: "#f1f5f9", fg: "#64748b", dot: "#94a3b8" },
   unsaved: { bg: "#fffbeb", fg: "#b45309", dot: "#f59e0b" },
@@ -870,7 +807,6 @@ const PILL = {
 };
 function SavePill({ saveState, pageCount, online }) {
   // Offline with unsaved work isn't a failure — the strokes are safe on the
-  // phone and will sync themselves. Say so, in amber, not alarming red.
   const offlinePending = !online && (saveState === "error" || saveState === "unsaved" || saveState === "saving");
   const key = offlinePending ? "unsaved" : saveState;
   const s = PILL[key] || PILL.idle;

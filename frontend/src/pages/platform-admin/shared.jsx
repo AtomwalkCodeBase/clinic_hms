@@ -1,10 +1,4 @@
-/**
- * pages/platform-admin/shared.jsx
- * --------------------------------
- * Shared constants + small components used across the platform-admin
- * Dashboard, Hospitals, and Subscriptions pages — kept in one place so the
- * three pages stay visually consistent instead of drifting.
- */
+/** pages/platform-admin/shared.jsx */
 import { useState, useEffect } from "react";
 import apiClient from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
@@ -27,9 +21,6 @@ export const TIER_LIMITS = {
 };
 
 // Subscription lifecycle status — separate from the is_active kill switch.
-// This is the billing state (trial/active/grace/read_only/frozen/suspended)
-// that core/authentication.py actually enforces: frozen/suspended blocks
-// all API access for that hospital's staff, read_only blocks writes.
 export const SUB_STATUS_META = {
   trial:     { label: "Trial",        bg: "#e0f2fe", fg: "#075985" },
   active:    { label: "Active",       bg: "#dcfce7", fg: "#166534" },
@@ -40,7 +31,6 @@ export const SUB_STATUS_META = {
 };
 
 // Statuses that mean "someone should look at this hospital" — used to
-// surface an attention list on the Subscriptions page.
 export const ATTENTION_STATUSES = ["grace", "read_only", "frozen", "suspended"];
 
 export function StatusBadge({ isActive }) {
@@ -74,7 +64,6 @@ export function TierBadge({ tier }) {
 }
 
 // Thin usage-vs-limit bar — e.g. "7 / 10 doctors". max=0 means unlimited.
-// used=null means the hospital DB couldn't be reached (usage unknown).
 export function UsageBar({ label, used, max }) {
   if (used === null || used === undefined) {
     return (
@@ -112,9 +101,6 @@ export async function fetchAuditLog(hospitalId) {
 }
 
 // Slide-over drawer for viewing/editing one hospital's tier, subscription
-// status, and audit trail — shared by HospitalsPage and SubscriptionsPage
-// so both can offer the same controls DashboardPage's inline card has,
-// without duplicating the patch/audit-log wiring in three places.
 export function HospitalDetailDrawer({ hospital, onClose, onChanged }) {
   const [tierPick, setTierPick] = useState(hospital.subscription?.license_tier || "starter");
   const [statusPick, setStatusPick] = useState(hospital.subscription?.status || "trial");

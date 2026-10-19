@@ -1,11 +1,4 @@
-/**
- * pages/pharmacist/StockPage.jsx
- * -------------------------------
- * Pharmacist's inventory — current batches on hand, low-stock flagged in
- * red, and a "Receive Stock" form to log a new delivery (or top up an
- * existing batch of the same drug/branch/batch number). Modeled after
- * lab/CatalogPage.jsx's inline add-form pattern.
- */
+/** pages/pharmacist/StockPage.jsx */
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "react-router-dom";
 import { AppShell }  from "../../components/layout/AppShell";
@@ -97,8 +90,6 @@ function ReceiveForm({ onSave, onCancel, saving }) {
           <DrugPicker value={form.drug_label} onChange={(id, label, defaultMrp) => setForm(f => ({
             ...f, drug: id, drug_label: label,
             // Prefill from the catalog's reference price so it's never
-            // silently blank at billing time — still freely editable per
-            // batch (a fresh delivery can legitimately cost more or less).
             mrp: (id != null && f.mrp === "" && defaultMrp != null) ? String(defaultMrp) : f.mrp,
           }))} />
         </div>
@@ -152,8 +143,6 @@ export default function StockPage() {
   const stock = data?.results || [];
   const pagination = data?.pagination || null;
   // Separate lightweight call for the low-stock badge — now that the main
-  // list is paginated, counting `stock.filter(s => s.is_low)` would only
-  // reflect whatever's on the current page instead of the whole inventory.
   const { data: lowData, refetch: refetchLow } = useApi(API_ENDPOINTS.PHARMACY.STOCK, {
     params: { low_only: 1, page: 1, page_size: 1 },
   });

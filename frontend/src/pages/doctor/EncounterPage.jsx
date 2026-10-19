@@ -1,18 +1,4 @@
-/**
- * pages/doctor/EncounterPage.jsx
- * --------------------------------
- * Comprehensive consultation workspace.
- *
- * Sections:
- *   1. Patient info + vitals banner
- *   2. SOAP notes (S/O/A/P)
- *   3. ICD-10 diagnoses (searchable add, list with remove)
- *   4. Prescriptions (add drug lines inline)
- *   5. Investigations / orders
- *   6. Referral
- *   7. Advice + Follow-up
- *   8. Sign & Close
- */
+/** pages/doctor/EncounterPage.jsx */
 import { useParams, useNavigate } from "react-router-dom";
 import { useToast } from "../../hooks/useToast";
 import { useApi } from "../../hooks/useApi";
@@ -59,8 +45,6 @@ export default function EncounterPage() {
   const { data: enc, isLoading, refetch } = useApi(API_ENDPOINTS.OPD.ENCOUNTER(id));
 
   // Cross-hospital history — lifted up from the sidebar so the compact
-  // clinical summary header can also read from it (allergies, active
-  // problems) without a second, duplicate fetch.
   const { data: history, isLoading: historyLoading } = useApi(
     enc?.patient_pk ? API_ENDPOINTS.PATIENTS.HISTORY(enc.patient_pk) : null,
     { skip: !enc?.patient_pk }
@@ -84,22 +68,16 @@ export default function EncounterPage() {
   const [removingItem, setRemovingItem] = useState(null);
 
   // Voice dictation review state (human-in-the-loop)
-  // { section, text, target?, drug?, codes?, selected? }
   const [dictation, setDictation] = useState(null);
 
   // Patient history sidebar — collapsed by default so it never crowds the
-  // consultation workspace on first load; doctor opens it when needed.
   const [historyOpen, setHistoryOpen] = useState(false);
   const [viewerDoc, setViewerDoc] = useState(null); // document currently open in the resizable viewer
   const [activeTab, setActiveTab] = useState("consultation"); // "past" | "consultation" | "timeline"
-  const [admissionModalOpen, setAdmissionModalOpen] = useState(false); // Recommend Admission is a button + modal, not a tab — see AdmissionReferralModal
-  const [followUpModalOpen, setFollowUpModalOpen] = useState(false); // Book Follow-up is a button + modal too — see FollowUpModal
+  const [admissionModalOpen, setAdmissionModalOpen] = useState(false);
+  const [followUpModalOpen, setFollowUpModalOpen] = useState(false);
 
   // Handwriting session — the doctor starts it from this encounter
-  // (POST .../consult-session/), shows the patient's QR, and writes on a
-  // phone across two tabs. "Load handwritten note" pulls the current session
-  // into the form; it's re-runnable and says "nothing new" when the session
-  // hasn't changed since the last pull. See pages/public/ConsultPadPage.jsx.
   const [qrData, setQrData] = useState(null); // { qr_image, pad_url, session_id }
   const [qrOpen, setQrOpen] = useState(false);
   const [qrLoading, setQrLoading] = useState(false);
@@ -110,7 +88,6 @@ export default function EncounterPage() {
   const loadedSnapshotRef = useRef({});     // field -> value as last loaded (to spot hand-edits)
 
   // Per-encounter sessionStorage so a page refresh doesn't lose the doctor's
-  // "added" / "skipped" decisions or the still-to-review queue.
   const _ssKey = (k) => `hwpad:${id}:${k}`;
   const _ssGet = (k, fb) => { try { const v = sessionStorage.getItem(_ssKey(k)); return v ? JSON.parse(v) : fb; } catch { return fb; } };
   const _ssSet = (k, v) => { try { sessionStorage.setItem(_ssKey(k), JSON.stringify(v)); } catch { /* private mode / quota */ } };
@@ -130,7 +107,6 @@ export default function EncounterPage() {
   const editPendingDx = (idx, patch) => setPendingDx(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
 
   // Drop staged items that are already on the record (e.g. after a refresh, or
-  // if the doctor added one manually in the meantime).
   useEffect(() => {
     if (!pendingRx.length || !rxItems.length) return;
     const have = new Set(rxItems.map(i => _normName(i.drug_name)));
@@ -143,19 +119,12 @@ export default function EncounterPage() {
   }, [diagnoses]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Merge a session's recognised content into the encounter draft. SOAP-ish
-  // text fields are replaced only where the doctor hasn't hand-edited since
-  // the last load. Prescription lines AND diagnoses are NOT written to the
-  // record here — they are staged into `pendingRx` / `pendingDx` for the
-  // doctor to add one by one. Returns { set, changed, rxStaged, dxStaged, noteLowConf }.
   async function applyRecognised({ note, rx }) {
     setRecognisedNote({ note: note || null, rx: rx || null });
     const snap = loadedSnapshotRef.current;
     let set = 0, changed = 0, dxStaged = 0;
 
     // The model reports how confident it is that this was a legible clinical
-    // note. Below the threshold we do NOT auto-fill the SOAP fields — the
-    // doctor is pointed at "View text" to read it and copy anything useful by
-    // hand, rather than have low-trust text land silently in the record.
     const lowConf = (t) => !!t && t.status === "done" &&
       typeof t.confidence === "number" && t.confidence < HW_LOW_CONFIDENCE;
     const noteLowConf = lowConf(note);
@@ -165,8 +134,6 @@ export default function EncounterPage() {
     const anyLowConf = noteLowConf || rxLowConf;
 
     // ONE combined context. The doctor writes wherever they like — the
-    // Prescription pad, the Internal Note pad, or both — and every field is
-    // merged from both. No "this tab loads that field" rule to remember.
     const merge = (a, b) => {
       a = String(a || "").trim(); b = String(b || "").trim();
       if (!a) return b;
@@ -196,10 +163,6 @@ export default function EncounterPage() {
           snap[field] = inc;
         }
         // The model transcribed the note but didn't split it into SOAP
-        // sections (common for a short free-form note) — don't silently drop
-        // it. Drop the verbatim transcription into Subjective so it's on
-        // screen for the doctor to re-file, instead of only living behind
-        // "View text".
         if (set === before.set && changed === before.changed) {
           const raw = merge(noteOk ? note.raw_text : "", rxOk ? rx.raw_text : "");
           const cur = (prev.subjective || "").trim();
@@ -221,8 +184,6 @@ export default function EncounterPage() {
       });
 
       // Diagnoses are staged for review (same as Rx) — a hallucinated
-      // diagnosis or a wrong ICD code must not land on the record unseen.
-      // Merged from whichever pad(s) they were written on.
       const dxIn = [
         ...(noteOk && Array.isArray(note.diagnoses) ? note.diagnoses : []),
         ...(rxOk && Array.isArray(rx.diagnoses) ? rx.diagnoses : []),
@@ -251,11 +212,6 @@ export default function EncounterPage() {
     }
 
     // Prescription lines are never written straight to the record — a mis-read
-    // or hallucinated drug would land as a real order. Stage them into
-    // `pendingRx`; the doctor adds each one explicitly from the review panel
-    // under the Prescription card. De-dupe against what's already prescribed
-    // and against lines the doctor already added or dismissed (`loadedRxRef`),
-    // so re-loading the same pad is idempotent.
     let rxStaged = 0;
     const drugsOf = (t) => Array.isArray(t?.items) ? t.items
       : Array.isArray(t?.prescription) ? t.prescription : [];
@@ -298,11 +254,6 @@ export default function EncounterPage() {
   }
 
   // ── Handwriting: one pull + an auto-watch ─────────────────────────────────
-  // The doctor can't know when transcription finishes (it runs on the phone's
-  // autosave and can take 30-120s), so a single "Load" click that comes back
-  // "still transcribing" is useless. Instead: pull once, and if it's not ready
-  // yet, poll every few seconds and fill the fields the moment it lands — with
-  // a small progress bar in place of the button meanwhile.
   const HW_WATCH_MAX_MS = 150_000;
   const HW_POLL_EVERY_TICKS = 3;   // 1s ticks → poll every 3s
   const [hwWatch, setHwWatch] = useState(false);
@@ -319,11 +270,6 @@ export default function EncounterPage() {
   useEffect(() => () => { if (hwTimerRef.current) clearInterval(hwTimerRef.current); }, []);
 
   // Fetch the session and either apply it or report why not.
-  //   "settled"  — applied, or there's nothing more coming (stop)
-  //   "waiting"  — recognition still running (keep polling)
-  //   "inactive" — no session started yet (stop)
-  // `quiet` suppresses the informational toasts ("no session", "nothing new")
-  // used by the poll loop; terminal errors and a real apply always toast.
   async function pullHandwrittenNote({ quiet = false } = {}) {
     if (!enc?.id) return "inactive";
     try {
@@ -337,8 +283,6 @@ export default function EncounterPage() {
       const noteDone = s.note && s.note.status === "done";
       if (s.updated_at && s.updated_at === lastLoadedRef.current && !quiet) {
         // Nothing new written since the last load. Re-apply the compiled
-        // result anyway (the doctor may have cleared a field and wants it
-        // back) — but don't re-run the model.
         if (rxDone || noteDone) {
           await applyRecognised({ note: s.note, rx: s.rx });
           toastSuccess("Re-applied the handwritten note.");
@@ -395,8 +339,6 @@ export default function EncounterPage() {
     let verdict = "waiting";
     try {
       // Lazy compile: nothing is transcribed until this click. The server
-      // only runs the model over pages it hasn't seen before (a re-load after
-      // the patient adds more just picks up the new pages), then re-reads.
       try {
         await encounterApi.recogniseConsultSession(enc.id);
       } catch { /* the pull below reports if there's no session yet */ }
@@ -480,9 +422,6 @@ export default function EncounterPage() {
 
   const isClosed = enc?.status === "signed";
   // appointment_type is unreliable in real data — the live booking flow
-  // (PortalBookView.post) hardcodes "opd" even for "Book follow-up" links,
-  // so it's only ever "followup" for demo-seeded encounters. Fall back to
-  // the chief complaint text, which is what's actually set in practice.
   const isFollowUp = enc?.appointment_type === "followup" || /^\s*follow[\s-]?up/i.test(enc?.chief_complaint || "");
 
   function upd(k, v) { setForm(p => ({ ...p, [k]: v })); setDirty(true); }
@@ -568,10 +507,6 @@ export default function EncounterPage() {
   }
 
   // ── Handwriting: staged Rx / Dx review ───────────────────────────────────
-  // Recognised prescription lines and diagnoses wait in `pendingRx` /
-  // `pendingDx` until the doctor adds them here — nothing from handwriting is
-  // written to the record on its own. Doctors can edit a staged row first;
-  // that edit is what gets saved.
   function _rxPayload(it) {
     return {
       drug_name: (it.drug_name || "").trim(),
@@ -959,9 +894,7 @@ export default function EncounterPage() {
               />
             </Field>
 
-            {/* Visit summary — plain-text digest of what's already been typed
-                above, not a model-generated interpretation (no LLM is wired
-                into this backend). Saves a re-read before signing. */}
+            {/* Visit summary — plain-text digest of what's already been typed */}
             {(() => {
               const summary = buildVisitSummary(form, diagnoses);
               return summary ? (
@@ -1266,9 +1199,6 @@ export default function EncounterPage() {
                 onChange={e => {
                   const v = e.target.value;
                   // "0" (or negative) isn't a real follow-up — it's just
-                  // today, the same visit — so it's rejected here rather
-                  // than silently accepted and only caught on save. Empty
-                  // stays allowed (no follow-up needed).
                   if (v !== "" && parseInt(v, 10) < 1) return;
                   upd("follow_up_in_days", v);
                 }}

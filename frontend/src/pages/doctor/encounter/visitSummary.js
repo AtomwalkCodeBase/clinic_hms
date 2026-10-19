@@ -1,8 +1,4 @@
 // ─── Visit summary — auto-assembled from what the doctor has already typed
-// (chief complaint, working diagnosis, plan, follow-up). This is template
-// text stitched from the doctor's own entries, not a model-generated
-// clinical interpretation — labelled plainly in the UI as such rather than
-// as "AI", since no LLM is wired into this backend yet.
 export function buildVisitSummary(form, diagnoses) {
   const parts = [];
   if (form.subjective?.trim()) parts.push(`Patient reports: ${form.subjective.trim()}.`);

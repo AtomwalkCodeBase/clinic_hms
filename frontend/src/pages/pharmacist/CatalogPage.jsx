@@ -1,11 +1,4 @@
-/**
- * pages/pharmacist/CatalogPage.jsx
- * ---------------------------------
- * Pharmacist manages the drug catalog — name, form, strength/dosage. This is
- * what powers the dropdown doctors prescribe from (see EncounterPage.jsx's
- * DrugForm) and what pharmacy's "Receive Stock" picker searches against.
- * Modeled directly after lab/CatalogPage.jsx's inline add/edit pattern.
- */
+/** pages/pharmacist/CatalogPage.jsx */
 import { useState, useEffect } from "react";
 import { Search } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
@@ -96,7 +89,6 @@ export default function CatalogPage() {
   const drugs = data?.results || [];
   const pagination = data?.pagination || null;
   // Drug-form dropdown needs every active form regardless of page — no
-  // ?page= passed here, so this stays the plain unpaginated list.
   const { data: formsData } = useApi(API_ENDPOINTS.PRESCRIPTIONS.DRUG_FORMS);
   const drugForms = formsData || [];
 

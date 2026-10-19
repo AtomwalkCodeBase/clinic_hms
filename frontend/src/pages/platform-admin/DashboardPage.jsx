@@ -1,14 +1,4 @@
-/**
- * pages/platform-admin/DashboardPage.jsx
- * ----------------------------------------
- * Platform admin home — hero overview of the whole platform, provision new
- * hospitals, and manage each hospital's tier/subscription/audit trail inline.
- *
- * Styled with the same premium hero-card / icon-chip language used across
- * the patient and staff portals (see MyProfilePage.jsx) rather than flat
- * boxes with hardcoded hex colors — this is the first screen a platform
- * admin sees, it should read as a control room, not a plain admin panel.
- */
+/** pages/platform-admin/DashboardPage.jsx */
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Building2, ShieldCheck, Search, Plus, History, ChevronDown, ExternalLink } from "lucide-react";

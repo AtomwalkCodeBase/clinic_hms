@@ -1,9 +1,4 @@
 // ─── Vitals display ───────────────────────────────────────────────────────────
-// Standard adult clinical reference ranges (textbook values, not
-// patient-specific data) — used only to badge a recorded vital as
-// Normal/Watch/High so a doctor doesn't have to do the mental math on
-// every patient. Never invents a reading; only classifies one already
-// recorded by nursing staff.
 export function classifyVital(key, val) {
   if (val == null || val === "") return null;
   const n = Number(val);

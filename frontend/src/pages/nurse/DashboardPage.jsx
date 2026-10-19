@@ -1,9 +1,4 @@
-/**
- * pages/nurse/DashboardPage.jsx
- * --------------------------------
- * Nurse dashboard — shows today's queue with a focus on vitals pending.
- * Quick-action: click any waiting patient to go to VitalsPage.
- */
+/** pages/nurse/DashboardPage.jsx */
 
 import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
@@ -21,9 +16,6 @@ import {
 } from "lucide-react";
 
 // Groups a flat appointment list into [ [doctorName, items[]], ... ] sorted
-// alphabetically by doctor — a nurse assigned to more than one doctor
-// otherwise sees every patient jumbled together with no way to tell whose
-// queue is whose.
 function groupByDoctor(list) {
   const map = new Map();
   for (const a of list) {
@@ -88,9 +80,6 @@ export default function NurseDashboardPage() {
   }, [toastApiError]);
 
   // ── Today's Queue — search + status filter, grouped by doctor. Filtered
-  // client-side (the full unfiltered `appointments` list is already loaded
-  // above, and the stat cards need that full list's true counts, so
-  // filtering happens only on what's displayed here, not on the fetch).
   const [showTodayFilters, setShowTodayFilters] = useState(false);
   const [todaySearch,      setTodaySearch]      = useState("");
   const [todayStatusFilter, setTodayStatusFilter] = useState("");
@@ -109,12 +98,6 @@ export default function NurseDashboardPage() {
   const todayByDoctor = useMemo(() => groupByDoctor(filteredAppointments), [filteredAppointments]);
 
   // ── Upcoming schedule — everything from tomorrow onward, for the
-  // doctor(s) this nurse is assigned to (server-side scoped, same as the
-  // queue above — see NurseDoctorAssignment). Mirrors the doctor
-  // dashboard's own upcoming-schedule panel: collapsed to 5 by default,
-  // full pagination once expanded. Search/status filter go straight to the
-  // backend (same params AppointmentUpcomingView already supports) since
-  // this list is itself paginated server-side, unlike today's queue above.
   const [upcomingExpanded, setUpcomingExpanded] = useState(false);
   const [upcomingPage, setUpcomingPage] = useState(1);
   const [upcomingPageSize, setUpcomingPageSize] = useState(5);
@@ -139,7 +122,6 @@ export default function NurseDashboardPage() {
   const upcomingByDoctor = useMemo(() => groupByDoctor(upcomingList), [upcomingList]);
 
   // Re-page to 1 whenever a filter changes, so a narrowed result set doesn't
-  // land on what's now an out-of-range page.
   useEffect(() => { setUpcomingPage(1); }, [upcomingSearch, upcomingStatusFilter]);
 
   function collapseUpcoming() {

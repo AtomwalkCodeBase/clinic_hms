@@ -1,10 +1,4 @@
-/**
- * pages/nurse/TasksPage.jsx
- * ---------------------------
- * Patient monitoring — every patient consulted today with the doctor's
- * orders: tests to chase, medication given, advice, follow-up. Lets the
- * nurse track condition and make sure lab work actually happens.
- */
+/** pages/nurse/TasksPage.jsx */
 import { useState } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -22,7 +16,6 @@ import { todayLocal } from "../../utils/dates";
 const TODAY = todayLocal();
 
 
-
 const STATUS_BADGE = {
   in_progress: "badge--info",
   done:        "badge--success",
@@ -31,9 +24,7 @@ const STATUS_BADGE = {
 };
 
 
-
 // ─── One ordered test — nurse sets/corrects the patient's in-house/outside
-// choice here (folded in from the old standalone Lab Orders page). ─────────
 const PAY_PREF_LABEL = { pay_at_lab: "Pay at lab", pay_online: "Pay online" };
 const CHOICE_MADE_BY_LABEL = { patient: "patient", nurse: "nurse" };
 
@@ -62,9 +53,6 @@ function LabOrderRow({ order, onChoiceSaved }) {
     }
   }
   // Once a choice exists, show it as a confirmed record rather than live
-  // buttons — otherwise every nurse who opens this page after the first
-  // one sees the same "unset" picker and can't tell anything happened.
-  // "Change" reveals the picker again for a correction.
   const [editing, setEditing] = useState(order.patient_choice === "pending");
   const status = LAB_STATUS_BADGE[order.status] || LAB_STATUS_BADGE.ordered;
   const hasChoice = order.patient_choice !== "pending";
@@ -211,8 +199,6 @@ function LabOrderRow({ order, onChoiceSaved }) {
 }
 
 // Opens the patient's outside-lab upload in a new tab — same underlying
-// document the doctor's History sidebar and the patient portal both show,
-// fetched on demand (base64 content is never loaded until asked for).
 function ViewUploadedReportButton({ documentId }) {
   const { toastApiError } = useToast();
   const [loading, setLoading] = useState(false);
@@ -245,7 +231,6 @@ function ViewUploadedReportButton({ documentId }) {
 }
 
 // Fetches this encounter's structured lab orders and renders them alongside
-// (not instead of) the doctor's free-text investigations note above.
 function LabOrdersForEncounter({ encounterId }) {
   const { data, refetch } = useApi(API_ENDPOINTS.LAB.REQUESTS, { params: { encounter_id: encounterId } });
   const orders = data?.results || [];
@@ -258,13 +243,6 @@ function LabOrdersForEncounter({ encounterId }) {
 }
 
 // ─── Vaccinations due today — mirrors the LabOrdersForEncounter pattern:
-// fetch this patient's roadmap (apps/hospital_patients/pediatrics/vaccine_schedule.py
-// build_roadmap(), same GET the doctor's EncounterPage history sidebar
-// uses) and surface only what's actionable for a nurse right now: a
-// doctor-ordered vaccine not yet given ("ordered"), or a routine schedule
-// slot that's reached its recommended age window with no record on file
-// ("unknown" + timing "due_now"). Nothing renders if there's nothing to do
-// — same "only show if there's something real" convention as LabOrders.
 function VaccinationsForPatient({ patientPk }) {
   const { toastSuccess, toastApiError } = useToast();
   const { data, refetch } = useApi(
@@ -272,8 +250,6 @@ function VaccinationsForPatient({ patientPk }) {
   );
   const [administeringKey, setAdministeringKey] = useState(null);
   // Optional certificate/photo to attach when administering — keyed by the
-  // same record_id/vaccine_name key the Administer button uses, same
-  // pattern as EncounterPage.jsx's doctor-side version of this action.
   const [fileByKey, setFileByKey] = useState({});
   const roadmap = data?.roadmap || [];
   const actionable = roadmap.filter(
@@ -377,7 +353,6 @@ export default function NurseTasksPage() {
   });
 
   // Follow-ups a doctor asked a nurse to book — see FollowUpTab in
-  // EncounterPage.jsx (doctor side) and FollowupNurseWorklistView (backend).
   const { data: followupData, refetch: refetchFollowups } = useApi(API_ENDPOINTS.OPD.FOLLOWUP_NURSE_WORKLIST, { pollMs: 30000 });
   const followups = followupData?.results || [];
   const [markingBooked, setMarkingBooked] = useState(null);

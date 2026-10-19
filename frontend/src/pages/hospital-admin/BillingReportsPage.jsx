@@ -1,16 +1,4 @@
-/**
- * pages/hospital-admin/BillingReportsPage.jsx
- * ---------------------------------------------
- * Hospital admin: billing reports (HMS-09d-1 payment ledger, HMS-09d-2
- * revenue reports). Two tabs sharing one date-range filter:
- *   - Overview — billed vs collected vs outstanding for the range, a
- *     payment-mode breakdown, and a day-by-day table with the same tiny
- *     inline sparkline pattern DashboardPage.jsx already uses (no charting
- *     library in this app yet, so this stays consistent rather than
- *     introducing one for a single page).
- *   - Ledger — every payment recorded, filterable, with a running total
- *     over the whole filtered set (not just the current page).
- */
+/** pages/hospital-admin/BillingReportsPage.jsx */
 import { useState, useEffect, useCallback } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";

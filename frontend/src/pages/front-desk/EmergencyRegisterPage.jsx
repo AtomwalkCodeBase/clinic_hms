@@ -1,36 +1,4 @@
-/**
- * pages/front-desk/EmergencyRegisterPage.jsx
- * -----------------------------------------------
- * Minimal/provisional patient registration for a patient who arrives with
- * no identity, no consent, sometimes no name — step 3 ("Emergency Reg.")
- * of the approved intake mockup. Markup/styling here follow that mockup
- * (see intake-workspace.css) — the mockup's step 3 shows a read-only field
- * summary, but this has to actually collect the data, so the same
- * `.field`/`.val`-shaped boxes are real inputs instead.
- *
- * Deliberately a SEPARATE page from RegisterPatientPage / QuickRegisterModal:
- * this is the only registration path that requires neither a mobile number
- * nor a guardian (see apps/hospital_patients/serializers.py::PatientEmergencyRegisterSerializer
- * and docs/PENDING_IMPROVEMENTS.md item 1).
- *
- * Consent is NOT collected here — it's explicitly deferred, with a reason
- * recorded, on the emergency-treatment legal basis already used elsewhere
- * in this codebase (see apps/ipd/models.py AdmissionDeposit docstring).
- *
- * A doctor's referral is still required for actual IPD admission — front
- * desk cannot originate one (see AdmissionsPage.jsx) — so after
- * registering, this page only offers two next steps: close the visit as
- * an emergency OPD encounter, or hand off and wait for a doctor.
- *
- * Exports both a standalone routed page (default export, used directly at
- * ROUTES.FRONT_DESK.REGISTER_EMERGENCY — kept working for backward
- * compatibility/deep links) and a bare content component
- * (`EmergencyRegisterPageContent`) that the Patient Intake hub
- * (PatientIntakePage.jsx) embeds as one of its internal tabs — same
- * component, same API calls, no duplicated implementation. `embedded`
- * just suppresses this page's own PageShell, since the hub already
- * supplies an equivalent page title and tab bar.
- */
+/** pages/front-desk/EmergencyRegisterPage.jsx */
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AppShell } from "../../components/layout/AppShell";
@@ -51,7 +19,6 @@ const ARRIVAL_CHANNELS = [
   { value: "walk_in_unresponsive", label: "Walk-in, unresponsive" },
   { value: "other", label: "Other" },
 ];
-
 
 
 export function EmergencyRegisterPageContent({ embedded = false } = {}) {

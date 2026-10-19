@@ -1,16 +1,4 @@
-/**
- * App.jsx
- * -------
- * Top-level router. All route paths come from ROUTES constants —
- * never hardcoded strings.
- *
- * Route protection:
- *   <ProtectedRoute roles={[...]}> — redirects to /login if not authenticated
- *                                    or if the user's role is not in the list.
- *
- * Layout wrappers (to be created in components/layout/):
- *   <AppShell> — sidebar + topbar wrapper for authenticated pages
- */
+/** App.jsx */
 
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "./hooks/useAuth";
@@ -20,7 +8,6 @@ import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import { PatientProvider } from "./context/PatientContext";
 
 // ── Lazy-loaded pages ─────────────────────────────────────────────────────────
-// Each role has its own folder; import pages here as they are built.
 import { lazy, Suspense } from "react";
 
 const LoginPage         = lazy(() => import("./pages/auth/LoginPage"));
@@ -75,7 +62,7 @@ const NurseHistory   = lazy(() => import("./pages/nurse/HistoryPage"));
 
 // Front Desk
 const FrontDeskDashboard      = lazy(() => import("./pages/front-desk/DashboardPage"));
-const FrontDeskIntake         = lazy(() => import("./pages/front-desk/PatientIntakePage"));  // sidebar hub: Register Patient + Triage + Emergency Registration tabs
+const FrontDeskIntake         = lazy(() => import("./pages/front-desk/PatientIntakePage"));
 const FrontDeskTriage         = lazy(() => import("./pages/front-desk/TriagePage"));
 const FrontDeskRegisterPatient= lazy(() => import("./pages/front-desk/RegisterPatientPage"));
 const FrontDeskRegisterEmergency = lazy(() => import("./pages/front-desk/EmergencyRegisterPage"));
@@ -86,8 +73,8 @@ const FrontDeskBilling        = lazy(() => import("./pages/front-desk/BillingPag
 const FrontDeskHistory        = lazy(() => import("./pages/front-desk/HistoryPage"));
 const FrontDeskAdmissions     = lazy(() => import("./pages/front-desk/AdmissionsPage"));  // IPD admissions + bed assignment
 const FrontDeskAdmissionDetail = lazy(() => import("./pages/front-desk/AdmissionDetailPage"));  // single admission: edit, discharge, billing
-const FrontDeskBedBoard       = lazy(() => import("./pages/front-desk/BedBoardPage"));  // live Floor->Room->Bed grid + turnover/reserve/transfer actions
-const FrontDeskIpdPatients    = lazy(() => import("./pages/front-desk/IpdPatientsPage"));  // "Current Patients" — everyone currently admitted, searchable
+const FrontDeskBedBoard       = lazy(() => import("./pages/front-desk/BedBoardPage"));
+const FrontDeskIpdPatients    = lazy(() => import("./pages/front-desk/IpdPatientsPage"));
 
 // Lab
 const LabDashboard = lazy(() => import("./pages/lab/DashboardPage"));
@@ -104,7 +91,6 @@ const PharmacistCatalog       = lazy(() => import("./pages/pharmacist/CatalogPag
 const PharmacistDrugFormSetup = lazy(() => import("./pages/pharmacist/DrugFormSetupPage"));
 
 // Shared — generic self-service "My Profile" (photo upload) for any
-// non-doctor staff role. Doctor has its own richer version.
 const SharedMyProfile = lazy(() => import("./pages/shared/MyProfilePage"));
 
 // Patient
@@ -134,28 +120,17 @@ function ProtectedRoute({ children, roles = [] }) {
     return <Navigate to={getDefaultRoute(user)} replace />;
   }
   // key=pathname resets the boundary's error state on navigation — without
-  // it, clicking to a different page after a crash would keep showing the
-  // old page's fallback instead of actually trying to render the new one.
   return <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>;
 }
 
-/**
- * True if `user` is allowed onto a route guarded by `roles`. Handles
- * role="custom" staff (see docs/onboarding_auth_rbac_architecture.md and
- * apps.org.rbac.resolve_acts_as) by also passing if any role in their JWT
- * `acts_as` claim is in the allow-list — e.g. a solo-clinic custom role
- * acting as doctor can reach every doctor-only route.
- */
+/** True if `user` is allowed onto a route guarded by `roles`. Handles */
 function roleAllowed(user, roles) {
   if (roles.includes(user.role)) return true;
   if (user.role !== "custom") return false;
   return (user.acts_as || []).some(r => roles.includes(r));
 }
 
-/** Redirect authenticated user to their role's default page. For a
- *  role="custom" user (acts_as one or more system roles), picks the
- *  highest-priority role present in their acts_as claim — same priority
- *  order used to build their merged sidebar nav in AppShell.jsx. */
+/** Redirect authenticated user to their role's default page. For a */
 function getDefaultRoute(user) {
   const map = {
     [ROLES.PLATFORM_ADMIN]:  ROUTES.PLATFORM.DASHBOARD,
@@ -174,12 +149,7 @@ function getDefaultRoute(user) {
   return map[user.role] || ROUTES.LOGIN;
 }
 
-/** Wraps only the patient-portal page tree in PatientProvider — the shared
- *  "which family member am I viewing" context. Kept as a small per-route
- *  wrapper (rather than a single nested <Route> parent) so the existing flat
- *  <Route path={ROUTES.PATIENT.X}> declarations below don't need to be
- *  restructured into relative nested paths, and no other role's routes are
- *  touched. */
+/** Wraps only the patient-portal page tree in PatientProvider — the shared */
 function PatientRoute({ children }) {
   return (
     <ProtectedRoute roles={[ROLES.PATIENT]}>
@@ -305,11 +275,7 @@ export default function App() {
           {/* Front Desk — also accessible to hospital admin for oversight */}
           <Route path={ROUTES.FRONT_DESK.DASHBOARD}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskDashboard /></ProtectedRoute>} />
-          {/* Patient Intake hub — one page, five tabs (each the exact same
-              content component the standalone routes below still mount),
-              addressed by distinct paths so the sidebar's expandable
-              group can highlight the right one. Bare INTAKE redirects to
-              the Register tab. */}
+          {/* Patient Intake hub — one page, five tabs (each the exact same */}
           <Route path={ROUTES.FRONT_DESK.INTAKE}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><Navigate to={ROUTES.FRONT_DESK.INTAKE_REGISTER} replace /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.INTAKE_REGISTER}
@@ -322,10 +288,7 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIntake /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.INTAKE_REFERRALS}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIntake /></ProtectedRoute>} />
-          {/* Kept mounted for backward compatibility / deep links — no longer
-              linked from the sidebar, which now sends people through
-              Patient Intake (above) instead. Same page components, same
-              APIs; nothing here was removed. */}
+          {/* Kept mounted for backward compatibility / deep links — no longer */}
           <Route path={ROUTES.FRONT_DESK.TRIAGE}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskTriage /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.REGISTER_PATIENT}
@@ -381,8 +344,7 @@ export default function App() {
           <Route path={ROUTES.PHARMACIST.MY_PROFILE}
             element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><SharedMyProfile /></ProtectedRoute>} />
 
-          {/* Patient Portal — wrapped in PatientProvider so "which family
-              member am I viewing" is shared across every page below. */}
+          {/* Patient Portal — wrapped in PatientProvider so "which family */}
           <Route path={ROUTES.PATIENT.DASHBOARD}
             element={<PatientRoute><PatientDashboard /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.APPOINTMENTS}

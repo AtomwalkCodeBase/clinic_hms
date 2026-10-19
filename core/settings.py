@@ -1,20 +1,24 @@
-"""Base settings for Atomwalk Healthcare Platform."""
+"""Settings for Atomwalk Healthcare Platform: ENVIRONMENT=development (default) or production; manage.py test adds a test database and in-memory storage."""
 
 import os
+import sys
 from pathlib import Path
 from datetime import timedelta
 from decouple import config
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 
-DEBUG = config("DEBUG", default=False, cast=bool)
+ENVIRONMENT = config("ENVIRONMENT", default="development")
+PRODUCTION = ENVIRONMENT == "production"
+TESTING = sys.argv[1:2] == ["test"]
+DEBUG = not PRODUCTION
 
 if DEBUG:
     SECRET_KEY = config("SECRET_KEY", default="dev-only-insecure-secret-key")
-    ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="*").split(",")
+    ALLOWED_HOSTS = ["*"]
 else:
     SECRET_KEY = config("SECRET_KEY")
-    ALLOWED_HOSTS = config("ALLOWED_HOSTS").split(",")
+    ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="app.atomwalk.com").split(",")
 
 FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 
@@ -283,3 +287,59 @@ class LicenseTier:
     HOSPITAL = "hospital"
 
 LICENSE_TIER = LicenseTier
+
+if PRODUCTION:
+    SENTRY_DSN = config("SENTRY_DSN", default="")
+    if SENTRY_DSN:
+        import sentry_sdk
+        from sentry_sdk.integrations.django import DjangoIntegration
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            integrations=[DjangoIntegration()],
+            traces_sample_rate=config("SENTRY_TRACES_SAMPLE_RATE", default=0.1, cast=float),
+            send_default_pii=False,
+            environment=ENVIRONMENT,
+        )
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = config("SECURE_SSL_REDIRECT", default=True, cast=bool)
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    CSRF_TRUSTED_ORIGINS = [o for o in config("CSRF_TRUSTED_ORIGINS", default="").split(",") if o]
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "filters": {"request_context": {"()": "core.utils.logging_context.RequestContextFilter"}},
+        "formatters": {
+            "json": {
+                "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
+                "format": "%(asctime)s %(levelname)s %(name)s %(request_id)s %(hospital_id)s %(user_id)s %(message)s",
+            }
+        },
+        "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "json", "filters": ["request_context"]}},
+        "root": {"handlers": ["console"], "level": "WARNING"},
+        "loggers": {"apps": {"handlers": ["console"], "level": "INFO", "propagate": False}},
+    }
+else:
+    CORS_ALLOW_ALL_ORIGINS = True
+    DATABASES["default"]["CONN_MAX_AGE"] = 0
+    HOSPITAL_DB_CONFIG_TEMPLATE["CONN_MAX_AGE"] = 0
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "handlers": {"console": {"class": "logging.StreamHandler"}},
+        "loggers": {
+            "django.db.backends": {"handlers": ["console"], "level": "DEBUG" if DEBUG else "WARNING"},
+            "apps": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        },
+    }
+
+if TESTING:
+    DATABASES["hospital_test"] = {
+        **HOSPITAL_DB_CONFIG_TEMPLATE,
+        "NAME": "aw_hospital_test",
+        "TEST": {"NAME": "test_aw_hospital_test"},
+    }
+    DEFAULT_FILE_STORAGE = "django.core.files.storage.InMemoryStorage"

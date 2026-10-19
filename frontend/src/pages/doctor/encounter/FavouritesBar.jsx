@@ -6,8 +6,6 @@ import { encounterApi } from "../../../api";
 import { miniBtn } from "./styles";
 
 // Doctor's saved drug bundles (apps.opd.PrescriptionFavourite) — one click
-// re-adds every item in a bundle via the same POST DrugForm's "+ Add Drug"
-// uses, or the current Rx can be saved as a new bundle for next time.
 export function FavouritesBar({ currentItems, onApply, disabled }) {
   const { toastSuccess, toastApiError } = useToast();
   const { data: favData, refetch: refetchFavs } = useApi(API_ENDPOINTS.OPD.FAVOURITES);

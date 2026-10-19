@@ -3,13 +3,6 @@ import { useState } from "react";
 import { encounterApi } from "../../../api";
 
 // ─── Book Follow-up modal ─── doctor picks exactly one path for the NEXT
-// visit: hand it to a nurse to actually book, or just send the patient a
-// reminder and let them / front desk book it later (existing behaviour).
-// Available even after Sign & Close — see FollowUpActionView's docstring on
-// why this is a separate endpoint from the general SOAP-notes PATCH.
-// A button + modal (mirrors AdmissionReferralModal) — NOT a tab. The
-// "Follow-up" heading on the consultation itself is handled separately by
-// isFollowUp further down; this modal is only for planning the NEXT visit.
 export function FollowUpModal({ enc, encounterId, refetch, onClose }) {
   const { toastSuccess, toastApiError } = useToast();
   const [mode, setMode] = useState(enc.followup_ask_nurse ? "nurse" : "reminder");

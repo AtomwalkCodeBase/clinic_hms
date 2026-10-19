@@ -1,9 +1,4 @@
-/**
- * pages/auth/SetupPasswordPage.jsx
- * ----------------------------------
- * Staff use this page (via invite link) to set their own password.
- * Token is passed as a URL query param: /setup-password?token=<invite_token>
- */
+/** pages/auth/SetupPasswordPage.jsx */
 
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";

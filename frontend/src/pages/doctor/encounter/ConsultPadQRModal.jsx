@@ -1,9 +1,4 @@
-/**
- * Modal shown when the doctor clicks "Handwrite (QR)" on the SOAP card.
- * Shows the patient's QR for this consultation's handwriting session — scan
- * it, write across the Prescription and Internal Note tabs (it autosaves and
- * survives closing the tab), then back here press "Load handwritten note".
- */
+/** Modal shown when the doctor clicks "Handwrite (QR)" on the SOAP card. */
 export function ConsultPadQRModal({ data, patientName, onClose }) {
   return (
     <div

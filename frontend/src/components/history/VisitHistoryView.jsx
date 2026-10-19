@@ -1,21 +1,4 @@
-/**
- * components/history/VisitHistoryView.jsx
- * ------------------------------------------
- * Shared searchable visit-history table, used by the doctor, nurse, and
- * front-desk "History" pages. Not date-limited to today — search by patient
- * name / UHID / AWPID, optionally narrowed to a date range.
- *
- * Doctors see only their own past patients (same scoping as their live
- * queue); front desk and nurse see the whole hospital. That scoping is
- * enforced server-side in AppointmentHistoryView — this component just
- * renders whatever the backend returns.
- *
- * Props:
- *   role           — "doctor" | "nurse" | "front-desk" — controls the Action column.
- *   initialPatient — optional pre-fill for the patient search box (e.g. when
- *                    arriving here from "View" on the Patients page, jumping
- *                    straight to one patient's visit history).
- */
+/** components/history/VisitHistoryView.jsx */
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { FolderOpen, Filter, Search, X, FileText, Download } from "lucide-react";
@@ -28,12 +11,7 @@ import { APPOINTMENT_STATUS_BADGE as BADGE } from "../../constants/badges";
 import { todayLocal } from "../../utils/dates";
 
 
-
 // Today / Upcoming / Past — the flat, date-descending list this used to be
-// made it impossible to tell a scheduled visit next week from one that
-// already happened, since both just sort by date. Bucketing by
-// scheduled_date vs. today fixes that without touching how the backend
-// paginates (each page's rows just get sorted into these three groups).
 function bucketByDate(rows) {
   const today = todayLocal();
   const buckets = { today: [], upcoming: [], past: [] };
@@ -137,8 +115,6 @@ function HistoryTable({ rows, role, navigate, docActions, tableClass }) {
 export default function VisitHistoryView({ role, initialPatient = "" }) {
   const navigate = useNavigate();
   // Front desk gets the new fdc- "command centre" panel/table styling;
-  // doctor and nurse (the other two callers of this shared view) keep the
-  // existing card/data-table classes untouched.
   const isFrontDesk = role === "front-desk";
   const panelClass = isFrontDesk ? "fdc-panel" : "card";
   const tableClass = isFrontDesk ? "fdc-table" : "data-table";
@@ -187,9 +163,6 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
   }
 
   // Open a stored PDF SharedDocument in a new tab.
-  // window.open() must be synchronous in the click handler or the popup is
-  // blocked; the tab is pointed at the file once it loads. Responses are
-  // enveloped { success, data: {...} } — unwrap one level.
   async function openDoc(docId, url) {
     const win = window.open("", "_blank");
     try {
@@ -204,7 +177,6 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
   }
 
   // Save a stored PDF to disk (browser "Save As"). ?download=1 makes the
-  // backend hand back an attachment-disposition URL / data URI.
   async function downloadDoc(docId, url) {
     try {
       const res = await apiClient.get(url || API_ENDPOINTS.PATIENTS.DOCUMENT(docId), { params: { download: 1 } });
@@ -224,7 +196,6 @@ export default function VisitHistoryView({ role, initialPatient = "" }) {
     background: "var(--color-primary-light)",
   };
   // `url` overrides where the file is fetched from: the doctor's internal note is not a patient document, so it has
-  // its own endpoint (OPD.ENCOUNTER_INTERNAL_NOTE) instead of PATIENTS.DOCUMENT.
   const docActions = (docId, tag, url) => (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
       {tag && <span style={{ color: "var(--color-text-muted)" }}>({tag})</span>}

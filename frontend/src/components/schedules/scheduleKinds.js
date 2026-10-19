@@ -1,10 +1,4 @@
-/**
- * Vaccination and milestone schedules are the same screens with different fields and wording, so the pages in this folder
- * (HospitalSchedulePage, PlatformTemplatesPage, RulesEditor, RuleRow) take one of these and nothing else differs.
- *   nameKey / extraKey  the rule field holding the vaccine or milestone name, and the kind-specific one (dose or domain)
- *   emptyRule(sort)     a blank rule row    ruleError(rule)  why a rule can't be saved yet, or null
- *   rulePayload(rule)   what the API takes  endpoints        the API URLs    text  every sentence the screens show
- */
+/** Vaccination and milestone schedules are the same screens with different fields and wording, so the pages in this folder */
 import API_ENDPOINTS from "../../config/api.config";
 
 const newKey = () => `new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;

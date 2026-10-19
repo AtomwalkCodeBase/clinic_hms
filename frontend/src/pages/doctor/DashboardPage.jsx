@@ -1,9 +1,4 @@
-/**
- * pages/doctor/DashboardPage.jsx
- * --------------------------------
- * Doctor's home view — premium theme.
- * Serif greeting + dark hero card with queue stats + today's schedule.
- */
+/** pages/doctor/DashboardPage.jsx */
 import { useState, useCallback } from "react";
 import { useNavigate }   from "react-router-dom";
 import { CalendarClock, ChevronDown, ChevronUp } from "lucide-react";
@@ -83,13 +78,6 @@ export default function DoctorDashboardPage() {
   const [starting, setStarting] = useState(null);
 
   // ── External-referral countersign queue ──────────────────────────────
-  // PendingReferralsListView (apps/ipd/views.py) scopes this same endpoint
-  // to a doctor's own countersign queue automatically — referrals a
-  // colleague recommended OR front desk logged from an outside letter
-  // (AdmissionReferral.front_desk_logged), still awaiting one of this
-  // hospital's own doctors' accept. Only rendered when there's something
-  // to act on, so most doctors never see an empty IPD card on their OPD
-  // dashboard.
   const { data: extReferralsData, refetch: refetchExtReferrals } = useApi(API_ENDPOINTS.IPD.REFERRALS, { pollMs: 45000 });
   const extReferrals = extReferralsData || [];
   const [accepting, setAccepting] = useState(null);
@@ -128,7 +116,6 @@ export default function DoctorDashboardPage() {
   }, [navigate, user, toastApiError]);
 
   // page_size: 100 — this dashboard only needs today's totals, not a paged
-  // view, so request the max page size rather than paginating a stat card.
   const { data: apptData, isLoading } = useApi(API_ENDPOINTS.OPD.APPOINTMENTS, {
     params: { date: TODAY, page_size: 100, ...(hasMultiple && activeBranchId ? { branch_id: activeBranchId } : {}) },
   });
@@ -138,9 +125,6 @@ export default function DoctorDashboardPage() {
   const weekStats = statsData?.results || [];
 
   // ── Upcoming schedule — everything from tomorrow onward, not just today.
-  // Collapsed by default to the first 5 (view more/less), with full
-  // pagination once expanded — the doctor's whole future booking list
-  // shouldn't dump onto the dashboard by default.
   const [upcomingExpanded, setUpcomingExpanded] = useState(false);
   const [upcomingPage, setUpcomingPage] = useState(1);
   const [upcomingPageSize, setUpcomingPageSize] = useState(5);
@@ -165,7 +149,6 @@ export default function DoctorDashboardPage() {
 
   const appointments = apptData?.results || [];
   // Prefer server-computed whole-day counts (accurate even beyond 100/day);
-  // fall back to counting the fetched page if that key isn't present.
   const serverCounts = apptData?.status_counts;
   const waiting     = serverCounts ? serverCounts.waiting     : appointments.filter(a => ["waiting", "scheduled"].includes(a.status)).length;
   const vitalsReady = serverCounts ? serverCounts.vitals_done : appointments.filter(a => a.status === "vitals_done").length;

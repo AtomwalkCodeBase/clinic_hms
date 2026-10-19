@@ -1,13 +1,4 @@
-/**
- * pages/patient/DashboardPage.jsx
- * ---------------------------------
- * Patient portal home — search-first landing. One box to search hospitals,
- * doctors, or a reason for visit ("cardiologist", "eye doctor", "fever") —
- * results come back from every active hospital, not just one the patient
- * has to pick first. Quick-access tiles below cover the rest (browse all
- * hospitals, appointments, records). Bookings summary stays underneath when
- * the patient isn't actively searching.
- */
+/** pages/patient/DashboardPage.jsx */
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Building2, Calendar, ClipboardList, Pill, FlaskConical, Search, SlidersHorizontal, X, MapPin } from "lucide-react";
@@ -21,7 +12,6 @@ import API_ENDPOINTS   from "../../config/api.config";
 import ROUTES          from "../../config/routes.config";
 import { PORTAL_APPOINTMENT_BADGE as BADGE } from "../../constants/badges";
 import { todayLocal } from "../../utils/dates";
-
 
 
 // Map chip class to accent colors for left border + tint
@@ -108,8 +98,6 @@ export default function PatientDashboardPage() {
   const { data, isLoading } = useApi(API_ENDPOINTS.PORTAL.MY_BOOKINGS, { pollMs: 20000 });
   const bookings = data?.results || [];
   // "Upcoming" = still active (not done/cancelled/no_show) AND its day hasn't
-  // already passed — an appointment the hospital never closed out shouldn't
-  // keep counting as upcoming forever once its date is in the past.
   const todayStr = todayLocal();
   const upcoming = bookings.filter(b =>
     !["done", "cancelled", "no_show"].includes(b.status) && b.date >= todayStr
@@ -126,8 +114,6 @@ export default function PatientDashboardPage() {
   const [minExperience, setMinExperience] = useState("");
   const [maxFee, setMaxFee] = useState("");
   // Filters used to be tucked behind a small text link most patients never
-  // noticed — the panel now starts open so it's actually seen, with a
-  // toggle only to collapse it out of the way once they know it's there.
   const [showFilters, setShowFilters] = useState(true);
   const [results, setResults] = useState(null); // { hospitals, doctors } once searched
   const [searching, setSearching] = useState(false);
@@ -309,9 +295,7 @@ export default function PatientDashboardPage() {
             )}
           </div>
 
-          {/* Hero stats — glass chips derived from the active theme's hero
-              text/accent colors (not fixed hues), so they always sit
-              correctly on whatever the hero gradient is this theme. */}
+          {/* Hero stats — glass chips derived from the active theme's hero */}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 24 }}>
             <div style={{
               background: "color-mix(in srgb, var(--color-hero-text) 14%, transparent)", borderRadius: 12, padding: "12px 20px", minWidth: 140,

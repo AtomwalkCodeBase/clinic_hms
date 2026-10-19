@@ -1,10 +1,4 @@
-/**
- * pages/pharmacist/DashboardPage.jsx
- * ------------------------------------
- * Pharmacist landing page: stat cards up top, then two live preview panels
- * (prescriptions actually waiting, drugs actually low) so the page has real
- * work to jump into instead of three numbers and nothing else.
- */
+/** pages/pharmacist/DashboardPage.jsx */
 import { useNavigate } from "react-router-dom";
 import { ClipboardList, PackageSearch, AlertTriangle, ArrowRight } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
@@ -63,10 +57,6 @@ export default function DashboardPage() {
   const navigate = useNavigate();
 
   // status: "active" — matches the pharmacist Prescriptions page's default
-  // "Pending" tab and the backend's default filter (Prescription.STATUS_ACTIVE).
-  // Was previously "finalized", a status value that doesn't exist on the
-  // model, so this always silently returned zero rows regardless of what
-  // was actually waiting in the queue.
   const { data: rxData, isLoading: rxLoading } = useApi(API_ENDPOINTS.PHARMACY.PRESCRIPTIONS, { params: { status: "active", page_size: 5 } });
   const { data: stockData, isLoading: stockLoading } = useApi(API_ENDPOINTS.PHARMACY.STOCK, { params: { page_size: 1 } });
   const { data: lowStockData, isLoading: lowLoading } = useApi(API_ENDPOINTS.PHARMACY.STOCK, { params: { low_only: 1, page_size: 5 } });

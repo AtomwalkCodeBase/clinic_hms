@@ -1,10 +1,4 @@
-/**
- * pages/platform-admin/UsersPage.jsx
- * --------------------------------------
- * Global cross-hospital staff directory — every staff member at every
- * hospital, searchable/filterable, with disable-account and reset-password
- * actions. Backed by PlatformUserListView, which loops each hospital DB.
- */
+/** pages/platform-admin/UsersPage.jsx */
 import { useState, useEffect, useCallback } from "react";
 import { Ban, CheckCircle2, KeyRound } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";

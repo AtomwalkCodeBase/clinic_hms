@@ -71,10 +71,7 @@ export function DictateButton({ onTranscript, disabled }) {
         {looks.icon && <looks.icon size={11} />}
         {looks.label}
       </button>
-      {/* Upload-audio alternative — lets you test the dictation pipeline with
-          a pre-recorded file instead of a live mic (e.g. no mic on this
-          machine, or you want a repeatable sample clip). Goes through the
-          exact same transcribe endpoint as live recording. */}
+      {/* Upload-audio alternative — lets you test the dictation pipeline with */}
       <button type="button" title="Upload an audio file instead of recording live"
         onClick={() => fileInputRef.current?.click()}
         disabled={disabled || state !== "idle"}

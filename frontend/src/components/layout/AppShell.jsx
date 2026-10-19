@@ -1,13 +1,4 @@
-/**
- * components/layout/AppShell.jsx
- * --------------------------------
- * Authenticated page shell — sidebar with grouped submenus + topbar + content.
- *
- * Nav item types:
- *   { type: "link",    label, icon, to }                       — direct NavLink
- *   { type: "group",   label, icon, children: [{label, to}] }  — expandable submenu
- *   { type: "section", label }                                  — non-clickable divider label
- */
+/** components/layout/AppShell.jsx */
 
 import { useState, useEffect, useContext, useRef } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
@@ -19,8 +10,6 @@ import APP_CONFIG    from "../../config/app.config";
 import { PatientContext } from "../../context/PatientContext";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 // New Front Desk sidebar icon set (Lucide) — kept separate from the
-// hand-rolled path-based ICONS map below (used by every other role) rather
-// than redrawing these seven shapes as single-path SVGs. See LUCIDE_ICONS.
 import {
   LayoutDashboard, UserRoundPlus, CalendarDays, ListChecks,
   FileClock, Bed as BedIconLucide, ReceiptIndianRupee, UserRound,
@@ -84,9 +73,6 @@ const ICONS = {
 };
 
 // Front Desk's 8-item sidebar (see NAV_BY_ROLE below) uses real Lucide
-// components instead of the single-path ICONS convention above — checked
-// first in SidebarLink/SidebarGroup, falling back to ICONS[iconKey] for
-// every other role's nav, which is untouched.
 const LUCIDE_ICONS = {
   fd_dashboard:      LayoutDashboard,
   fd_search:         SearchIconLucide,
@@ -103,9 +89,6 @@ const LUCIDE_ICONS = {
 };
 
 // ── Hospital monogram (fallback logo) ────────────────────────────────────────
-// Every hospital gets its own deterministic colored monogram (initials + a
-// color derived from its own name/id) until it uploads a real logo file —
-// distinct per hospital, unlike a single shared placeholder icon.
 const MONOGRAM_COLORS = ["#1B5E43", "#0F766E", "#7C3AED", "#B45309", "#BE123C", "#0369A1", "#4D7C0F"];
 const MONOGRAM_STOPWORDS = new Set(["hospital", "clinic", "multispecialty", "medical", "center", "centre", "care", "health", "the", "and"]);
 
@@ -136,8 +119,6 @@ function HospitalMonogram({ name, hospitalId }) {
 }
 
 // Real uploaded hospital logo (Hospital.logo, set via hospital-admin Settings)
-// takes over from the monogram the moment one exists — same 38px badge
-// footprint so the topbar layout doesn't shift either way.
 function HospitalBadge({ logo, name, hospitalId }) {
   if (!logo) return <HospitalMonogram name={name} hospitalId={hospitalId} />;
   return (
@@ -188,30 +169,6 @@ const NAV_BY_ROLE = {
     { type: "link",    label: "Patients",     iconKey: "patient",   to: ROUTES.DOCTOR.PATIENTS },
     { type: "link",    label: "History",      iconKey: "history",   to: ROUTES.DOCTOR.HISTORY },
     // NOTE: no separate "Laboratory" or "Prescriptions" links here — both
-    // used to point at the lab-tech's and pharmacist's own working-queue
-    // pages (ROUTES.LAB.REQUESTS/REPORTS, ROUTES.PHARMACIST.PRESCRIPTIONS),
-    // which are role-gated to lab_tech/pharmacist (+ hospital_admin) only in
-    // App.jsx. A doctor clicking either link got silently bounced back to
-    // their dashboard by ProtectedRoute — and even with access, those pages
-    // are lab-tech/pharmacist WRITE queues (mark collected, upload result,
-    // dispense), not something a doctor should be driving. Doctors already
-    // see lab results and write prescriptions in context, per-patient,
-    // inside EncounterPage/HistoryPage — that's the correct doctor-facing
-    // surface for both, so the dead links were removed rather than granted
-    // write access to another role's queue.
-    // A doctor-facing "Appointments" link used to sit here pointing at
-    // ROUTES.FRONT_DESK.APPOINTMENTS — the exact same copy-paste mistake as
-    // the Laboratory/Prescriptions links documented above (another role's
-    // page, role-gated to front_desk only, so doctors got silently bounced
-    // back to their dashboard). "My Queue" already covers a doctor's whole
-    // schedule (today + upcoming, with filters), so removed rather than
-    // pointed at a real page — there's nothing a doctor-facing Appointments
-    // page would show that Queue doesn't already.
-    // Added directly in response to feedback that "Recommend Admission"
-    // (a button inside an active encounter — see EncounterPage.jsx) was
-    // hard to find and had no follow-up view: this is a persistent,
-    // findable place for a doctor's IPD work, distinct from the OPD
-    // section above.
     { type: "section", label: "IPD" },
     { type: "link",    label: "IPD Referrals", iconKey: "admission", to: ROUTES.DOCTOR.IPD_REFERRALS },
     { type: "link",    label: "My Inpatients", iconKey: "vitals",    to: ROUTES.DOCTOR.IPD_PATIENTS },
@@ -228,20 +185,6 @@ const NAV_BY_ROLE = {
   ],
 
   // Redesigned per direct feedback: the old "Patient Intake" nested dropdown
-  // (Register/Triage/Emergency/OPD Booking/Referral Queue all buried one
-  // click deep, several of them duplicating a top-level link that already
-  // existed — e.g. "OPD Booking" and "Appointments" were literally the same
-  // page) made the module hard to scan and easy to get lost in. Flat
-  // sections (visible at all times, no expand/collapse) instead of a
-  // dropdown, split cleanly along OPD vs IPD — the same split used
-  // throughout the rest of this app's architecture docs — plus a dedicated
-  // "Current Patients" entry so a front-desk user can always find someone
-  // who was just admitted without hunting through tabs. "Triage" is gone
-  // entirely: it was never clinical triage, just a doctor-availability
-  // check before booking — TriagePage.jsx/its route still exist for any
-  // old bookmark/deep link, they're just not surfaced as their own concept
-  // here anymore (Appointments already shows real per-doctor slot
-  // availability, which is the same information).
   [ROLES.FRONT_DESK]: [
     { type: "link",    label: "Dashboard",             iconKey: "fd_dashboard",         to: ROUTES.FRONT_DESK.DASHBOARD },
 
@@ -317,22 +260,9 @@ function isGroupActive(children, pathname) {
 }
 
 // Priority order for picking which single role's Dashboard link leads a
-// custom-role user's sidebar — hospital_admin's is the fullest overview, so
-// it wins if present; otherwise whichever operational role comes first.
-// Shared with App.jsx (default-route selection) so both agree on the same
-// "primary" hat — see constants/roles.js.
 const ACTS_AS_NAV_PRIORITY = ACTS_AS_PRIORITY;
 
-/**
- * Builds the sidebar for a role="custom" staff member (e.g. a solo-clinic
- * role acting as doctor+nurse+front_desk) by unioning each acts_as role's
- * own nav — reusing every page already built for that role rather than
- * needing dedicated custom-role pages. De-dupes by route so a link/child
- * shared across roles (rare, but "My Profile" style routes can collide)
- * only appears once; only the first role keeps its own "Dashboard" link
- * and un-namespaced section headers, later roles get a labeled section so
- * it's clear which hat each group of links belongs to.
- */
+/** Builds the sidebar for a role="custom" staff member (e.g. a solo-clinic */
 function buildCustomNav(actsAs) {
   const roles = ACTS_AS_NAV_PRIORITY.filter(r => (actsAs || []).includes(r));
   if (roles.length === 0) return [];
@@ -367,7 +297,6 @@ function buildCustomNav(actsAs) {
 }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
-// Dark-sidebar palette
 const SB = {
   text:       "var(--color-hero-muted)",
   textActive: "var(--color-hero-text)",
@@ -455,11 +384,6 @@ function SidebarGroup({ label, iconKey, children, collapsed, pathname }) {
 }
 
 // ── Family Members nav list (patient portal only) ───────────────────────────
-// Renders each linked family member as a clickable nav item — selecting one
-// sets the shared "which patient am I viewing" context and jumps to Records
-// (no separate per-member routes needed). Falls back to nothing if this
-// AppShell instance has no PatientProvider ancestor (i.e. any non-patient
-// role), so it's safe to reference from the shared NAV_BY_ROLE renderer.
 function FamilyNavList({ collapsed }) {
   const ctx = useContext(PatientContext);
   const navigate = useNavigate();
@@ -508,8 +432,6 @@ function FamilyNavList({ collapsed }) {
 }
 
 // ── "Viewing: <name>" indicator (patient portal only) ───────────────────────
-// Always-visible reminder of whose records are currently on screen — with a
-// one-click way back to self when a dependent is selected.
 function ViewingIndicator({ collapsed }) {
   const ctx = useContext(PatientContext);
   if (!ctx || collapsed) return null;
@@ -562,9 +484,6 @@ export function AppShell({ children }) {
   const topSearchRef = useRef(null);
 
   // role="custom" staff (a hospital-defined Role — see apps/org/rbac.py)
-  // get the union of every role their acts_as claim includes, e.g. a
-  // solo-clinic role acting as doctor+nurse+front_desk sees all three
-  // roles' nav merged into one sidebar. See buildCustomNav() above.
   const navItems = user?.role === "custom"
     ? buildCustomNav(user?.acts_as)
     : (NAV_BY_ROLE[user?.role] || []);
@@ -579,19 +498,13 @@ export function AppShell({ children }) {
   const initials = (user?.full_name || user?.email || "U")[0].toUpperCase();
   const displayName = user?.full_name || user?.email?.split("@")[0] || "User";
   // role="custom" has no fixed label of its own — the JWT carries the
-  // actual Role name (custom_role_name) precisely so this doesn't have to
-  // fall back to a generic placeholder. See StaffLoginView.
   const roleLabel = user?.role === "custom"
     ? (user?.custom_role_name || "Custom Role")
     : (ROLE_LABELS[user?.role] || "Staff");
   // Front Desk gets a light, search-forward topbar (see the reference
-  // design it was built to match) — every other role keeps the existing
-  // dark hero-gradient topbar untouched below.
   const isFrontDesk = user?.role === ROLES.FRONT_DESK;
 
   // Ctrl/Cmd+K focuses the topbar search, matching the visible "Ctrl K"
-  // hint next to it (front desk only — a no-op keybinding with a visible
-  // hint would be worse than no hint at all).
   useEffect(() => {
     if (!isFrontDesk) return;
     function onKeyDown(e) {
@@ -625,10 +538,7 @@ export function AppShell({ children }) {
         position: "relative",
       }}>
 
-        {/* Brand — plain, no tinted/bordered chip around it (that just
-            boxed in and shrank the logo) — the white logo card is enough
-            visual weight of its own sitting straight on the sidebar
-            gradient. Taller row than before so the logo actually reads. */}
+        {/* Brand — plain, no tinted/bordered chip around it (that just */}
         <div style={{
           height: 76, display: "flex", alignItems: "center",
           padding: collapsed ? "0 11px" : "0 16px",
@@ -736,12 +646,7 @@ export function AppShell({ children }) {
       {/* ── Main area ────────────────────────────────────────────────────── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
 
-        {/* Topbar — same height as the sidebar's brand row above, so the
-            two sit flush as one continuous band instead of a jagged
-            skyline where the sidebar logo block used to be taller.
-            Front Desk gets a distinct light, search-forward topbar (see
-            isFrontDesk above); every other role keeps the original dark
-            hero-gradient bar in the else branch below, byte-for-byte. */}
+        {/* Topbar — same height as the sidebar's brand row above, so the */}
         {isFrontDesk ? (
           <header className="fdc-topbar" style={{
             height: 76, flexShrink: 0,
@@ -768,9 +673,7 @@ export function AppShell({ children }) {
             </form>
 
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-              {/* Static bell — no notifications backend exists for staff yet
-                  (only the patient portal has one), so this deliberately
-                  carries no invented unread count. */}
+              {/* Static bell — no notifications backend exists for staff yet */}
               <button type="button" className="fdc-icon-btn" title="Notifications">
                 <BellIconLucide size={17} />
               </button>
@@ -814,12 +717,7 @@ export function AppShell({ children }) {
           padding: "0 24px",
           position: "relative", zIndex: 2,
         }}>
-          {/* Left: hospital logo + clinic name — driven by the logged-in staff
-              member's own hospital (from user.hospital_name/.logo, fetched
-              via /me/), not a fixed hospital. Falls back to a monogram
-              derived from the hospital's own name/id until it uploads a
-              real logo via Settings (see HospitalLogoUpload.jsx), rather
-              than all hospitals sharing one hardcoded icon. */}
+          {/* Left: hospital logo + clinic name — driven by the logged-in staff */}
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {user?.db_name ? (
               <>
@@ -854,10 +752,7 @@ export function AppShell({ children }) {
             )}
           </div>
 
-          {/* Right: email + theme switcher — the user's own avatar/name/role
-              already lives in one place, the sidebar's bottom chip (which
-              also carries Sign Out/Collapse right next to it), so it isn't
-              repeated here too. */}
+          {/* Right: email + theme switcher — the user's own avatar/name/role */}
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{
               fontSize: 12, color: "var(--color-hero-muted)",

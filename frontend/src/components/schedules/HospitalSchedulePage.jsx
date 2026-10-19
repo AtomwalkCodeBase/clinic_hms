@@ -1,14 +1,4 @@
-/**
- * Hospital admin: configure the vaccination or milestone roadmap this hospital's staff and patient portal build against.
- * One page for both kinds (scheduleKinds.js); the API is apps/hospital_patients/pediatrics/schedule_views.py:
- *   GET   endpoints.schedules       -> { own_schedules, templates, active_schedule_id }
- *   POST  endpoints.schedules       -> clone {template_id, name?} into an owned schedule, which becomes the active one
- *   GET   endpoints.schedule(id)    -> schedule + rules[]
- *   PATCH endpoints.schedule(id)    -> { name?, description?, active?, rules?: [{id?, ..., _delete?}] }
- *   POST  endpoints.activate(id)    -> make it this hospital's active schedule
- * A hospital's active schedule is either a system template (until it clones one) or one schedule it owns, so the switcher
- * only shows when it owns more than one.
- */
+/** Hospital admin: configure the vaccination or milestone roadmap this hospital's staff and patient portal build against. */
 import { useState, useEffect, useCallback } from "react";
 import { AppShell }  from "../layout/AppShell";
 import { PageShell } from "../common/PageShell";

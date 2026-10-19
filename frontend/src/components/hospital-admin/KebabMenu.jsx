@@ -1,11 +1,4 @@
-/**
- * components/hospital-admin/KebabMenu.jsx
- * -----------------------------------------
- * Small "⋮" icon button that opens a floating action menu — shared by
- * RoomsPage's Rooms/Beds tables and DropdownListEditor's compact variant
- * (Room Types) so all three get the same look/behavior instead of three
- * one-off implementations.
- */
+/** components/hospital-admin/KebabMenu.jsx */
 import { useState, useRef, useEffect } from "react";
 import { MoreVertical } from "lucide-react";
 

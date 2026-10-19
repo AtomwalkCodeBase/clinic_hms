@@ -1,15 +1,4 @@
-/**
- * pages/patient/CorrectionRequestsPage.jsx
- * -------------------------------------------
- * DPDP Act 2023, Article 13 — patient right to correction. Lets a patient
- * (or a linked family member, via PatientContext) ask a hospital to fix
- * something in their record, and shows the status of past requests across
- * every hospital they've visited.
- *
- * resource_id is optional on purpose — a patient describing "my address is
- * wrong" has no way to know an internal database row id; the reviewing
- * staff member resolves the exact record (see apps/compliance/views.py).
- */
+/** pages/patient/CorrectionRequestsPage.jsx */
 import { useState } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -58,8 +47,6 @@ export default function CorrectionRequestsPage() {
     params: selectedPatient?.awpid ? { patient_awpid: selectedPatient.awpid } : {},
   });
   // COMPLIANCE.PORTAL_AMENDMENTS already scopes to patient_awpid server-side
-  // (see apps/compliance/views.py::PortalRecordAmendmentView.get), so no
-  // extra client-side filtering is needed here.
   const requests = data?.results || [];
 
   const [form, setForm] = useState({

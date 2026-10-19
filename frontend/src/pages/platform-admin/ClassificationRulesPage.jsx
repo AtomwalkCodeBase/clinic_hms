@@ -1,16 +1,4 @@
-/**
- * pages/platform-admin/ClassificationRulesPage.jsx
- * ------------------------------------------------
- * Platform admin: how uploaded documents were classified (apps/records) — every document with its type, who decided
- * it (the rule engine or a person), its score and its status; a person can correct a type here, and "Re-run" applies
- * today's rules to documents already read.
- *
- * The document types and their keywords are no longer edited on a screen: they are fixed in code
- * (apps/records/classification.py), so changing a keyword is a code change.
- *
- * Backend (apps/platform_admin/classification_rule_views.py):
- *   GET /platform/records/report/   PATCH /platform/records/report/<id>/   POST /platform/records/reclassify/
- */
+/** pages/platform-admin/ClassificationRulesPage.jsx */
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";

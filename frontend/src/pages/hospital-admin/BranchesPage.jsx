@@ -1,8 +1,4 @@
-/**
- * pages/hospital-admin/BranchesPage.jsx
- * ----------------------------------------
- * Hospital admin: create and manage branches + departments.
- */
+/** pages/hospital-admin/BranchesPage.jsx */
 
 import { useState, useEffect, useCallback } from "react";
 import { AppShell }  from "../../components/layout/AppShell";

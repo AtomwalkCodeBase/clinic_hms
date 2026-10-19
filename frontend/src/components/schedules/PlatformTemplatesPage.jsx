@@ -1,12 +1,4 @@
-/**
- * Platform admin: manage the system-level schedule templates every hospital admin can clone from. One page for both kinds
- * (scheduleKinds.js); the API is apps/hospital_patients/pediatrics/schedule_views.py:
- *   GET    endpoints.templates       -> [ {id, name, description, active, rule_count, hospitals_using, ...} ]
- *   POST   endpoints.templates       -> create {name, description?, active?, rules?}
- *   GET    endpoints.template(id)    -> template + rules[]
- *   PATCH  endpoints.template(id)    -> {name?, description?, active?, rules?: [{id?, ..., _delete?}]}
- *   DELETE endpoints.template(id)    -> refused (400) while any hospital has it as its active schedule
- */
+/** Platform admin: manage the system-level schedule templates every hospital admin can clone from. One page for both kinds */
 import { useState, useEffect, useCallback } from "react";
 import { AppShell }  from "../layout/AppShell";
 import { PageShell } from "../common/PageShell";

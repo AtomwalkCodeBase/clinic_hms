@@ -1,12 +1,4 @@
-/**
- * pages/patient/HospitalDoctorsPage.jsx
- * ----------------------------------------
- * Step 2 of booking: doctors at the chosen hospital, as cards. Same
- * search-box + specialty-dropdown pattern as HospitalsPage, but scoped to
- * this one hospital's already-fetched doctor list — filtered client-side
- * (no need to hit the cross-hospital /portal/search/ endpoint for a list
- * this small).
- */
+/** pages/patient/HospitalDoctorsPage.jsx */
 import { useState, useMemo } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { Building2, MapPin, ShieldCheck, Search, SlidersHorizontal, X } from "lucide-react";

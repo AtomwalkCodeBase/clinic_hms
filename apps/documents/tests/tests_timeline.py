@@ -1,5 +1,4 @@
 """Tests of the pediatric health timeline: the rules (services.py), the database side (processing.py), its task and its views."""
-import datetime as dt
 import json
 import tempfile
 from decimal import Decimal

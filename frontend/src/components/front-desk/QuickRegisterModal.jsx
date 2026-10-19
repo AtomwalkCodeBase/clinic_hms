@@ -1,23 +1,4 @@
-/**
- * components/front-desk/QuickRegisterModal.jsx
- * -----------------------------------------------
- * Minimal-field registration for two situations where front desk can't
- * (or shouldn't have to) collect a full registration form up front:
- *
- *   1. Emergency / walk-in — name + mobile + age only. Everything else
- *      (address, insurance, emergency contact, etc.) can be filled in
- *      later from the patient's record; what matters right now is getting
- *      them a UHID and in front of a doctor.
- *   2. Registering a family member found via the family-tree lookup who
- *      isn't registered at this hospital yet — same minimal shape, but
- *      tied to the guardian's AWPID as a dependent (see
- *      PatientService.resolve_dependent_identity).
- *
- * Age is converted to an approximate date_of_birth (Jan 1 of the birth
- * year) since Patient has no separate "age" field — good enough to get
- * someone booked; the real DOB can be corrected later from the full
- * registration/edit form.
- */
+/** components/front-desk/QuickRegisterModal.jsx */
 import { useState } from "react";
 import { X, Siren, UserPlus } from "lucide-react";
 import { useToast } from "../../hooks/useToast";
@@ -34,9 +15,6 @@ function approximateDobFromAge(age) {
 }
 
 // prefill.gender arrives as the single normalized character the backend
-// stores ("M"/"F"/"O" — see apps/hospital_patients/services.py::_normalize_gender)
-// rather than the lowercase word this form's <select> options use, so it
-// never matched an option and silently showed as unselected. Map it back.
 const GENDER_CODE_TO_OPTION = { M: "male", F: "female", O: "other" };
 function normalizeGenderPrefill(g) {
   if (!g) return "";
@@ -62,30 +40,12 @@ const RELATIONS = [
   { value: "other",   label: "Other" },
 ];
 
-/**
- * @param {boolean} open
- * @param {() => void} onClose
- * @param {(patient: object) => void} onRegistered - called with the
- *   PatientDetailSerializer response after a successful registration.
- * @param {number|string} branchId - branch to register under.
- * @param {{awpid: string, full_name: string, relation?: string} | null} guardian
- *   when set, registers a dependent under this guardian instead of a new
- *   independent adult patient.
- * @param {{full_name?: string, date_of_birth?: string, gender?: string} | null} prefill
- *   known details about the PERSON BEING REGISTERED (not the guardian) —
- *   e.g. from a family-tree lookup that already knows this relative's name/
- *   DOB/gender even though they have no local record at this hospital yet.
- *   Pre-fills those fields instead of asking front desk to re-type
- *   something the system already has on file.
- */
+/** @param {boolean} open */
 export default function QuickRegisterModal({ open, onClose, onRegistered, branchId, guardian = null, prefill = null }) {
   const { toastSuccess, toastApiError } = useToast();
   const [fullName, setFullName] = useState(prefill?.full_name || guardian?.suggestedName || "");
   const [mobile, setMobile] = useState("");
   // A known exact DOB (from a family-tree record) is kept as-is and sent
-  // to the backend directly — never round-tripped through a whole-years
-  // number input, which is how an infant's age used to get silently
-  // dropped (age computed as 0 was treated as "not entered").
   const knownDob = prefill?.date_of_birth || null;
   const [age, setAge] = useState("");
   const [gender, setGender] = useState(() => normalizeGenderPrefill(prefill?.gender));
@@ -100,12 +60,6 @@ export default function QuickRegisterModal({ open, onClose, onRegistered, branch
   const hasPrefill = knownFields.length > 0;
 
   // "Who is the patient?" — only asked in true emergency mode (no guardian
-  // already found via family-tree lookup). The caller who phones in isn't
-  // always the patient — could be calling about their kid, parent, etc.
-  // "self": the caller IS the patient — mobile/name/age are theirs directly.
-  // "relative": the caller is reporting on someone else — we still only
-  // need the caller's mobile (as contact/guardian) plus the patient's own
-  // name + age; the relationship tells us how the patient relates to caller.
   const [patientIs, setPatientIs] = useState("self");
   const [callerName, setCallerName] = useState("");
 
@@ -146,7 +100,6 @@ export default function QuickRegisterModal({ open, onClose, onRegistered, branch
         : isEmergencyRelative
         ? {
             // No existing guardian record yet — backend resolves/creates
-            // the caller's network identity from their mobile number.
             is_dependent: true,
             guardian_mobile: sanitizeMobileInput(mobile),
             guardian_name: callerName.trim() || undefined,

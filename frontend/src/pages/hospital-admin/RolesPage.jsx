@@ -1,15 +1,4 @@
-/**
- * pages/hospital-admin/RolesPage.jsx
- * -----------------------------------
- * Hospital admin: view the 6 system roles (read-only, back the hardcoded
- * per-endpoint checks) and — on the enterprise tier — define custom roles
- * with a hand-picked set of permissions. See apps/org/rbac.py and
- * docs/onboarding_auth_rbac_architecture.md section 4.3.
- *
- * Staff-level role assignment is deliberately NOT here — a person's primary
- * role stays a field on the invite/edit forms in StaffPage.jsx. This page is
- * only about defining what a role (system or custom) grants.
- */
+/** pages/hospital-admin/RolesPage.jsx */
 
 import { useState, useEffect, useCallback } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
@@ -42,9 +31,6 @@ function Modal({ title, children, onClose }) {
 }
 
 // Which system-role identities a custom role can claim — see
-// apps.org.rbac.ACTS_AS_CHOICES on the backend (kept in sync manually;
-// these are deploy-time constants, not something either side needs to
-// fetch from the other).
 const ACTS_AS_OPTIONS = [
   { key: "doctor",         label: "Doctor" },
   { key: "nurse",          label: "Nurse" },

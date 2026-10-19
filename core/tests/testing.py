@@ -15,7 +15,7 @@ HAS_HOSPITAL_DB = HOSPITAL_ALIAS in settings.DATABASES
 
 requires_hospital_db = unittest.skipUnless(
     HAS_HOSPITAL_DB,
-    "needs the hospital_test alias — run with --settings=core.settings.test",
+    "needs the hospital_test alias — run with python manage.py test",
 )
 
 

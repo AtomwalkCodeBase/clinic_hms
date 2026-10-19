@@ -10,9 +10,6 @@ import { todayLocal } from "../../../utils/dates";
 
 export function HistorySidebar({ patientPk, patientUhid, history, isLoading, open, onToggle, onOpenDocument }) {
   // Real visit timeline for this patient at this hospital — reuses the same
-  // searchable visit-history endpoint the "History" nav page already uses,
-  // filtered to this one patient by UHID. No fabricated entries: only
-  // appointments that actually exist show up.
   const { data: timelineData, isLoading: timelineLoading } = useApi(
     patientUhid ? API_ENDPOINTS.OPD.HISTORY : null,
     { params: { patient: patientUhid, page_size: 12 }, skip: !patientUhid }
@@ -20,20 +17,12 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   const timeline = timelineData?.results || [];
 
   // Growth trend + vaccination roadmap — reuses the same patient record this
-  // sidebar already has open. Growth blends this hospital's own vitals with
-  // cross-hospital ones (gated on hie_consent, same as the rest of this
-  // sidebar); vaccinations merges real records with the default schedule so
-  // a nurse/doctor sees exactly what's due, not just what's been logged.
   const growthData = null;
   const growthLoading = false;
   const { data: vaxData, isLoading: vaxLoading, refetch: refetchVax } = useApi(
     patientPk ? API_ENDPOINTS.PATIENTS.VACCINATIONS(patientPk) : null, { skip: !patientPk }
   );
   // Pediatric-only additions — Birth History + developmental-milestone
-  // roadmap. Both fetch unconditionally alongside growth/vaccinations (the
-  // request is cheap and the response is small); the panels themselves are
-  // gated to growthData.is_minor === true, same as Vaccinations above, so
-  // an adult patient's sidebar never shows or fetches-for-display these.
   const { data: birthHistoryData, isLoading: birthHistoryLoading, refetch: refetchBirthHistory } = useApi(
     patientPk ? API_ENDPOINTS.PATIENTS.BIRTH_HISTORY(patientPk) : null, { skip: !patientPk }
   );
@@ -43,8 +32,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   const { toastSuccess, toastApiError } = useToast();
 
   // Ad-hoc "Order Vaccine" inline form — matches this file's existing
-  // lightweight-inline-form convention (LabOrderSection's search box,
-  // DrugForm's "+ Add Drug" panel) rather than a modal.
   const [orderFormOpen, setOrderFormOpen] = useState(false);
   const [showAllDocs, setShowAllDocs] = useState(false);          // Attachments: the first 5, or all of them
   const [orderForm, setOrderForm] = useState({ vaccine_name: "", reason: "", due_date: "", dose_number: "" });
@@ -52,15 +39,9 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   const [decliningId, setDecliningId] = useState(null);
   const [administeringId, setAdministeringId] = useState(null);
   // Optional certificate to attach when administering a roadmap row —
-  // keyed by the same itemKey (record_id or vaccine_name) the row's
-  // Administer button uses, so each row can carry its own selected file
-  // without a full modal per row.
   const [administerFileByKey, setAdministerFileByKey] = useState({});
 
   // "Log Vaccination" manual-entry form — a doctor/nurse recording a past
-  // or outside vaccination (with an optional scanned certificate) the same
-  // way a parent can from the portal's "Add Records" flow, rather than only
-  // being able to act on today's due roadmap slots via Administer/Order.
   const [logFormOpen, setLogFormOpen] = useState(false);
   const [logForm, setLogForm] = useState({ vaccine_name: "", administered_date: "" });
   const [logFile, setLogFile] = useState(null);
@@ -106,9 +87,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   }
 
   // Quick, low-friction "not required" action — window.prompt for an
-  // optional reason matches this file's existing convention for quick
-  // secondary actions (no dedicated modal/inline-text-input elsewhere for
-  // something this minor).
   async function declineVaccination(v) {
     if (!patientPk) return;
     const reason = window.prompt("Reason (optional) — why isn't this vaccine required for this patient?", v.reason || "");
@@ -131,10 +109,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   }
 
   // Nurse/doctor "give it now" shortcut — administers an ordered/due
-  // vaccine right from this sidebar instead of routing through TasksPage.
-  // Attaches whatever file (if any) was picked for this row's key via the
-  // paperclip input next to the Administer button — e.g. a photo of the
-  // vial/batch label or a printed certificate handed to the clinic.
   async function administerVaccination(v) {
     if (!patientPk) return;
     const key = v.record_id ?? v.vaccine_name;
@@ -163,10 +137,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   }
 
   // "Log Vaccination" — manual historical/outside entry with an optional
-  // certificate, the doctor/nurse-side equivalent of the patient portal's
-  // "Add Records" upload. Uses the plain create endpoint (previously had no
-  // frontend caller) rather than Administer/Order, since this isn't tied to
-  // a specific roadmap slot — any vaccine name and any past date is valid.
   async function submitLogVaccination(e) {
     e.preventDefault();
     if (!logForm.vaccine_name.trim() || !logForm.administered_date || !patientPk) return;
@@ -195,11 +165,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   }
 
   // ── Birth History (pediatric-only) ──────────────────────────────────────
-  // Front desk may already have captured this at registration (see
-  // RegisterPatientPage.jsx) — the doctor's job here is to review and, if
-  // needed, add or correct it during consultation. POST creates the record
-  // (first capture), PATCH edits an existing one — same create-vs-edit split
-  // as apps/hospital_patients/pediatrics/pediatric_views.py BirthHistoryView.
   const [bhFormOpen, setBhFormOpen] = useState(false);
   const [bhForm, setBhForm] = useState(null); // populated on open, from birthHistoryData or blank
   const [bhSaving, setBhSaving] = useState(false);
@@ -285,16 +250,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   };
 
   // Status values from build_roadmap() (apps/hospital_patients/pediatrics/vaccine_schedule.py):
-  // "completed"/"pending_review"/"rejected"/"ordered"/"declined" when a real
-  // record matches the slot, or "unknown" when none does — "unknown" is
-  // never shown as "due"/"overdue"/"not yet due"; the backend genuinely
-  // doesn't know whether the vaccine was given elsewhere, only that
-  // nothing's on file. `timing` ("upcoming"/"due_now"/"past_window") is
-  // separate informational metadata, surfaced in the subtitle text below
-  // rather than the status badge. "past_window" = the age window opened
-  // long ago with no record — still "unknown" status, just needs copy that
-  // doesn't read as "recommended now" (misleading once the window's long
-  // closed, e.g. a birth-window vaccine on a 5-year-old).
   const VAX_STATUS_STYLE = {
     completed:       { label: "Done",              bg: "#D1FAE5", color: "#065F46" },
     pending_review:  { label: "Unverified upload", bg: "#F9F0DC", color: "#92400E" },
@@ -338,8 +293,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   const allergies    = history?.allergies     || [];
   const labResults   = history?.lab_results   || [];
   // Grouped by calendar date (already newest-first from the API) so nine
-  // near-identical rows read as "two visits' worth of tests" at a glance,
-  // instead of a flat wall of repeated dates and "No summary" text.
   const labGroups = [];
   for (const l of labResults) {
     const dateLabel = l.delivered_at
@@ -397,9 +350,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
         </div>
       ) : (
         // Ordered by clinical priority, not alphabetically: what could hurt
-        // the patient (allergies) comes first, followed by what's currently
-        // being managed (active problems, current meds), then supporting
-        // evidence (labs, vitals trend), then the longitudinal record.
         <div>
           <HistorySection title="Allergies" icon={<AlertTriangle size={13} />} count={allergies.length} urgent defaultOpen>
             {allergies.length === 0 ? <EmptyNote>No known allergies on record.</EmptyNote> : (

@@ -1,43 +1,4 @@
-/**
- * pages/front-desk/AdmissionsPage.jsx
- * -------------------------------------
- * IPD Admission — Phase 1 (admission intake) only. Covers steps 4 and 5 of
- * the approved intake mockup (Referral Queue, then Complete Admission +
- * Bed) — two sections of one screen there, so both render here together;
- * This page renders standalone (own sidebar item) or embedded as the
- * Patient Intake hub's "Referral Queue & Admission" tab.
- *
- * Front desk still can NEVER complete an Admission on its own — that
- * always requires a pending AdmissionReferral, and CompleteAdmissionModal
- * below still won't act on an externally-sourced one until a hospital
- * doctor has countersigned it. What front desk CAN now do (v9 — "front
- * desk must be able to act on an external referral letter"): log the
- * referral itself the moment a patient arrives with an outside doctor's
- * paper/PDF letter, via LogExternalReferralModal / RegisterExternalReferralView
- * — instead of waiting for an in-app doctor to type the same letter into
- * Recommend Admission first. That referral still lands as
- * status=pending/accepted_by=None, same as always, so it still needs a
- * doctor's countersign before this page's own Complete Registration button
- * will do anything with it (see models.AdmissionReferral module docstring,
- * design decision 2). There is still no "create an Admission directly"
- * action anywhere on this page.
- *
- * Standalone (non-embedded) view adds a tab bar: Triage/OPD Booking/
- * Emergency Registration cross-link to Patient Intake's own tabs; Referral
- * Queue is this page's existing content; IPD Admission is a real,
- * read-only list of every Admission record (GET IPD.ADMISSIONS — the same
- * AdmissionSerializer already used for the awaiting-bed list), showing
- * both bed-assigned and still-awaiting-bed admissions together. There is
- * no Discharge tab — apps/ipd has no discharge endpoint, model transition,
- * or field yet (Admission.status's ACTIVE/DISCHARGE_INITIATED states are
- * explicitly Phase 2, not built), so a Discharge tab would have nothing
- * real to show or do.
- *
- * Markup/styling follow the mockup exactly (see intake-workspace.css): the
- * referral queue is a real table (`.wtable`, red-tinted `.row-emergency`
- * rows for MLC/emergency-sourced referrals), and bed assignment is the
- * mockup's visual clickable `.bedgrid` rather than a plain <select>.
- */
+/** pages/front-desk/AdmissionsPage.jsx */
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppShell }  from "../../components/layout/AppShell";
@@ -53,35 +14,11 @@ import { CheckIcon } from "../../components/common/CheckIcon";
 import { timeAgo } from "../../utils/dates";
 
 
-
-
-
-
 function bedStatusMeta(status) {
   return BED_STATUS_META[status] || { cls: "taken", label: status || "Unavailable" };
 }
 
 // Visual bed picker shared by CompleteAdmissionModal ("assign now") and
-// AssignBedModal (the Awaiting Bed worklist's "assign later" action) — one
-// fetch-and-render implementation so both stay in sync with what
-// org.BedListCreateView actually returns. Fetches every bed in the branch
-// (not just available ones) so occupied/cleaning/blocked beds render in
-// their own color rather than simply vanishing from a dropdown.
-//
-// Rooms used to be split into a separate "Ward" concept with its own Ward
-// Type catalog — the two were unified (see org.Room's own docstring and
-// hospital-admin/RoomsPage.jsx, which manages the same catalog): a "ward"
-// is just a Room whose Room Type is bed-based (billing.OptionList's
-// is_bed_based flag), so this picker fetches ORG.ROOMS and narrows to the
-// bed-based ones client-side. Room Type shown next to each room's name is
-// that catalog's configured label, not the raw stored value — so this
-// dropdown reads "General Ward (General Ward)" the same way it used to
-// read "General Ward (General)". Picking one specific room also surfaces
-// its Floor and Department right below the dropdown, and narrows the grid
-// to just that room's beds (org.BedListCreateView's own room_id filter,
-// already in the GET below); leaving "All rooms" selected groups the full
-// branch-wide grid under a heading per room instead of dumping every bed
-// into one undifferentiated list.
 function BedSelector({ branchId, roomId, setRoomId, bedId, setBedId }) {
   const { data: allRooms } = useApi(API_ENDPOINTS.ORG.ROOMS, {
     params: { branch_id: branchId }, skip: !branchId,
@@ -94,7 +31,6 @@ function BedSelector({ branchId, roomId, setRoomId, bedId, setBedId }) {
 
   const roomTypeMeta = (value) => (roomTypes || []).find((t) => t.value === value) || null;
   // Only bed-based rooms (general ward/private/ICU/etc.) belong in a bed
-  // picker — an OPD consultation room never has beds.
   const rooms = (allRooms || []).filter((r) => roomTypeMeta(r.room_type)?.is_bed_based);
   const roomTypeLabel = (value) => roomTypeMeta(value)?.label || value || "—";
   const selectedRoom = rooms.find((r) => String(r.id) === String(roomId));
@@ -201,7 +137,6 @@ function BedSelector({ branchId, roomId, setRoomId, bedId, setBedId }) {
 }
 
 // Standalone bed assignment for an admission that was completed with the
-// bed deferred — opened from the Awaiting Bed worklist below.
 function AssignBedModal({ admission, branchId, onClose, onDone }) {
   const { toastSuccess, toastApiError } = useToast();
   const [roomId, setRoomId] = useState("");
@@ -259,10 +194,6 @@ function CompleteAdmissionModal({ referral, branchId, onClose, onDone }) {
   const [saving, setSaving] = useState(false);
 
   // Bed assignment — "now" (pick a specific bed as part of this same
-  // screen) or "later" (leave it to the Awaiting Bed worklist below). This
-  // is a second, separate API call after CompleteAdmissionView succeeds —
-  // that view has no bed_id field of its own by design (see
-  // apps/ipd/serializers.py::CompleteAdmissionSerializer).
   const [bedChoice, setBedChoice] = useState("later");
   const [roomId, setRoomId] = useState("");
   const [bedId, setBedId] = useState("");
@@ -302,9 +233,6 @@ function CompleteAdmissionModal({ referral, branchId, onClose, onDone }) {
         toastSuccess(`Admission completed — ${referral.patient_name} added to the Awaiting Bed worklist.`);
       }
       // Take the user straight to this admission's own page — completing
-      // registration used to just close the modal and leave you back on
-      // the referral queue with no obvious way to find the patient you
-      // just admitted.
       onDone(admission);
     } catch (err) {
       toastApiError(err, "Could not complete registration.");
@@ -427,19 +355,9 @@ function CompleteAdmissionModal({ referral, branchId, onClose, onDone }) {
 }
 
 // Sources RegisterExternalReferralView accepts — mirrors
-// AdmissionReferral.SOURCES_REQUIRING_ACCEPTANCE on the backend (see
-// apps/ipd/models.py) and doctor/EncounterPage.jsx's own
-// EXTERNAL_ADMISSION_SOURCES, which the doctor-side Recommend Admission
-// form uses for the same reason: these are the only sources a referral can
-// ever require a countersign for.
 const EXTERNAL_ADMISSION_SOURCES = new Set(["external_referral", "transfer_in", "ambulance_ems", "medical_tourism"]);
 
 // Front desk logging a referral straight from an external letter — the
-// front-desk-side counterpart to doctor/EncounterPage.jsx's own
-// AdmissionReferralModal, posting to IPD.REFERRAL_REGISTER_EXTERNAL
-// instead of IPD.REFERRAL_RECOMMEND. Same two-step outcome either way (the
-// referral still needs a doctor's countersign before Complete Registration
-// works) — see this file's own module docstring.
 function LogExternalReferralModal({ onClose, onDone }) {
   const { toastSuccess, toastApiError } = useToast();
   const { data: departments } = useApi(API_ENDPOINTS.ORG.DEPARTMENTS);
@@ -447,8 +365,6 @@ function LogExternalReferralModal({ onClose, onDone }) {
   const { data: admissionSources } = useApi(API_ENDPOINTS.IPD.ADMISSION_SOURCES);
 
   // Patient search — same debounced-search pattern as
-  // front-desk/AppointmentsPage.jsx's own patient picker (PATIENTS.SEARCH,
-  // ~250ms debounce, `data?.data?.results || data?.results || []`).
   const [patientQuery, setPatientQuery] = useState("");
   const [patientOpts, setPatientOpts] = useState([]);
   const [patient, setPatient] = useState(null);

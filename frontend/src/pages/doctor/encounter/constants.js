@@ -1,11 +1,4 @@
 // ─── Common ICD-10 codes (expandable; backend search in Phase 2) ─────────────
-// Broad, multi-specialty starter set so the picker has something relevant no
-// matter what the patient booked for — general medicine, ENT, cardiology,
-// pulmonology, GI, endocrine/metabolic, renal/urology, ortho/rheum, neuro,
-// dermatology, gynae/obstetrics, ophthalmology, psychiatry, infectious
-// disease, pediatrics, and routine/admin encounters. Each `keywords` list
-// widens what a booked chief-complaint string can match against beyond just
-// the clinical description text (see suggestForComplaint below).
 export const ICD10_CODES = [
   // Respiratory / ENT
   { code: "J06.9",  desc: "Acute upper respiratory infection, unspecified", keywords: ["cold", "uri", "throat"] },
@@ -148,24 +141,14 @@ export const FREQ_LABELS = { od:"OD", bd:"BD", td:"TD", qid:"QID", sos:"SOS", st
 export const ROUTE_LABELS = { oral:"Oral", iv:"IV", im:"IM", sc:"SC", topical:"Topical", inhaled:"Inhaled", rectal:"Rectal", sublingual:"SL" };
 
 // Below this, the handwriting model's self-reported confidence is treated as
-// "don't trust this": note fields are not auto-filled and Rx lines are flagged
-// in the review panel rather than added silently.
 export const HW_LOW_CONFIDENCE = 0.35;
 
 // A recognition that has sat "pending" longer than this is treated as stuck
-// (the worker thread died, or a deploy restarted mid-run).
 export const HW_PENDING_STALE_MS = 90_000;
 
 export const ICD10_CODE_SET = new Set(ICD10_CODES.map(c => c.code.toUpperCase()));
 
 // ─── Speech parsers (best-effort; doctor reviews before insert) ──────────────
-// Rule-based, not model-based — deliberately kept that way (no LLM wired into
-// this backend). Generalises across patients because it works purely on the
-// SHAPE of the sentence (dose/unit/frequency/duration patterns), not on any
-// patient-specific content, so it applies the same way to every dictation.
-// Widened here to catch more of how doctors actually phrase things out loud —
-// spelled-out numbers/durations, "every N hours" cadences, filler-word
-// prefixes — while still leaving the doctor to review/edit before it's applied.
 
 export const WORD_NUM = {
   half: 0.5, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
@@ -173,11 +156,6 @@ export const WORD_NUM = {
 };
 
 // Lay-term → clinical-keyword expansions so common ways patients/doctors
-// actually describe a complaint out loud ("sugar", "high bp") still match
-// the ICD-10 description text, not just exact clinical vocabulary. Purely a
-// static synonym table — still pattern matching, not model understanding, so
-// it won't catch phrasing outside this list, but it materially widens what
-// "for all the patients" dictation this can handle without an LLM.
 export const SYMPTOM_SYNONYMS = {
   sugar: ["diabetes"], fever: ["pyrexia", "fever"], "high bp": ["hypertension"],
   "high blood pressure": ["hypertension"], "low bp": ["hypotension"],
@@ -192,12 +170,6 @@ export const SYMPTOM_SYNONYMS = {
 };
 
 // ─── Document viewer drawer (Overleaf-style resizable pane) ─────────────────
-// Fixed to the right edge, drag the left border to resize, scrolls entirely
-// within itself — the SOAP/vitals workspace behind it is untouched.
-// `doc` can either carry file_data/mime_type directly (e.g. a lab report
-// already fetched as part of this hospital's own lab-order list — no extra
-// round trip needed) or a `fetchUrl` to load full content from (cross-hospital
-// HIE attachments / lab results, kept out of the summary payload for size).
 export const DRAWER_DEFAULT_WIDTH = 520;
 
 export const DRAWER_MIN_WIDTH = 320;
@@ -209,11 +181,6 @@ export const VITAL_BADGE = {
 };
 
 // ─── Lab orders — structured picker against the catalog ─────────────────────
-// Lives inside the "Investigations / Orders" card itself (the free-text box
-// there is now only for imaging/misc orders that aren't in the lab catalog).
-// Ordering here creates real LabRequest rows the patient sees on their
-// portal to choose in-house vs outside, and that the nurse/lab-tech
-// workflows key off.
 export const CHOICE_BADGE = {
   pending:  { label: "Awaiting patient choice", bg: "var(--color-border)", color: "var(--color-text-muted)" },
   in_house: { label: "In-house",  bg: "#DBEAFE", color: "#1E40AF" },
@@ -226,16 +193,9 @@ export { LAB_STATUS_BADGE } from "../../../constants/badges";
 export const EMPTY_DRUG = { drug: null, drug_name: "", dosage: "", frequency: "od", route: "oral", duration_days: "", instructions: "" };
 
 // Normalise a free-text / abbreviation frequency or route (e.g. from the
-// handwriting recogniser) to the codes PrescriptionItem accepts.
 export const _FREQ_CODES = new Set(["od", "bd", "td", "qid", "sos", "stat", "nocte", "mane"]);
 
 export const _ROUTE_CODES = new Set(["oral", "iv", "im", "sc", "topical", "inhaled", "rectal", "sublingual"]);
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
-// ─── Admission Referral tab ─── embedded IPD referral, Phase 1 ─────────────────────
-// Lives inside the consultation workspace so a doctor never has to leave a
-// consultation and re-search for the patient. Creates an AdmissionReferral
-// (RecommendAdmissionView, apps/ipd/views.py, IsDoctor-gated) ─ the only
-// artifact that lets an admission exist; front desk cannot originate one.
-// source_encounter_id links this referral straight back to this consultation.
 export const EXTERNAL_ADMISSION_SOURCES = new Set(["external_referral", "transfer_in", "ambulance_ems", "medical_tourism"]);

@@ -1,15 +1,4 @@
-/**
- * components/common/DependentBadge.jsx
- * -------------------------------------
- * Small inline tag shown next to a patient's name wherever staff (front
- * desk, nurse, doctor) view a patient list — flags patients registered as
- * a dependent (child/ward/etc. with no mobile/login of their own) so staff
- * know to loop in the guardian for consent, contact, or ID verification.
- *
- * Accepts either a full patient-like object ({ is_dependent, guardian_name,
- * guardian_relation }) via `patient`, or the individual fields directly —
- * whichever the call site already has in scope.
- */
+/** components/common/DependentBadge.jsx */
 import { Users2 } from "lucide-react";
 
 export default function DependentBadge({ patient, isDependent, guardianName, guardianRelation, style }) {

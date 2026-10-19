@@ -2,16 +2,11 @@
 
 import base64
 import logging
-import mimetypes
-import posixpath
 import re
 import uuid
 
 from django.conf import settings
 from django.core.files.base import ContentFile
-from django.core.exceptions import SuspiciousFileOperation
-from django.core.files.storage import Storage
-from django.utils.deconstruct import deconstructible
 
 logger = logging.getLogger(__name__)
 

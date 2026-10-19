@@ -1,15 +1,4 @@
-/**
- * pages/patient/PrescriptionsPage.jsx
- * -------------------------------------
- * Two things on this page:
- *  1. "Your prescriptions" — one card per Rx a doctor has written, with the
- *     same buy-in-house-or-elsewhere choice flow LabReportsPage already has
- *     for lab tests (see PortalPrescriptionListView/ChoiceView). Choosing
- *     in-house surfaces the rx_number — the token to quote at the pharmacy
- *     counter, same idea as the lab request token.
- *  2. The full consult record, unchanged — diagnosis/advice/investigations
- *     context that the choice cards above don't carry.
- */
+/** pages/patient/PrescriptionsPage.jsx */
 import { useState, useMemo } from "react";
 import { FlaskConical, Search, Filter, X, Download } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
@@ -32,7 +21,6 @@ const RX_STATUS_BADGE = {
 };
 
 // One prescription, self-contained: choice -> (rx_number/pay | nothing more
-// to do) — mirrors LabReportsPage's LabOrderCard shape and interaction.
 function PrescriptionOrderCard({ rx, onChanged, patientAwpid }) {
   const { toastSuccess, toastApiError } = useToast();
   const [saving, setSaving] = useState(false);
@@ -222,9 +210,6 @@ function PrescriptionOrderCard({ rx, onChanged, patientAwpid }) {
 }
 
 // One consult visit — diagnosis/prescription/investigations/advice, exactly
-// as before, just extracted into its own component so it can hold its own
-// "download PDF" button + loading state (the record card renders straight
-// out of a .map(), so hooks need a component boundary to live in).
 function ConsultRecordCard({ r }) {
   const { toastApiError } = useToast();
   const [downloading, setDownloading] = useState(false);
@@ -264,8 +249,7 @@ function ConsultRecordCard({ r }) {
           <span className={`badge ${r.signed ? "badge--success" : "badge--warning"}`}>
             {r.signed ? "Completed" : "In progress"}
           </span>
-          {/* Only shown once a doctor has actually written a prescription
-              for this visit — nothing to download otherwise. */}
+          {/* Only shown once a doctor has actually written a prescription */}
           {r.prescription_id && (
             <button
               onClick={downloadPdf}
@@ -387,10 +371,6 @@ export default function PatientPrescriptionsPage() {
   );
 
   // ── Search + filter — over the loaded records (usePaginatedList is built
-  // for exactly this: client-side filtering over an accumulating list; use
-  // "Load more" to widen the pool if what you're looking for isn't loaded
-  // yet). Search matches doctor, hospital, drug names, and diagnosis text —
-  // filters narrow by date range and visit status. ──────────────────────
   const [search,      setSearch]      = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [dateFrom,    setDateFrom]    = useState("");
@@ -423,7 +403,6 @@ export default function PatientPrescriptionsPage() {
         return haystack.includes(q);
       })
       // Most recent first — dates are ISO strings, so a plain string
-      // comparison sorts correctly without parsing.
       .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   }, [withRx, search, dateFrom, dateTo, statusFilter, doctorFilter]);
 

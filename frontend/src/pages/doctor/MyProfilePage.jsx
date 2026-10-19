@@ -1,16 +1,4 @@
-/**
- * pages/doctor/MyProfilePage.jsx
- * ---------------------------------
- * Doctor self-service profile. Admin-set basics (registration no.,
- * specialisation, qualification, experience) are shown read-only — they
- * were entered by the hospital admin when the account was created. The
- * doctor fills in everything else here: bio, photo, languages spoken, and
- * an e-signature (used on prescriptions), both uploaded as images.
- *
- * Consultation fee is intentionally on hold — likely belongs to front desk
- * (billing owns pricing), not the doctor's own login. Shown read-only with
- * a note until that's decided; not editable from here.
- */
+/** pages/doctor/MyProfilePage.jsx */
 import { useState, useEffect, useRef } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -25,11 +13,7 @@ import { formatAgeYM } from "../../utils/age";
 import { readOnlyStyle, labelStyle, inputStyle } from "../../styles/formStyles";
 
 
-
-
-
 // Same downscale approach as ProfilePhotoUpload — signatures don't need to
-// be huge either, and this keeps it well under the request body cap.
 function resizeToDataUrl(file, maxDim = 480, quality = 0.85) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -67,7 +51,6 @@ export default function DoctorMyProfilePage() {
   const [sigUploading, setSigUploading] = useState(false);
   const [feeEditable, setFeeEditable] = useState(false); // true when fee_ownership=doctor
   // View mode by default once there's something to show; edit mode opens
-  // the form. Cancel reverts to whatever was last saved (snapshot below).
   const [editing, setEditing] = useState(false);
   const snapshotRef = useRef(null);
   const sigInputRef = useRef(null);

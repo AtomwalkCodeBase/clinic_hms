@@ -1,15 +1,4 @@
-/**
- * api/http.js
- * -----------
- * The one place pages/components reach the backend from. Domain modules in this folder
- * (org.js, encounter.js, …) wrap services/api.client.js + config/api.config.js so that:
- *   - URLs and HTTP verbs live next to each other, not scattered through JSX
- *   - a component calls `encounterApi.sign(id)`, not `apiClient.post(API_ENDPOINTS.OPD.ENCOUNTER_SIGN(id), {})`
- *
- * The wrappers return the raw axios response (so existing `res.data?.data` handling keeps working);
- * use `unwrap(res)` for the standard `{ success, message, data }` envelope (see core/response.py).
- * Errors are the normalised `{ message, errors, status, data }` object from api.client.js.
- */
+/** api/http.js */
 
 import apiClient from "../services/api.client";
 import API_ENDPOINTS from "../config/api.config";

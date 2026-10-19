@@ -70,7 +70,6 @@ export function parseDrugSpeech(t) {
   if (instr) d.instructions = instr[1].charAt(0).toUpperCase() + instr[1].slice(1);
 
   // Drug name — strip common spoken filler before/around the dose so the
-  // remaining words are (usually) just the drug name.
   const FILLER = /\b(please|start|prescribe|give|add|put (?:him|her|them) on|let'?s start|tab|tablet|cap|capsule|syrup|syp|inj|injection|the patient on|patient on)\b/g;
   if (doseIndex != null) {
     const before = text.slice(0, doseIndex).replace(FILLER, "").trim();

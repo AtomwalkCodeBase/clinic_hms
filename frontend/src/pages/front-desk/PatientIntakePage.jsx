@@ -1,30 +1,4 @@
-/**
- * pages/front-desk/PatientIntakePage.jsx
- * -----------------------------------------
- * The consolidated "Patient Intake" workspace — reached either as its own
- * expandable sidebar group (see AppShell.jsx's NAV_BY_ROLE[ROLES.FRONT_DESK])
- * or by landing on any of its five tabs directly/via deep link.
- *
- * None of the five tabs are reimplemented here — each renders the exact
- * same content component that already powers its own standalone route
- * (still mounted in App.jsx for backward compatibility/deep links), via
- * that component's `embedded` prop, so there's one implementation, one set
- * of API calls, one set of form validations per step:
- *   Register Patient   → RegisterPatientPageContent   (RegisterPatientPage.jsx)
- *   Triage              → TriagePageContent            (TriagePage.jsx)
- *   Emergency Reg.       → EmergencyRegisterPageContent (EmergencyRegisterPage.jsx)
- *   OPD Booking          → AppointmentsPageContent      (AppointmentsPage.jsx)
- *   Referral Queue &     → AdmissionsPageContent        (AdmissionsPage.jsx)
- *   Admission
- *
- * Which tab is showing is read from the URL path (one of the five
- * ROUTES.FRONT_DESK.INTAKE_* routes — see routes.config.js) rather than
- * React state or a query param, so the sidebar's expandable submenu can
- * highlight the right child (NavLink prefix-matching needs distinct paths
- * to do that reliably) and the current step survives a reload or a direct
- * link. Visiting the bare .INTAKE path redirects to .INTAKE_REGISTER
- * (see App.jsx).
- */
+/** pages/front-desk/PatientIntakePage.jsx */
 import { useNavigate, useLocation } from "react-router-dom";
 import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";

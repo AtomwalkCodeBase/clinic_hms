@@ -1,39 +1,4 @@
-/**
- * pages/hospital-admin/RoomsPage.jsx
- * ------------------------------------
- * Hospital admin: Floors, Rooms & Beds setup for a branch.
- *
- * Which doctor sits in which room and when is tagged from the doctor's own
- * profile (Staff → Profile → Working Hours & Rooms), not here — this page
- * is purely location setup (floors/rooms/beds), so it deliberately shows
- * no doctor-assignment column or control anywhere below.
- *
- * v8 unification: what used to be two separate concepts — Room (OPD
- * consultation/procedure space) and Ward (IPD bed space, with its own
- * Ward Type catalog and Bed) — are now one: Room, with a single
- * hospital-configurable Room Type catalog (billing.OptionList,
- * list_type="room_type") that spans both OPD types (Consultation,
- * Procedure, …) and bed-based IPD types (General Ward, Private, ICU, HDU,
- * Isolation, …). A room's type carries whether it's bed-based
- * (is_bed_based) and a category (OPD/IPD/Procedure/Other) — see
- * billing.OptionList's own docstring. "Add Room" asks for Bed Capacity
- * only when the picked Room Type is bed-based, and Department is always
- * optional. Floors organize every Room (OPD and bed-based alike) the same
- * way; Rooms created before a floor was ever picked for them (floor_obj is
- * nullable) surface in an always-visible "Unassigned Rooms" bucket rather
- * than silently vanishing from every floor's list.
- *
- * Bed *status* (available/occupied/…) is never edited here —
- * org.BedDetailView deliberately refuses it — that only ever changes
- * through IPD's assign-bed/release-bed flow, so a bed here always reflects
- * whether a patient is actually in it.
- *
- * Every bed-based room has a required Bed Capacity, set at Add Room time —
- * the backend (org.views.BedListCreateView.post / BedDetailView.patch)
- * refuses to add or move a bed into a room once its active bed count
- * reaches that number, so "+ Add Bed" is disabled here the moment a room
- * hits capacity rather than letting the request round-trip and fail.
- */
+/** pages/hospital-admin/RoomsPage.jsx */
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
@@ -62,10 +27,6 @@ const ROOM_TYPE_CATEGORY_OPTIONS = [
 ];
 
 // Room Type is a single hospital-configurable catalog (billing.OptionList,
-// list_type="room_type") spanning both OPD and bed-based IPD types —
-// neither stores a color, so colors are assigned by position, stable as
-// long as sort_order doesn't change, which matches how the compact catalog
-// editor and the tables below read the same fetched array.
 const TYPE_COLOR_PALETTE = [
   { bg: "#e8f0fe", text: "#3b6fd4" },
   { bg: "#f3e8fd", text: "#8b5cf6" },
@@ -92,8 +53,6 @@ const BED_STATUSES = [
 const bedStatusMeta = (status) => BED_STATUSES.find(s => s.value === status) || BED_STATUSES[0];
 
 // "12 Sep 2026" / "12 Sep 2026, 14:05" — used for a bed's current occupant
-// (admitted date/time, expected discharge date), not on this page anywhere
-// else, so this stays local rather than a shared date util.
 function formatDate(value) {
   if (!value) return "";
   const d = new Date(value);
@@ -280,8 +239,6 @@ function StatCard({ icon: Icon, value, label, iconBg, iconColor }) {
 }
 
 // Bordered box wrapping a real (invisible, overlaid) <select> so the
-// branch switcher reads as a two-line "BRANCH / Sparsh Hospital — Yelahanka"
-// control while staying a normal, accessible <select> underneath.
 function BranchSelector({ branches, value, onChange }) {
   const selected = branches.find(b => String(b.id) === String(value));
   return (
@@ -309,7 +266,7 @@ function BranchSelector({ branches, value, onChange }) {
 // ── Floors ──────────────────────────────────────────────────────────────
 
 function FloorForm({ initial, onSave, onGenerate, onCancel, saving }) {
-  const [mode, setMode] = useState("single"); // "single" | "quick" — quick only offered when creating fresh
+  const [mode, setMode] = useState("single");
   const [form, setForm] = useState(initial || EMPTY_FLOOR);
   const [floorCount, setFloorCount] = useState("4");
   const set = (k) => (v) => setForm(f => ({ ...f, [k]: v }));
@@ -414,12 +371,6 @@ function FloorListItem({ floor, roomCount, selected, onSelect, icon: Icon = Buil
 }
 
 // Per-night price for each bed-based Room Type — billing.OptionList.daily_rate,
-// added specifically so IPD's Generate Invoice action (front-desk/
-// AdmissionDetailPage.jsx) has a real rate to price room charges from; that
-// action hard-errors on any bed-based type left at "—" here. Deliberately a
-// small bespoke list rather than another DropdownListEditor extraFields
-// entry — that widget's extra fields are create-time-only (see its own
-// docstring), but a rate has to stay editable long after the type exists.
 function RoomTypeRatesEditor({ roomTypes, onSaved }) {
   const { toastSuccess, toastApiError } = useToast();
   const [editingId, setEditingId] = useState(null);
@@ -508,29 +459,16 @@ function RoomTypeRatesEditor({ roomTypes, onSaved }) {
 // ── Rooms ───────────────────────────────────────────────────────────────
 
 // "3 of 5 beds" for a bed-based room with capacity set, "3 beds" (uncapped)
-// for one created before capacity was required, "—" for a non-bed-based
-// (OPD) room. This is a *setup* fact (how many bed records exist against
-// the room's configured capacity) — it says nothing about whether a
-// patient is in any of those beds. See roomOccupancy() for that.
 function bedsLabel(room, isBedBased) {
   if (!isBedBased) return "—";
   if (room.capacity == null) return `${room.bed_count} bed${room.bed_count === 1 ? "" : "s"}`;
   return `${room.bed_count} of ${room.capacity} bed${room.capacity === 1 ? "" : "s"}`;
 }
 // Whether every bed slot the room's capacity allows has already been
-// created — used only to gate the "+ Add Bed" action (you can't create
-// more bed records than the configured capacity). Deliberately NOT used
-// to mean "no vacancy" — a room can have all its bed *records* created
-// and still have every one of them empty and available for a patient.
 function bedCapacityReached(room, isBedBased) {
   return isBedBased && room.capacity != null && room.bed_count >= room.capacity;
 }
 // Real, patient-facing occupancy for a room, computed from its actual
-// beds' statuses (not from bed_count/capacity — see bedCapacityReached
-// for why those are a different question). available/occupied here match
-// the same "available"/"occupied" bed statuses the top stat row and the
-// Beds table use, so a room only ever shows "Full" when none of its beds
-// can actually take a new patient right now.
 function roomOccupancy(roomBeds) {
   const total = roomBeds.length;
   const available = roomBeds.filter((b) => b.status === "available").length;
@@ -666,9 +604,6 @@ function RoomsTable({ rooms, roomTypes, bedsByRoom, onEdit, onDeactivate, onMana
                   const roomBeds = (bedsByRoom && bedsByRoom[room.id]) || [];
                   const occ = roomOccupancy(roomBeds);
                   // "Full" here means real, patient-facing occupancy — every
-                  // bed this room actually has is currently occupied — not
-                  // that all of the room's capacity has been provisioned
-                  // with bed records (that's a setup fact, shown below).
                   const noVacancy = meta.isBedBased && occ.total > 0 && occ.available === 0;
                   return (
                     <tr key={room.id} style={{ borderBottom: "1px solid var(--color-border)" }}>
@@ -876,8 +811,6 @@ export default function RoomsPage() {
   }, [branches, branchId]);
 
   // Branch switch resets whichever floor was selected for the old branch —
-  // the auto-select effect below immediately picks a fresh first one once
-  // the new branch's data has loaded.
   function handleBranchChange(id) {
     setBranchId(id);
     setSelectedFloorId("");
@@ -937,9 +870,6 @@ export default function RoomsPage() {
   const selectedFloor = floors.find(f => String(f.id) === String(selectedFloorId)) || null;
   const isUnassignedView = selectedFloorId === "unassigned";
   // Rooms created before a Floor was picked for them (or from data that
-  // predates the Floor model) have floor_obj = null — rather than silently
-  // dropping them from every floor's list, they surface in this always-visible
-  // bucket so nothing "disappears"; picking a floor for them here is the fix.
   const unassignedRooms = useMemo(() => rooms.filter(r => !r.floor_obj), [rooms]);
   const roomsOnFloor = useMemo(() => {
     if (isUnassignedView) return unassignedRooms;
@@ -1103,8 +1033,6 @@ export default function RoomsPage() {
   }
 
   // Room Type add-form's extra fields (category + bed-based) — see
-  // billing.OptionList's docstring for why this one catalog now carries
-  // both OPD and bed-based IPD types.
   const roomTypeExtraFields = [
     { name: "category", type: "select", label: "Category", options: ROOM_TYPE_CATEGORY_OPTIONS, default: "opd" },
     { name: "is_bed_based", type: "checkbox", label: "Bed-based (IPD)", default: false },

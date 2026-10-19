@@ -1,6 +1,4 @@
 // Chart colours come from CSS custom properties (see healthJourney.css) so light/dark
-// are two *selected* palettes, not an automatic flip. ECharts needs literal values,
-// so we read the tokens at render time and re-read when the colour scheme changes.
 import { useEffect, useState } from 'react';
 
 const TOKENS = [
@@ -18,7 +16,7 @@ export function useChartTokens() {
   const [tokens, setTokens] = useState(() => readTokens());
   useEffect(() => {
     const refresh = () => setTokens(readTokens());
-    const obs = new MutationObserver(refresh); // the app's theme switcher changes the root element's variables
+    const obs = new MutationObserver(refresh);
     obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'style', 'class'] });
     return () => obs.disconnect();
   }, []);

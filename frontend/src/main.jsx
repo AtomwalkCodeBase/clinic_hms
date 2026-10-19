@@ -1,16 +1,4 @@
-/**
- * main.jsx
- * --------
- * Application entry point.
- * Mounts React into #root with all global providers in correct order:
- *   ThemeProvider      — selected color theme (applies before auth so the
- *                        login screen itself picks up the chosen theme)
- *   AuthProvider       — JWT user state
- *   HospitalProvider     — hospital metadata
- *   PermissionProvider — feature-flag permissions
- *   ToastContainer     — toast notifications (react-toastify)
- *   App                — router and route tree
- */
+/** main.jsx */
 
 import { StrictMode }       from "react";
 import { createRoot }       from "react-dom/client";

@@ -3,11 +3,6 @@ import { User, Cake, CalendarClock, AlertTriangle, Stethoscope, Activity } from 
 import { formatYearsMonths } from "../../../utils/age";
 
 // ─── Compact clinical summary header ─────────────────────────────────────────
-// A doctor with a full queue shouldn't have to scroll to understand who
-// they're seeing. Everything here is real: age/gender/UHID/last-visit come
-// from the encounter serializer, allergies and active problems come from
-// the same cross-hospital history the sidebar shows, vitals are today's
-// own recorded reading.
 export function ClinicalSummaryHeader({ enc, history, allergies, activeProblems, vitals, isClosed }) {
   const genderLabel = { M: "Male", F: "Female", O: "Other" }[enc.patient_gender] || null;
   return (

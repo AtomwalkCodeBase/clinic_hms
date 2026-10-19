@@ -1,8 +1,4 @@
-/**
- * The details of one report: Details · Preview · Activity, and what the patient can do about it.
- * Loads the full record (GET /portal/documents/<id>/) for the signed file link, the types the patient can
- * choose from, and the activity.
- */
+/** The details of one report: Details · Preview · Activity, and what the patient can do about it. */
 import { useEffect, useState } from "react";
 import { Download, FileText, Image as ImageIcon, Lock, Unlock, X } from "lucide-react";
 import { useToast } from "../../../hooks/useToast";

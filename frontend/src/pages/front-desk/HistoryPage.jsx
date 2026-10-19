@@ -1,9 +1,4 @@
-/**
- * pages/front-desk/HistoryPage.jsx
- * ------------------------------------
- * Searchable visit history — not limited to today like the live queue.
- * Shows the whole hospital, across all doctors and branches.
- */
+/** pages/front-desk/HistoryPage.jsx */
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import VisitHistoryView from "../../components/history/VisitHistoryView";

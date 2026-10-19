@@ -7,7 +7,7 @@ Django + React hospital management system. Data lives in one shared `atomwalk` d
 
 ```
 manage.py
-core/        project settings (core/settings/), urls, wsgi/asgi, Celery app, db router, shared helpers, auth/ (login, OTP, tokens)
+core/        project settings (core/settings.py, one file), urls, wsgi/asgi, Celery app, db router, shared helpers, auth/ (login, OTP, tokens)
 apps/
   patients/          atomwalk DB   patient accounts, portal, guardians
   documents/         atomwalk DB   uploaded reports, extraction, health timeline
@@ -32,7 +32,7 @@ frontend/            React + Vite
 ## Run
 
 ```
-python manage.py runserver                      # core.settings.development by default
+python manage.py runserver                      # ENVIRONMENT=development by default; set ENVIRONMENT=production for production
 celery -A core worker -Q instant,bulk,celery --loglevel=info -P solo
 celery -A core beat --loglevel=info
 ```

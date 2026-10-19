@@ -1,11 +1,4 @@
-/**
- * context/HospitalContext.jsx
- * -------------------------
- * Provides hospital-level metadata fetched from /api/v1/auth/me/.
- *
- * Separate from AuthContext so hospital info can be refreshed
- * independently without touching the JWT.
- */
+/** context/HospitalContext.jsx */
 
 import { createContext, useState, useEffect, useContext } from "react";
 import { apiClient }   from "../services/api.client";

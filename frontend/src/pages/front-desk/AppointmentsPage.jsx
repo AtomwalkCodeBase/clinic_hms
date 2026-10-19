@@ -1,13 +1,4 @@
-/**
- * pages/front-desk/AppointmentsPage.jsx
- * ---------------------------------------
- * Front desk's search-and-book hub: find or register a patient (by name,
- * mobile, UHID, AWPID, or a dependent's parent's name), see their family
- * so any member can be booked without a second search, search/filter
- * doctors by name or specialisation, check real availability, and only
- * then book — a slot must be picked before the Book button unlocks
- * whenever the doctor actually has slots configured for that day.
- */
+/** pages/front-desk/AppointmentsPage.jsx */
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Search, User, CalendarPlus, Users, Siren, UserPlus, Stethoscope, X } from "lucide-react";
@@ -92,15 +83,8 @@ export function AppointmentsPageContent({ embedded = false }) {
   const navigate = useNavigate();
 
   // Arrives here two ways: from PatientsPage's "Book Appointment" button, or
-  // straight after RegisterPatientPage's submit (justRegistered) — either
-  // way, a patient was handed off via navigation state and the booking form
-  // should already have them selected instead of front desk having to
-  // search for the person they just came from.
   const [justRegistered] = useState(() => !!location.state?.justRegistered);
   // Arrives from EmergencyRegisterPage's "Close as Emergency OPD Encounter"
-  // with appointmentType: "emergency" (default "opd" otherwise — see
-  // apps/opd/models.py Appointment.TYPE_CHOICES); TriagePage passes a
-  // departmentHint so the doctor search below starts pre-filtered.
   const [appointmentType] = useState(() => location.state?.appointmentType || "opd");
   const [departmentHintApplied, setDepartmentHintApplied] = useState(false);
   const departmentHint = location.state?.departmentHint || "";
@@ -136,17 +120,12 @@ export function AppointmentsPageContent({ embedded = false }) {
   }, []);
   useEffect(() => { fetchFamily(patient?.awpid); }, [patient?.awpid, fetchFamily]);
   // The household head, resolved from the tree itself rather than assumed to
-  // be whichever patient is currently selected — front desk can search up
-  // any member (a dependent included), and the guardian is still whoever
-  // the backend resolved, not necessarily "self".
   const familyGuardian = useMemo(
     () => family.find(m => m.awpid === familyGuardianAwpid) || null,
     [family, familyGuardianAwpid]
   );
 
   // ── Emergency / dependent quick-register modal ───────────────────────
-  // null | "emergency" | a family-tree member entry (the person TO register
-  // — e.g. Ria — not the guardian; see familyGuardian above for that).
   const [quickRegisterFor, setQuickRegisterFor] = useState(null);
   const { data: branchesData } = useApi(API_ENDPOINTS.ORG.BRANCHES);
   const branches = branchesData?.data || branchesData || [];
@@ -160,8 +139,6 @@ export function AppointmentsPageContent({ embedded = false }) {
   }
 
   // Selecting an "already registered here" family member — the search
-  // endpoint returns full local records (with the uuid booking needs) when
-  // queried by AWPID, unlike the lightweight family-tree entry itself.
   async function selectExistingFamilyMember(member) {
     try {
       const { data } = await apiClient.get(API_ENDPOINTS.PATIENTS.SEARCH, { params: { q: member.awpid } });
@@ -192,12 +169,8 @@ export function AppointmentsPageContent({ embedded = false }) {
   const appointments = apptData?.results || [];
 
   // ── Patient search / browse — name, mobile, UHID, AWPID, or a
-  // dependent's guardian/parent name (backend now matches guardian_name
-  // too — see PatientService.search) ───────────────────────────────────
   const [isBrowseMode, setIsBrowseMode] = useState(true);
   // Search intentionally remains hospital-scoped. When the atomwalk knows a
-  // mobile number but this hospital has no local Patient row, surface that
-  // distinction instead of telling reception the person does not exist.
   const [networkMatch, setNetworkMatch] = useState(null);
   const [attachingNetworkPatient, setAttachingNetworkPatient] = useState(false);
   useEffect(() => {
@@ -237,10 +210,6 @@ export function AppointmentsPageContent({ embedded = false }) {
   }
 
   // True when the query itself is a precise identifier (UHID/AWPID/mobile)
-  // that resolved to exactly one record — there's no real ambiguity to
-  // escape from in that case, unlike a fuzzy name search that can surface
-  // the wrong "Rohan" or several. Drives whether the "register instead"
-  // fallback appears under the results (see the dropdown below).
   const isPreciseMatch = useMemo(() => {
     if (patientOpts.length !== 1) return false;
     const q = patientQuery.trim().toLowerCase();
@@ -267,7 +236,6 @@ export function AppointmentsPageContent({ embedded = false }) {
   }, []);
 
   // ── Doctor search / filter — name or specialisation, availability-first
-  // (task: search doctors before booking, not just pick from a flat list) ──
   const [doctorQuery,   setDoctorQuery]   = useState("");
   const [specFilter,    setSpecFilter]    = useState("");
   const [doctorList,    setDoctorList]    = useState([]);
@@ -301,9 +269,6 @@ export function AppointmentsPageContent({ embedded = false }) {
   }, [doctorId, date, user]);
 
   // Live availability — same fix as the patient portal's slot picker: if
-  // someone else books this slot while front desk has it open, silently
-  // refresh in the background so it greys out instead of failing at
-  // confirm time, and drop the current selection if it was the one taken.
   useEffect(() => {
     if (!doctorId || !date || !user?.hospital_id || booking) return undefined;
     const id = setInterval(() => {
@@ -324,10 +289,6 @@ export function AppointmentsPageContent({ embedded = false }) {
   }, [doctorId, date, user, booking]);
 
   // A slot must be chosen whenever the doctor actually has any configured
-  // for the day — front desk defaulting to "first available" silently was
-  // the bug (see spreadsheet row 45); a doctor with zero slots set up for
-  // that day (no working hours configured) still allows a walk-in booking
-  // with no fixed time.
   const slotRequired = slots.length > 0;
   const canBook = !!patient && !!doctorId && (!slotRequired || !!slot) && !booking;
 
@@ -352,10 +313,6 @@ export function AppointmentsPageContent({ embedded = false }) {
         : "";
       toastSuccess(`Appointment booked for ${patient.full_name}.${roomNote}`);
       // Reset the whole form for the next patient — including the date,
-      // which used to stay on whatever day was just booked and quietly
-      // carry over into the next booking (front desk booking a future
-      // follow-up, then the next walk-in accidentally landing on that same
-      // future date instead of today).
       setPatient(null); setPatientQuery(""); setComplaint(""); setSlot(""); setDoctorId("");
       setDate(TODAY);
       refetch();
@@ -403,33 +360,18 @@ export function AppointmentsPageContent({ embedded = false }) {
 
         <QuickRegisterModal
           // Forces a fresh mount per target — the modal stays in the tree
-          // between opens (only its internal `open` check hides it), so
-          // without a key its form state would carry over from whoever was
-          // last registered (e.g. still showing Ria's prefilled age/gender
-          // after closing and reopening for a different family member).
           key={quickRegisterFor === "emergency" ? "emergency" : quickRegisterFor?.awpid || "closed"}
           open={!!quickRegisterFor}
           onClose={() => setQuickRegisterFor(null)}
           onRegistered={handleRegistered}
           branchId={defaultBranchId}
           // The GUARDIAN this new record gets attached to — resolved from
-          // the family tree itself (familyGuardian), not from
-          // quickRegisterFor, which is the person we're registering (e.g.
-          // Ria), not her guardian. Getting this backwards is what made the
-          // modal ask "Register Ria's family member" while asking for Ria's
-          // own name/age/gender all over again — she was already fully known
-          // from the family-tree lookup that surfaced her chip in the first
-          // place. Falls back to the currently selected patient if the
-          // guardian entry didn't resolve for some reason.
           guardian={quickRegisterFor && quickRegisterFor !== "emergency" ? {
             awpid: (familyGuardian || patient)?.awpid,
             full_name: (familyGuardian || patient)?.full_name,
             relation: quickRegisterFor.relationship,
           } : null}
           // Everything already known about the person being registered —
-          // came straight from the same family-tree lookup that put their
-          // chip on screen, so front desk isn't re-typing what the system
-          // already has on file.
           prefill={quickRegisterFor && quickRegisterFor !== "emergency" ? {
             full_name: quickRegisterFor.full_name,
             date_of_birth: quickRegisterFor.date_of_birth,
@@ -603,14 +545,7 @@ export function AppointmentsPageContent({ embedded = false }) {
                       </span>
                     </button>
                   ))}
-                  {/* Only offer the "register instead" escape hatch when the match
-                      is genuinely uncertain — a fuzzy name search can turn up the
-                      wrong person, or several. It shouldn't appear when the query
-                      was a precise identifier (UHID/AWPID/mobile) that hit exactly
-                      one record — that IS the patient, full stop, and showing a
-                      register button right next to a confirmed match reads as an
-                      invitation to create a duplicate registration for someone
-                      who's already on file. */}
+                  {/* Only offer the "register instead" escape hatch when the match */}
                   {!isBrowseMode && patientOpts.length > 0 && !isPreciseMatch && (
                     <div style={{
                       padding: "9px 12px", borderTop: "1px solid var(--color-border)",

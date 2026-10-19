@@ -1,14 +1,4 @@
-/**
- * config/api.config.js
- * --------------------
- * Central atomwalk of ALL API endpoints used by Atomwalk HMS frontend.
- *
- * Rules:
- *   - Never hardcode any URL in a component or service file.
- *   - All URLs must be defined here and imported where needed.
- *   - Dynamic segments use arrow functions: (id) => `${BASE}/resource/${id}/`
- *   - Base URL comes from VITE_API_BASE_URL environment variable.
- */
+/** config/api.config.js */
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 const API_V1 = `${BASE_URL}/api/v1`;
@@ -25,7 +15,6 @@ export const API_ENDPOINTS = {
     CHANGE_PASSWORD:  `${API_V1}/auth/change-password/`,
     SETUP_PASSWORD:   `${API_V1}/auth/setup-password/`,
     // OTP — shared by staff/patient forgot-password, patient registration,
-    // and day-to-day patient OTP login (see apps/auth_app/otp_views.py).
     OTP_REQUEST:      `${API_V1}/auth/otp/request/`,
     OTP_VERIFY:       `${API_V1}/auth/otp/verify/`,
     STAFF_FORGOT_PASSWORD_RESET:   `${API_V1}/auth/forgot-password/staff/reset/`,
@@ -93,9 +82,6 @@ export const API_ENDPOINTS = {
     ROOM_ASSIGNMENTS:  `${API_V1}/org/room-assignments/`,
     ROOM_ASSIGNMENT: (id) => `${API_V1}/org/room-assignments/${id}/`,
     // Beds (IPD bed assignment) + front-desk triage availability — see
-    // docs/PENDING_IMPROVEMENTS.md items 1 & 3. A bed hangs off ROOMS above
-    // now (a bed-based room — the old, separate wards/ endpoint is gone,
-    // see org.Room's own docstring for the v8 unification).
     BEDS:              `${API_V1}/org/beds/`,
     BED:        (id) => `${API_V1}/org/beds/${id}/`,
     BED_BOARD:         `${API_V1}/org/beds/board/`,
@@ -107,7 +93,6 @@ export const API_ENDPOINTS = {
   PATIENTS: {
     REGISTER:         `${API_V1}/patients/register/`,
     // Provisional/unidentified-patient registration (Emergency path) — no
-    // mobile or guardian required. See PatientEmergencyRegisterSerializer.
     REGISTER_EMERGENCY: `${API_V1}/patients/register-emergency/`,
     LOOKUP:           `${API_V1}/patients/lookup/`,
     ATTACH_NETWORK:   `${API_V1}/patients/attach-network/`,
@@ -185,7 +170,6 @@ export const API_ENDPOINTS = {
     PROFILE:                `${API_V1}/portal/profile/`,
     CHANGE_PASSWORD:        `${API_V1}/portal/profile/change-password/`,
     // Forgot-password is now OTP-based — see AUTH.OTP_REQUEST / AUTH.OTP_VERIFY
-    // / AUTH.PATIENT_FORGOT_PASSWORD_RESET (apps/auth_app/otp_views.py).
     MOBILE_CHANGE_REQUEST_OTP: `${API_V1}/portal/profile/mobile-change/request-otp/`,
     FAMILY:                 `${API_V1}/portal/family/`,
     FAMILY_DETAIL:  (awpid) => `${API_V1}/portal/family/${awpid}/`,
@@ -200,25 +184,20 @@ export const API_ENDPOINTS = {
     NOTIFICATION_READ: (hospitalDb, id) => `${API_V1}/portal/notifications/${hospitalDb}/${id}/read/`,
     EMERGENCY_TOKEN:        `${API_V1}/portal/emergency/token/`,
     // "Share Records" — patient-authenticated half: the patient CREATES the
-    // session here, then approves / ends / releases downloads / lists access.
     RECORDS_SHARE_CREATE:           `${API_V1}/portal/records-share/`,
     RECORDS_SHARE_MINE:             `${API_V1}/portal/records-share/mine/`,
     RECORDS_SHARE_DECISION: (token) => `${API_V1}/portal/records-share/${token}/decision/`,
     RECORDS_SHARE_END:      (token) => `${API_V1}/portal/records-share/${token}/end/`,
     RECORDS_SHARE_DOWNLOAD_DECISION: (token) => `${API_V1}/portal/records-share/${token}/downloads/decision/`,
     // Shared-records privacy — the standing "what a doctor sees" config, the
-    // single-record lock used from My Reports, and the per-visit reveal on a
-    // live grant (scope: visit | always | conceal).
     RECORDS_PRIVACY:                `${API_V1}/portal/records-privacy/`,
     RECORDS_PRIVACY_TOGGLE:         `${API_V1}/portal/records-privacy/toggle/`,
     RECORDS_SHARE_REVEAL:  (token) => `${API_V1}/portal/records-share/${token}/reveal/`,
   },
 
   // "Share Records" — public, token-gated half the doctor's laptop reads
-  // (see apps/hospital_patients/records_share_views.py). publicClient: no login.
   RECORDS_SHARE: {
     // The doctor's laptop binds itself to a session — by the patient's
-    // 6-digit code (typed at /s) or by the link's own token.
     CLAIM:   `${API_V1}/records-share/claim/`,
     STATUS:  (token) => `${API_V1}/records-share/${token}/`,
     RECORDS: (token) => `${API_V1}/records-share/${token}/records/`,
@@ -228,35 +207,24 @@ export const API_ENDPOINTS = {
   },
 
   // Emergency QR summary — public, no auth (see apps/hospital_patients/emergency_views.py).
-  // Fetched with publicClient, not apiClient, since the person scanning this
-  // has no Atomwalk login at all.
   EMERGENCY: {
     SUMMARY: (token) => `${API_V1}/emergency/${token}/`,
   },
 
   // Public document-view page — what a printed prescription/lab-report QR
-  // opens for a non-app scanner (see apps/hospital_patients/document_view_views.py).
-  // Fetched with publicClient only after the patient clicks "Yes" on the
-  // confirm prompt — nothing is fetched before that.
   VIEW_REPORT: {
     RESOLVE: (token) => `${API_V1}/view-report/${token}/`,
   },
 
   // Consultation handwriting pad — public, no auth (see
-  // apps/hospital_patients/consult_pad_views.py). One URL: GET returns the live
-  // session (both tabs' saved pages + recognised text), PUT autosaves one
-  // tab. Fetched with publicClient — the phone has no session in that browser.
   CONSULT_PAD: {
     BASE: (token) => `${API_V1}/consult-pad/${token}/`,
   },
 
   // apps.clinical was retired (HMS-07c-1) — live consultation flow is
-  // apps.opd (see OPD.ENCOUNTER* / OPD.PRESCRIPTIONS above).
 
   PRESCRIPTIONS: {
     // LIST/DETAIL/FINALIZE (apps.prescriptions.Prescription) were retired
-    // (HMS-07c-1) — live prescriptions are OPD.PRESCRIPTIONS above. Only the
-    // drug catalog endpoints below are still live.
     DRUGS:            `${API_V1}/prescriptions/drugs/`,
     DRUG_ITEM:  (id) => `${API_V1}/prescriptions/drugs/${id}/`,
     DRUG_SEARCH:      `${API_V1}/prescriptions/drugs/search/`,
@@ -287,8 +255,6 @@ export const API_ENDPOINTS = {
     INVOICE_STATUSES:      `${API_V1}/billing/invoice-statuses/`,
     INVOICE_STATUS: (id) => `${API_V1}/billing/invoice-statuses/${id}/`,
     // Also carries what used to be the separate ward-types/ catalog
-    // (General Ward, Private, ICU, …) — see billing.OptionList's docstring
-    // for the v8 unification.
     ROOM_TYPES:      `${API_V1}/billing/room-types/`,
     ROOM_TYPE: (id) => `${API_V1}/billing/room-types/${id}/`,
     INVOICES:         `${API_V1}/billing/invoices/`,
@@ -308,13 +274,8 @@ export const API_ENDPOINTS = {
   },
 
   // apps.ai_pipeline was retired (HMS-07c-1) — its urls.py was never
-  // mounted even before that, so this AI.JOBS/JOB block was already dead
-  // (confirmed unreferenced anywhere in frontend/src).
 
   // apps.tasks (Task/TaskAssignment) was retired (v7 table-count redesign)
-  // — this TASKS block had zero real consumer anywhere in this file's own
-  // codebase (confirmed by grep before removal), so it's gone along with
-  // the backend route. See apps/tasks/models.py for the full removal note.
 
   COMPLIANCE: {
     AUDIT_LOG:            `${API_V1}/compliance/audit-log/`,
@@ -325,7 +286,6 @@ export const API_ENDPOINTS = {
   },
 
   // IPD module — admission intake + bed assignment (immediate or
-  // deferred). See docs/PENDING_IMPROVEMENTS.md item 3.
   IPD: {
     REFERRALS:                `${API_V1}/ipd/referrals/`,
     REFERRALS_MINE:           `${API_V1}/ipd/referrals/mine/`,

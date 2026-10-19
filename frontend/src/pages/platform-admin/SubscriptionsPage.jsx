@@ -1,12 +1,4 @@
-/**
- * pages/platform-admin/SubscriptionsPage.jsx
- * ---------------------------------------------
- * Subscription lifecycle view — groups every hospital by billing status
- * (trial/active/grace/read_only/frozen/suspended) so a platform admin can
- * see at a glance who needs attention, rather than scanning the full
- * hospital list. No payment gateway is wired up yet, so this is a manual
- * triage view, not an automated dunning dashboard.
- */
+/** pages/platform-admin/SubscriptionsPage.jsx */
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { AlertTriangle, Building2, Check, X } from "lucide-react";

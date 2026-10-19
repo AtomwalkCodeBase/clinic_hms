@@ -1,13 +1,4 @@
-/**
- * pages/shared/MyProfilePage.jsx
- * ----------------------------------
- * Generic self-service profile page for any staff role that isn't a
- * doctor (nurse, front desk, lab tech, pharmacist, hospital admin).
- * Photo upload (StaffUser.photo, shared with the doctor page) plus a
- * qualification/license card — admin-set basics shown read-only, gender/
- * bio/languages filled in by the person themselves. Mirrors the doctor
- * profile page's view/edit pattern so every login works the same way.
- */
+/** pages/shared/MyProfilePage.jsx */
 import { useState, useEffect, useRef } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -19,9 +10,6 @@ import ProfilePhotoUpload from "../../components/common/ProfilePhotoUpload";
 import ChangePasswordCard from "../../components/common/ChangePasswordCard";
 import { formatAgeYM } from "../../utils/age";
 import { readOnlyStyle, labelStyle, inputStyle } from "../../styles/formStyles";
-
-
-
 
 
 export default function MyProfilePage() {

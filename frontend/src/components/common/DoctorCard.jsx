@@ -1,13 +1,4 @@
-/**
- * components/common/DoctorCard.jsx
- * ------------------------------------
- * Rich horizontal doctor card used across the patient portal (dashboard
- * search results, hospital doctor listing). Photo + identity on the left,
- * fee + booking CTAs on the right, expandable bio/qualifications below —
- * every field is read straight off the doctor object the backend already
- * returns (org.DoctorProfile via _doctor_card in portal_views.py), nothing
- * here is placeholder/fabricated data.
- */
+/** components/common/DoctorCard.jsx */
 import { useState } from "react";
 import { Building2, ChevronDown, ChevronUp } from "lucide-react";
 import HospitalDirections from "./HospitalDirections";
@@ -58,10 +49,7 @@ export default function DoctorCard({ d, hospitalName, hospitalCity, onBook, onVi
               {languages.map(l => <span key={l} className="tag-pill">{l}</span>)}
             </div>
           )}
-          {/* Cross-hospital search results carry hospital_latitude/longitude
-              per doctor (each row can be a different hospital) — the
-              single-hospital doctor list shows directions once at the top
-              of the page instead, so this stays empty there. */}
+          {/* Cross-hospital search results carry hospital_latitude/longitude */}
           {(d.hospital_latitude != null && d.hospital_longitude != null) && (
             <div style={{ marginTop: 10 }} onClick={(e) => e.stopPropagation()}>
               <HospitalDirections latitude={d.hospital_latitude} longitude={d.hospital_longitude} hospitalName={hospital} />

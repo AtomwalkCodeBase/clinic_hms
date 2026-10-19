@@ -1,13 +1,4 @@
-/**
- * components/layout/ThemeSwitcher.jsx
- * -------------------------------------
- * Palette-icon trigger in AppShell's topbar (present for every role, since
- * AppShell is the one shared shell) that opens a popover to browse and pick
- * a color theme. Flat grid of ~12 curated swatches (no family tabs — the
- * list is short enough now that a second navigation layer just adds
- * clicks), same outside-click-closes pattern as every other dropdown in
- * this app.
- */
+/** components/layout/ThemeSwitcher.jsx */
 import { useState, useRef, useEffect } from "react";
 import { useTheme } from "../../context/ThemeContext";
 import { DEFAULT_THEME_ID } from "../../config/themes.config";

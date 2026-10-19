@@ -1,18 +1,4 @@
-/**
- * pages/lab/SampleTypeSetupPage.jsx
- * -------------------------------------
- * Lab tech manages the list of sample types (Blood, Urine, Stool, ...) that
- * populate the "Sample Type" dropdown on the Lab Test Catalog. Was
- * previously a hardcoded list on both the backend (LabTest.sample_type
- * choices=) and the frontend (CatalogPage.jsx's own SAMPLE_TYPES const) —
- * this makes it fully configurable per hospital, backed by
- * billing.OptionList(list_type="sample_type"). Modeled directly on
- * pharmacist/DrugFormSetupPage.jsx's add/edit pattern (the same "domain
- * expert manages their own catalog" shape) rather than the hospital-admin-
- * only DropdownListEditor widget, since apps.lab.views.SampleTypeListCreateView
- * uses ?include_inactive=1 + IsLabTech, not billing's generic ?all=1 +
- * IsHospitalAdmin base classes.
- */
+/** pages/lab/SampleTypeSetupPage.jsx */
 import { useState } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";

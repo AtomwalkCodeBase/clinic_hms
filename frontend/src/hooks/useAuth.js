@@ -1,16 +1,4 @@
-/**
- * hooks/useAuth.js
- * ----------------
- * Convenience hook. Consume AuthContext anywhere in the tree.
- *
- * Returns:
- *   user         — decoded JWT payload or null
- *   role         — current role string
- *   isLoading    — true while hydrating on first mount
- *   loginStaff   — async (email, password, hospital_code) => void
- *   loginPatient — async (awpid, password) => void
- *   logout       — () => void
- */
+/** hooks/useAuth.js */
 
 import { useContext } from "react";
 import { AuthContext } from "../context/AuthContext";

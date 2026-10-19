@@ -43,9 +43,6 @@ export const LAB_STATUS_BADGE = {
 };
 
 // Bed status -> the CSS class from intake-workspace.css that colors it, and
-// the label the legend/details panel shows. "available" is styled as
-// `.bed.free` (pre-existing class, kept as-is so nothing else regresses);
-// the rest render distinctly instead of collapsing into one gray "taken".
 export const BED_STATUS_META = {
   available:      { cls: "free",     label: "Available" },
   reserved:       { cls: "reserved", label: "Reserved" },

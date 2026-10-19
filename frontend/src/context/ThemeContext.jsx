@@ -1,17 +1,4 @@
-/**
- * context/ThemeContext.jsx
- * --------------------------
- * Lets any logged-in user (any of the 8 roles) pick a color theme from
- * config/themes.config.js. Applied by setting CSS custom properties
- * directly on <html>, so every existing component that already reads
- * var(--color-primary) etc. re-themes for free — no component changes
- * needed anywhere else in the app.
- *
- * Persisted to localStorage only (no backend field for this yet) — which
- * actually suits this app well: the same browser is typically used to
- * switch between the different demo role logins, so the choice sticks
- * across all of them without needing a synced per-user setting.
- */
+/** context/ThemeContext.jsx */
 import { createContext, useContext, useState, useEffect, useMemo, useCallback } from "react";
 import { THEMES, DEFAULT_THEME_ID, getThemeById } from "../config/themes.config";
 import { deriveThemeVars } from "../utils/theme";
@@ -20,10 +7,6 @@ const STORAGE_KEY = "atomwalk_theme";
 const ThemeContext = createContext(null);
 
 // "forest" is the only theme with hand-tuned values baked directly into
-// styles/variables.css (every other theme, including the app default, is
-// derived at apply-time). Kept as its own constant — decoupled from
-// DEFAULT_THEME_ID — so picking "Forest" from the switcher always gets the
-// exact original stylesheet, regardless of which theme the app defaults to.
 const ORIGINAL_STYLESHEET_THEME_ID = "forest";
 
 function readStoredThemeId() {
@@ -43,7 +26,6 @@ export function ThemeProvider({ children }) {
     const vars = deriveThemeVars(getThemeById(themeId));
     if (themeId === ORIGINAL_STYLESHEET_THEME_ID) {
       // Forest — clear any inline overrides so the hand-tuned values in
-      // variables.css take over again, unmodified.
       Object.keys(vars).forEach(key => root.style.removeProperty(key));
     } else {
       Object.entries(vars).forEach(([key, value]) => root.style.setProperty(key, value));
@@ -52,7 +34,6 @@ export function ThemeProvider({ children }) {
       window.localStorage.setItem(STORAGE_KEY, themeId);
     } catch {
       // Private browsing / storage disabled — theme still applies for
-      // this session, it just won't persist across reloads.
     }
   }, [themeId]);
 

@@ -1,10 +1,4 @@
-/**
- * pages/lab/ReportsPage.jsx
- * ---------------------------
- * Read-only list of delivered in-house reports — a record of what's already
- * gone out. Upload/deliver happens on the Requests page; this is just the
- * "released" view.
- */
+/** pages/lab/ReportsPage.jsx */
 import { useState, useMemo } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";

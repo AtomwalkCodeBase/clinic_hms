@@ -1,5 +1,4 @@
 """Tests of documents, extraction, classification, timeline, vitals, episodes, vaccinations and schedules."""
-import unittest
 import uuid
 import datetime
 import base64
@@ -16,14 +15,12 @@ from apps.documents.models import (
     SharedAllergy,
     GrowthMeasurement,
     Vitals,
-    HealthEpisode,
     ImmunizationRecord,
     ScheduleRule,
     MilestoneRecord,
     BirthHistory,
     Schedule,
 )
-from apps.patients.models import RecurrenceFlag
 from apps.patients.models import Patient, ConsultSession, PatientRelationship
 from core.tests.testing import ensure_hospital, HospitalDBTestCase, requires_hospital_db
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -1538,30 +1535,12 @@ class PortalPediatricTests(TestCase):
     def upload(self, **body):
         return self.call(views.PortalVaccinationUploadView, "post", {"patient_awpid": "AW-KID", **body})
 
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_a_parent_upload_waits_for_review(self):
-        resp = self.upload(vaccine_name=" Polio ", administered_date="2025-03-04", scheduled_label="6 weeks")
-        self.assertEqual(resp.status_code, 200)
-        record = V.objects.using("default").get()
-        self.assertEqual((record.patient.awpid, record.vaccine_name, record.source, record.verification_status, roadmap.recorded_by(record)),
-                         ("AW-KID", "Polio", V.SOURCE_SELF_REPORTED, V.STATUS_PENDING, "patient"))
-
     def test_an_upload_needs_a_name_and_a_plausible_date(self):
         self.assertEqual(self.upload(administered_date="2025-03-04").status_code, 400)
         self.assertEqual(self.upload(vaccine_name="Polio").status_code, 400)
         for bad in ("04/03/2025", "82026-10-02", "1850-01-01", (dt.date.today() + timedelta(days=2)).isoformat()):
             self.assertEqual(self.upload(vaccine_name="Polio", administered_date=bad).status_code, 400, bad)
         self.assertEqual(V.objects.using("default").count(), 0)
-
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_a_certificate_is_stored_and_named_after_the_vaccine(self):
-        with mock.patch.object(views, "validate_data_uri", return_value="image/png"), \
-                mock.patch.object(views.blob_storage, "upload_data_uri", return_value="vaccination-certs/a.png"), \
-                mock.patch.object(views.blob_storage, "display_file_name", return_value="Polio - Kid.png"):
-            resp = self.upload(vaccine_name="Polio", administered_date="2025-03-04", file_data="data:image/png;base64,AAAA")
-        self.assertEqual(resp.status_code, 200)
-        record = V.objects.using("default").get()
-        self.assertEqual((record.file_data, record.file_name, record.mime_type), ("vaccination-certs/a.png", "Polio - Kid.png", "image/png"))
 
     def test_an_oversized_or_invalid_certificate_is_refused(self):
         too_big = "x" * (views._MAX_CERTIFICATE_CHARS + 1)
@@ -1570,19 +1549,6 @@ class PortalPediatricTests(TestCase):
         self.assertEqual(V.objects.using("default").count(), 0)
 
     # ── certificate file ──────────────────────────────────────────────────────
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_a_certificate_can_be_opened_by_the_account_or_its_family_only(self):
-        mine = self.vaccination(awpid="AW-MOM", file_data="k/mine.png", file_name="mine.png", mime_type="image/png")
-        kids = self.vaccination(file_data="k/kid.png", file_name="kid.png", mime_type="image/png")
-        theirs = self.vaccination(awpid="AW-STRANGER", file_data="k/x.png")
-        with mock.patch.object(views.blob_storage, "signed_url", side_effect=lambda key: f"https://signed/{key}"):
-            self.assertEqual(self.call(views.PortalVaccinationFileView, record_id=mine.id).data["data"]["file_data"], "https://signed/k/mine.png")
-            self.assertEqual(self.call(views.PortalVaccinationFileView, record_id=kids.id).status_code, 200)
-            self.assertEqual(self.call(views.PortalVaccinationFileView, record_id=theirs.id).status_code, 403)
-        self.assertEqual(self.call(views.PortalVaccinationFileView, record_id=999999).status_code, 404)
-        no_file = self.vaccination(vaccine_name="MMR")
-        self.assertEqual(self.call(views.PortalVaccinationFileView, record_id=no_file.id).status_code, 404)
-
     # ── family ────────────────────────────────────────────────────────────────
     def test_family_members_are_listed_added_edited_and_unlinked(self):
         listed = self.call(views.PortalFamilyListCreateView).data["data"]["results"]
@@ -1668,62 +1634,6 @@ class PediatricStaffTests(HospitalDBTestCase):
         self.assertEqual(bcg["status"], "completed")
         self.assertTrue(any(r["status"] == "unknown" for r in roadmap))
 
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_only_a_doctor_or_nurse_can_log_a_dose_but_any_staff_can_read_the_roadmap(self):
-        view = vax_views.PatientVaccinationListCreateView
-        body = {"vaccine_name": "BCG", "administered_date": "2026-01-01"}
-        for role in ("front_desk", "pharmacist", "lab_tech"):
-            self.assertEqual(self.call(view, "post", role=role, data=body).status_code, 403, role)
-            self.assertEqual(self.call(view, "get", role=role).status_code, 200, role)
-        self.assertEqual(self.call(view, "post", role="nurse", data=body).status_code, 201)
-
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_logging_a_vaccination_needs_a_name_and_date_and_is_verified_on_the_spot(self):
-        view = vax_views.PatientVaccinationListCreateView
-        self.assertEqual(self.call(view, "post", data={"administered_date": "2026-01-01"}).status_code, 400)
-        self.assertEqual(self.call(view, "post", data={"vaccine_name": "BCG"}).status_code, 400)
-        resp = self.call(view, "post", data={"vaccine_name": " BCG ", "administered_date": "2026-01-01", "scheduled_label": "Birth"})
-        self.assertEqual(resp.status_code, 201)
-        record = V.objects.using("default").get(pk=resp.data["data"]["id"])
-        self.assertEqual((record.vaccine_name, record.source, record.verification_status, record.source_hospital_id),
-                         ("BCG", V.SOURCE_CLINIC, V.STATUS_VERIFIED, self.hospital.id))
-        self.assertFalse(resp.data["data"]["has_certificate"])
-
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_bad_or_future_dates_are_refused_not_crashed_on(self):
-        log, order = vax_views.PatientVaccinationListCreateView, vax_views.PatientVaccinationOrderView
-        for bad in ("82026-10-02", "yesterday", "02/03/2026", "1850-01-01", (dt.date.today() + timedelta(days=2)).isoformat()):
-            resp = self.call(log, "post", data={"vaccine_name": "BCG", "administered_date": bad})
-            self.assertEqual(resp.status_code, 400, bad)
-        self.assertEqual(V.objects.using("default").count(), 0)
-        self.assertEqual(self.call(order, "post", data={"vaccine_name": "Flu", "reason": "r", "due_date": "garbage"}).status_code, 400)
-        later = (dt.date.today() + timedelta(days=60)).isoformat()
-        self.assertEqual(self.call(order, "post", data={"vaccine_name": "Flu", "reason": "r", "due_date": later}).status_code, 201)   # a target date may be ahead
-        admin = vax_views.PatientVaccinationAdministerView
-        self.assertEqual(self.call(admin, "post", data={"vaccine_name": "MMR", "administered_date": "nonsense"}).status_code, 400)
-
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_the_same_dose_cannot_be_recorded_twice(self):
-        log, admin = vax_views.PatientVaccinationListCreateView, vax_views.PatientVaccinationAdministerView
-        body = {"vaccine_name": "MMR", "administered_date": "2026-01-01", "dose_number": 1}
-        self.assertEqual(self.call(log, "post", data=body).status_code, 201)
-        self.assertEqual(self.call(log, "post", data={**body, "vaccine_name": " mmr "}).status_code, 409)       # same dose, different spelling
-        self.assertEqual(self.call(admin, "post", data=body).status_code, 409)
-        self.assertEqual(self.call(log, "post", data={**body, "dose_number": 2}).status_code, 201)            # the next dose is fine
-        self.assertEqual(self.call(log, "post", data={**body, "administered_date": "2026-02-01"}).status_code, 201)
-        self.assertEqual(V.objects.using("default").count(), 3)
-
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_a_certificate_is_validated_and_stored_with_the_record(self):
-        with mock.patch.object(vax_views.blob_storage, "upload_data_uri", return_value="vaccination-certs/k.png") as up, \
-                mock.patch.object(vax_views, "validate_data_uri", return_value="image/png"):
-            resp = self.call(vax_views.PatientVaccinationListCreateView, "post",
-                             data={"vaccine_name": "BCG", "administered_date": "2026-01-01", "file_data": "data:image/png;base64,AAAA"})
-        self.assertEqual(resp.status_code, 201)
-        self.assertTrue(resp.data["data"]["has_certificate"])
-        self.assertEqual(V.objects.using("default").get().file_data, "vaccination-certs/k.png")
-        up.assert_called_once()
-
     def test_a_bad_certificate_is_refused_and_nothing_is_saved(self):
         resp = self.call(vax_views.PatientVaccinationListCreateView, "post",
                          data={"vaccine_name": "BCG", "administered_date": "2026-01-01", "file_data": "not-a-data-uri"})
@@ -1731,89 +1641,7 @@ class PediatricStaffTests(HospitalDBTestCase):
         self.assertEqual(V.objects.using("default").count(), 0)
 
     # ── vaccinations: review ──────────────────────────────────────────────────
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_staff_verify_or_reject_a_parents_upload(self):
-        pending = self.vax(source=V.SOURCE_SELF_REPORTED, verification_status=V.STATUS_PENDING, source_hospital_id=None)
-        view = vax_views.PatientVaccinationVerifyView
-        self.assertEqual(self.call(view, "patch", data={"action": "maybe"}, pk=pending.pk).status_code, 400)
-        self.assertEqual(self.call(view, "patch", role="nurse", data={"action": "reject", "review_notes": " blurry "}, pk=pending.pk).status_code, 200)
-        pending.refresh_from_db()
-        self.assertEqual((pending.verification_status, pending.review_notes, pending.source_hospital_id),
-                         (V.STATUS_REJECTED, "blurry", self.hospital.id))
-        self.call(view, "patch", data={"action": "verify"}, pk=pending.pk)
-        pending.refresh_from_db()
-        self.assertEqual(pending.verification_status, V.STATUS_VERIFIED)
-        self.assertEqual(self.call(view, "patch", data={"action": "verify"}, pk=999999).status_code, 404)
-
     # ── vaccinations: order, decline, administer ──────────────────────────────
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_only_a_doctor_can_order_a_vaccine_and_it_needs_a_reason(self):
-        view = vax_views.PatientVaccinationOrderView
-        self.assertEqual(self.call(view, "post", role="nurse", data={"vaccine_name": "Flu", "reason": "x"}).status_code, 403)
-        self.assertEqual(self.call(view, "post", data={"reason": "x"}).status_code, 400)
-        self.assertEqual(self.call(view, "post", data={"vaccine_name": "Flu"}).status_code, 400)
-        resp = self.call(view, "post", data={"vaccine_name": "Flu", "reason": "asthma", "due_date": "2026-12-01", "dose_number": 1})
-        self.assertEqual(resp.status_code, 201)
-        record = V.objects.using("default").get()
-        self.assertEqual((record.source, record.verification_status, record.administered_date, record.reason),
-                         (V.SOURCE_DOCTOR_ORDERED, V.STATUS_ORDERED, None, "asthma"))
-
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_a_doctor_declines_a_slot_with_no_record_by_creating_one(self):
-        view = vax_views.PatientVaccinationDeclineView
-        self.assertEqual(self.call(view, "post", role="nurse", data={"vaccine_name": "BCG"}).status_code, 403)
-        self.assertEqual(self.call(view, "post", data={}).status_code, 400)
-        resp = self.call(view, "post", data={"vaccine_name": "BCG", "scheduled_label": "Birth", "reason": "had it abroad"})
-        self.assertEqual(resp.status_code, 200)
-        record = V.objects.using("default").get()
-        self.assertEqual((record.verification_status, record.reason, record.review_notes, record.source_hospital_id),
-                         (V.STATUS_DECLINED, "had it abroad", "had it abroad", self.hospital.id))
-
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_declining_an_existing_record_updates_it_but_only_for_this_patient(self):
-        ordered = self.vax(source=V.SOURCE_DOCTOR_ORDERED, verification_status=V.STATUS_ORDERED, reason="old reason")
-        view = vax_views.PatientVaccinationDeclineView
-        self.call(view, "post", data={"record_id": ordered.id})
-        ordered.refresh_from_db()
-        self.assertEqual((ordered.verification_status, ordered.reason), (V.STATUS_DECLINED, "old reason"))
-        stranger = self.vax(awpid="AW-OTHER")
-        self.assertEqual(self.call(view, "post", data={"record_id": stranger.id}).status_code, 404)
-
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_administering_closes_a_doctors_order_in_place(self):
-        ordered = self.vax(vaccine_name="Flu", source=V.SOURCE_DOCTOR_ORDERED, verification_status=V.STATUS_ORDERED, source_hospital_id=None)
-        resp = self.call(vax_views.PatientVaccinationAdministerView, "post", role="nurse",
-                         data={"record_id": ordered.id, "dose_number": 2})
-        self.assertEqual(resp.status_code, 200)
-        ordered.refresh_from_db()
-        self.assertEqual((ordered.source, ordered.verification_status, ordered.dose_number, ordered.source_hospital_id),
-                         (V.SOURCE_CLINIC, V.STATUS_VERIFIED, 2, self.hospital.id))
-        self.assertEqual(ordered.administered_date, dt.date.today())
-        self.assertEqual(V.objects.using("default").count(), 1)
-
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_administering_without_a_record_creates_one_and_needs_a_name(self):
-        view = vax_views.PatientVaccinationAdministerView
-        self.assertEqual(self.call(view, "post", data={}).status_code, 400)
-        resp = self.call(view, "post", data={"vaccine_name": "MMR", "administered_date": "2026-02-02", "dose_number": 1})
-        self.assertEqual(resp.status_code, 200)
-        record = V.objects.using("default").get()
-        self.assertEqual((record.vaccine_name, str(record.administered_date), record.verification_status),
-                         ("MMR", "2026-02-02", V.STATUS_VERIFIED))
-        self.assertEqual(self.call(view, "post", data={"record_id": 999999}).status_code, 404)
-
-    @unittest.skip("needs ImmunizationRecord fields that are no longer in the model (certificate file, reason, verifier); not part of the timeline pipeline")
-    def test_a_new_certificate_replaces_the_old_file_when_administering(self):
-        ordered = self.vax(source=V.SOURCE_DOCTOR_ORDERED, verification_status=V.STATUS_ORDERED, file_data="old/key.png")
-        with mock.patch.object(vax_views.blob_storage, "upload_data_uri", return_value="new/key.png"), \
-                mock.patch.object(vax_views, "validate_data_uri", return_value="image/png"), \
-                mock.patch.object(vax_views.blob_storage, "delete") as delete:
-            self.call(vax_views.PatientVaccinationAdministerView, "post",
-                      data={"record_id": ordered.id, "file_data": "data:image/png;base64,AAAA"})
-        ordered.refresh_from_db()
-        self.assertEqual(ordered.file_data, "new/key.png")
-        delete.assert_called_once_with("old/key.png")
-
     # ── birth history ─────────────────────────────────────────────────────────
     def test_birth_history_is_created_once_edited_and_copied_to_the_atomwalk(self):
         view = ped_views.BirthHistoryView

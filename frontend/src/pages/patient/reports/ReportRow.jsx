@@ -1,7 +1,4 @@
-/**
- * One report in the list: file icon, name, date and size, what it is, how sure we are, and a menu.
- * What a problem report needs (try again, keep a duplicate…) is in the menu and in the details panel.
- */
+/** One report in the list: file icon, name, date and size, what it is, how sure we are, and a menu. */
 import { useEffect, useRef, useState } from "react";
 import { FileText, Image as ImageIcon, MoreVertical } from "lucide-react";
 import { NEEDS_ATTENTION, chipsFor, fileKind, fmtDate, formatSize, stateOf, statusLine } from "../../../utils/reports";

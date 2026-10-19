@@ -1,12 +1,4 @@
-/**
- * pages/lab/CatalogPage.jsx
- * ---------------------------
- * Lab tech manages the test catalog — name, sample type, price, turnaround
- * time. This is what powers the dropdown doctors order from, what patients
- * see priced on their portal, and what nurses see when setting a patient's
- * in-house/outside choice. Nothing else in the lab-ordering flow works
- * until tests exist here.
- */
+/** pages/lab/CatalogPage.jsx */
 import { useState } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -16,9 +8,6 @@ import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 
 // Common/generic lab tests every diagnostic lab runs — lets a lab tech pick
-// a standard test name off a list instead of retyping it (and typo'ing it)
-// every time, while still allowing a fully custom name for anything not on
-// this list (see the "Custom / type your own" option below).
 const GENERIC_TESTS = [
   { name: "Complete Blood Count (CBC)", sample_type: "blood" },
   { name: "Erythrocyte Sedimentation Rate (ESR)", sample_type: "blood" },
@@ -70,9 +59,6 @@ const EMPTY_FORM = { name: "", code: "", sample_type: "blood", price: "", turnar
 function TestForm({ initial, onSave, onCancel, saving, sampleTypes }) {
   const [form, setForm] = useState(initial || EMPTY_FORM);
   // Tracks the quick-pick dropdown's own selection so it can show "Custom /
-  // type your own" as chosen while the name field underneath stays freely
-  // editable — the dropdown is just a shortcut to prefill name+sample type,
-  // never the source of truth for what gets saved.
   const [quickPick, setQuickPick] = useState(
     initial && GENERIC_TESTS.some(g => g.name === initial.name) ? initial.name : CUSTOM_OPTION
   );

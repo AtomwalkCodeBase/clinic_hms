@@ -1,13 +1,4 @@
-/**
- * hooks/useToast.js
- * -----------------
- * Thin wrapper around react-toastify so components
- * import one hook instead of the library directly.
- *
- * Usage:
- *   const { toastSuccess, toastError, toastInfo } = useToast();
- *   toastSuccess("Patient registered!");
- */
+/** hooks/useToast.js */
 
 import { useMemo } from "react";
 import { toast } from "react-toastify";
@@ -21,13 +12,6 @@ const DEFAULTS = {
 };
 
 // These never depend on component state or props, so they're defined once
-// at module scope and the hook just hands back the same object every call.
-// Returning a fresh object/functions on every render (as this used to do)
-// breaks any caller that puts toastApiError etc. in a useCallback/useEffect
-// dependency array — the changed identity re-triggers the effect on every
-// render, and if that effect fetches data and the fetch fails, it retoasts
-// and re-renders forever (seen on the hospital-admin dashboard: a single
-// failed request turned into an endless stream of duplicate error toasts).
 const toastApi = {
   toastSuccess: (message, options = {}) =>
     toast.success(message, { ...DEFAULTS, ...options }),
@@ -48,7 +32,6 @@ const toastApi = {
 
 export function useToast() {
   // useMemo isn't strictly needed since toastApi is already a stable module
-  // singleton, but keeping the hook shape means callers don't need to change.
   return useMemo(() => toastApi, []);
 }
 

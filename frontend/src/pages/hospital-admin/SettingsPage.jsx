@@ -1,7 +1,4 @@
-/**
- * pages/hospital-admin/SettingsPage.jsx
- * Hospital admin: account info + clinical configuration (fee ownership).
- */
+/** pages/hospital-admin/SettingsPage.jsx */
 import { useState, useEffect } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";

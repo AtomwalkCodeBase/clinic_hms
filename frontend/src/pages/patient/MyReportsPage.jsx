@@ -1,15 +1,4 @@
-/**
- * pages/patient/MyReportsPage.jsx
- * -------------------------------
- * Every prescription, lab report and scan in one list, with the details of the open report beside it.
- *
- *   Add      reports/AddReportsModal — files, a folder, a photo; read and classified in the background
- *   List     GET /portal/documents/ — polled while any report is still being read
- *   Panel    reports/ReportPanel — details, preview, activity, change type, keep a duplicate, try again
- *   Select   several reports → download as a ZIP, or delete them all (POST /portal/documents/bulk-delete/)
- *
- * What each report is called, and the message and actions it gets, follow from utils/reports.js (stateOf).
- */
+/** pages/patient/MyReportsPage.jsx */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckSquare, Clock, Download, Lock, Plus, Search } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -119,9 +108,6 @@ export default function MyReportsPage() {
   }
 
   // ── shared-records privacy: the per-report lock ────────────────────────
-  // Only for the patient's own reports (a family member's are managed from
-  // that member's own login). One map id -> {private, private_by_rule,
-  // revealed_for_visit} plus the live share session, if any.
   const [privMap, setPrivMap] = useState(() => new Map());
   const [privSession, setPrivSession] = useState(null);
   const [lockDlg, setLockDlg] = useState(null);

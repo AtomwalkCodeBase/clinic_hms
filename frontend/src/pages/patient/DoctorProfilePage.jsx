@@ -1,19 +1,4 @@
-/**
- * pages/patient/DoctorProfilePage.jsx
- * ---------------------------------------
- * Step 3 of booking: doctor profile + book panel.
- * Slot-based — the patient picks a fixed 15-min time slot (same grid front
- * desk's own booking screen uses, core.PortalSlotListView) rather than just
- * getting a queue token. A token number is still assigned server-side for
- * the day's queue and shown on the confirmation screen, but the patient's
- * choice is the exact time, not just the date.
- *
- * Every trust signal on this page is real data already returned by the
- * backend (experience_years, consultations_count, known_for, hospital
- * accreditations, live slot availability) — there is no reviews/ratings
- * system in this product, so no star ratings or review counts are shown;
- * inventing those numbers would be actively misleading in a healthcare app.
- */
+/** pages/patient/DoctorProfilePage.jsx */
 import { useState, useEffect } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { Building2, ShieldCheck, CircleCheck, Lock, Clock } from "lucide-react";
@@ -31,9 +16,6 @@ import { todayLocal, toLocalISODate } from "../../utils/dates";
 const TODAY = todayLocal();
 
 // Booking window capped at 2 months out — nobody realistically books an OPD
-// slot a year in advance, and an unbounded date picker just invites picking
-// a date so far out that the whole booking is more likely to be forgotten
-// or go stale (doctor leaves, schedule changes, etc.) than kept.
 const MAX_BOOKING_DATE = (() => {
   const d = new Date();
   d.setMonth(d.getMonth() + 2);
@@ -90,23 +72,18 @@ export default function PatientDoctorProfilePage() {
 
   const [date,   setDate]   = useState(TODAY);
   const [reason, setReason] = useState("");
-  const [contactMobile, setContactMobile] = useState("");     // the hospital needs a number it can call; the account keeps it only scrambled
+  const [contactMobile, setContactMobile] = useState("");
   const [slots, setSlots] = useState([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState(null);
   // Pay Online isn't wired to a real payment gateway yet — offered as an
-  // option so the choice is captured now, but selecting it just tells the
-  // patient it's coming soon rather than defaulting them to it.
   const [paymentPreference, setPaymentPreference] = useState("pay_at_desk");
   const [booking, setBooking] = useState(false);
   const [confirmation, setConfirmation] = useState(null);
   // Set when the backend tells us this is the patient's first booking at
-  // this hospital and it needs explicit consent before sharing their
-  // cross-hospital history — holds what to show in the consent modal.
   const [consentPrompt, setConsentPrompt] = useState(null);
 
   // Family members this account can book for, plus who the booking is for
-  // (defaults to "self" — patient_awpid omitted from the POST in that case).
   const [family, setFamily] = useState([]);
   const [bookingFor, setBookingFor] = useState("self");
   const [addingMember, setAddingMember] = useState(false);
@@ -156,11 +133,6 @@ export default function PatientDoctorProfilePage() {
   }, [hospitalId, doctorId, date]);
 
   // Live slot availability — the exact bug this fixes: if another patient
-  // books the slot you're looking at, you'd otherwise only find out (with a
-  // confusing error) when you tried to confirm. Silently re-checks in the
-  // background so a slot that just got taken visibly greys out, and clears
-  // your selection if it was the one taken. Pauses once booking is
-  // confirmed (nothing left to keep live) or the tab is backgrounded.
   useEffect(() => {
     if (!date || confirmation) return undefined;
     const id = setInterval(() => {
@@ -201,9 +173,6 @@ export default function PatientDoctorProfilePage() {
       toastSuccess("Appointment booked!");
     } catch (err) {
       // First booking at a new hospital — backend needs explicit consent
-      // before it'll create the local patient record there (and before that
-      // hospital's doctors can see any shared history). Show the prompt
-      // instead of a generic error toast.
       if (err?.status === 428 && err.data?.consent_required) {
         setConsentPrompt(err.data);
       } else {
@@ -231,8 +200,6 @@ export default function PatientDoctorProfilePage() {
   const languages  = (doctor?.languages || "").split(",").map(s => s.trim()).filter(Boolean);
   const knownFor   = (doctor?.known_for || "").split(",").map(s => s.trim()).filter(Boolean);
   // Which payment modes this hospital actually accepts (set in their
-  // Billing Setup) — drives the "How will you pay?" step below instead of
-  // a hardcoded pair of buttons, so patients only see options that are real.
   const paymentMethods = doctor?.payment_methods || [];
   const deskMethods    = paymentMethods.filter(m => m !== "Online");
   const onlineAccepted = paymentMethods.includes("Online");

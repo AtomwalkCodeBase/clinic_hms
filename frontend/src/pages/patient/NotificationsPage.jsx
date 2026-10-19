@@ -1,12 +1,4 @@
-/**
- * pages/patient/NotificationsPage.jsx
- * -------------------------------------
- * In-app reminders (HMS-10g) — appointment reminders, follow-up reminders
- * (both pre-generated server-side, see apps/notifications/services.py), and
- * vaccination-due items (computed live from the vaccination roadmap, so
- * always current). No real SMS/email/push exists in this build yet — this
- * IS the notification, not a copy of one sent elsewhere.
- */
+/** pages/patient/NotificationsPage.jsx */
 import { useState } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -38,8 +30,6 @@ function relativeDate(dateStr) {
 export default function NotificationsPage() {
   const { familyMembers } = usePatientContext();
   // Like PortalInvoiceListView, notifications resolve one target patient at
-  // a time (see _resolve_target_awpid_and_dob) rather than merging the whole
-  // family — so "whose notifications" is a selector here, defaulting to self.
   const [notifFor, setNotifFor] = useState(""); // "" = self, else a family member's awpid
   const { data, isLoading, refetch } = useApi(
     API_ENDPOINTS.PORTAL.NOTIFICATIONS,
@@ -51,7 +41,6 @@ export default function NotificationsPage() {
 
   async function markRead(n) {
     // Only real NotificationLog rows ("<hospital_db>:<log_id>") can be marked
-    // read — vaccination-due items are computed live with no backing row.
     const sepIndex = n.id.indexOf(":");
     if (sepIndex === -1 || n.type === "vaccination_due") return;
     const hospitalDb = n.id.slice(0, sepIndex);

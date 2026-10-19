@@ -1,27 +1,4 @@
-/**
- * hooks/usePaginatedList.js
- * --------------------------
- * Data-fetching hook for endpoints that return { results: [...], pagination: {...} }
- * (see core/pagination.py paginate_queryset / paginate_list on the backend).
- *
- * Unlike useApi, this accumulates pages via loadMore() instead of replacing
- * the list on every param change — suited to "Load more" style list views
- * where the caller may also apply client-side filtering over the accumulated
- * items (e.g. the patient portal's Records/Prescriptions/Lab pages, which all
- * derive their view from the same underlying paginated record list).
- *
- * Usage:
- *   const { items, isLoading, isLoadingMore, hasMore, loadMore, refetch } =
- *     usePaginatedList(API_ENDPOINTS.PORTAL.MY_RECORDS, { pageSize: 20 });
- *
- * Options:
- *   pollMs — if set, silently re-fetches page 1 on this interval to keep
- *            the list live (e.g. a new booking/prescription appearing
- *            without a manual refresh). Skipped while the user has loaded
- *            additional pages (page > 1), so a background tick never
- *            discards "Load more" progress, and paused while the tab is
- *            hidden.
- */
+/** hooks/usePaginatedList.js */
 
 import { useState, useEffect, useCallback } from "react";
 import apiClient from "../services/api.client";

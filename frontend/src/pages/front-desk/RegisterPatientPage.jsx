@@ -1,15 +1,4 @@
-/**
- * pages/front-desk/RegisterPatientPage.jsx
- * ------------------------------------------
- * Patient registration form — matches the Atomwalk HMS field specification.
- *
- * Sections (per atomwalk_registration_fields.html):
- *   1. Personal Information (name, DOB, gender, blood group, etc.)
- *   2. Contact Information (mobile, email, address, emergency contact)
- *   3. Registration Branch (branch, referring doctor)
- *   4. Insurance & Payment (payer type, insurer, policy)
- *   5. Consent (DPDP consent)
- */
+/** pages/front-desk/RegisterPatientPage.jsx */
 
 import { useState, useEffect, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -87,8 +76,6 @@ function SectionCard({ title, subtitle, color = "#5B52EE", bgColor = "#EDE9FF", 
 }
 
 // Two-node progress indicator — registration is really two phases: find the
-// patient, then (if new) fill in their details. Kept to what's actually
-// built rather than a longer wizard that doesn't exist yet.
 function Stepper({ step }) {
   const nodeStyle = (active) => ({
     display: "flex", alignItems: "center", gap: 7, fontSize: 12, fontWeight: 700,
@@ -137,16 +124,10 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
   const [errors,  setErrors]  = useState({});
 
   // A family member the mobile lookup already knows everything about (name/
-  // DOB/gender, from PatientService.list_family_members) just needs a click
-  // to get a local record at THIS hospital — routing them through the full
-  // 5-section form below (insurance, emergency contact, the works) to
-  // re-confirm data that's already on file is exactly the "why am I
-  // registering her again?" friction QuickRegisterModal exists to avoid.
   const [quickRegisterMember, setQuickRegisterMember] = useState(null);
 
   function handleQuickRegistered(created) {
     // QuickRegisterModal already toasts the "registered" confirmation —
-    // straight to booking next, same as the rest of this page's flow.
     setQuickRegisterMember(null);
     navigate(ROUTES.FRONT_DESK.INTAKE_OPD, { state: { patient: created, justRegistered: true } });
   }
@@ -190,8 +171,6 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
     hie_consent:  false,
 
     // Dependent / guardian — set when registering a family member (child,
-    // or anyone with no mobile of their own) via an existing guardian
-    // record instead of their own mobile number.
     is_dependent:    false,
     guardian_awpid:  "",
     guardian_name:   "",
@@ -200,11 +179,6 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
   });
 
   // Pediatric-only — Birth History, captured here (registration) OR later by
-  // the doctor at consultation (see EncounterPage.jsx's Birth History panel)
-  // per the "both" build decision. Kept as a separate form since it posts to
-  // its own endpoint (patient must exist first) rather than the patient
-  // registration payload itself — front desk fills it in only when they have
-  // the details on hand; nothing here is mandatory.
   const [birthHistory, setBirthHistory] = useState({
     gestational_age_weeks: "", birth_weight_kg: "", delivery_mode: "",
     nicu_admission: false, nicu_days: "", birth_complications: "",
@@ -216,9 +190,6 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
     };
   }
   // Shown only while registering a dependent whose DOB marks them a minor —
-  // never for an adult record, and never on the "own mobile" (non-dependent)
-  // path, since Birth History is specifically about the child being
-  // registered here, not an adult filling in their own details.
   function isMinorDob(dob) {
     if (!dob) return false;
     const born = new Date(dob);
@@ -232,15 +203,6 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
   const showBirthHistory = form.is_dependent && isMinorDob(form.date_of_birth);
 
   // ── Step 1: mobile-number check, gates the rest of the form ──────────────
-  // Front desk shouldn't have to type a patient's full name/DOB/gender before
-  // finding out they're already in the system — check the mobile number
-  // first, and only reveal the registration fields once we know this is
-  // genuinely a new patient (or the front desk explicitly chooses to
-  // continue anyway).
-  // Prefilled when arriving from Patient Search's "found in network, not
-  // registered here yet" prompt (PatientsPage.jsx) — lands the front desk
-  // straight into the mobile-check step already populated instead of
-  // making them retype the number they just searched.
   const [mobileInput, setMobileInput] = useState(location.state?.mobile || "");
   const [lookup, setLookup] = useState(null);       // API result once mobile is long enough
   const [lookupLoading, setLookupLoading] = useState(false);
@@ -259,7 +221,6 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
     lookupDebounce.current = setTimeout(() => {
       apiClient.get(API_ENDPOINTS.PATIENTS.LOOKUP, { params: { mobile: mobileInput } })
         // Backend wraps the payload as {success, message, data: {...}} —
-        // the actual lookup fields are under .data.data, not .data.
         .then(({ data: res }) => setLookup(res?.data || null))
         .catch(() => setLookup(null))
         .finally(() => setLookupLoading(false));
@@ -288,11 +249,6 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
   }
 
   // A patient record shouldn't depend on the person having their own
-  // mobile/login — a dependent (child, elderly parent with no phone, etc.)
-  // is registered against a guardian's existing identity instead. Picking
-  // an existing family member reuses their AWPID (cross-hospital dedup, the
-  // same way mobile matching does for adults); "add new" starts a blank
-  // dependent record under the same guardian.
   function continueAsDependent(member) {
     setForm(f => ({
       ...f,
@@ -325,19 +281,6 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
   }
 
   // ── Name / UHID search — a second way to find an existing patient without
-  // knowing their mobile number. Reuses the same search endpoint the doctor
-  // and nurse patient-search screens use (name/UHID/AWPID/mobile prefix).
-  //
-  // Live-searches as you type (same debounce pattern as the mobile tab
-  // above) instead of requiring an explicit Search click, and an empty
-  // query browses the most recently registered patients at this hospital
-  // instead of showing a blank box — front desk can scan a short list
-  // without needing an exact name/UHID first.
-  //
-  // The results list (and its pagination) is shared across BOTH tabs, not
-  // just Name/UHID — front desk shouldn't have to switch tabs just to
-  // browse/page through recently registered patients while on the Mobile
-  // Number tab.
   const [searchTab, setSearchTab] = useState("mobile"); // "mobile" | "name"
   const [nameQuery, setNameQuery] = useState("");
   const [nameResults, setNameResults] = useState(null); // null = not loaded yet
@@ -361,8 +304,6 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
   }
 
   // Loads the default "recently registered" browse list on mount (empty
-  // query), then re-searches (debounced) whenever the query, page, or page
-  // size changes — regardless of which tab is currently active.
   useEffect(() => {
     clearTimeout(nameDebounce.current);
     const q = nameQuery.trim();
@@ -373,9 +314,6 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
   }, [nameQuery, namePage, namePageSize]);
 
   // Fields that must be a plain 10-digit mobile number — sanitized on every
-  // keystroke (strip non-digits, cap at 10) so the field can never end up
-  // holding too few/too many digits in the first place, rather than only
-  // catching it at submit time.
   const MOBILE_FIELDS = new Set(["mobile", "alternate_mobile", "emergency_phone"]);
 
   function set(key) {
@@ -418,11 +356,6 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
       const patient = envelope?.data;
 
       // Optional Birth History — only when there's actually something to
-      // save, so a front desk that skipped these fields doesn't create an
-      // empty record (BirthHistoryView.post requires none of these; an
-      // all-empty POST would just be a wasted request). Best-effort: a
-      // failure here shouldn't block registration itself — the doctor can
-      // still add it later at consultation (see EncounterPage.jsx).
       if (showBirthHistory && patient?.id) {
         const bhBody = {};
         Object.entries(birthHistory).forEach(([k, v]) => {
@@ -435,17 +368,12 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
             await apiClient.post(API_ENDPOINTS.PATIENTS.BIRTH_HISTORY(patient.id), bhBody);
           } catch {
             // Non-fatal — registration already succeeded; birth history can
-            // be added/corrected later from the doctor's consultation screen.
           }
         }
       }
 
       toastSuccess("Patient registered successfully.");
       // Straight to booking, not the queue — a freshly registered patient
-      // has no appointment yet, so the queue (which only ever shows today's
-      // appointments) would just look empty and silently "lose" them. This
-      // is also the reason a new registration used to look like it "didn't
-      // show up" in the queue: it never should have until it's booked.
       navigate(ROUTES.FRONT_DESK.INTAKE_OPD, { state: { patient, justRegistered: true } });
     } catch (err) {
       if (err?.errors) setErrors(err.errors);
@@ -479,9 +407,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
         <SectionCard title="Find Patient" subtitle="Search first to avoid creating a duplicate record — then create a new one only if nothing matches."
           icon={Search} bgColor="#EFF6FF" color="#1D4ED8">
 
-          {/* Segmented tabs — mobile is the fast path (dedup-checked across
-              every hospital); name/UHID only searches this hospital's own
-              records, for when front desk doesn't have the mobile handy. */}
+          {/* Segmented tabs — mobile is the fast path (dedup-checked across */}
           <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
             {[["mobile", Smartphone, "Mobile Number"], ["name", Contact, "Name / UHID"]].map(([key, TabIcon, label]) => (
               <button key={key} type="button"
@@ -594,11 +520,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
                 </div>
               )}
 
-              {/* Family members — a patient record shouldn't depend on having
-                  their own mobile, so dependents registered under this
-                  guardian anywhere in the network show up here to reuse,
-                  instead of front desk re-typing (and re-guessing) details
-                  that create a disconnected duplicate. */}
+              {/* Family members — a patient record shouldn't depend on having */}
               {!proceeded && mobileChecked && lookup.exists_in_network && (
                 <div style={{
                   background: "#FAF5FF", border: "1px solid #E9D5FF", borderRadius: 8,
@@ -791,9 +713,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
             </ThreeCol>
           </SectionCard>
 
-          {/* ── Birth History (pediatric-only) ── shown only for a dependent
-              whose DOB marks them a minor; entirely optional — the
-              pediatrician can also add/correct this later at consultation. */}
+          {/* ── Birth History (pediatric-only) ── shown only for a dependent */}
           {showBirthHistory && (
             <SectionCard title="Birth History" subtitle="Optional — fill in if you have the details on hand. The pediatrician can also add this at consultation."
               icon={Baby} bgColor="#FFF7ED" color="#C2410C">
@@ -1091,14 +1011,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
         </form>
         )}
 
-        {/* Shared browse/search results list — visible under BOTH tabs, so
-            front desk can page through recently registered patients (or an
-            in-progress name/UHID search) without switching tabs. Rendered
-            last, after the registration form above (when it's showing) —
-            whatever the front desk is actively doing (finding a patient or
-            filling in a new one) belongs above the fold; the recently-
-            registered browse list is reference material, not the task at
-            hand, so it always sits at the bottom of the page. */}
+        {/* Shared browse/search results list — visible under BOTH tabs, so */}
         {nameResults != null && (
           <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px dashed var(--color-border)" }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", margin: "4px 0 8px" }}>

@@ -1,12 +1,4 @@
-/**
- * pages/pharmacist/DrugFormSetupPage.jsx
- * ---------------------------------------
- * Pharmacist manages the list of drug forms (Tablet, Capsule, Syrup, ...)
- * that populate the "Drug Form" dropdown on the Drug Catalog Setup page.
- * Was previously a hardcoded list — this makes it fully configurable per
- * hospital. Modeled after CatalogPage.jsx's inline add/edit pattern, just
- * with a single field (name) instead of a full drug record.
- */
+/** pages/pharmacist/DrugFormSetupPage.jsx */
 import { useState } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";

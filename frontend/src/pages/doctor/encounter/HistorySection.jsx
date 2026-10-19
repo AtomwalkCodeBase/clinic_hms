@@ -2,14 +2,6 @@ import { cloneElement, isValidElement, useState } from "react";
 import { ChevronDown } from "lucide-react";
 
 // ─── Patient history sidebar (Overleaf-style collapsible rail) ──────────────
-// Cross-visit history — past diagnoses, vitals, allergies, lab results,
-// prescriptions — pulled from the shared HIE record. Collapses to a thin
-// icon rail so it never eats into the SOAP/vitals/diagnoses workspace; the
-// main content's own layout is completely untouched either way.
-//
-// A section with something in it is a full row (icon in a tinted tile, title, count, chevron). A section with
-// nothing in it (count 0) is a slim, muted row, so six empty sections don't read as six full ones; it still opens
-// (some hold an "add" action). `urgent` (allergies) turns red as soon as it has an entry.
 export function HistorySection({ title, icon, count, defaultOpen, urgent, children }) {
   const [open, setOpen] = useState(!!defaultOpen);
   const empty = count === 0;

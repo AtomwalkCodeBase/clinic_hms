@@ -1,28 +1,4 @@
-/**
- * pages/front-desk/BedBoardPage.jsx
- * -----------------------------------
- * Live Floor -> Room -> Bed grid, backed by org.BedBoardView (one call
- * instead of stitching Floor/Room/Bed lists together). Click any bed to act
- * on it:
- *   - available -> Reserve it for a patient still on the Awaiting Bed
- *     worklist (see AdmissionsPage.jsx), or take it out of rotation
- *     (maintenance — hospital-admin only on the backend).
- *   - reserved  -> confirm ("patient is actually in the bed now" — the same
- *     action as AssignBedView) or cancel the hold.
- *   - occupied  -> see who's in it, jump to their admission, or transfer
- *     them straight into a different bed (one atomic call — see
- *     apps.ipd.views.TransferBedView).
- *   - cleaning  -> mark it clean and available again (the turnover step a
- *     discharge/transfer now routes through instead of freeing a bed
- *     straight back to available).
- *   - blocked / out_of_service -> return it to available.
- *
- * Maintenance actions are shown regardless of role — hospital_admin already
- * has route access to this page "for oversight" (see AppShell.jsx), and a
- * front-desk user attempting an admin-only action just gets the ordinary
- * 403 toast, the same pattern every other cross-role button in this app
- * already follows (no in-page role branching elsewhere in front-desk pages).
- */
+/** pages/front-desk/BedBoardPage.jsx */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppShell } from "../../components/layout/AppShell";
@@ -44,7 +20,6 @@ const BADGE_META = {
   available: "badge--success", reserved: "badge--warning", occupied: "badge--error",
   cleaning: "badge--warning", blocked: "badge--neutral", out_of_service: "badge--neutral",
 };
-
 
 
 const selectStyle = {

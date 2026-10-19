@@ -1,17 +1,4 @@
-/**
- * utils/theme.js
- * ---------------
- * Turns a small hand-picked theme entry (config/themes.config.js) into the
- * full set of CSS custom properties styles/variables.css expects, by
- * mixing/lightening the source colors rather than hand-authoring every
- * derived shade for every theme.
- *
- * Deliberately left untouched by theming: --color-success/warning/error/info
- * (and their *-light pairs) stay the fixed semantic colors from
- * variables.css — status colors shouldn't shift with the brand palette, or
- * "success" and "warning" stop being recognizable at a glance. Same for
- * --font-family (body text), spacing, radius, and shadow tokens.
- */
+/** utils/theme.js */
 
 function hexToRgb(hex) {
   const h = hex.replace("#", "");
@@ -34,12 +21,7 @@ function mix(hexA, hexB, t) {
 const lighten = (hex, t) => mix(hex, "#FFFFFF", t);
 const darken = (hex, t) => mix(hex, "#000000", t);
 
-/**
- * Perceived brightness (YIQ) of a hex color, 0-255. Used to decide whether
- * hero text should be light or dark when the hero background is the theme's
- * primary color itself (which ranges from near-black to near-white across
- * the palette, unlike the old hand-picked-always-dark sidebar color).
- */
+/** Perceived brightness (YIQ) of a hex color, 0-255. Used to decide whether */
 function yiq(hex) {
   const [r, g, b] = hexToRgb(hex);
   return (r * 299 + g * 587 + b * 114) / 1000;
@@ -48,15 +30,6 @@ function yiq(hex) {
 /** The full CSS-variable name -> value map for a theme, ready to apply. */
 export function deriveThemeVars(t) {
   // Hero (sidebar/topbar/hero-card) now uses the primary color directly,
-  // not a separately hand-picked darker shade — so light chips (Aqua,
-  // Teal Mist, Spring, ...) need dark text, and dark chips need light text.
-  // 150 (not the more "correct" 145) is deliberate: Emerald Glass's primary
-  // (#01D4C7) sits right at YIQ~147 — technically "light" by the strict
-  // midpoint, but it's a saturated, fairly vivid teal, not a pale tint, and
-  // dark text on it reads as muddy/low-contrast rather than crisp (this is
-  // what "colours not matching" turned out to be). 150 flips just this one
-  // borderline theme to light text without touching any other theme's
-  // classification (next nearest is sand-sage at ~152, which stays dark-text).
   const heroIsLight = yiq(t.primary) >= 150;
   const heroText = heroIsLight ? t.text : t.sidebarText;
 

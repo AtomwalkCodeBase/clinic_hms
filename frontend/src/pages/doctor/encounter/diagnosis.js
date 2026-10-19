@@ -1,7 +1,6 @@
 import { ICD10_CODES, SYMPTOM_SYNONYMS } from "./constants";
 
 // Best-effort ICD-10 code for a free-text diagnosis description, using the
-// same starter table the manual picker uses. "" when nothing matches.
 export function icdCodeForDescription(desc) {
   const d = (desc || "").trim().toLowerCase();
   if (!d) return "";
@@ -25,9 +24,6 @@ export function matchICD(t, limit = 6) {
   return ICD10_CODES
     .map(c => {
       // Curated keyword phrases (e.g. "back pain", "high bp") are a much
-      // stronger signal than incidental word overlap with the clinical
-      // description text, so they're weighted heavier and checked as
-      // whole-phrase substring matches against the raw complaint text.
       const keywordHits = (c.keywords || []).filter(k => lower.includes(k)).length;
       const wordHits = words.filter(w => c.desc.toLowerCase().includes(w)).length;
       return { c, score: keywordHits * 3 + wordHits };

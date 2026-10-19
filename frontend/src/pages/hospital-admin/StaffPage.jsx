@@ -1,9 +1,4 @@
-/**
- * pages/hospital-admin/StaffPage.jsx
- * ------------------------------------
- * Hospital admin: invite and manage staff members.
- * Uses the invite → setup-password flow (no admin-set passwords).
- */
+/** pages/hospital-admin/StaffPage.jsx */
 
 import { useState, useEffect, useCallback } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
@@ -31,9 +26,6 @@ const ROLE_LABELS = {
 const ROLES = Object.keys(ROLE_LABELS);
 
 // Which "basics" fields to collect at invite time, per role — mirrors the
-// registration-fields reference: nurse/pharmacist have a legally-mandated
-// council registration, lab tech's is optional-but-common, front desk/admin
-// have none. Doctor is handled separately (has its own specialisation field).
 const ROLE_BASICS = {
   nurse:          { license: true,  licenseLabel: "Nursing Council Registration No." },
   pharmacist:     { license: true,  licenseLabel: "Pharmacy Council Registration No." },
@@ -43,10 +35,6 @@ const ROLE_BASICS = {
 };
 
 // Dropdown options for Specialisation (doctor) and Qualification (per role)
-// — rendered as <input list="..."> + <datalist>, so it behaves like a real
-// dropdown (click the field, pick from the list) while still accepting a
-// value that isn't on the list, since real-world staff qualifications and
-// specialisations are too varied for any fixed list to fully cover.
 const SPECIALISATIONS = [
   "General Physician", "General Medicine", "Family Medicine", "Cardiology",
   "Dermatology", "ENT (Otorhinolaryngology)", "Gynaecology & Obstetrics",
@@ -75,9 +63,6 @@ const QUALIFICATIONS_BY_ROLE = {
 };
 
 // role="custom" has no fixed label/color of its own (it's a hospital-defined
-// Role — see apps/org/rbac.py) — falls back to the actual role's name, and a
-// neutral color unless it happens to act as exactly one system role (in
-// which case that role's color is a reasonable visual hint).
 function roleDisplay(staff) {
   if (staff.role !== "custom") {
     return ROLE_LABELS[staff.role] || { label: staff.role, color: "#64748b" };
@@ -101,8 +86,6 @@ function RoleBadge({ staff }) {
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 // Shared default working-hours shape — Mon-Fri 9-5, used both for a brand
-// new doctor (InviteModal) and as a fallback when an existing doctor has
-// never had a schedule saved yet (DoctorProfileModal).
 function defaultSchedule() {
   return DAYS.map((_, i) => ({
     day_of_week:  i,
@@ -112,17 +95,7 @@ function defaultSchedule() {
   }));
 }
 
-/**
- * Working Hours + Room tagging, shown together so which room a doctor sits
- * in is configured right on top of the day/time it applies to (rather than
- * as a separate step on the Rooms page). A day can carry more than one room
- * "block" — e.g. Room 101 9-1 and Room 204 1-5 on the same Monday — to cover
- * a doctor who sits in different rooms at different times on the same day.
- *
- * `blocksByDay` — { [day_of_week]: [{ key, start_time, end_time, room_id, room_name, floor }] }
- * `onAddBlock(day_of_week, { start_time, end_time, room_id })` → Promise<boolean>
- * `onRemoveBlock(day_of_week, block)` → void | Promise<void>
- */
+/** Working Hours + Room tagging, shown together so which room a doctor sits */
 function WorkingHoursRoomGrid({
   schedule, setSchedule, rooms, blocksByDay, onAddBlock, onRemoveBlock, busy,
   inputStyle,
@@ -275,8 +248,6 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
   });
 
   // Custom roles (enterprise add-on) — offered in the Role dropdown below
-  // ROLES alongside the 6 system ones. See apps/org/rbac.py; a hospital
-  // defines these on the Roles & Permissions page.
   const [customRoles, setCustomRoles] = useState([]);
   useEffect(() => {
     if (!permissions?.feat_custom_roles) return;
@@ -289,17 +260,10 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
     ? customRoles.find(r => String(r.id) === String(form.custom_role_id))
     : null;
   // Whether the currently-selected role (system "doctor" or a custom role
-  // that acts_as doctor) should count against the doctors cap, get the full
-  // doctor invite UI (specialisation, working hours, consultation fee, room
-  // tagging), and be treated as a doctor by the backend (see
-  // StaffInviteView's is_doctor_equivalent).
   const roleActsAsDoctor = form.role === "doctor"
     || (form.role === "custom" && !!selectedCustomRole?.acts_as?.includes("doctor"));
 
   // For a custom role that ISN'T doctor-equivalent, which non-doctor
-  // "professional basics" block (license field) to show, if any — the first
-  // acts_as entry that has a ROLE_BASICS definition. A literal system role
-  // just uses itself.
   const basicsRole = form.role === "custom"
     ? (selectedCustomRole?.acts_as || []).find(r => r !== "doctor" && ROLE_BASICS[r])
     : (form.role !== "doctor" ? form.role : null);
@@ -309,11 +273,8 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
   const [slotDuration, setSlotDuration] = useState(15);
 
   // Rooms for whichever branch is selected, and the room "blocks" the admin
-  // has tagged onto specific days/times so far. These can't be saved to the
-  // backend until the doctor actually exists, so they're held locally and
-  // created right after the invite succeeds (see handleSubmit).
   const [rooms, setRooms] = useState([]);
-  const [roomBlocks, setRoomBlocks] = useState([]); // [{key, day_of_week, start_time, end_time, room_id, room_name, floor}]
+  const [roomBlocks, setRoomBlocks] = useState([]);
 
   useEffect(() => {
     if (!form.branch_id || !roleActsAsDoctor) { setRooms([]); return; }
@@ -345,7 +306,6 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
   }
 
   // Per-invite fee toggle: true = admin sets fee now, false = doctor sets it themselves.
-  // Defaults to whatever the hospital's global setting is, but admin can flip it per invite.
   const [adminSetsFee, setAdminSetsFee] = useState(false);
   useEffect(() => {
     orgApi.getSettings()
@@ -357,9 +317,6 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
   }, [api]);
 
   // Doctor-only: which branches beyond the single dropdown above they also
-  // work at. Everyone else stays single-branch (see docs/onboarding_auth_
-  // rbac_architecture.md 4.4 — doctors are the only role that realistically
-  // needs more than one).
   const [extraBranchIds, setExtraBranchIds] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -398,16 +355,12 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
         registration_expiry: form.registration_expiry || null,
       };
       // custom_role_id only means anything (and is only required) when
-      // role="custom" — omit it entirely otherwise so the backend doesn't
-      // see a stray empty string.
       if (form.role === "custom") {
         payload.custom_role_id = form.custom_role_id ? parseInt(form.custom_role_id) : null;
       } else {
         delete payload.custom_role_id;
       }
       // Doctor's extra branches, if any were checked — the primary branch
-      // dropdown's value is folded in automatically as the primary on the
-      // backend (see StaffInviteSerializer.branch_ids / branch_utils).
       if (roleActsAsDoctor && extraBranchIds.length > 0) {
         payload.branch_ids = [
           ...(payload.branch_id ? [payload.branch_id] : []),
@@ -415,8 +368,6 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
         ];
       }
       // specialisation only applies to doctors (literal or acts_as doctor);
-      // council_name/registration_expiry only apply to non-doctor roles with
-      // a professional license.
       if (roleActsAsDoctor) {
         delete payload.council_name; delete payload.registration_expiry;
         // Consultation fee — only include when admin chose to set it now
@@ -426,7 +377,6 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
           delete payload.consultation_fee;
         }
         // Follow-up fee — optional even when admin sets fees; leave unset
-        // and the invoice generator falls back to consultation_fee.
         if (adminSetsFee && form.followup_fee) {
           payload.followup_fee = parseFloat(form.followup_fee);
         } else {
@@ -449,9 +399,6 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
       toastSuccess(`${form.first_name} invited successfully.`);
 
       // Room tagging can only be saved now that the doctor actually has an
-      // id — create whatever blocks the admin set up above. Best-effort:
-      // the staff account is already created either way, so a room-tag
-      // conflict here shouldn't look like the whole invite failed.
       if (roleActsAsDoctor && roomBlocks.length > 0 && res.data?.id) {
         let okCount = 0;
         const failMsgs = [];
@@ -1180,8 +1127,6 @@ function EditStaffModal({ staff, branches, onClose, onSaved }) {
     setExtraBranchIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
   }
   // Seed from staff.branches (already returned on the list/serializer) if
-  // present, else fall back to fetching — covers callers that pass a lean
-  // staff object.
   useEffect(() => {
     if (!isDoctor) return;
     if (Array.isArray(staff.branches)) {
@@ -1217,8 +1162,6 @@ function EditStaffModal({ staff, branches, onClose, onSaved }) {
       };
       await api.patch(API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id), payload);
       // Doctor's full branch set — primary is whatever's selected in the
-      // dropdown above, extras are the checked boxes. A separate call since
-      // it's a separate resource (StaffBranchMapping), not a plain field.
       if (isDoctor) {
         const branchIds = [
           ...(payload.branch_id ? [payload.branch_id] : []),
@@ -1496,7 +1439,6 @@ export default function StaffPage() {
   }
 
   // Filtering and pagination now happen server-side (see fetchData above),
-  // so the fetched page is rendered as-is.
   const filtered = staff;
 
   const doctorsCapped = atCapacity("doctors");

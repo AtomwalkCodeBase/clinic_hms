@@ -1,7 +1,6 @@
 const pad2 = x => String(x).padStart(2, "0");
 
 // "YYYY-MM-DD" for a Date in the *local* timezone. Do not use date.toISOString().slice(0, 10) for this:
-// that is the UTC date, which in timezones ahead of UTC (IST, UTC+5:30) is still "yesterday" for the first hours of the day.
 export function toLocalISODate(date) {
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 }

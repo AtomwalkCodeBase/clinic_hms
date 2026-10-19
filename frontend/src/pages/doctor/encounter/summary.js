@@ -2,11 +2,6 @@ import { encounterApi } from "../../../api";
 import { openDataUrlInNewTab } from "../../../utils/fileViewer";
 
 // Real, printable consultation-summary PDF — server-rendered (reportlab,
-// see apps/opd/pdf.py's generate_encounter_summary_pdf) rather than a
-// plain-text file built client-side, so what the doctor hands the patient
-// looks like an actual medical document, not a stray .txt. Same
-// open-in-new-tab pattern as the front-desk invoice PDF and the patient
-// portal's prescription/invoice receipts (see utils/fileViewer.js).
 export async function downloadVisitSummary(encId) {
   const win = window.open("", "_blank");
   try {

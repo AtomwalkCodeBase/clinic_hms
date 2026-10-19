@@ -1,21 +1,4 @@
-/**
- * components/common/AvailabilityCalendar.jsx
- * --------------------------------------------
- * Date picker for the patient booking flow that replaces a plain
- * `<input type="date">`. A native date input has no way to disable
- * specific days of the week, so a patient could freely pick a Sunday for
- * a doctor who never works Sundays — the app already correctly refused to
- * let the booking complete (see PortalSlotListView / _slot_grid, which
- * return an empty slot grid for a day the doctor doesn't work), but the
- * calendar itself gave no visual sign of that until after picking the
- * date. This component greys out and disables non-working weekdays (and
- * out-of-range dates) up front, using the doctor's real weekly schedule
- * (`working_days`, 0=Monday..6=Sunday, from PortalDoctorDetailView).
- *
- * `workingDays === null` means "no schedule configured for this doctor
- * yet" — every day stays selectable, matching the backend's own fallback
- * (_slot_grid uses a generic all-week grid in that case too).
- */
+/** components/common/AvailabilityCalendar.jsx */
 import { useState, useRef, useEffect } from "react";
 import { ChevronLeft, ChevronRight, CalendarDays } from "lucide-react";
 
@@ -35,7 +18,6 @@ function fromISO(s) {
   return new Date(y, m - 1, d);
 }
 // JS Date.getDay(): 0=Sunday..6=Saturday. Backend/DoctorAvailabilitySlot
-// convention (Python's date.weekday()): 0=Monday..6=Sunday.
 function jsToPyDow(jsDay) {
   return (jsDay + 6) % 7;
 }

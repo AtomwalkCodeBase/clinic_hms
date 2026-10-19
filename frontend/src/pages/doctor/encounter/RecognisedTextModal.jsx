@@ -1,11 +1,6 @@
 import { openDataUrlInNewTab } from "../../../utils/fileViewer";
 
-/**
- * Read-only view of the handwriting session's recognised content — the
- * Prescription tab's extracted drugs and the Internal Note tab's SOAP split
- * + verbatim transcription. The form on the left is already populated; this
- * is the "what was actually read" reference.
- */
+/** Read-only view of the handwriting session's recognised content — the */
 export function RecognisedTextModal({ data, onClose }) {
   const note = data?.note || {};
   const rx = data?.rx || {};

@@ -1,15 +1,4 @@
-/**
- * pages/doctor/PatientsPage.jsx
- * --------------------------------
- * Doctor's patient roster. Opens showing "My Patients" — everyone this
- * doctor has actually seen — instead of a blank search box, since that's
- * the doctor's own EHR/roster and the whole point of the page. Built from
- * the same visit-history endpoint the History page uses (already scoped to
- * this doctor's own patients server-side), deduped down to one row per
- * patient (most recent visit). Typing a search still searches every patient
- * at the hospital (via PATIENTS.SEARCH) for cases where the doctor needs to
- * look someone up who isn't in their own history yet.
- */
+/** pages/doctor/PatientsPage.jsx */
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useNavigate }       from "react-router-dom";
 import { AppShell }          from "../../components/layout/AppShell";
@@ -33,9 +22,6 @@ export default function DoctorPatientsPage() {
   const timerRef = useRef(null);
 
   // ── "My Patients" — loaded once on mount, shown whenever the search box
-  // is empty. Deduped from this doctor's own visit history (most recent
-  // visit per patient wins, since AppointmentHistoryView is already ordered
-  // newest-first).
   const [myPatients, setMyPatients] = useState(null); // null = still loading
   const [myPatientsError, setMyPatientsError] = useState(false);
 
@@ -89,9 +75,6 @@ export default function DoctorPatientsPage() {
   }
 
   // ── Filters — applied client-side over whichever list is showing (the
-  // roster or a search result set). Last-visit range only makes sense for
-  // the roster (search results don't carry a visit date), so it's hidden
-  // once the doctor is actually searching.
   const [showFilters,     setShowFilters]     = useState(false);
   const [genderFilter,    setGenderFilter]    = useState("");
   const [dependentFilter, setDependentFilter] = useState(""); // "" | "dependent" | "adult"

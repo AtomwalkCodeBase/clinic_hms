@@ -1,10 +1,7 @@
 import { useState, useEffect } from "react";
 import { RuleRow } from "./RuleRow";
 
-/**
- * The rule list of one schedule or template: add, edit, reorder, remove, and the payload the PATCH endpoint takes.
- * `resetKey` (the schedule's id) re-seeds the list when a different schedule is opened.
- */
+/** The rule list of one schedule or template: add, edit, reorder, remove, and the payload the PATCH endpoint takes. */
 export function useRules(kind, saved, resetKey) {
   const seed = () => (saved || []).map(r => ({ ...r, _key: `existing-${r.id}` }));
   const [rules, setRules] = useState(seed);

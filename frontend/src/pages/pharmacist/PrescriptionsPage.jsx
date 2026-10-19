@@ -1,18 +1,4 @@
-/**
- * pages/pharmacist/PrescriptionsPage.jsx
- * ----------------------------------------
- * Pharmacist's dispensing queue — finalized prescriptions waiting to be
- * filled. Each drug line is dispensed against a specific stock batch (FEFO
- * isn't enforced — pharmacist picks the batch); once every line on a
- * prescription has at least one dispense, it drops off this list.
- *
- * Note: doctors currently free-type drug names on a prescription (drug_name
- * is a denormalized text field; the drug FK is optional and usually empty —
- * see doctor/EncounterPage.jsx's DrugForm), so a prescription line can't
- * always be linked to a catalog Drug automatically. The stock picker below
- * is pre-filtered by name match where possible and otherwise shows the full
- * batch list so the pharmacist can pick the right one by eye.
- */
+/** pages/pharmacist/PrescriptionsPage.jsx */
 import { useMemo, useState } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -131,10 +117,6 @@ const RX_PAY_BADGE = {
 };
 
 // The counter workflow: a patient walks up and quotes their Rx number
-// (shown to them in the portal once they choose in-house). This looks it
-// up directly — regardless of the active/dispensed tab or pagination —
-// and pops up the full prescription with patient details, same idea as a
-// lab tech searching by report number.
 function RxLookupBar({ onFound }) {
   const { toastApiError, toastError } = useToast();
   const [q, setQ] = useState("");
@@ -169,8 +151,6 @@ function RxLookupBar({ onFound }) {
 }
 
 // Full-detail popup for a looked-up prescription — patient info up top,
-// dispensable items below, reusing the same DispenseModal flow the queue
-// list uses.
 function RxLookupModal({ rx, stock, onClose, onDone, onDispenseClick }) {
   const choiceBadge = RX_CHOICE_BADGE[rx.patient_choice] || RX_CHOICE_BADGE.pending;
   const payBadge = RX_PAY_BADGE[rx.payment_status] || RX_PAY_BADGE.unpaid;
@@ -236,8 +216,6 @@ export default function PrescriptionsPage() {
   const [pageSize, setPageSize] = useState(10);
   const { data, isLoading, refetch } = useApi(API_ENDPOINTS.PHARMACY.PRESCRIPTIONS, { params: { status: tab, page, page_size: pageSize }, pollMs: 20000 });
   // Full (unpaginated) batch list — the dispense modal below name-matches
-  // against every batch on hand, not just whatever's on the current page of
-  // this list, so this stays a plain high-cap fetch rather than a paged one.
   const { data: stockData, refetch: refetchStock } = useApi(API_ENDPOINTS.PHARMACY.STOCK, { params: { page_size: 500 } });
   const stock = stockData?.results || [];
   const prescriptions = data?.results || [];

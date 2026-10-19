@@ -1,26 +1,4 @@
-/**
- * config/themes.config.js
- * ------------------------
- * Atomwalk of selectable color themes. Each entry only defines the
- * hand-picked "source" colors (primary, sidebar/hero, text, border,
- * accent, ...) — everything else (light tints, hero gradient stop, muted
- * variants, hero-text contrast, etc.) is derived at apply-time in
- * utils/theme.js so we're not hand-authoring 20+ full token sets.
- *
- * Curated down to ~12 clearly distinct hues (from an earlier 32-theme list
- * that had up to 8 near-identical shades within a single family) so the
- * picker reads as a deliberate, professional set of choices rather than a
- * wall of barely-different swatches. Kept flat (no family grouping) since
- * there's no longer enough depth per hue to justify family tabs in the UI.
- *
- * "forest" is the original theme, already fully defined by the hand-tuned
- * values in styles/variables.css — ThemeProvider still special-cases it
- * (see ORIGINAL_STYLESHEET_THEME_ID in ThemeContext.jsx) so picking it
- * gets the exact original stylesheet, pixel for pixel, not a re-derived
- * approximation. It is no longer the app *default*, though — that's
- * DEFAULT_THEME_ID below, which a first-time user (or "Reset to default")
- * lands on.
- */
+/** config/themes.config.js */
 
 function theme(id, name, primary, sidebar, sidebarText, bg, border, text, muted, accent, serif) {
   return { id, name, primary, sidebar, sidebarText, bg, border, text, muted, accent, serif };

@@ -1,19 +1,4 @@
-/**
- * hooks/usePermissions.js
- * ------------------------
- * Convenience hook. Consume PermissionContext anywhere in the tree.
- *
- * Returns:
- *   permissions — flat object of feature flags + tier limits + live usage,
- *                 e.g. { feat_lab, max_doctors, max_branches, max_staff,
- *                        usage: { doctors, branches, staff } }
- *   can(feature) — convenience function to check a single feature flag
- *   isLoading    — true while fetching
- *   atCapacity(resource) — true if usage.<resource> >= max_<resource> and
- *                          the limit isn't 0 (0 = unlimited on this tier)
- *   remaining(resource)  — max minus current usage, or null if usage/limit
- *                          isn't known yet (still loading) — never negative
- */
+/** hooks/usePermissions.js */
 
 import { useContext, useCallback } from "react";
 import { PermissionContext } from "../context/PermissionContext";

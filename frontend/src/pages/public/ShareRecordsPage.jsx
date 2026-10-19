@@ -1,27 +1,4 @@
-/**
- * pages/public/ShareRecordsPage.jsx
- * --------------------------------
- * "Share Records" — what a doctor's laptop opens.
- *
- * The PATIENT starts the flow in their app: they create a share link and
- * send it to the doctor. The doctor opens that link here (no account):
- *
- *   /s  (or /share-records)   no token — the doctor types the 6-digit code
- *                             the patient reads out. That claims the session
- *                             (binds this browser, mints a device token) and
- *                             redirects to /share-records/<token>.
- *   /share-records/<token>    shows a QR (carrying the session's `pairing`)
- *                             + that pairing as text, and waits. The patient
- *                             scans it in their app and confirms; this page
- *                             then fills in with the records, read-only, for
- *                             2 hours. Opening this path directly (a link the
- *                             patient sent) self-claims by token.
- *
- * There is NO web approve path — approval only ever happens in the app.
- * Deliberately outside AppShell / ProtectedRoute. Every read carries the
- * X-Share-Device token from the claim, so a leaked link/QR reads nothing.
- * Backend: apps/hospital_patients/records_share_views.py.
- */
+/** pages/public/ShareRecordsPage.jsx */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
@@ -40,13 +17,7 @@ const FEATURE_NAME = "Share Records";
 /* ── small helpers ─────────────────────────────────────────────────────── */
 const unwrap = (res) => res.data?.data ?? res.data;
 
-/* ── laptop binding ────────────────────────────────────────────────────────
- * When this browser "claims" a session it gets a one-time device token. We
- * keep it in sessionStorage (per tab, gone when the tab closes) and send it
- * as X-Share-Device on every read — the backend refuses a claimed session's
- * data to anyone without it, so a forwarded link or a photographed QR sees
- * nothing.
- */
+/* ── laptop binding ──────────────────────────────────────────────────────── */
 const devKey = (token) => `rshare:dev:${token}`;
 const getDev = (token) => {
   try { return sessionStorage.getItem(devKey(token)) || ""; } catch { return ""; }
@@ -209,11 +180,6 @@ function ClinicianWait({ token }) {
   }, [token]);
 
   // The status endpoint returns the pairing code and a server-rendered QR
-  // image while the request is still pending, so this screen survives a
-  // reload without needing the original create response. If this browser has
-  // no device token yet (the doctor opened a full share link rather than
-  // coming through /s), claim the session by its token first so later reads
-  // carry X-Share-Device.
   useEffect(() => {
     let stop = false;
     (async () => {
@@ -223,7 +189,6 @@ function ClinicianWait({ token }) {
           if (!stop) setDev(token, d.device_token);
         } catch (e) {
           // 409 = already approved elsewhere (or ended) — fall through to a
-          // normal poll, which will show the right end state.
           if (!stop && e?.status && ![409, 404].includes(e.status)) {
             setState({ status: "error", message: e?.message });
           }
@@ -350,10 +315,6 @@ function DocRow({ d, token, onChanged }) {
   const meta = metaFor(d.doc_type);
   const [busy, setBusy] = useState("");
   // { kind: "pdf", pages: [dataUri, ...], page: 0 } | { kind: "image", url: "blob:..." } | null
-  // Deliberately never a raw file URL handed to window.open() — that opens
-  // the browser's own PDF/image viewer, which carries its own Download
-  // button and bypasses the patient-approval gate on RecordsShareDownloadView
-  // entirely. See RecordsShareDocumentViewView's docstring for why.
   const [viewer, setViewer] = useState(null);
 
   async function onView() {
@@ -364,8 +325,6 @@ function DocRow({ d, token, onChanged }) {
         setViewer({ kind: "pdf", pages: r.pages, page: 0 });
       } else if (r.file_url) {
         // Fetched into a blob and shown in our own <img>, never navigated to
-        // directly — a direct-navigated image URL gets the browser's own
-        // image-viewer chrome (download button included) same as a PDF would.
         const blob = await fetch(r.file_url).then((res) => res.blob());
         setViewer({ kind: "image", url: URL.createObjectURL(blob) });
       }
@@ -550,8 +509,6 @@ function RecordsView({ token }) {
 
   const { label: countdown, left } = useCountdown(data?.seconds_left);
   // Only treat "0 on the clock" as ended once the clock has actually been
-  // running — otherwise the first render (data in, countdown not yet seeded)
-  // reads left===0 and ends the session immediately.
   const tickedRef = useRef(false);
   useEffect(() => {
     if (left > 0) tickedRef.current = true;
@@ -572,7 +529,6 @@ function RecordsView({ token }) {
   }, [docs]);
 
   // Only months/years that actually have a record — a doctor scanning one
-  // patient's history doesn't need every calendar month back to year zero.
   const monthOpts = useMemo(() => {
     const keys = new Set(docs.map((d) => ymKey(d.created_at)).filter(Boolean));
     return [...keys].sort((a, b) => b.localeCompare(a)).map((k) => ({ key: k, label: ymLabel(k) }));
@@ -589,7 +545,6 @@ function RecordsView({ token }) {
     || (filterMode === "dates" && (!!dFrom || !!dTo));
 
   // Panel filter only makes sense while looking at lab reports (or "all",
-  // which includes them) — prescriptions/documents have no panel.
   const catMode = tab === "all" || tab === "lab";
   const catOptions = useMemo(() => {
     const c = new Map();
@@ -620,7 +575,6 @@ function RecordsView({ token }) {
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
 
     // All / Lab reports: group category by category (matches the patient's
-    // own view). Prescriptions / Documents: month-grouped.
     if (tab === "all" || tab === "lab") {
       const map = new Map();
       list.forEach((d) => docSections(d).forEach(({ key, label }) => {
@@ -659,7 +613,6 @@ function RecordsView({ token }) {
   const sum = data.summary || {};
   const ec = sum.emergency_contact;
   // Sections the patient keeps private this session are dropped from the rail
-  // entirely. `sections_withheld` carries the backend's own labels.
   const withheldSet = new Set(data.sections_withheld || []);
   const SECTION_LABEL = { summary: "Summary", vitals: "Recent vitals", diagnoses: "Diagnoses & clinical notes", vaccinations: "Vaccinations" };
   const nav = [
@@ -967,7 +920,5 @@ export default function ShareRecordsPage() {
   if (!token) return <EntryForm />;
 
   // The link, opened on any device, always shows the QR + waiting → records.
-  // The patient approves ONLY from their app by scanning that QR — there is
-  // no web approve path.
   return <ClinicianWait token={token} />;
 }

@@ -1,28 +1,4 @@
-/**
- * pages/patient/EmergencyQRPage.jsx
- * -----------------------------------
- * "Show my emergency QR" — for the unregistered/nearby-hospital emergency
- * scenario (see core/emergency_access.py for the full design reasoning).
- * The patient (or a linked family member, picked here independently of the
- * global "Viewing: X" switcher in PatientContext — generating a QR for a
- * child shouldn't silently flip every other page over to that child) taps
- * Generate, reviews exactly what will be shared, confirms, then gets a
- * short-lived QR code to hand to whichever doctor is in front of them. No
- * login/app needed on the doctor's side — scanning it just opens a public
- * read-only summary page with the patient's full shared history.
- *
- * Deliberately NOT auto-generated on page load — every generation mints a
- * fresh token and writes an EmergencyAccessLog "generated" row, so this
- * stays an explicit, patient-initiated action rather than something that
- * fires just from visiting the page.
- *
- * Consent step: the first request always omits consent_confirmed, so the
- * backend (PortalEmergencyTokenView) always answers with 428 + the exact
- * list of what would be shared — that list drives the confirmation card
- * below rather than a hardcoded copy of it, so this page can never drift
- * out of sync with what the backend actually discloses. Only after the
- * patient explicitly confirms does the real (token-minting) request go out.
- */
+/** pages/patient/EmergencyQRPage.jsx */
 import { useState, useEffect, useCallback } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -54,8 +30,6 @@ export default function EmergencyQRPage() {
   const { toastApiError, toastSuccess } = useToast();
 
   // Independent of PatientContext.selectedPatient on purpose — see file
-  // docstring. "" (empty string) means self, matching how <select> handles
-  // a null-ish value; converted to undefined (self) when calling the API.
   const [targetAwpid, setTargetAwpid] = useState("");
   const [generating, setGenerating] = useState(false);
   const [result, setResult] = useState(null); // { token, view_url, qr_image, expires_at, ttl_minutes }
@@ -93,12 +67,10 @@ export default function EmergencyQRPage() {
   }, [targetAwpid]);
 
   // "Generate" always starts by asking what would be shared — the actual
-  // token is only minted once the patient sees and confirms that list.
   const startGenerate = useCallback(() => requestToken(false), [requestToken]);
   const confirmAndGenerate = useCallback(() => requestToken(true), [requestToken]);
 
   // Switching who the QR is for invalidates whatever was on screen — don't
-  // show a stale code, or a stale consent prompt, for the wrong person.
   useEffect(() => { setResult(null); setConsentPrompt(null); }, [targetAwpid]);
 
   function copyLink() {

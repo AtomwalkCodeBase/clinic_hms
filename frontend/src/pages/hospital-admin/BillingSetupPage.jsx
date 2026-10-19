@@ -1,15 +1,4 @@
-/**
- * pages/hospital-admin/BillingSetupPage.jsx
- * ------------------------------------------
- * Hospital admin: everything about billing that used to be hardcoded.
- *   - Registration fee (on/off + amount) and default tax rate — hospital-wide.
- *   - Service catalog (price list) — full CRUD, was previously DB-only.
- *   - Three configurable dropdown lists (service categories, payment modes,
- *     invoice statuses) that replace what used to be fixed choices= lists
- *     on the backend models. Seeded "system" values can be relabelled but
- *     not removed (the backend's own logic depends on a few of them); a
- *     hospital can add its own custom entries alongside them.
- */
+/** pages/hospital-admin/BillingSetupPage.jsx */
 import { useState, useEffect, useCallback } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
@@ -38,16 +27,6 @@ function SectionCard({ icon: Icon, title, subtitle, children }) {
 }
 
 // ── Hospital-wide billing settings (registration fee, default tax rate) ──────
-// Both amount fields used to be uncontrolled (defaultValue + onBlur) — that
-// meant a failed save (e.g. clearing the field to blank, or a stray value
-// outside 0-100 for tax) left the input showing whatever the admin typed
-// with no way to tell it hadn't actually been saved, and a successful save
-// never visibly reflected the server's normalized value either, since a
-// defaultValue prop is only ever read once at mount. Rewritten as fully
-// controlled: local text state tracks what's on screen, client-side range
-// validation runs before the request goes out, and on any failure — client
-// or server-side — the field snaps back to the last known-good saved value
-// instead of sitting there silently wrong.
 function HospitalBillingSettings() {
   const { toastSuccess, toastApiError, toastError } = useToast();
   const [settings, setSettings] = useState(null);
@@ -74,16 +53,12 @@ function HospitalBillingSettings() {
       const updated = res.data || {};
       setSettings(s => ({ ...s, ...updated }));
       // Re-sync the specific field(s) just saved to the server's own
-      // (normalized/rounded) value, so the field always shows exactly
-      // what's actually stored rather than the raw text the admin typed.
       if ("registration_fee_amount" in updated) setRegFeeInput(String(updated.registration_fee_amount));
       if ("default_tax_rate" in updated) setTaxRateInput(String(updated.default_tax_rate));
       toastSuccess("Billing settings saved.");
     } catch (err) {
       toastApiError(err, "Could not save settings.");
       // Revert the visible field to the last known-good value — otherwise
-      // a rejected save (e.g. an out-of-range or non-numeric value) leaves
-      // the input showing something that was never actually saved.
       if ("registration_fee_amount" in patch) setRegFeeInput(String(settings?.registration_fee_amount ?? ""));
       if ("default_tax_rate" in patch) setTaxRateInput(String(settings?.default_tax_rate ?? ""));
     } finally {

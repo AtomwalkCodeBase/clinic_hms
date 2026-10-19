@@ -1,17 +1,4 @@
-/**
- * components/common/HospitalDirections.jsx
- * ------------------------------------------
- * "Get Directions" + an optional map preview for a hospital, given its
- * lat/lng (see Hospital.latitude/longitude, returned by _hospital_card /
- * PortalDoctorDetailView / PortalBookView / PortalMyBookingsView).
- *
- * Deliberately no maps SDK / API key: "Get Directions" opens Google Maps'
- * plain directions URL (works as a web page AND deep-links into the
- * Google/Apple Maps app on mobile, giving real turn-by-turn navigation for
- * free), and the preview is the keyless `output=embed` iframe. Renders
- * nothing if this hospital has no coordinates on file yet — that's a real,
- * expected state (platform admin hasn't set them), not an error.
- */
+/** components/common/HospitalDirections.jsx */
 import { useEffect, useRef, useState } from "react";
 import { MapPin, Navigation } from "lucide-react";
 import { useGeolocation } from "../../hooks/useGeolocation";
@@ -21,7 +8,6 @@ export default function HospitalDirections({ latitude, longitude, hospitalName, 
   const [showMap, setShowMap] = useState(defaultShowMap);
   const [pendingDirections, setPendingDirections] = useState(false);
   // Holds the tab opened synchronously in the click handler while we wait
-  // on the (async) geolocation callback — see handleGetDirections below.
   const pendingWinRef = useRef(null);
 
   const directionsUrl = (originLat, originLng) => {
@@ -42,10 +28,6 @@ export default function HospitalDirections({ latitude, longitude, hospitalName, 
       return;
     }
     // getCurrentPosition is async, so window.open() can't be called from
-    // its callback — by then the browser no longer considers it a direct
-    // result of this click and silently blocks it as a popup. Instead,
-    // open the tab right now (still inside the click handler, so it's
-    // allowed) and navigate that same tab once we know the real URL.
     pendingWinRef.current = window.open("", "_blank");
     setPendingDirections(true);
     geo.request();
@@ -60,8 +42,6 @@ export default function HospitalDirections({ latitude, longitude, hospitalName, 
       pendingWinRef.current = null;
     } else if (geo.status === "denied" || geo.status === "unavailable" || geo.status === "error") {
       // Fall back to a destination-only link — Google Maps will use its
-      // own location detection (or ask the patient to search from wherever
-      // they are) instead of the trip being blocked entirely.
       if (win) win.location.href = directionsUrl(null, null);
       setPendingDirections(false);
       pendingWinRef.current = null;

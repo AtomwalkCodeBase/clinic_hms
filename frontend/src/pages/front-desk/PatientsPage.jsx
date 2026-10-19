@@ -1,12 +1,4 @@
-/**
- * pages/front-desk/PatientsPage.jsx
- * ------------------------------------
- * Full, paginated list of every patient registered at this hospital —
- * distinct from AppointmentsPage's typeahead search box, which only ever
- * shows a capped 50 results and is meant for picking one patient to book
- * for, not browsing the whole roster. Front desk needed somewhere to just
- * see everyone, page through them, and jump straight into booking.
- */
+/** pages/front-desk/PatientsPage.jsx */
 import { useState, useEffect, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { AppShell }  from "../../components/layout/AppShell";
@@ -24,8 +16,6 @@ export default function FrontDeskPatientsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   // Prefilled when arriving from the topbar's global search (AppShell.jsx)
-  // or a "found in network" prompt elsewhere — lands here with the same
-  // query already typed instead of making front desk retype it.
   const [query, setQuery] = useState(location.state?.prefillQuery || "");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const debounceRef = useRef(null);

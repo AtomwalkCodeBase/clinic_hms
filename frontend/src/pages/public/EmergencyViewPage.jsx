@@ -1,28 +1,4 @@
-/**
- * pages/public/EmergencyViewPage.jsx
- * -------------------------------------
- * What opens when a doctor scans a patient's Emergency QR (see
- * pages/patient/EmergencyQRPage.jsx for where the code is generated — and
- * where the patient explicitly confirms sharing this — and
- * apps/hospital_patients/emergency_views.py for the backend design reasoning).
- *
- * Deliberately outside AppShell/ProtectedRoute — the person opening this
- * has no Atomwalk login at all, possibly at a hospital that isn't even on
- * this platform. Fetched with publicClient (no Authorization header),
- * mobile-first (this is opened on a phone camera scan). Renders the
- * patient's full shared clinical history — the same shape a consenting
- * cross-hospital doctor sees via the HIE roadmap, just resolved by a
- * token instead of a session — including viewable lab reports, uploaded
- * documents, and vaccination certificates via signed URLs the backend
- * already resolved (no further auth needed to open them).
- *
- * Layout: numbered, colour-coded priority sections (vitals first, then
- * context, then everything else) — every value shown is real data straight
- * off the API response; nothing here is a placeholder or an inferred
- * status. Where the backend doesn't carry a field (e.g. no "is this
- * prescription still active" flag), the section simply doesn't claim one,
- * rather than showing a plausible-looking but fabricated badge.
- */
+/** pages/public/EmergencyViewPage.jsx */
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { publicClient } from "../../services/api.client";
@@ -65,7 +41,6 @@ const DELIVERY_MODE_LABEL = {
 };
 
 // Colour identity per priority section — a left accent bar + a numbered
-// badge in the same colour, same visual language throughout.
 const THEME = {
   red:    { border: "#DC2626", badgeBg: "#DC2626", chipBg: "#FEF2F2", chipBorder: "#FECACA", text: "#991B1B" },
   orange: { border: "#D97706", badgeBg: "#D97706", chipBg: "#FFFBEB", chipBorder: "#FDE68A", text: "#92400E" },
@@ -78,7 +53,6 @@ const THEME = {
 };
 
 // One numbered priority card — colour, step number, icon+title, a short
-// "why this matters" line, and its content.
 function PriorityCard({ n, color, icon: Icon, title, hint, count, children }) {
   const t = THEME[color];
   return (

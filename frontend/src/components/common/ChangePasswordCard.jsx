@@ -1,20 +1,9 @@
-/**
- * components/common/ChangePasswordCard.jsx
- * --------------------------------------------
- * Self-service "Change Password" section, dropped into each role's My
- * Profile page. Always requires the current password — unlike the forced
- * first-login flow (ChangePasswordPage), this can be reached any time by
- * someone who already has a working session, so proving the current
- * password again is what stops a hijacked/left-open session from locking
- * the real owner out.
- */
+/** components/common/ChangePasswordCard.jsx */
 import { useState } from "react";
 import { useToast } from "../../hooks/useToast";
 import apiClient from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { labelStyle, inputStyle } from "../../styles/formStyles";
-
-
 
 
 export default function ChangePasswordCard() {

@@ -1,9 +1,4 @@
-/**
- * pages/nurse/VitalsPage.jsx
- * ---------------------------
- * Nurse vitals entry. Nurse selects a waiting appointment, fills in vitals,
- * and saves them. Status auto-advances to "vitals_done" so doctor sees them next.
- */
+/** pages/nurse/VitalsPage.jsx */
 
 import { useState, useEffect } from "react";
 import { AppShell }   from "../../components/layout/AppShell";
@@ -24,12 +19,6 @@ const MILESTONE_STATUS_STYLE = {
 };
 
 // Read-only Birth History (nurses can view, per IsHospitalStaff on
-// BirthHistoryView.get — recording it is doctor/front-desk only, see
-// apps/hospital_patients/pediatrics/pediatric_views.py's own docstring) + Developmental
-// Milestones, which nurses CAN record (IsDoctorOrNurse on
-// PatientMilestoneListCreateView) — same roadmap/assess pattern as the
-// doctor's EncounterPage "Developmental Milestones" panel, just standalone
-// here rather than embedded in a consult.
 function PediatricPanel({ patientPk }) {
   const { toastSuccess, toastApiError } = useToast();
   const { data: bh, isLoading: bhLoading } = useApi(
@@ -213,16 +202,11 @@ export default function VitalsPage() {
   });
 
   // Pediatric-only field — shown only for a minor patient (age < 18), same
-  // is_minor derivation used everywhere else in this codebase (see
-  // EncounterPage.jsx's growthData.is_minor gate). Appointment.patient_age
-  // is already on every appointment row via AppointmentSerializer.
   const isMinorPatient = selected?.patient_age != null && selected.patient_age < 18;
 
   useEffect(() => {
     setLoading(true);
     // page_size=100 — this list must show every waiting patient today, not
-    // just the first page, since a missed patient here means vitals never
-    // get recorded for them.
     apiClient.get(`${API_ENDPOINTS.OPD.APPOINTMENTS}?date=${TODAY}&page_size=100`)
       .then(r => {
         const appts = r.data?.results || [];
@@ -437,9 +421,7 @@ export default function VitalsPage() {
                       value={form.height_cm} onChange={handleChange} placeholder="170" />
                     <VitalInput label="Blood Sugar (RBS)" unit="mg/dL" name="blood_sugar_rbs"
                       value={form.blood_sugar_rbs} onChange={handleChange} placeholder="90" />
-                    {/* Pediatric-only — head circumference matters for growth
-                        tracking in infants/young children; hidden for adults
-                        so it never clutters the standard vitals form. */}
+                    {/* Pediatric-only — head circumference matters for growth */}
                     {isMinorPatient && (
                       <VitalInput label="Head Circumference" unit="cm" name="head_circumference_cm"
                         value={form.head_circumference_cm} onChange={handleChange} placeholder="43" />

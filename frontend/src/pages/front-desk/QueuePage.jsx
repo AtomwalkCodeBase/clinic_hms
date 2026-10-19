@@ -1,9 +1,4 @@
-/**
- * pages/front-desk/QueuePage.jsx
- * --------------------------------
- * Front desk live OPD queue — all doctors, today.
- * Front desk can check patients in (scheduled → waiting) and cancel.
- */
+/** pages/front-desk/QueuePage.jsx */
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppShell }  from "../../components/layout/AppShell";
@@ -32,11 +27,7 @@ const MAX_RESCHEDULE_DATE = (() => {
 const TOMORROW = addDays(TODAY, 1);
 
 
-
-
-
 // Same slot grid as the booking form on AppointmentsPage — reused here so a
-// reschedule shows real live availability instead of a freeform time field.
 function RescheduleModal({ appt, onClose, onDone }) {
   const { toastSuccess, toastApiError } = useToast();
   const { user } = useAuth();
@@ -139,8 +130,6 @@ export default function FrontDeskQueuePage() {
   const [rescheduleTarget, setRescheduleTarget] = useState(null);
 
   // ── Search + filters — shared across both Today and Upcoming, matching
-  // every header the table shows (patient/UHID/AWPID/mobile/doctor/
-  // complaint/room/token — see AppointmentListCreateView's ?patient=) ────
   const [showFilters,  setShowFilters]  = useState(false);
   const [search,       setSearch]       = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -197,11 +186,9 @@ export default function FrontDeskQueuePage() {
   }, [refetch, refetchUpcoming, toastSuccess, toastApiError]);
 
   // Filters changing invalidates the current page — jump back to page 1
-  // rather than showing a possibly-empty page 4 of a narrower result set.
   useEffect(() => { setPage(1); }, [search, statusFilter, doctorFilter, roomFilter]);
 
   // Server-computed totals for the whole day (not just the current page),
-  // so the stat strip stays accurate regardless of pagination.
   const serverCounts = apptData?.status_counts || {};
   const counts = {
     total: serverCounts.total ?? appointments.length,

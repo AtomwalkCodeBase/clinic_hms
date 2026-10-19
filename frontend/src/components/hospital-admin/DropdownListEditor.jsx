@@ -1,67 +1,4 @@
-/**
- * components/hospital-admin/DropdownListEditor.jsx
- * ---------------------------------------------------
- * Generic configurable dropdown list — one small CRUD block (pill list +
- * inline add form) backed by billing.OptionList. Originally built inline
- * in BillingSetupPage.jsx for Service Categories / Payment Modes / Invoice
- * Statuses; extracted here so other admin pages (e.g. Rooms & Floors'
- * "Room Types") can reuse the exact same widget instead of re-implementing
- * it, since they're all the same OptionList-backed shape (see
- * apps/billing/models.py's OptionList docstring and apps/billing/views.py's
- * _DropdownListCreateView/_DropdownDetailView).
- *
- * identityField is "name" for lists where value mirrors label (Service
- * Categories, Payment Modes, Room Types) or "value" for lists where the
- * stored value and display label differ (Invoice Statuses) — the extra
- * Label input only appears in the latter case.
- *
- * toggleable=true (Payment Modes) additionally fetches inactive entries and
- * shows an is_active switch per item — this is what the hospital actually
- * accepts/offers, reflected to whoever picks from this list elsewhere.
- *
- * onChange (optional) fires every time the list reloads (initial load, and
- * after any add/toggle/remove) — for a caller that keeps its own copy of
- * the same catalog elsewhere (e.g. Rooms & Floors mirrors Room Types into
- * its Add Room dropdown), this is the cue to refetch that copy too.
- *
- * Every item (including system ones — the help text next to this widget
- * already promises "system ones can be renamed but not removed") can be
- * renamed via the pencil icon. What actually gets PATCHed depends on
- * identityField: for a "value"-shaped list (Invoice Statuses, Room Types)
- * the visible text is `label`, a field distinct from the locked `value`
- * identity, so renaming only ever touches `label` — never blocked, even
- * for a system row. For a "name"-shaped list (Service Categories, Payment
- * Modes) the visible text IS the identity field, so renaming a system row
- * is still allowed (the backend only blocks an identity change combined
- * with is_system when the two disagree in a way that would orphan
- * existing references — same guard the backend already enforces; this
- * widget doesn't duplicate that check, it just lets the request through
- * and surfaces whatever error comes back).
- *
- * compact=true (Rooms & Floors' Room Types panel) swaps the plain "✕"
- * remove button for a pencil + kebab-menu ("Delete") pair, and — when
- * showAddForm is left at its default false in this mode — hides the
- * inline add-row so the panel reads as a compact reference list; the
- * caller drives showAddForm itself (e.g. a "+ Add Type" button toggling
- * a boolean) to reveal the exact same add-row non-compact mode always
- * shows. dotColorForIndex(index), if given, renders a small color swatch
- * before each item's label (compact mode's visual cue for which room type
- * is which, matching how the Room list elsewhere colors its type badges).
- * onAdded (optional) fires once, after a successful add, so the caller can
- * auto-collapse an add-row it's driving via showAddForm.
- *
- * extraFields (optional) — beyond the identity/label inputs, lets a list
- * carry a little more than value+label (e.g. Room Types' category +
- * is_bed_based — see billing.OptionList's docstring for why that catalog
- * needs them). Each entry is `{ name, type: "select" | "checkbox", label,
- * options, default }` — `options` (an array of {value,label}) only for
- * "select". Rendered in the add form after the Label input, and included
- * in the POST payload the same way identityField/label already are.
- * Read-only after creation for now — no inline editor for these fields yet,
- * only the rename pencil (label) and delete/deactivate. `badgeForItem(item)`
- * (optional), if given, renders a small secondary tag on each pill (e.g.
- * "IPD" / bed icon) — purely a read-side complement to extraFields.
- */
+/** components/hospital-admin/DropdownListEditor.jsx */
 import { useState, useEffect, useCallback, useRef } from "react";
 import apiClient from "../../services/api.client";
 import { useToast } from "../../hooks/useToast";
@@ -70,9 +7,7 @@ import { KebabMenu } from "./KebabMenu";
 import { editorInputStyle as inputStyle } from "../../styles/formStyles";
 
 
-
 // Small pill toggle — same visual language as the bigger toggles elsewhere
-// in hospital-admin settings screens.
 function MiniToggle({ checked, onChange, disabled }) {
   return (
     <button
@@ -110,8 +45,6 @@ export function DropdownListEditor({
   const [editSaving, setEditSaving] = useState(false);
 
   // Kept as a ref (not a load() dependency) so an inline onChange passed by
-  // the caller doesn't recreate load() — and therefore doesn't retrigger
-  // useEffect(load) — on every parent render.
   const onChangeRef = useRef(onChange);
   useEffect(() => { onChangeRef.current = onChange; });
   const onAddedRef = useRef(onAdded);
@@ -184,8 +117,6 @@ export function DropdownListEditor({
     const current = item.label ?? item[identityField] ?? "";
     if (trimmed === current) { cancelEdit(); return; }
     // "value"-shaped lists show `label` on the pill — rename that, leaving
-    // the locked `value` identity untouched. "name"-shaped lists show the
-    // identity field itself, so that's what gets renamed.
     const patchKey = identityField === "value" ? "label" : identityField;
     setEditSaving(true);
     try {

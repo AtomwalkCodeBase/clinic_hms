@@ -7,7 +7,6 @@ import traceback
 from datetime import date, timedelta
 from unittest import mock
 
-from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.test import Client, override_settings
 

@@ -1,19 +1,4 @@
-/**
- * context/PermissionContext.jsx
- * -----------------------------
- * Fetches /api/v1/auth/me/permissions/ after login and exposes:
- *   - permissions  — flat object of feature flags, e.g. { feat_lab: true, feat_ai_voice: false }
- *   - can(feature) — convenience function to check a single flag
- *   - isLoading    — true while fetching
- *
- * The backend is the single source of truth for feature gating.
- * This context simply caches the result so components don't
- * each have to call the endpoint themselves.
- *
- * Usage:
- *   const { can } = usePermissions();
- *   if (can("feat_lab")) { ... }
- */
+/** context/PermissionContext.jsx */
 
 import { createContext, useState, useEffect, useContext, useCallback } from "react";
 import { apiClient }   from "../services/api.client";

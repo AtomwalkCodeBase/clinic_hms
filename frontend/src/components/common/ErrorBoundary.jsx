@@ -1,18 +1,4 @@
-/**
- * components/common/ErrorBoundary.jsx
- * -------------------------------------
- * Catches render-time exceptions in the component tree beneath it and shows
- * a graceful fallback instead of an unhandled crash. React unmounts the
- * entire tree on an uncaught render error — without a boundary, one bad
- * value (a malformed lab result, an unexpected null from an API response,
- * etc.) white-screens the WHOLE app for that user, not just the widget that
- * broke. This is deliberately placed at the per-route level (see App.jsx's
- * ProtectedRoute) so a crash in one page doesn't take down the sidebar/
- * navigation shell around it — the user can still navigate elsewhere.
- *
- * Class component because componentDidCatch/getDerivedStateFromError have
- * no hook equivalent — this is the one place React still requires a class.
- */
+/** components/common/ErrorBoundary.jsx */
 import { Component } from "react";
 
 export class ErrorBoundary extends Component {
@@ -27,9 +13,6 @@ export class ErrorBoundary extends Component {
 
   componentDidCatch(error, info) {
     // Logged to the console for now — swap for a real error-tracking
-    // integration (Sentry or similar) when one is wired up. Silently
-    // swallowing this would recreate the exact "invisible failure" pattern
-    // this session already fixed elsewhere (silent except blocks, etc.).
      
     console.error("ErrorBoundary caught a render error:", error, info?.componentStack);
   }

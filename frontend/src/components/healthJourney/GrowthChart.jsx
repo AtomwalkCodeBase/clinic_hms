@@ -1,5 +1,4 @@
 // Growth chart: WHO (0-5 y) / IAP (5-18 y) reference bands with the child's own readings on top.
-// Bands: -3..-2 and +2..+3 SD (outer), -2..+2 SD (inner, the "expected" range), median dashed.
 import React, { useEffect, useMemo, useState } from 'react';
 import ReactECharts from './EChart';
 import { GROWTH_FLAG_STYLE, useChartTokens } from './theme';

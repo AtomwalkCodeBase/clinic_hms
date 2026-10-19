@@ -1,18 +1,4 @@
-/**
- * pages/front-desk/IpdPatientsPage.jsx
- * ---------------------------------------
- * "Current Patients" — the single, always-reachable place to find anyone
- * currently admitted, added directly in response to feedback that a
- * front-desk user had no obvious way to find a patient right after
- * completing their admission (it used to be a tab buried inside the
- * Admissions page, only visible in that page's non-embedded view). This
- * page is a permanent sidebar item under IPD.
- *
- * Reuses IPD.ADMISSIONS (the same AdmissionSerializer list every other
- * admission screen already calls) filtered client-side to admitted/active
- * stays — discharged and cancelled admissions belong in Visit History, not
- * here.
- */
+/** pages/front-desk/IpdPatientsPage.jsx */
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search } from "lucide-react";
@@ -22,7 +8,6 @@ import { useApi } from "../../hooks/useApi";
 import API_ENDPOINTS from "../../config/api.config";
 import { ROUTES } from "../../config/routes.config";
 import { timeAgo } from "../../utils/dates";
-
 
 
 const FILTERS = [
