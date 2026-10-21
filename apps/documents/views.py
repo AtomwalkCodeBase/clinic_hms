@@ -27,10 +27,9 @@ from rest_framework.throttling import ScopedRateThrottle
 from core.utils import qr_token as _qt
 from core import storage as blob_storage
 from apps.documents.lib_roadmap import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
-from django.utils import timezone
 from core.utils.file_validation import validate_data_uri, FileValidationError
 from core.utils.age import age_years_months
-from apps.documents.lib_documents import PATIENT_NOT_FOUND, get_patient, parse_date, staff_name as _staff_name, text as _text
+from apps.documents.lib_documents import PATIENT_NOT_FOUND, get_patient, parse_date, text as _text
 from apps.documents.lib_vitals import add_percentiles
 from apps.documents.lib_roadmap import active_schedule, rules_for, schedule_usage
 from apps.patients.models import Patient, PatientRelationship
@@ -432,8 +431,7 @@ MilestoneTemplateListCreateView, MilestoneTemplateDetailView = template_views(MI
 V = ImmunizationRecord
 def _given(request):
     """The fields that make a record a verified dose given at this clinic."""
-    return {"source": V.SOURCE_CLINIC, "verification_status": V.STATUS_VERIFIED,
-            "verified_by_name": _staff_name(request), "verified_at": timezone.now()}
+    return {"source": V.SOURCE_CLINIC, "verification_status": V.STATUS_VERIFIED}
 def _new_record(request, patient, **fields):
     return V.objects.using("default").create(
         patient=Patient.objects.using("default").filter(awpid=patient.awpid).first(),
@@ -443,24 +441,13 @@ def _already_recorded(patient, name, given_on, dose_number):
     return V.objects.using("default").filter(
         patient__awpid=patient.awpid, vaccine_name__iexact=name, administered_date=given_on, dose_number=dose_number).exists()
 _DUPLICATE = "This dose is already recorded for this patient."
+def _refuse_certificate(data):
+    """A dose record keeps no file; say so instead of silently dropping one that was sent."""
+    if data.get("file_data"):
+        return error("A certificate can't be attached to a dose record.", errors={"file_data": "Not supported."})
 def _given_json(record):
     return {"id": record.id, "vaccine_name": record.vaccine_name, "administered_date": str(record.administered_date),
-            "verification_status": record.verification_status, "has_certificate": bool(record.file_data)}
-def _certificate(patient, data, vaccine_name):
-    """The optional scanned certificate sent with a dose: (file_name, mime_type, stored_key, error_response)."""
-    file_data = data.get("file_data") or ""
-    if not file_data:
-        return "", "", "", None
-    try:
-        mime_type = validate_data_uri(file_data)
-        key = blob_storage.upload_data_uri(
-            file_data, prefix="vaccination-certs", mime_type=mime_type, category="vaccination-certificate",
-            identity=blob_storage.identity_slug(name=patient.full_name, identifier=patient.awpid))
-    except (FileValidationError, blob_storage.StorageError) as exc:
-        return None, None, None, error(str(exc), errors={"file_data": str(exc)})
-    name = blob_storage.display_file_name("vaccination-certificate", mime_type, detail=vaccine_name,
-                                          name=patient.full_name, identifier=patient.awpid)
-    return name, mime_type, key, None
+            "verification_status": record.verification_status, "has_certificate": record.document_id is not None}
 # ── vaccinations ──────────────────────────────────────────────────────────────────────────────────────────────────
 class PatientVaccinationListCreateView(APIView):
     def get_permissions(self):
@@ -482,6 +469,8 @@ class PatientVaccinationListCreateView(APIView):
         if not patient:
             return not_found(PATIENT_NOT_FOUND)
         d = request.data
+        if refused := _refuse_certificate(d):
+            return refused
         name = _text(d, "vaccine_name")
         if not name:
             return error("Vaccine name is required.", errors={"vaccine_name": "Required."})
@@ -492,12 +481,8 @@ class PatientVaccinationListCreateView(APIView):
             return err
         if _already_recorded(patient, name, given_on, d.get("dose_number") or None):
             return error(_DUPLICATE, status=409)
-        file_name, mime_type, key, err = _certificate(patient, d, name)
-        if err:
-            return err
         record = _new_record(request, patient, vaccine_name=name, scheduled_label=_text(d, "scheduled_label"),
-                             administered_date=given_on, dose_number=d.get("dose_number") or None, file_name=file_name, mime_type=mime_type,
-                             file_data=key, **_given(request))
+                             administered_date=given_on, dose_number=d.get("dose_number") or None, **_given(request))
         return created(data=_given_json(record), message="Vaccination logged.")
 class PatientVaccinationVerifyView(APIView):
     """Body: {action: "verify" | "reject", review_notes?}. Any hospital's doctor or nurse can review a parent's upload."""
@@ -511,12 +496,9 @@ class PatientVaccinationVerifyView(APIView):
         if action not in ("verify", "reject"):
             return error("action must be 'verify' or 'reject'.", errors={"action": "Invalid."})
         record.verification_status = V.STATUS_VERIFIED if action == "verify" else V.STATUS_REJECTED
-        record.verified_by_name = _staff_name(request)
-        record.verified_at = timezone.now()
-        record.review_notes = _text(request.data, "review_notes")
+        record.remarks = _text(request.data, "review_notes")[:200] or record.remarks
         record.source_hospital_id = record.source_hospital_id or request.hospital_id      # first hospital to review claims it
-        record.save(using="default", update_fields=[
-            "verification_status", "verified_by_name", "verified_at", "review_notes", "source_hospital_id"])
+        record.save(using="default", update_fields=["verification_status", "remarks", "source_hospital_id", "updated_at"])
         return success(data={"id": record.id, "verification_status": record.verification_status},
                        message=f"Vaccination record {action}d.")
 class PatientVaccinationOrderView(APIView):
@@ -528,7 +510,7 @@ class PatientVaccinationOrderView(APIView):
         if not patient:
             return not_found(PATIENT_NOT_FOUND)
         d = request.data
-        name, reason = _text(d, "vaccine_name"), _text(d, "reason")
+        name, reason = _text(d, "vaccine_name"), _text(d, "reason")[:200]
         if not name:
             return error("Vaccine name is required.", errors={"vaccine_name": "Required."})
         if not reason:
@@ -537,11 +519,10 @@ class PatientVaccinationOrderView(APIView):
         if err:
             return err
         record = _new_record(
-            request, patient, vaccine_name=name, scheduled_label=_text(d, "scheduled_label"), reason=reason,
+            request, patient, vaccine_name=name, scheduled_label=_text(d, "scheduled_label"), remarks=reason,
             due_date=due_on, dose_number=d.get("dose_number") or None, administered_date=None,
-            source=V.SOURCE_DOCTOR_ORDERED, verification_status=V.STATUS_ORDERED,
-            verified_by_name=_staff_name(request, "Doctor"))
-        return created(data={"id": record.id, "vaccine_name": record.vaccine_name, "reason": record.reason,
+            source=V.SOURCE_DOCTOR_ORDERED, verification_status=V.STATUS_ORDERED)
+        return created(data={"id": record.id, "vaccine_name": record.vaccine_name, "reason": record.remarks,
                              "due_date": str(record.due_date) if record.due_date else None,
                              "verification_status": record.verification_status}, message="Vaccine order recorded.")
 class PatientVaccinationDeclineView(APIView):
@@ -564,15 +545,11 @@ class PatientVaccinationDeclineView(APIView):
             record = _new_record(request, patient, vaccine_name=name, scheduled_label=_text(d, "scheduled_label"),
                                  administered_date=None, source=V.SOURCE_DOCTOR_ORDERED,
                                  verification_status=V.STATUS_DECLINED)
-        reason = _text(d, "reason")
+        reason = _text(d, "reason")[:200]
         record.verification_status = V.STATUS_DECLINED
-        record.reason = reason or record.reason
-        record.review_notes = reason or record.review_notes
-        record.verified_by_name = _staff_name(request, "Doctor")
-        record.verified_at = timezone.now()
+        record.remarks = reason or record.remarks
         record.source_hospital_id = record.source_hospital_id or request.hospital_id
-        record.save(using="default", update_fields=[
-            "verification_status", "reason", "review_notes", "verified_by_name", "verified_at", "source_hospital_id"])
+        record.save(using="default", update_fields=["verification_status", "remarks", "source_hospital_id", "updated_at"])
         return success(data={"id": record.id, "vaccine_name": record.vaccine_name,
                              "verification_status": record.verification_status}, message="Vaccine marked as not required.")
 class PatientVaccinationAdministerView(APIView):
@@ -584,6 +561,8 @@ class PatientVaccinationAdministerView(APIView):
         if not patient:
             return not_found(PATIENT_NOT_FOUND)
         d = request.data
+        if refused := _refuse_certificate(d):
+            return refused
         record = None
         if d.get("record_id"):
             record = V.objects.using("default").filter(pk=d["record_id"], patient__awpid=patient.awpid).first()
@@ -599,25 +578,17 @@ class PatientVaccinationAdministerView(APIView):
         given_on = given_on or date.today()
         if record is None and _already_recorded(patient, name, given_on, d.get("dose_number") or None):
             return error(_DUPLICATE, status=409)
-        file_name, mime_type, key, err = _certificate(patient, d, name)
-        if err:
-            return err
         fields = {"administered_date": given_on, "dose_number": d.get("dose_number") or None, **_given(request)}
-        if key:
-            fields.update(file_name=file_name, mime_type=mime_type, file_data=key)
 
         if record is None:
             record = _new_record(request, patient, vaccine_name=name, scheduled_label=_text(d, "scheduled_label"), **fields)
         else:
-            old_key = record.file_data
             if not fields["dose_number"]:
                 del fields["dose_number"]                                   # keep the dose the order already had
             fields.update(source_hospital_id=record.source_hospital_id or request.hospital_id)
             for field, value in fields.items():
                 setattr(record, field, value)
-            record.save(using="default", update_fields=list(fields))
-            if key and old_key:
-                blob_storage.delete(old_key)                                # the new certificate replaces the old file
+            record.save(using="default", update_fields=[*fields, "updated_at"])
         return success(data=_given_json(record), message="Vaccination recorded as administered.")
 
 

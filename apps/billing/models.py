@@ -1,4 +1,9 @@
-"""apps/billing/models.py"""
+"""Hospital database: the price list, invoices with their lines and payments, and the hospital-managed dropdown lists.
+
+One-line docstring and __str__ on every model; created_at / updated_at on records that change; UniqueConstraint, never unique_together; every foreign key has on_delete and related_name. Reverse names here are plain descriptive words (plural for a foreign key, singular for a one-to-one) because the API reads them as field names (items, payments, doctor_profile, encounter, beds).
+
+Deliberate exceptions: Invoice.status, Payment.payment_mode and BillingService.category are plain text checked against OptionList, because each hospital edits those lists; PROTECT on invoice links so billed records are never deleted; no created_at or updated_at on InvoiceItem (its invoice carries them) or Payment (paid_at is its time).
+"""
 
 from django.db import models
 from django.utils import timezone
@@ -45,17 +50,18 @@ class OptionList(models.Model):
         (CATEGORY_OTHER, "Other"),
     ]
 
-    list_type   = models.CharField(max_length=20, choices=LIST_TYPE_CHOICES)
-    value       = models.CharField(max_length=20)   # what's actually stored/matched against
-    label       = models.CharField(max_length=50)   # what's shown in the UI
-    is_active   = models.BooleanField(default=True)
-    is_system   = models.BooleanField(default=False)  # seeded default — can't be deleted
-    sort_order  = models.PositiveSmallIntegerField(default=0)
-    category      = models.CharField(max_length=12, choices=CATEGORY_CHOICES, blank=True)
-    is_bed_based  = models.BooleanField(default=False)
+    list_type    = models.CharField(max_length=20, choices=LIST_TYPE_CHOICES)
+    value        = models.CharField(max_length=20)   # what's actually stored/matched against
+    label        = models.CharField(max_length=50)   # what's shown in the UI
+    is_active    = models.BooleanField(default=True)
+    is_system    = models.BooleanField(default=False)  # seeded default — can't be deleted
+    sort_order   = models.PositiveSmallIntegerField(default=0)
+    category     = models.CharField(max_length=12, choices=CATEGORY_CHOICES, blank=True)
+    is_bed_based = models.BooleanField(default=False)
     # Meaningful only for list_type="room_type" rows where is_bed_based=True
-    daily_rate  = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    created_at  = models.DateTimeField(auto_now_add=True)
+    daily_rate   = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    created_at   = models.DateTimeField(auto_now_add=True)
+    updated_at   = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table  = "option_list"
@@ -70,13 +76,14 @@ class OptionList(models.Model):
 
 class BillingService(models.Model):
     """Hospital-configured price list for services, procedures, etc."""
-    name        = models.CharField(max_length=200)
-    code        = models.CharField(max_length=50, blank=True)
-    category    = models.CharField(max_length=50, default="Other")
-    unit_price  = models.DecimalField(max_digits=10, decimal_places=2)
-    tax_rate    = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-    is_active   = models.BooleanField(default=True)
-    created_at  = models.DateTimeField(auto_now_add=True)
+    name       = models.CharField(max_length=200)
+    code       = models.CharField(max_length=50, blank=True)
+    category   = models.CharField(max_length=50, default="Other")
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    tax_rate   = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    is_active  = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table  = "billing_service"
@@ -87,6 +94,7 @@ class BillingService(models.Model):
 
 
 class Invoice(models.Model):
+    """A bill for one patient at one branch, with its lines, payments and totals."""
     # Kept as plain constants (not a `choices=` list) for internal logic to
     STATUS_DRAFT          = "draft"
     STATUS_ISSUED         = "issued"
@@ -125,21 +133,25 @@ class Invoice(models.Model):
 
 
 class InvoiceItem(models.Model):
-    invoice         = models.ForeignKey(Invoice, on_delete=models.CASCADE,
+    """One line on an invoice, with its price and tax at billing time."""
+    invoice     = models.ForeignKey(Invoice, on_delete=models.CASCADE,
                                         related_name="items")
-    service         = models.ForeignKey(BillingService, on_delete=models.PROTECT,
+    service     = models.ForeignKey(BillingService, on_delete=models.PROTECT,
                                         null=True, blank=True, related_name="invoice_items")
-    description     = models.CharField(max_length=200)  # denormalized
-    quantity        = models.PositiveSmallIntegerField(default=1)
-    unit_price      = models.DecimalField(max_digits=10, decimal_places=2)
-    tax_rate        = models.DecimalField(max_digits=5, decimal_places=2, default=0)
-    total           = models.DecimalField(max_digits=12, decimal_places=2)
+    description = models.CharField(max_length=200)  # denormalized
+    quantity    = models.PositiveSmallIntegerField(default=1)
+    unit_price  = models.DecimalField(max_digits=10, decimal_places=2)
+    tax_rate    = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    total       = models.DecimalField(max_digits=12, decimal_places=2)
 
     class Meta:
         db_table  = "invoice_item"
         constraints = [
             models.CheckConstraint(check=models.Q(quantity__gt=0, unit_price__gte=0, total__gte=0), name="invoice_item_values_valid"),
         ]
+
+    def __str__(self):
+        return f"{self.description} x{self.quantity}"
 
 
 class Payment(models.Model):

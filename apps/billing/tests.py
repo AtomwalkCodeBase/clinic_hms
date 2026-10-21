@@ -39,6 +39,14 @@ class PaymentCreateTests(HospitalDBTestCase):
             data={"invoice": self.invoice.id, "amount": str(amount), "payment_mode": "cash"},
         )
 
+    def test_a_zero_or_negative_payment_is_refused_not_a_crash(self):
+        for amount in ("0", "-5"):
+            self.assertEqual(self.pay(amount).status_code, 400)
+
+    def test_paying_more_than_is_owed_is_refused(self):
+        self.assertEqual(self.pay("101").status_code, 400)
+        self.assertEqual(self.pay("100").status_code, 201)
+
     def test_payment_records_the_staff_member_and_updates_the_invoice(self):
         """Regression: recorded_by was assigned the MockUser (request.user), which Django rejects."""
         resp = self.pay("40.00")

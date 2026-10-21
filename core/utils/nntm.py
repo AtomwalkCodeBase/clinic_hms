@@ -5,6 +5,11 @@ from django.db import transaction
 
 logger = logging.getLogger(__name__)
 
+_DEFAULTS = {
+    "uhid": ("UHID-", 6), "invoice": ("INV-", 6), "lab_report": ("LAB-", 6), "lab_test": ("LT-", 4), "lab_request": ("LR-", 6),
+    "prescription": ("RX-", 6), "queue": ("Q-", 4), "employee_id": ("EMP-", 6), "drug": ("DRG-", 4), "admission": ("ADM-", 6),
+}
+
 
 def get_next_number(branch_id: int | None, entity: str, using: str = "default") -> tuple[str, int]:
     """Atomically increment the counter for a given branch+entity and return"""
@@ -15,6 +20,10 @@ def get_next_number(branch_id: int | None, entity: str, using: str = "default") 
     VALID_ENTITIES = {"uhid", "invoice", "lab_report", "lab_test", "lab_request", "prescription", "queue", "employee_id", "drug", "admission"}
     if entity not in VALID_ENTITIES:
         raise ValueError(f"Unknown entity '{entity}'. Must be one of: {VALID_ENTITIES}")
+
+    prefix, pad = _DEFAULTS[entity]
+    NextNumber.objects.using(using).get_or_create(
+        branch_id=branch_id, entity=entity, defaults={"prefix": prefix, "pad_length": pad, "last_number": 0})
 
     with transaction.atomic(using=using):
         # Lock the row for this branch+entity — prevents concurrent duplicates

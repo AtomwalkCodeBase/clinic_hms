@@ -171,6 +171,7 @@ class Command(BaseCommand):
             self.patient_portal(r, pt, h["id"], doc, tag)
         self.documents(r, pats[0])
         self.hospital_visit(r, pats, staff, adm, branch_id, tag, mob)
+        self.more_flows(r, pats, staff, adm, branch_id, h["id"], doc, (dep or {}).get("id"))
         self.access_control(r, staff, adm, plat, pats, logins, h["id"])
         r.call("Billing", "hospital admin", "Payment modes list", "get", "/api/v1/billing/payment-modes/", token=adm)
 
@@ -268,6 +269,7 @@ class Command(BaseCommand):
                      body={"name": "CBC", "code": "CBC", "price": "300", "turnaround_hours": 4}, expect=(200, 201))
         rx = r.call("Doctor", "doctor", "Create a prescription", "post", "/api/v1/opd/prescriptions/", token=dr, body={"encounter_id": eid})
         rid = (rx or {}).get("id")
+        self.ctx = {"patient_pk": appt.get("patient_pk"), "appt": appt, "rid": rid, "eid": eid}
         if rid:
             r.call("Doctor", "doctor", "Add a medicine to it", "post", f"/api/v1/opd/prescriptions/{rid}/items/", token=dr,
                    body={"drug_name": "Paracetamol", "dosage": "250 mg", "frequency": "td", "duration_days": 3, "quantity": 9, "route": "oral"})
@@ -295,6 +297,99 @@ class Command(BaseCommand):
         r.call("Return visit", who, "Lab orders", "get", "/api/v1/portal/lab-orders/", token=tk)
         r.call("Return visit", who, "My bookings after the visit", "get", "/api/v1/portal/my-bookings/", token=tk)
         r.call("Return visit", who, "Timeline after the visit (vitals feed growth)", "get", f"/api/v1/peds/patients/{pt['awpid']}/growth/", token=tk)
+
+    def more_flows(self, r, pats, staff, adm, branch_id, hospital_id, doc, dept_id):
+        ctx = getattr(self, "ctx", {})
+        pt = pats[0]
+        fd, dr, nu, ph = (staff[k][0]["token"] for k in ("front_desk", "doctor", "nurse", "pharmacist"))
+        who = f"patient {pt['awpid'][-4:]}"
+        pk = ctx.get("patient_pk")
+        if not pk:
+            found = r.call("Front desk", "front_desk", "Find the patient's record id by AWPID", "get", "/api/v1/patients/search/", token=fd, query={"q": pt["awpid"]})
+            rows = (found.get("results") if isinstance(found, dict) else found) or []
+            pk = (rows[0] or {}).get("id") if rows else None
+
+        # a parent books for the child
+        child = pt.get("child")
+        if child:
+            day = str(date.today() + timedelta(days=3))
+            r.call("Child booking", who, "Parent books a visit for the child", "post", "/api/v1/portal/book/", token=pt["token"],
+                   body={"hospital_id": hospital_id, "doctor_id": doc["id"], "scheduled_date": day, "scheduled_time": "12:00",
+                         "chief_complaint": "Vaccination due", "patient_awpid": child, "data_sharing_consent": True}, expect=(201,))
+            ap = r.call("Child booking", "front_desk", "Front desk sees the child's appointment", "get", "/api/v1/opd/appointments/upcoming/", token=fd)
+            rows = (ap.get("results") if isinstance(ap, dict) else ap) or []
+            kid = next((x for x in rows if x.get("patient_awpid") == child), None)
+            r.note("Child booking", "front_desk", "Child shows as a dependent with the guardian relation", bool(kid) and kid.get("is_dependent") is True
+                   and kid.get("guardian_relation") == "child", str({k: (kid or {}).get(k) for k in ("is_dependent", "guardian_name", "guardian_relation")}))
+            r.call("Child booking", who, "Parent sees the child's booking", "get", "/api/v1/portal/my-bookings/", token=pt["token"], query={"patient_awpid": child})
+
+        # billing: invoice, partial payment, refused payments, final payment
+        if pk:
+            inv = r.call("Billing", "front_desk", "Create an invoice with one line", "post", "/api/v1/billing/invoices/", token=fd,
+                         body={"patient": pk, "items": [{"description": "Consultation", "quantity": 1, "unit_price": "500"}]}, expect=(200, 201))
+            iid = (inv or {}).get("id")
+            if iid:
+                pay = lambda what, amt, ref="", exp=(201,): r.call("Billing", "front_desk", what, "post", "/api/v1/billing/payments/", token=fd,
+                                                                  body={"invoice": iid, "amount": amt, "payment_mode": "cash", "transaction_ref": ref}, expect=exp)
+                pay("Part payment of 200", "200", "R1")
+                pay("Paying more than is owed is refused", "1000", "R2", (400,))
+                pay("The same reference twice on one invoice is refused", "50", "R1", (400,))
+                pay("A zero payment is refused", "0", "", (400,))
+                pay("Final payment of 300", "300", "R3")
+                r.call("Billing", "front_desk", "Invoice is now paid in full", "get", f"/api/v1/billing/invoices/{iid}/", token=fd,
+                       check=lambda d: True if d.get("status") == "paid" and str(d.get("paid_amount")) in ("500", "500.00") else f"status={d.get('status')} paid={d.get('paid_amount')}")
+
+        # pharmacy: drug, stock, dispense, over-dispense
+        drug = r.call("Pharmacy", "pharmacist", "Add a drug to the catalogue", "post", "/api/v1/prescriptions/drugs/", token=ph,
+                      body={"name": "Paracetamol 250", "generic_name": "paracetamol", "form": "Tablet", "strength": "250mg"}, expect=(200, 201))
+        did = (drug or {}).get("id")
+        if did:
+            stock = r.call("Pharmacy", "pharmacist", "Receive 50 units into stock", "post", "/api/v1/pharmacy/stock/", token=ph,
+                           body={"drug": did, "branch": branch_id, "batch_number": "B1", "quantity": 50, "mrp": "2", "unit_cost": "1", "expiry_date": "2028-01-01"},
+                           expect=(200, 201))
+            sid = (stock or {}).get("id")
+            rx = r.call("Pharmacy", "doctor", "Read the prescription written earlier", "get", f"/api/v1/opd/prescriptions/{ctx.get('rid')}/", token=dr) if ctx.get("rid") else {}
+            item = ((rx or {}).get("items") or [{}])[0].get("id")
+            if sid and item:
+                r.call("Pharmacy", "pharmacist", "Dispense 3 units against the prescription", "post", "/api/v1/pharmacy/dispense/", token=ph,
+                       body={"prescription_item": item, "stock": sid, "quantity": 3}, expect=(200, 201))
+                r.call("Pharmacy", "pharmacist", "Dispensing more than is in stock is refused", "post", "/api/v1/pharmacy/dispense/", token=ph,
+                       body={"prescription_item": item, "stock": sid, "quantity": 500}, expect=(400,))
+                r.call("Pharmacy", "pharmacist", "Stock fell to 47", "get", "/api/v1/pharmacy/stock/", token=ph,
+                       check=lambda d: True if any(x.get("quantity") == 47 for x in ((d.get("results") if isinstance(d, dict) else d) or [])) else "no stock row at 47")
+
+        # vaccination actions by staff
+        if pk:
+            r.call("Vaccination", "doctor", "Doctor orders a vaccine", "post", f"/api/v1/patients/{pk}/vaccinations/order/", token=dr,
+                   body={"vaccine_name": "MMR", "reason": "due"}, expect=(200, 201))
+            r.call("Vaccination", "nurse", "Nurse marks a dose given", "post", f"/api/v1/patients/{pk}/vaccinations/administer/", token=nu,
+                   body={"vaccine_name": "BCG", "dose_number": 1}, expect=(200, 201))
+            r.call("Vaccination", "doctor", "Doctor marks a slot not required", "post", f"/api/v1/patients/{pk}/vaccinations/decline/", token=dr,
+                   body={"vaccine_name": "Hepatitis B", "reason": "given elsewhere"}, expect=(200, 201))
+            r.call("Vaccination", "doctor", "Vaccination schedule view", "get", f"/api/v1/patients/{pk}/vaccinations/", token=dr)
+
+        # inpatient: referral, registration, bed, discharge
+        types = r.call("Admission", "front_desk", "Admission types configured", "get", "/api/v1/ipd/admission-types/", token=fd)
+        srcs = r.call("Admission", "front_desk", "Admission sources configured", "get", "/api/v1/ipd/admission-sources/", token=fd)
+        first = lambda d: ((d if isinstance(d, list) else (d or {}).get("results")) or [{}])[0].get("value")
+        if pk and dept_id and first(types) and first(srcs):
+            rf = r.call("Admission", "doctor", "Doctor recommends admission", "post", "/api/v1/ipd/referrals/recommend/", token=dr,
+                        body={"patient_id": pk, "department_id": dept_id, "admission_type": first(types), "admission_source": first(srcs),
+                              "reason_for_admission": "Needs observation"}, expect=(200, 201))
+            rid2 = (rf or {}).get("id")
+            rtypes = r.call("Admission", "hospital admin", "Room types", "get", "/api/v1/billing/room-types/", token=adm)
+            bedtype = next((x.get("value") for x in ((rtypes if isinstance(rtypes, list) else (rtypes or {}).get("results")) or []) if x.get("is_bed_based")), None)
+            room = r.call("Admission", "hospital admin", "Create a ward room", "post", "/api/v1/org/rooms/", token=adm,
+                          body={"branch": branch_id, "name": "Ward 1", "room_type": bedtype or "general_ward", "capacity": 4}, expect=(200, 201))
+            bed = r.call("Admission", "hospital admin", "Create a bed", "post", "/api/v1/org/beds/", token=adm,
+                         body={"room": (room or {}).get("id"), "bed_number": "1"}, expect=(200, 201))
+            if rid2:
+                ad = r.call("Admission", "front_desk", "Front desk registers the admission", "post", "/api/v1/ipd/admissions/register/", token=fd,
+                            body={"referral_id": rid2, "attendant_name": "Parent", "attendant_phone": "9000000002", "consent_given": True}, expect=(200, 201))
+                aid = (ad or {}).get("id")
+                if aid and (bed or {}).get("id"):
+                    r.call("Admission", "front_desk", "Assign the bed", "post", f"/api/v1/ipd/admissions/{aid}/assign-bed/", token=fd, body={"bed_id": bed["id"]}, expect=(200, 201))
+                    r.call("Admission", "front_desk", "Discharge", "post", f"/api/v1/ipd/admissions/{aid}/discharge/", token=fd, body={}, expect=(200, 201))
 
     def access_control(self, r, staff, adm, plat, pats, logins, hospital_id):
         nu, fd, ph, lab = (staff[k][0]["token"] for k in ("nurse", "front_desk", "pharmacist", "lab_tech"))

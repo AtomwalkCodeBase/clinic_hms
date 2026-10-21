@@ -1,4 +1,9 @@
-"""apps/lab/models.py"""
+"""Hospital database: the lab test catalogue, lab requests raised in an encounter, and the reports and result lines that answer them.
+
+One-line docstring and __str__ on every model; created_at / updated_at on records that change; UniqueConstraint, never unique_together; every foreign key has on_delete and related_name. Reverse names here are plain descriptive words (plural for a foreign key, singular for a one-to-one) because the API reads them as field names (items, payments, doctor_profile, encounter, beds).
+
+Deliberate exceptions: PROTECT on patient, encounter and test links so ordered tests and delivered reports are never deleted; LabTest.sample_type is plain text checked against OptionList; no created_at or updated_at on LabReportItem (its report carries them).
+"""
 
 from django.db import models
 from apps.hospital_setup.models import StaffUser
@@ -9,14 +14,15 @@ from apps.opd.models import Appointment, OPDEncounter, PatientChoiceFields
 
 class LabTest(models.Model):
     """Hospital-managed lab test catalog."""
-    name            = models.CharField(max_length=200)
-    code            = models.CharField(max_length=50, blank=True)  # internal code
-    sample_type     = models.CharField(max_length=20, default="blood")
-    turnaround_hours= models.PositiveSmallIntegerField(default=24)
-    price           = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
-    description     = models.TextField(blank=True)
-    is_active       = models.BooleanField(default=True)
-    created_at      = models.DateTimeField(auto_now_add=True)
+    name             = models.CharField(max_length=200)
+    code             = models.CharField(max_length=50, blank=True)  # internal code
+    sample_type      = models.CharField(max_length=20, default="blood")
+    turnaround_hours = models.PositiveSmallIntegerField(default=24)
+    price            = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    description      = models.TextField(blank=True)
+    is_active        = models.BooleanField(default=True)
+    created_at       = models.DateTimeField(auto_now_add=True)
+    updated_at       = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table  = "lab_test"
@@ -39,35 +45,36 @@ class LabRequest(PatientChoiceFields):
         ("pay_online", "Pay Online"),
         ("pay_at_lab", "Pay at Lab"),
     ]
+    URGENCY_CHOICES = [("routine", "Routine"), ("urgent", "Urgent")]
 
-    patient         = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT,
+    patient            = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT,
                                         related_name="lab_requests")
-    encounter       = models.ForeignKey(OPDEncounter, on_delete=models.PROTECT,
+    encounter          = models.ForeignKey(OPDEncounter, on_delete=models.PROTECT,
                                         related_name="lab_requests")
     # Denormalised for cheap filtering (nurse's queue works off appointment,
-    appointment     = models.ForeignKey(Appointment, on_delete=models.SET_NULL, null=True, blank=True,
+    appointment        = models.ForeignKey(Appointment, on_delete=models.SET_NULL, null=True, blank=True,
                                         related_name="lab_requests")
-    test            = models.ForeignKey(LabTest, on_delete=models.PROTECT, related_name="requests")
-    requested_by    = models.ForeignKey(StaffUser, on_delete=models.PROTECT,
+    test               = models.ForeignKey(LabTest, on_delete=models.PROTECT, related_name="requests")
+    requested_by       = models.ForeignKey(StaffUser, on_delete=models.PROTECT,
                                         related_name="lab_requests_made",
                                         limit_choices_to={"role": "doctor"})
-    branch          = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="lab_requests")
-    status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default="ordered", db_index=True)
-    urgency         = models.CharField(max_length=10, choices=[("routine","Routine"),("urgent","Urgent")],
-                                       default="routine")
-    clinical_notes  = models.TextField(blank=True)
+    branch             = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="lab_requests")
+    status             = models.CharField(max_length=20, choices=STATUS_CHOICES, default="ordered", db_index=True)
+    urgency            = models.CharField(max_length=10, choices=URGENCY_CHOICES, default="routine")
+    clinical_notes     = models.TextField(blank=True)
 
-    payment_preference   = models.CharField(max_length=15, choices=PAYMENT_PREF_CHOICES, blank=True)
+    payment_preference = models.CharField(max_length=15, choices=PAYMENT_PREF_CHOICES, blank=True)
 
     # Human-readable, sequential, quotable-at-the-counter token — NNTM
-    request_number = models.CharField(max_length=30, unique=True, null=True, blank=True)
+    request_number     = models.CharField(max_length=30, unique=True, null=True, blank=True)
 
     # Set the first time this request is billed (see lab/views.py::_bill_lab_request,
-    invoice = models.ForeignKey("billing.Invoice", on_delete=models.SET_NULL,
+    invoice            = models.ForeignKey("billing.Invoice", on_delete=models.SET_NULL,
                                 null=True, blank=True, related_name="+")
 
-    ordered_at      = models.DateTimeField(auto_now_add=True)
-    collected_at    = models.DateTimeField(null=True, blank=True)
+    ordered_at         = models.DateTimeField(auto_now_add=True)
+    collected_at       = models.DateTimeField(null=True, blank=True)
+    updated_at         = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table  = "lab_request"
@@ -83,26 +90,26 @@ class LabReport(models.Model):
         ("delivered", "Delivered"),
     ]
 
-    request         = models.OneToOneField(LabRequest, on_delete=models.PROTECT,
+    request        = models.OneToOneField(LabRequest, on_delete=models.PROTECT,
                                            related_name="report")
-    patient         = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT,
+    patient        = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT,
                                         related_name="lab_reports")
-    report_number   = models.CharField(max_length=30, unique=True)
-    status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
-    result_summary  = models.TextField(blank=True)
-    file_url        = models.CharField(max_length=255, blank=True)  # storage key of the uploaded PDF or result file
-    file_name       = models.CharField(max_length=255, blank=True)
-    mime_type       = models.CharField(max_length=100, blank=True)
-    performed_by    = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,
+    report_number  = models.CharField(max_length=30, unique=True)
+    status         = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    result_summary = models.TextField(blank=True)
+    file_url       = models.CharField(max_length=255, blank=True)  # storage key of the uploaded PDF or result file
+    file_name      = models.CharField(max_length=255, blank=True)
+    mime_type      = models.CharField(max_length=100, blank=True)
+    performed_by   = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,
                                         null=True, blank=True,
                                         related_name="lab_reports_performed",
                                         limit_choices_to={"role": "lab_tech"})
-    verified_by     = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,
+    verified_by    = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,
                                         null=True, blank=True,
                                         related_name="lab_reports_verified")
-    delivered_at    = models.DateTimeField(null=True, blank=True)
-    created_at      = models.DateTimeField(auto_now_add=True)
-    updated_at      = models.DateTimeField(auto_now=True)
+    delivered_at   = models.DateTimeField(null=True, blank=True)
+    created_at     = models.DateTimeField(auto_now_add=True)
+    updated_at     = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table  = "lab_report"
