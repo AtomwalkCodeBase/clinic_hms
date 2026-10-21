@@ -74,7 +74,7 @@ class AdmissionReferral(models.Model):
     # True when RegisterExternalReferralView (front desk, logging a paper/
     front_desk_logged = models.BooleanField(default=False)
 
-    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_PENDING)
 
     class Meta:
         db_table  = "admission_referral"
@@ -103,15 +103,7 @@ class Admission(models.Model):
         (STATUS_CANCELLED, "Cancelled"),
     ]
 
-    # Same enforced-state-machine pattern as
-    ALLOWED_TRANSITIONS = {
-        STATUS_REQUESTED: [STATUS_ADMITTED, STATUS_CANCELLED],
-        STATUS_ADMITTED:  [STATUS_ACTIVE, STATUS_CANCELLED],
-        STATUS_ACTIVE:    [STATUS_ADMITTED, STATUS_DISCHARGE_INITIATED, STATUS_DISCHARGED],
-        STATUS_DISCHARGE_INITIATED: [STATUS_DISCHARGED],
-        STATUS_DISCHARGED: [],
-        STATUS_CANCELLED: [],
-    }
+    OPEN_STATUSES = (STATUS_REQUESTED, STATUS_ADMITTED, STATUS_ACTIVE, STATUS_DISCHARGE_INITIATED)
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
@@ -152,7 +144,7 @@ class Admission(models.Model):
     # Set once, by views.DischargeAdmissionView, the moment a discharge is
     discharged_at = models.DateTimeField(null=True, blank=True)
 
-    status = models.CharField(max_length=22, choices=STATUS_CHOICES, default=STATUS_REQUESTED, db_index=True)
+    status = models.CharField(max_length=22, choices=STATUS_CHOICES, default=STATUS_REQUESTED)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -163,6 +155,12 @@ class Admission(models.Model):
         indexes = [
             models.Index(fields=["status", "branch"]),
             models.Index(fields=["patient", "status"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=["patient"], condition=models.Q(status__in=("requested", "admitted", "active", "discharge_initiated")),
+                                    name="one_open_admission_per_patient"),
+            models.UniqueConstraint(fields=["bed"], condition=models.Q(bed__isnull=False, status__in=("requested", "admitted", "active", "discharge_initiated")),
+                                    name="one_open_admission_per_bed"),
         ]
 
     def __str__(self):
@@ -176,7 +174,7 @@ class AdmissionDeposit(models.Model):
     amount          = models.DecimalField(max_digits=12, decimal_places=2)
     payment_mode    = models.CharField(max_length=50)
     transaction_ref = models.CharField(max_length=100, blank=True)
-    collected_by    = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True)
+    collected_by    = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="deposits_collected")
     collected_at    = models.DateTimeField(auto_now_add=True)
 
     # The reconciliation this docstring used to describe as "Phase 2, not
@@ -188,6 +186,7 @@ class AdmissionDeposit(models.Model):
     class Meta:
         db_table  = "admission_deposit"
         ordering  = ["-collected_at"]
+        constraints = [models.CheckConstraint(check=models.Q(amount__gt=0), name="deposit_amount_positive")]
 
     def __str__(self):
         return f"₹{self.amount} advance for {self.admission.admission_number}"

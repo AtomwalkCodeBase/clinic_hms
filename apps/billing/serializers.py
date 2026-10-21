@@ -62,6 +62,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         model  = Payment
         fields = ["id", "invoice", "amount", "payment_mode", "transaction_ref", "paid_at"]
         read_only_fields = ["id", "paid_at"]
+        validators = []
 
 
 class InvoiceSerializer(serializers.ModelSerializer):

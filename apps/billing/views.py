@@ -409,10 +409,16 @@ class PaymentCreateView(APIView):
         db = request.hospital_db
         # Payment + the invoice's running total in one transaction, with the invoice row
         with transaction.atomic(using=db):
-            payment = Payment.objects.using(db).create(
-                recorded_by_id=request.user.id, **s.validated_data
-            )
-            inv = Invoice.objects.using(db).select_for_update().get(pk=payment.invoice_id)
+            inv = Invoice.objects.using(db).select_for_update().get(pk=s.validated_data["invoice"].pk)
+            outstanding = inv.total_amount - inv.paid_amount
+            if s.validated_data["amount"] > outstanding:
+                return error("That is more than the invoice still owes.",
+                             errors={"amount": f"At most {outstanding} is outstanding."})
+            ref = s.validated_data.get("transaction_ref") or ""
+            if ref and Payment.objects.using(db).filter(invoice=inv, transaction_ref=ref).exists():
+                return error("That payment reference is already recorded for this invoice.",
+                             errors={"transaction_ref": "Already used on this invoice."})
+            payment = Payment.objects.using(db).create(recorded_by_id=request.user.id, **s.validated_data)
             inv.paid_amount += payment.amount
             inv.status = "paid" if inv.paid_amount >= inv.total_amount else "partially_paid"
             inv.save(using=db, update_fields=["paid_amount", "status"])

@@ -1,6 +1,7 @@
 """apps/billing/models.py"""
 
 from django.db import models
+from django.utils import timezone
 from apps.hospital_setup.models import StaffUser
 from apps.hospital_setup.models import Branch
 from apps.opd.models import HospitalPatient
@@ -44,7 +45,7 @@ class OptionList(models.Model):
         (CATEGORY_OTHER, "Other"),
     ]
 
-    list_type   = models.CharField(max_length=20, choices=LIST_TYPE_CHOICES, db_index=True)
+    list_type   = models.CharField(max_length=20, choices=LIST_TYPE_CHOICES)
     value       = models.CharField(max_length=20)   # what's actually stored/matched against
     label       = models.CharField(max_length=50)   # what's shown in the UI
     is_active   = models.BooleanField(default=True)
@@ -96,7 +97,7 @@ class Invoice(models.Model):
     patient         = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT,
                                         related_name="invoices")
     # `encounter` (FK to apps.clinical.Encounter) was removed (HMS-07c-1) —
-    branch          = models.ForeignKey(Branch, on_delete=models.PROTECT)
+    branch          = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="invoices")
     invoice_number  = models.CharField(max_length=30, unique=True)
     status          = models.CharField(max_length=20, default=STATUS_DRAFT, db_index=True)  # validated against OptionList(list_type="invoice_status")
     subtotal        = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -106,13 +107,18 @@ class Invoice(models.Model):
     paid_amount     = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     notes           = models.TextField(blank=True)
     created_by      = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,
-                                        null=True, blank=True)
+                                        null=True, blank=True, related_name="invoices_created")
     issued_at       = models.DateTimeField(null=True, blank=True)
     created_at      = models.DateTimeField(auto_now_add=True)
     updated_at      = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table  = "invoice"
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(subtotal__gte=0, tax_amount__gte=0, discount_amount__gte=0, total_amount__gte=0, paid_amount__gte=0),
+                name="invoice_amounts_not_negative"),
+        ]
 
     def __str__(self):
         return f"{self.invoice_number} — {self.patient.uhid} (₹{self.total_amount})"
@@ -122,7 +128,7 @@ class InvoiceItem(models.Model):
     invoice         = models.ForeignKey(Invoice, on_delete=models.CASCADE,
                                         related_name="items")
     service         = models.ForeignKey(BillingService, on_delete=models.PROTECT,
-                                        null=True, blank=True)
+                                        null=True, blank=True, related_name="invoice_items")
     description     = models.CharField(max_length=200)  # denormalized
     quantity        = models.PositiveSmallIntegerField(default=1)
     unit_price      = models.DecimalField(max_digits=10, decimal_places=2)
@@ -131,6 +137,9 @@ class InvoiceItem(models.Model):
 
     class Meta:
         db_table  = "invoice_item"
+        constraints = [
+            models.CheckConstraint(check=models.Q(quantity__gt=0, unit_price__gte=0, total__gte=0), name="invoice_item_values_valid"),
+        ]
 
 
 class Payment(models.Model):
@@ -140,11 +149,16 @@ class Payment(models.Model):
     amount          = models.DecimalField(max_digits=12, decimal_places=2)
     payment_mode    = models.CharField(max_length=50)
     transaction_ref = models.CharField(max_length=100, blank=True)
-    recorded_by     = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True)
-    paid_at         = models.DateTimeField(auto_now_add=True)
+    recorded_by     = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="payments_recorded")
+    paid_at         = models.DateTimeField(default=timezone.now)
 
     class Meta:
         db_table  = "payment"
+        constraints = [
+            models.CheckConstraint(check=models.Q(amount__gt=0), name="payment_amount_positive"),
+            models.UniqueConstraint(fields=["invoice", "transaction_ref"], condition=~models.Q(transaction_ref=""),
+                                    name="uniq_payment_reference_per_invoice"),
+        ]
 
     def __str__(self):
         return f"₹{self.amount} via {self.payment_mode} for {self.invoice.invoice_number}"

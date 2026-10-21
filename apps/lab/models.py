@@ -4,7 +4,7 @@ from django.db import models
 from apps.hospital_setup.models import StaffUser
 from apps.hospital_setup.models import Branch
 from apps.opd.models import HospitalPatient
-from apps.opd.models import OPDEncounter
+from apps.opd.models import Appointment, OPDEncounter, PatientChoiceFields
 
 
 class LabTest(models.Model):
@@ -26,7 +26,7 @@ class LabTest(models.Model):
         return self.name
 
 
-class LabRequest(models.Model):
+class LabRequest(PatientChoiceFields):
     """Lab test order raised by a doctor during a consultation (apps.opd.OPDEncounter"""
     STATUS_CHOICES = [
         ("ordered",     "Ordered"),
@@ -35,23 +35,9 @@ class LabRequest(models.Model):
         ("completed",   "Completed"),
         ("cancelled",   "Cancelled"),
     ]
-    CHOICE_CHOICES = [
-        ("pending",  "Pending"),
-        ("in_house", "In-House"),
-        ("outside",  "Outside"),
-    ]
     PAYMENT_PREF_CHOICES = [
         ("pay_online", "Pay Online"),
         ("pay_at_lab", "Pay at Lab"),
-    ]
-    PAYMENT_STATUS_CHOICES = [
-        ("unpaid",         "Unpaid"),
-        ("pending_online", "Pending Online Payment"),
-        ("paid",           "Paid"),
-    ]
-    CHOICE_MADE_BY_CHOICES = [
-        ("patient", "Patient"),
-        ("nurse",   "Nurse"),
     ]
 
     patient         = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT,
@@ -59,22 +45,19 @@ class LabRequest(models.Model):
     encounter       = models.ForeignKey(OPDEncounter, on_delete=models.PROTECT,
                                         related_name="lab_requests")
     # Denormalised for cheap filtering (nurse's queue works off appointment,
-    appointment_id  = models.UUIDField(null=True, blank=True, db_index=True)
-    test            = models.ForeignKey(LabTest, on_delete=models.PROTECT)
+    appointment     = models.ForeignKey(Appointment, on_delete=models.SET_NULL, null=True, blank=True,
+                                        related_name="lab_requests")
+    test            = models.ForeignKey(LabTest, on_delete=models.PROTECT, related_name="requests")
     requested_by    = models.ForeignKey(StaffUser, on_delete=models.PROTECT,
                                         related_name="lab_requests_made",
                                         limit_choices_to={"role": "doctor"})
-    branch          = models.ForeignKey(Branch, on_delete=models.PROTECT)
+    branch          = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="lab_requests")
     status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default="ordered", db_index=True)
     urgency         = models.CharField(max_length=10, choices=[("routine","Routine"),("urgent","Urgent")],
                                        default="routine")
     clinical_notes  = models.TextField(blank=True)
 
-    patient_choice      = models.CharField(max_length=10, choices=CHOICE_CHOICES, default="pending")
     payment_preference   = models.CharField(max_length=15, choices=PAYMENT_PREF_CHOICES, blank=True)
-    payment_status       = models.CharField(max_length=15, choices=PAYMENT_STATUS_CHOICES, default="unpaid", db_index=True)
-    choice_made_by       = models.CharField(max_length=10, choices=CHOICE_MADE_BY_CHOICES, blank=True)
-    choice_made_at       = models.DateTimeField(null=True, blank=True)
 
     # Human-readable, sequential, quotable-at-the-counter token — NNTM
     request_number = models.CharField(max_length=30, unique=True, null=True, blank=True)
@@ -88,7 +71,6 @@ class LabRequest(models.Model):
 
     class Meta:
         db_table  = "lab_request"
-        indexes = [models.Index(fields=["request_number"])]
 
     def __str__(self):
         return f"{self.patient.uhid} — {self.test.name} ({self.status})"
@@ -106,9 +88,9 @@ class LabReport(models.Model):
     patient         = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT,
                                         related_name="lab_reports")
     report_number   = models.CharField(max_length=30, unique=True)
-    status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending", db_index=True)
+    status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     result_summary  = models.TextField(blank=True)
-    file_url        = models.TextField(blank=True)  # uploaded PDF / result file (base64 data URI)
+    file_url        = models.CharField(max_length=255, blank=True)  # storage key of the uploaded PDF or result file
     file_name       = models.CharField(max_length=255, blank=True)
     mime_type       = models.CharField(max_length=100, blank=True)
     performed_by    = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,

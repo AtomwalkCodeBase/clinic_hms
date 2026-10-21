@@ -363,7 +363,7 @@ class PatientAllergyListCreateView(APIView):
             return error(message="Validation error.", errors=serializer.errors)
         allergy = Allergy.objects.using(request.hospital_db).create(
             patient=patient,
-            recorded_by=request.user.id,
+            recorded_by_id=request.user.id,
             **serializer.validated_data,
         )
         return created(data=AllergySerializer(allergy).data)

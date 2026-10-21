@@ -195,7 +195,6 @@ class OPDEncounterSerializer(serializers.ModelSerializer):
             "followup_ask_nurse", "followup_nurse_note", "followup_nurse_requested_at",
             "followup_nurse_booked", "followup_nurse_booked_at",
             "diagnoses", "referred_to", "referral_notes",
-            "ai_transcript_job_id", "ai_transcript_text",
             "signed_at", "prescription", "vitals", "created_at", "updated_at",
         ]
         read_only_fields = ["id", "signed_at", "created_at", "updated_at"]
@@ -298,6 +297,7 @@ class OPDEncounterCreateSerializer(serializers.ModelSerializer):
     # Accept either 'appointment' or 'appointment_id' from the frontend.
     appointment    = serializers.UUIDField(write_only=True, required=False)
     appointment_id = serializers.UUIDField(required=False)
+    patient_id     = serializers.UUIDField()
 
     class Meta:
         model = OPDEncounter

@@ -223,7 +223,6 @@ class AppointmentListCreateView(APIView):
             **data,
             token_number=next_token,
             status=initial_status,
-            booked_by_user_id=request.user.id,
             branch_id=branch_id,
             **room_fields,
         )

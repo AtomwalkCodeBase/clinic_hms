@@ -2,7 +2,6 @@
 
 import uuid
 from django.db import models
-import uuid as _uuid
 from apps.hospital_setup.models import Branch
 from django.utils.functional import cached_property
 
@@ -38,17 +37,17 @@ class Appointment(models.Model):
     doctor_user_id = models.UUIDField(db_index=True)       # atomwalk_user.id
     doctor_name = models.CharField(max_length=255)
     # Nullable: existing rows predate this field. Multi-branch hospitals should
-    branch_id = models.IntegerField(null=True, blank=True, db_index=True)  # org.Branch.id (hospital DB)
+    branch = models.ForeignKey(Branch, on_delete=models.SET_NULL, null=True, blank=True, related_name="appointments")
 
     appointment_type = models.CharField(max_length=15, default=TYPE_OPD)
-    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default=STATUS_SCHEDULED, db_index=True)
+    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default=STATUS_SCHEDULED)
 
-    scheduled_date = models.DateField(db_index=True)
+    scheduled_date = models.DateField()
     scheduled_time = models.TimeField(null=True, blank=True)
     token_number = models.IntegerField(null=True, blank=True)
 
     # Denormalized room/floor — resolved once at booking time from
-    room_id = models.IntegerField(null=True, blank=True)
+    room = models.ForeignKey("hospital_setup.Room", on_delete=models.SET_NULL, null=True, blank=True, related_name="appointments")
     room_name = models.CharField(max_length=100, blank=True)
     floor = models.CharField(max_length=30, blank=True)
 
@@ -59,7 +58,6 @@ class Appointment(models.Model):
 
     chief_complaint = models.TextField(blank=True)
     notes = models.TextField(blank=True)
-    booked_by_user_id = models.UUIDField(null=True, blank=True)
 
     # Captured at booking time (patient portal, or front desk on the patient's
     PAYMENT_PAY_AT_DESK = "pay_at_desk"
@@ -104,9 +102,10 @@ class OPDEncounter(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     appointment = models.OneToOneField(Appointment, on_delete=models.CASCADE, related_name="encounter")
-    patient_id = models.UUIDField(db_index=True)
+    patient = models.ForeignKey("opd.HospitalPatient", to_field="uuid", db_column="patient_id",
+                                on_delete=models.PROTECT, related_name="encounters")
     doctor_user_id = models.UUIDField(db_index=True)
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_DRAFT, db_index=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_DRAFT)
 
     # SOAP notes
     subjective = models.TextField(blank=True)    # Chief complaint + history
@@ -135,20 +134,13 @@ class OPDEncounter(models.Model):
     referred_to = models.CharField(max_length=255, blank=True)
     referral_notes = models.TextField(blank=True)
 
-    # AI transcription (Phase 2)
-    ai_transcript_job_id = models.CharField(max_length=100, blank=True)
-    ai_transcript_text = models.TextField(blank=True)
-
     signed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "opd_encounter"
-        indexes = [
-            models.Index(fields=["patient_id"]),
-            models.Index(fields=["doctor_user_id", "status"]),
-        ]
+        indexes = [models.Index(fields=["doctor_user_id", "status"])]
         ordering = ["-created_at"]
 
     def __str__(self):
@@ -166,17 +158,8 @@ class OPDEncounter(models.Model):
         self.save(using=db)
 
 
-class Prescription(models.Model):
-    STATUS_ACTIVE = "active"
-    STATUS_DISPENSED = "dispensed"
-    STATUS_EXPIRED = "expired"
-    STATUS_CHOICES = [
-        (STATUS_ACTIVE, "Active"),
-        (STATUS_DISPENSED, "Dispensed"),
-        (STATUS_EXPIRED, "Expired"),
-    ]
-
-    # Mirrors apps.lab.models.LabRequest's patient_choice/payment_preference/
+class PatientChoiceFields(models.Model):
+    """Where the patient gets a prescribed item done (in the hospital or outside) and how it is paid: shared by prescriptions and lab requests."""
     CHOICE_PENDING = "pending"
     CHOICE_IN_HOUSE = "in_house"
     CHOICE_OUTSIDE = "outside"
@@ -184,12 +167,6 @@ class Prescription(models.Model):
         (CHOICE_PENDING, "Pending"),
         (CHOICE_IN_HOUSE, "In-House"),
         (CHOICE_OUTSIDE, "Outside"),
-    ]
-    PAY_ONLINE = "pay_online"
-    PAY_AT_PHARMACY = "pay_at_pharmacy"
-    PAYMENT_PREFERENCE_CHOICES = [
-        (PAY_ONLINE, "Pay Online"),
-        (PAY_AT_PHARMACY, "Pay at Pharmacy"),
     ]
     PAY_UNPAID = "unpaid"
     PAY_PENDING_ONLINE = "pending_online"
@@ -201,22 +178,44 @@ class Prescription(models.Model):
     ]
     CHOICE_MADE_BY_CHOICES = [("patient", "Patient"), ("nurse", "Nurse")]
 
+    patient_choice = models.CharField(max_length=10, choices=CHOICE_CHOICES, default=CHOICE_PENDING)
+    payment_status = models.CharField(max_length=15, choices=PAYMENT_STATUS_CHOICES, default=PAY_UNPAID)
+    choice_made_by = models.CharField(max_length=10, choices=CHOICE_MADE_BY_CHOICES, blank=True)
+    choice_made_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        abstract = True
+
+
+class Prescription(PatientChoiceFields):
+    STATUS_ACTIVE = "active"
+    STATUS_DISPENSED = "dispensed"
+    STATUS_EXPIRED = "expired"
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_DISPENSED, "Dispensed"),
+        (STATUS_EXPIRED, "Expired"),
+    ]
+
+    PAY_ONLINE = "pay_online"
+    PAY_AT_PHARMACY = "pay_at_pharmacy"
+    PAYMENT_PREFERENCE_CHOICES = [
+        (PAY_ONLINE, "Pay Online"),
+        (PAY_AT_PHARMACY, "Pay at Pharmacy"),
+    ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     encounter = models.OneToOneField(OPDEncounter, on_delete=models.CASCADE, related_name="prescription")
-    patient_id = models.UUIDField(db_index=True)
+    patient = models.ForeignKey("opd.HospitalPatient", to_field="uuid", db_column="patient_id",
+                                on_delete=models.PROTECT, related_name="prescriptions")
     doctor_user_id = models.UUIDField(db_index=True)
-    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default=STATUS_ACTIVE, db_index=True)
+    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
     notes = models.TextField(blank=True)
     dispensed_at = models.DateTimeField(null=True, blank=True)
 
     # Human-readable, sequential, quotable-over-the-counter token — NNTM
     rx_number = models.CharField(max_length=30, unique=True, null=True, blank=True)
 
-    patient_choice = models.CharField(max_length=10, choices=CHOICE_CHOICES, default=CHOICE_PENDING)
     payment_preference = models.CharField(max_length=15, choices=PAYMENT_PREFERENCE_CHOICES, blank=True)
-    payment_status = models.CharField(max_length=15, choices=PAYMENT_STATUS_CHOICES, default=PAY_UNPAID)
-    choice_made_by = models.CharField(max_length=10, choices=CHOICE_MADE_BY_CHOICES, blank=True)
-    choice_made_at = models.DateTimeField(null=True, blank=True)
 
     # Set on first dispense against this prescription (see
     invoice = models.ForeignKey("billing.Invoice", on_delete=models.SET_NULL,
@@ -227,7 +226,6 @@ class Prescription(models.Model):
 
     class Meta:
         db_table = "opd_prescription"
-        indexes = [models.Index(fields=["patient_id"]), models.Index(fields=["rx_number"])]
         ordering = ["-created_at"]
 
     def __str__(self):
@@ -270,7 +268,6 @@ class PrescriptionItem(models.Model):
     duration_days = models.IntegerField(null=True, blank=True)
     quantity = models.IntegerField(null=True, blank=True)
     instructions = models.TextField(blank=True)       # e.g. "Take after food"
-    is_controlled = models.BooleanField(default=False)
 
     class Meta:
         db_table = "opd_prescription_item"
@@ -289,7 +286,7 @@ class PrescriptionFavourite(models.Model):
 
     class Meta:
         db_table = "prescription_favourite"
-        unique_together = [("doctor_user_id", "name")]
+        constraints = [models.UniqueConstraint(fields=["doctor_user_id", "name"], name="uniq_favourite_doctor_name")]
 
 
 # Hospital patients: the hospital's own record of a patient, and the allergies noted here
@@ -299,8 +296,8 @@ class HospitalPatient(models.Model):
     GENDER_CHOICES = [("M", "Male"), ("F", "Female"), ("O", "Other")]
     PAYER_CHOICES  = [("self", "Self Pay"), ("insurance", "Insurance"), ("corporate", "Corporate")]
 
-    uuid            = models.UUIDField(default=_uuid.uuid4, unique=True, db_index=True)
-    awpid           = models.CharField(max_length=30, db_index=True)
+    uuid            = models.UUIDField(default=uuid.uuid4, unique=True)
+    awpid           = models.CharField(max_length=30, unique=True)
     uhid            = models.CharField(max_length=20, unique=True)  # e.g. APL-000123
     branch          = models.ForeignKey(Branch, on_delete=models.PROTECT,
                                         related_name="patients")
@@ -308,7 +305,8 @@ class HospitalPatient(models.Model):
     full_name       = models.CharField(max_length=200)
     date_of_birth   = models.DateField(null=True, blank=True)
     gender          = models.CharField(max_length=1, choices=GENDER_CHOICES, blank=True)
-    blood_group     = models.CharField(max_length=5, blank=True)
+    BLOOD_GROUP_CHOICES = [(g, g) for g in ("A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-")]
+    blood_group     = models.CharField(max_length=5, choices=BLOOD_GROUP_CHOICES, blank=True)
     marital_status  = models.CharField(max_length=20, blank=True)
     nationality     = models.CharField(max_length=50, blank=True, default="Indian")
     occupation      = models.CharField(max_length=100, blank=True)
@@ -389,13 +387,13 @@ class HospitalPatient(models.Model):
             return None
         if not hasattr(self, "_guardian_link"):
             from apps.patients.models import PatientRelationship
-            self._guardian_link = (PatientRelationship.objects.using("default").filter(dependent__awpid=self.awpid)
-                                   .order_by("-is_primary", "id").first())
+            self._guardian_link = (PatientRelationship.objects.using("default").select_related("guardian")
+                                   .filter(dependent__awpid=self.awpid).order_by("id").first())
         return self._guardian_link
 
     @property
     def guardian_awpid(self):
-        return self.guardian_link.guardian_awpid if self.guardian_link else ""
+        return self.guardian_link.guardian.awpid if self.guardian_link else ""
 
     @property
     def guardian_relation(self):
@@ -421,7 +419,7 @@ class Allergy(models.Model):
     is_active   = models.BooleanField(default=True)
     recorded_at = models.DateTimeField(auto_now_add=True)
     updated_at  = models.DateTimeField(auto_now=True)
-    recorded_by = models.IntegerField(null=True, blank=True)  # StaffUser.id
+    recorded_by = models.ForeignKey("hospital_setup.StaffUser", on_delete=models.SET_NULL, null=True, blank=True, related_name="allergies_recorded")
 
     class Meta:
         db_table  = "allergy"

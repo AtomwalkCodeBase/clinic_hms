@@ -23,6 +23,7 @@ class Drug(models.Model):
     class Meta:
         db_table  = "drug"
         ordering  = ["name"]
+        constraints = [models.UniqueConstraint(fields=["drug_code"], condition=~models.Q(drug_code=""), name="uniq_drug_code")]
 
     def __str__(self):
         return f"{self.name} {self.strength}"
@@ -43,7 +44,10 @@ class Stock(models.Model):
 
     class Meta:
         db_table  = "stock"
-        unique_together = [("drug", "branch", "batch_number")]
+        constraints = [
+            models.UniqueConstraint(fields=["drug", "branch", "batch_number"], name="uniq_stock_drug_branch_batch"),
+            models.CheckConstraint(check=models.Q(quantity__gte=0), name="stock_quantity_not_negative"),
+        ]
 
     def __str__(self):
         return f"{self.drug.name} @ {self.branch.name} — qty:{self.quantity}"
@@ -66,29 +70,33 @@ class StockTransaction(models.Model):
     quantity_before = models.IntegerField()
     quantity_after  = models.IntegerField()
     reference_type  = models.CharField(max_length=50, blank=True)   # "Dispense", "Purchase", etc.
-    reference_id    = models.IntegerField(null=True, blank=True)
     notes           = models.TextField(blank=True)
-    recorded_by     = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True)
+    recorded_by     = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="stock_transactions")
     recorded_at     = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table  = "stock_transaction"
         ordering  = ["-recorded_at"]
+        constraints = [
+            models.CheckConstraint(check=models.Q(quantity_after=models.F("quantity_before") + models.F("quantity_change")),
+                                   name="stock_transaction_adds_up"),
+        ]
 
 
 class Dispense(models.Model):
     """Drug dispensing record linked to a prescription item."""
     prescription_item = models.ForeignKey(PrescriptionItem, on_delete=models.PROTECT,
                                           related_name="dispenses")
-    stock           = models.ForeignKey(Stock, on_delete=models.PROTECT)
+    stock           = models.ForeignKey(Stock, on_delete=models.PROTECT, related_name="dispenses")
     quantity        = models.PositiveIntegerField()
-    dispensed_by    = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True,
-                                        limit_choices_to={"role": "pharmacist"})
+    dispensed_by    = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True,
+                                        related_name="dispenses_made", limit_choices_to={"role": "pharmacist"})
     dispensed_at    = models.DateTimeField(auto_now_add=True)
     notes           = models.TextField(blank=True)
 
     class Meta:
         db_table  = "dispense"
+        constraints = [models.CheckConstraint(check=models.Q(quantity__gt=0), name="dispense_quantity_positive")]
 
 
 class MedicationDoseLog(models.Model):
@@ -101,10 +109,10 @@ class MedicationDoseLog(models.Model):
 
     prescription_item = models.ForeignKey(PrescriptionItem, on_delete=models.PROTECT,
                                           related_name="dose_logs")
-    patient         = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT)
-    status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default="given", db_index=True)
-    administered_by = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True,
-                                        limit_choices_to={"role": "nurse"})
+    patient         = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT, related_name="dose_logs")
+    status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default="given")
+    administered_by = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True,
+                                        related_name="doses_administered", limit_choices_to={"role": "nurse"})
     administered_at = models.DateTimeField()
     notes           = models.TextField(blank=True)
 
