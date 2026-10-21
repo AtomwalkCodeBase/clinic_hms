@@ -44,7 +44,7 @@ class DoctorProfileSerializer(serializers.ModelSerializer):
         model  = DoctorProfile
         fields = ["registration_no", "specialisation", "qualification",
                   "gender", "experience_years", "consultation_fee", "followup_fee",
-                  "bio", "photo_url", "languages", "known_for"]
+                  "bio", "languages", "known_for"]
 
 
 class DoctorSelfProfileSerializer(serializers.ModelSerializer):

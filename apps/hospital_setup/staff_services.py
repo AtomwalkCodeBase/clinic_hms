@@ -29,8 +29,8 @@ def next_employee_id(db_name: str) -> str:
     from core.utils.nntm import get_next_number
 
     NextNumber.objects.using(db_name).get_or_create(
-        branch_id=0, entity="employee_id",
+        branch=None, entity="employee_id",
         defaults={"prefix": "EMP-", "pad_length": 6, "last_number": 0},
     )
-    formatted_id, _ = get_next_number(0, "employee_id", using=db_name)
+    formatted_id, _ = get_next_number(None, "employee_id", using=db_name)
     return formatted_id

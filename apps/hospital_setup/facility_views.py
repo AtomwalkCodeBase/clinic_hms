@@ -220,9 +220,6 @@ class FloorDetailView(APIView):
         for attr, val in s.validated_data.items():
             setattr(floor, attr, val)
         floor.save(using=request.hospital_db)
-        # Keep every room's legacy free-text `floor` mirror in sync with a
-        if "name" in s.validated_data:
-            Room.objects.using(request.hospital_db).filter(floor_obj=floor).update(floor=floor.name)
         return success(data=FloorSerializer(floor).data, message="Floor updated.")
 
     def delete(self, request, pk):
@@ -289,7 +286,7 @@ class RoomListCreateView(APIView):
             capacity = None
 
         floor_obj = s.validated_data.get("floor_obj")
-        room = Room(branch=branch, floor=(floor_obj.name if floor_obj else ""), floor_obj=floor_obj,
+        room = Room(branch=branch, floor_obj=floor_obj,
                     department=s.validated_data.get("department"),
                     name=s.validated_data["name"], room_type=room_type, capacity=capacity)
         room.save(using=request.hospital_db)
@@ -334,9 +331,6 @@ class RoomDetailView(APIView):
                 s.validated_data["capacity"] = None
         for attr, val in s.validated_data.items():
             setattr(room, attr, val)
-        # floor_obj is the source of truth once set — keep the legacy
-        if "floor_obj" in s.validated_data:
-            room.floor = room.floor_obj.name if room.floor_obj else ""
         room.save(using=request.hospital_db)
         return success(data=RoomSerializer(room).data, message="Room updated.")
 

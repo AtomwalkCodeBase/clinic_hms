@@ -639,7 +639,7 @@ export function AppointmentsPageContent({ embedded = false }) {
                 {doctorList.map(d => {
                   const name = `${d.first_name || ""} ${d.last_name || ""}`.trim() || d.full_name || d.email;
                   const prof = d.doctor_profile || {};
-                  const photo = d.photo || prof.photo_url;
+                  const photo = d.photo;
                   const selected = String(doctorId) === String(d.id);
                   return (
                     <button key={d.id} type="button" onClick={() => setDoctorId(d.id)}

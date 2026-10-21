@@ -3,12 +3,14 @@
 from django.contrib.auth.hashers import make_password, check_password
 from django.db import models
 
+from apps.hospital_setup.rbac import SYSTEM_ROLE_LABELS
+
 
 # Organisation: branches, departments, floors, rooms, beds, number sequences
 
 class NextNumber(models.Model):
     """NNTM — Next Number Table Manager."""
-    branch_id   = models.IntegerField(db_index=True)
+    branch      = models.ForeignKey("Branch", on_delete=models.CASCADE, null=True, blank=True, related_name="number_counters")
     entity      = models.CharField(max_length=20)
     prefix      = models.CharField(max_length=10, default="")
     last_number = models.PositiveBigIntegerField(default=0)
@@ -16,7 +18,10 @@ class NextNumber(models.Model):
 
     class Meta:
         db_table     = "next_number"
-        unique_together = [("branch_id", "entity")]
+        constraints = [
+            models.UniqueConstraint(fields=["branch", "entity"], name="uniq_counter_branch_entity"),
+            models.UniqueConstraint(fields=["entity"], condition=models.Q(branch__isnull=True), name="uniq_counter_hospital_wide"),
+        ]
 
     def __str__(self):
         return f"{self.prefix}{str(self.last_number).zfill(self.pad_length)}"
@@ -48,7 +53,7 @@ class Department(models.Model):
 
     class Meta:
         db_table  = "department"
-        unique_together = [("branch", "name")]
+        constraints = [models.UniqueConstraint(fields=["branch", "name"], name="uniq_department_branch_name")]
 
     def __str__(self):
         return f"{self.branch.name} / {self.name}"
@@ -63,7 +68,7 @@ class Floor(models.Model):
 
     class Meta:
         db_table  = "floor"
-        unique_together = [("branch", "name")]
+        constraints = [models.UniqueConstraint(fields=["branch", "name"], name="uniq_floor_branch_name")]
         ordering  = ["level", "name"]
 
     def __str__(self):
@@ -73,8 +78,6 @@ class Room(models.Model):
     """A physical room at a branch, on a given floor — OPD consultation/"""
 
     branch      = models.ForeignKey(Branch, on_delete=models.CASCADE, related_name="rooms")
-    floor       = models.CharField(max_length=30, blank=True)   # legacy free-text mirror of floor_obj.name — kept so
-                                                                  # existing readers (RoomAssignmentSerializer, etc.)
     floor_obj   = models.ForeignKey(Floor, on_delete=models.SET_NULL, null=True, blank=True, related_name="rooms")
     # Optional — most OPD rooms don't need one; a bed-based room (ward/ICU/
     department  = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name="rooms")
@@ -87,8 +90,12 @@ class Room(models.Model):
 
     class Meta:
         db_table  = "room"
-        unique_together = [("branch", "name")]
-        ordering  = ["floor", "name"]
+        constraints = [models.UniqueConstraint(fields=["branch", "name"], name="uniq_room_branch_name")]
+        ordering  = ["floor_obj__level", "name"]
+
+    @property
+    def floor(self):
+        return self.floor_obj.name if self.floor_obj_id else ""
 
     def __str__(self):
         return f"{self.name} (Floor {self.floor or '—'}, {self.branch.name})"
@@ -111,20 +118,9 @@ class Bed(models.Model):
         (STATUS_OUT_OF_SERVICE, "Out of Service"),
     ]
 
-    # Documents intent; the actual guard is each view only ever writing one
-    ALLOWED_TRANSITIONS = {
-        STATUS_AVAILABLE: [STATUS_RESERVED, STATUS_OCCUPIED, STATUS_BLOCKED, STATUS_OUT_OF_SERVICE],
-        STATUS_RESERVED: [STATUS_OCCUPIED, STATUS_AVAILABLE],
-        # AVAILABLE is kept here (alongside CLEANING) for ReleaseBedView's
-        STATUS_OCCUPIED: [STATUS_CLEANING, STATUS_AVAILABLE],
-        STATUS_CLEANING: [STATUS_AVAILABLE],
-        STATUS_BLOCKED: [STATUS_AVAILABLE],
-        STATUS_OUT_OF_SERVICE: [STATUS_AVAILABLE],
-    }
-
     room        = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="beds")
     bed_number  = models.CharField(max_length=20)   # e.g. "3A", "12"
-    status      = models.CharField(max_length=15, choices=STATUS_CHOICES, default=STATUS_AVAILABLE, db_index=True)
+    status      = models.CharField(max_length=15, choices=STATUS_CHOICES, default=STATUS_AVAILABLE)
     # Set only while status=RESERVED, by apps.ipd.views.ReserveBedView, and
     reserved_for_admission_id = models.UUIDField(null=True, blank=True, db_index=True)
     is_active   = models.BooleanField(default=True)
@@ -133,7 +129,7 @@ class Bed(models.Model):
 
     class Meta:
         db_table  = "bed"
-        unique_together = [("room", "bed_number")]
+        constraints = [models.UniqueConstraint(fields=["room", "bed_number"], name="uniq_bed_room_number")]
         ordering  = ["room__name", "bed_number"]
 
     def __str__(self):
@@ -144,16 +140,7 @@ class Bed(models.Model):
 
 class StaffUser(models.Model):
     """Per-hospital staff user. Plain Django model (not AUTH_USER_MODEL)."""
-    ROLE_CHOICES = [
-        ("hospital_admin", "Hospital Admin"),
-        ("doctor",         "Doctor"),
-        ("nurse",          "Nurse"),
-        ("front_desk",     "Front Desk"),
-        ("lab_tech",       "Lab Technician"),
-        ("pharmacist",     "Pharmacist"),
-        # Primary role is a hospital-defined bundle (org.Role, custom_role
-        ("custom",         "Custom Role"),
-    ]
+    ROLE_CHOICES = [*SYSTEM_ROLE_LABELS.items(), ("custom", "Custom Role")]
 
     # Optional now — phone is the login identifier. null=True (not just
     email       = models.EmailField(unique=True, blank=True, null=True)
@@ -167,7 +154,7 @@ class StaffUser(models.Model):
     branch      = models.ForeignKey(Branch, on_delete=models.SET_NULL,
                                     null=True, blank=True, related_name="staff")
     department  = models.ForeignKey(Department, on_delete=models.SET_NULL,
-                                    null=True, blank=True)
+                                    null=True, blank=True, related_name="staff")
     phone               = models.CharField(max_length=20, unique=True)
     # Optional secondary login identifier for hospitals that already run an
     employee_id         = models.CharField(max_length=50, unique=True, null=True, blank=True)
@@ -178,7 +165,7 @@ class StaffUser(models.Model):
     last_login          = models.DateTimeField(null=True, blank=True)
 
     # Self-service profile photo — common to every staff role (doctor, nurse,
-    photo               = models.TextField(blank=True)
+    photo               = models.CharField(max_length=255, blank=True)
 
     class Meta:
         db_table  = "staff_user"
@@ -254,7 +241,7 @@ class Permission(models.Model):
 
 class Role(models.Model):
     """A named bundle of permissions. Every hospital DB is seeded with the 6"""
-    name          = models.CharField(max_length=100)
+    name          = models.CharField(max_length=100, unique=True)
     description   = models.CharField(max_length=255, blank=True)
     is_system_role = models.BooleanField(default=False)
     # For a system role, matches a StaffUser.ROLE_CHOICES value so
@@ -266,19 +253,18 @@ class Role(models.Model):
 
     class Meta:
         db_table  = "role"
-        unique_together = [("name",)]
         ordering  = ["-is_system_role", "name"]
 
     def __str__(self):
         return f"{self.name}{' (system)' if self.is_system_role else ''}"
 
 class RolePermission(models.Model):
-    role       = models.ForeignKey(Role, on_delete=models.CASCADE)
-    permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+    role       = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="grants")
+    permission = models.ForeignKey(Permission, on_delete=models.CASCADE, related_name="grants")
 
     class Meta:
         db_table  = "role_permission"
-        unique_together = [("role", "permission")]
+        constraints = [models.UniqueConstraint(fields=["role", "permission"], name="uniq_role_permission")]
 
 class UserRole(models.Model):
     """Extra roles a staff member holds beyond their primary StaffUser.role —"""
@@ -288,7 +274,7 @@ class UserRole(models.Model):
 
     class Meta:
         db_table  = "user_role"
-        unique_together = [("staff", "role")]
+        constraints = [models.UniqueConstraint(fields=["staff", "role"], name="uniq_user_role")]
 
 class DoctorProfile(models.Model):
     """Extended profile for staff with role='doctor'."""
@@ -304,11 +290,10 @@ class DoctorProfile(models.Model):
     consultation_fee= models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
     # Charged instead of consultation_fee when the appointment_type is
     followup_fee    = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
-    digital_signature = models.TextField(blank=True)  # base64 or file path
+    digital_signature = models.CharField(max_length=255, blank=True)
 
     # ── Self-service fields — filled by the doctor themselves after login,
     bio         = models.TextField(blank=True)          # short professional bio / about
-    photo_url   = models.URLField(max_length=500, blank=True)
     languages   = models.CharField(max_length=200, blank=True)  # comma-separated, e.g. "English, Hindi, Kannada"
     # Comma-separated conditions/procedures this doctor is known for, e.g.
     known_for   = models.CharField(max_length=300, blank=True)
@@ -348,20 +333,25 @@ class StaffProfile(models.Model):
 class AuditLog(models.Model):
     """Who did what to which patient record, when. Lives per-hospital since"""
     # StaffUser's PK is a plain BigAutoField (see StaffUser above), not a
-    actor_user_id   = models.BigIntegerField(null=True, blank=True, db_index=True)
+    actor_user_id   = models.BigIntegerField(null=True, blank=True)
     actor_email     = models.CharField(max_length=255, blank=True)
     actor_role      = models.CharField(max_length=30, blank=True)
-    action          = models.CharField(max_length=50, db_index=True)   # e.g. "encounter.sign", "patient.view"
+    action          = models.CharField(max_length=50)   # e.g. "encounter.sign", "patient.view"
     resource_type   = models.CharField(max_length=50, blank=True)
     resource_id     = models.CharField(max_length=64, blank=True)
-    patient_id      = models.UUIDField(null=True, blank=True, db_index=True)
+    patient_id      = models.UUIDField(null=True, blank=True)
     ip_address      = models.GenericIPAddressField(null=True, blank=True)
     metadata        = models.JSONField(default=dict, blank=True)
-    created_at      = models.DateTimeField(auto_now_add=True, db_index=True)
+    created_at      = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table  = "audit_log"
         ordering  = ["-created_at"]
+        indexes   = [
+            models.Index(fields=["patient_id", "-created_at"], name="audit_patient_time"),
+            models.Index(fields=["actor_user_id", "-created_at"], name="audit_actor_time"),
+            models.Index(fields=["-created_at"], name="audit_time"),
+        ]
 
     def __str__(self):
         return f"{self.action} by {self.actor_email or self.actor_user_id} @ {self.created_at}"
@@ -398,7 +388,7 @@ class DoctorAvailabilitySlot(models.Model):
 
     class Meta:
         db_table      = "doctor_availability_slot"
-        unique_together = [("schedule", "day_of_week")]
+        constraints   = [models.UniqueConstraint(fields=["schedule", "day_of_week"], name="uniq_slot_schedule_day")]
         ordering      = ["day_of_week"]
 
     def __str__(self):
@@ -444,14 +434,14 @@ class RecordAmendment(models.Model):
     patient         = models.ForeignKey("opd.HospitalPatient", on_delete=models.PROTECT,
                                         related_name="amendments")
     resource_type   = models.CharField(max_length=50)   # which table/field
-    resource_id     = models.IntegerField()
+    resource_id     = models.CharField(max_length=64)
     field_name      = models.CharField(max_length=100)
     current_value   = models.TextField(blank=True)
     requested_value = models.TextField()
     reason          = models.TextField(blank=True)
-    status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending", db_index=True)
+    status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     reviewed_by     = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,
-                                        null=True, blank=True)
+                                        null=True, blank=True, related_name="reviewed_amendments")
     review_notes    = models.TextField(blank=True)
     requested_at    = models.DateTimeField(auto_now_add=True)
     resolved_at     = models.DateTimeField(null=True, blank=True)
@@ -485,22 +475,31 @@ class ConsentRecord(models.Model):
 
     patient         = models.ForeignKey("opd.HospitalPatient", on_delete=models.PROTECT,
                                         related_name="consent_records")
-    consent_type    = models.CharField(max_length=30, choices=CONSENT_TYPE_CHOICES, db_index=True)
+    consent_type    = models.CharField(max_length=30, choices=CONSENT_TYPE_CHOICES)
     granted         = models.BooleanField(default=True)
     source          = models.CharField(max_length=20, choices=SOURCE_CHOICES)
     # Who captured it — set for front-desk-attested consent (staff confirms
     recorded_by     = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,
-                                        null=True, blank=True)
+                                        null=True, blank=True, related_name="recorded_consents")
     ip_address      = models.GenericIPAddressField(null=True, blank=True)
     user_agent      = models.TextField(blank=True)
     # Free-text tag for whichever version of the consent/policy language was
     policy_version  = models.CharField(max_length=20, default="v1")
     notes           = models.TextField(blank=True)
-    created_at      = models.DateTimeField(auto_now_add=True, db_index=True)
+    created_at      = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table  = "consent_record"
         ordering  = ["-created_at"]
+        indexes   = [models.Index(fields=["patient", "consent_type", "-created_at"], name="consent_patient_type_time")]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValueError("A consent record is never edited; record a new one instead.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("A consent record is never deleted.")
 
     def __str__(self):
         return f"{self.get_consent_type_display()} — {'granted' if self.granted else 'revoked'} ({self.source})"
@@ -519,10 +518,12 @@ class NotificationLog(models.Model):
 
     patient     = models.ForeignKey("opd.HospitalPatient", on_delete=models.SET_NULL,
                                     null=True, blank=True, related_name="notifications")
+    CHANNEL_CHOICES = [("in_app", "In-app"), ("sms", "SMS"), ("email", "Email"), ("whatsapp", "WhatsApp")]
+
     recipient   = models.CharField(max_length=200)  # phone or email
-    channel     = models.CharField(max_length=20)
+    channel     = models.CharField(max_length=20, choices=CHANNEL_CHOICES)
     body        = models.TextField()                 # rendered body (after variable substitution)
-    status      = models.CharField(max_length=20, choices=STATUS_CHOICES, default="queued", db_index=True)
+    status      = models.CharField(max_length=20, choices=STATUS_CHOICES, default="queued")
     provider_ref= models.CharField(max_length=200, blank=True)  # external message ID
     error       = models.TextField(blank=True)
     sent_at     = models.DateTimeField(null=True, blank=True)

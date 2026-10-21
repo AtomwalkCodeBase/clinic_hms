@@ -6,7 +6,7 @@ from django.db import transaction
 logger = logging.getLogger(__name__)
 
 
-def get_next_number(branch_id: int, entity: str, using: str = "default") -> tuple[str, int]:
+def get_next_number(branch_id: int | None, entity: str, using: str = "default") -> tuple[str, int]:
     """Atomically increment the counter for a given branch+entity and return"""
     # Import here to avoid circular imports
     from apps.hospital_setup.models import NextNumber

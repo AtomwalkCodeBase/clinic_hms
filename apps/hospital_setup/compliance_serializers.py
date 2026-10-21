@@ -50,7 +50,7 @@ class RecordAmendmentCreateSerializer(serializers.Serializer):
     """Patient-facing — what a patient submits to request a correction."""
     resource_type   = serializers.CharField(max_length=50)
     # A patient describing "my address is wrong" has no way to know the
-    resource_id     = serializers.IntegerField(required=False, default=0)
+    resource_id     = serializers.CharField(max_length=64, required=False, default="0")
     field_name      = serializers.CharField(max_length=100)
     current_value   = serializers.CharField(max_length=2000, required=False, allow_blank=True)
     requested_value = serializers.CharField(max_length=2000)

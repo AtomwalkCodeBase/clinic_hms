@@ -36,8 +36,8 @@ class Command(BaseCommand):
             ensure_hospital_db(hospital.db_name)
             try:
                 run_hospital_migrations(hospital.db_name)
-                self.stdout.write(self.style.SUCCESS(f"    ✓ {hospital.db_name} — done"))
+                self.stdout.write(self.style.SUCCESS(f"    OK {hospital.db_name} — done"))
             except Exception as exc:
-                self.stdout.write(self.style.ERROR(f"    ✗ {hospital.db_name} — {exc}"))
+                self.stdout.write(self.style.ERROR(f"    FAILED {hospital.db_name} — {exc}"))
 
         self.stdout.write("\nAll done.")

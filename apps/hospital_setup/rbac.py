@@ -112,3 +112,27 @@ def get_effective_permissions(staff, db_name):
 
 def has_permission(staff, code, db_name):
     return code in get_effective_permissions(staff, db_name)
+
+
+def sync_roles_and_permissions(db):
+    """Make a hospital database's permission and system-role rows match this file; runs after every migrate."""
+    from apps.hospital_setup.models import Permission, Role, RolePermission
+
+    permissions = {
+        code: Permission.objects.using(db).update_or_create(code=code, defaults={"description": text})[0]
+        for code, text in PERMISSION_CATALOG.items()
+    }
+    for key, label in SYSTEM_ROLE_LABELS.items():
+        role = (Role.objects.using(db).filter(system_role_key=key).first()
+                or Role.objects.using(db).filter(name=label).first())
+        if role is None:
+            role = Role.objects.using(db).create(name=label, is_system_role=True, system_role_key=key)
+        elif not role.is_system_role or role.system_role_key != key:
+            Role.objects.using(db).filter(pk=role.pk).update(is_system_role=True, system_role_key=key)
+        wanted = set(SYSTEM_ROLE_PERMISSIONS.get(key, ()))
+        have = set(RolePermission.objects.using(db).filter(role=role).values_list("permission__code", flat=True))
+        RolePermission.objects.using(db).bulk_create(
+            [RolePermission(role=role, permission=permissions[code]) for code in sorted(wanted - have)])
+        if have - wanted:
+            RolePermission.objects.using(db).filter(role=role, permission__code__in=have - wanted).delete()
+    Permission.objects.using(db).exclude(code__in=PERMISSION_CATALOG).delete()
