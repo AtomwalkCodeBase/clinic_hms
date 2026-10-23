@@ -494,9 +494,9 @@ function RoomForm({ branches, floors, roomTypes, departments, initial, onSave, o
       <Select label="Branch *" value={form.branch} onChange={set("branch")}
         options={branches.map(b => ({ value: String(b.id), label: b.name }))} required />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <Select label="Floor" value={form.floor_obj} onChange={set("floor_obj")}
+        <Select label="Floor *" value={form.floor_obj} onChange={set("floor_obj")}
           options={floors.map(f => ({ value: String(f.id), label: f.name }))}
-          hint={floors.length === 0 ? "No floors set up yet — add one first." : undefined} />
+          hint={floors.length === 0 ? "No floors set up yet — add one first." : "The room is at this floor's branch."} required />
         <Field label="Room Number / Name *" value={form.name} onChange={set("name")} placeholder="e.g. OPD-01, Ward 1, ICU-A" required />
       </div>
       <Select label="Room Type *" value={form.room_type} onChange={set("room_type")}
@@ -513,7 +513,7 @@ function RoomForm({ branches, floors, roomTypes, departments, initial, onSave, o
         options={departments.map(d => ({ value: String(d.id), label: d.name }))}
         hint="Only needed if this room belongs to a specific clinical department." />
       <ModalActions onCancel={onCancel} saving={saving}
-        disabled={!form.branch || !form.name || !form.room_type || (isBedBased && (!form.capacity || Number(form.capacity) < 1 || capacityTooLow))}
+        disabled={!form.branch || !form.floor_obj || !form.name || !form.room_type || (isBedBased && (!form.capacity || Number(form.capacity) < 1 || capacityTooLow))}
         submitLabel={initial ? "Update Room" : "Create Room"} />
     </form>
   );
@@ -868,13 +868,10 @@ export default function RoomsPage() {
   }, [beds]);
 
   const selectedFloor = floors.find(f => String(f.id) === String(selectedFloorId)) || null;
-  const isUnassignedView = selectedFloorId === "unassigned";
-  // Rooms created before a Floor was picked for them (or from data that
-  const unassignedRooms = useMemo(() => rooms.filter(r => !r.floor_obj), [rooms]);
-  const roomsOnFloor = useMemo(() => {
-    if (isUnassignedView) return unassignedRooms;
-    return rooms.filter(r => selectedFloor && String(r.floor_obj) === String(selectedFloor.id));
-  }, [rooms, selectedFloor, isUnassignedView, unassignedRooms]);
+  const roomsOnFloor = useMemo(
+    () => rooms.filter(r => selectedFloor && String(r.floor_obj) === String(selectedFloor.id)),
+    [rooms, selectedFloor],
+  );
 
   const bedsModalRoomTypeMeta = bedsModalRoom ? roomTypeMeta(bedsModalRoom.room_type, roomTypes) : null;
   const bedsInModalRoom = useMemo(
@@ -946,7 +943,7 @@ export default function RoomsPage() {
     try {
       await apiClient.post(API_ENDPOINTS.ORG.ROOMS, {
         branch: Number(form.branch), name: form.name, room_type: form.room_type,
-        floor_obj: form.floor_obj ? Number(form.floor_obj) : null,
+        floor_obj: Number(form.floor_obj),
         department: form.department ? Number(form.department) : null,
         capacity: isBedBased && form.capacity ? Number(form.capacity) : null,
       });
@@ -960,7 +957,7 @@ export default function RoomsPage() {
     try {
       await apiClient.patch(API_ENDPOINTS.ORG.ROOM(editing.id), {
         branch: Number(form.branch), name: form.name, room_type: form.room_type,
-        floor_obj: form.floor_obj ? Number(form.floor_obj) : null,
+        floor_obj: Number(form.floor_obj),
         department: form.department ? Number(form.department) : null,
         capacity: isBedBased && form.capacity ? Number(form.capacity) : null,
       });
@@ -1084,14 +1081,6 @@ export default function RoomsPage() {
                     onSelect={() => setSelectedFloorId(String(f.id))} />
                 ))
               )}
-              {unassignedRooms.length > 0 && (
-                <FloorListItem
-                  floor={{ id: "unassigned", name: "Unassigned Rooms", level: null }}
-                  icon={HelpCircle}
-                  roomCount={unassignedRooms.length}
-                  selected={isUnassignedView}
-                  onSelect={() => setSelectedFloorId("unassigned")} />
-              )}
             </div>
 
             <div className="card" style={{ padding: 18 }}>
@@ -1133,7 +1122,7 @@ export default function RoomsPage() {
 
           {/* Right column: selected floor's rooms */}
           <div className="card" style={{ padding: 22 }}>
-            {!selectedFloor && !isUnassignedView ? (
+            {!selectedFloor ? (
               <div style={{ textAlign: "center", padding: "60px 0", color: "var(--color-text-muted)" }}>
                 <Building2 size={36} style={{ marginBottom: 12 }} />
                 <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>No floor selected</div>
@@ -1145,33 +1134,25 @@ export default function RoomsPage() {
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>
-                        {isUnassignedView ? "Unassigned Rooms" : selectedFloor.name}
+                        {selectedFloor.name}
                       </h2>
-                      {!isUnassignedView && (
-                        <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 999, background: "var(--color-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-muted)" }}>
-                          Level {selectedFloor.level}
-                        </span>
-                      )}
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 999, background: "var(--color-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-muted)" }}>
+                        Level {selectedFloor.level}
+                      </span>
                     </div>
                     <div style={{ fontSize: 12.5, color: "var(--color-text-muted)", marginTop: 4 }}>
-                      {isUnassignedView
-                        ? `${roomsOnFloor.length} room${roomsOnFloor.length === 1 ? "" : "s"} not yet assigned to a floor — edit a room to move it`
-                        : `${roomsOnFloor.length} room${roomsOnFloor.length === 1 ? "" : "s"} in this floor`}
+                      {`${roomsOnFloor.length} room${roomsOnFloor.length === 1 ? "" : "s"} in this floor`}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 8 }}>
-                    {!isUnassignedView && (
-                      <>
-                        <button className="btn-outline" style={{ fontSize: 12.5, padding: "8px 14px" }}
-                          onClick={() => { setEditing(selectedFloor); setModal("floor"); }}>
-                          <Pencil size={13} style={{ marginRight: 6, verticalAlign: -2 }} /> Edit Floor
-                        </button>
-                        <button style={{ fontSize: 12.5, padding: "8px 14px", borderRadius: 8, border: "1.5px solid var(--color-error)", background: "none", color: "var(--color-error)", cursor: "pointer", fontWeight: 600 }}
-                          onClick={() => handleRemoveFloor(selectedFloor)}>
-                          Delete
-                        </button>
-                      </>
-                    )}
+                    <button className="btn-outline" style={{ fontSize: 12.5, padding: "8px 14px" }}
+                      onClick={() => { setEditing(selectedFloor); setModal("floor"); }}>
+                      <Pencil size={13} style={{ marginRight: 6, verticalAlign: -2 }} /> Edit Floor
+                    </button>
+                    <button style={{ fontSize: 12.5, padding: "8px 14px", borderRadius: 8, border: "1.5px solid var(--color-error)", background: "none", color: "var(--color-error)", cursor: "pointer", fontWeight: 600 }}
+                      onClick={() => handleRemoveFloor(selectedFloor)}>
+                      Delete
+                    </button>
                     <button className="btn-primary" style={{ fontSize: 12.5, padding: "8px 16px" }}
                       onClick={() => { setEditing(null); setModal("room"); }}>
                       + Add Room
@@ -1199,7 +1180,7 @@ export default function RoomsPage() {
                 ? { ...editing, branch: String(editing.branch), floor_obj: editing.floor_obj ? String(editing.floor_obj) : "",
                     department: editing.department ? String(editing.department) : "",
                     capacity: editing.capacity != null ? String(editing.capacity) : "" }
-                : { ...EMPTY_ROOM, branch: branchId, floor_obj: isUnassignedView ? "" : selectedFloorId }}
+                : { ...EMPTY_ROOM, branch: branchId, floor_obj: selectedFloorId }}
               onSave={editing ? handleUpdateRoom : handleCreateRoom}
               onCancel={() => { setModal(null); setEditing(null); }} saving={saving} />
           </Modal>

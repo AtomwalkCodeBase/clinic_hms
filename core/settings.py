@@ -18,7 +18,7 @@ if DEBUG:
     ALLOWED_HOSTS = ["*"]
 else:
     SECRET_KEY = config("SECRET_KEY")
-    ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="app.atomwalk.com").split(",")
+    ALLOWED_HOSTS = config("ALLOWED_HOSTS").split(",")
 
 FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 
@@ -95,13 +95,18 @@ TEMPLATES = [
 WSGI_APPLICATION = "core.wsgi.application"
 ASGI_APPLICATION = "core.asgi.application"
 
+def _db_setting(name, dev_default):
+    """A database setting: in production it must be in the environment, in development it may fall back to a local default."""
+    return config(name) if PRODUCTION else config(name, default=dev_default)
+
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": config("ATOMWALK_DB_NAME", default="atomwalk"),
-        "USER": config("ATOMWALK_DB_USER", default="postgres"),
-        "PASSWORD": config("ATOMWALK_DB_PASSWORD", default="password"),
-        "HOST": config("ATOMWALK_DB_HOST", default="localhost"),
+        "USER": _db_setting("ATOMWALK_DB_USER", "postgres"),
+        "PASSWORD": _db_setting("ATOMWALK_DB_PASSWORD", "password"),
+        "HOST": _db_setting("ATOMWALK_DB_HOST", "localhost"),
         "PORT": config("ATOMWALK_DB_PORT", default="5432"),
         "OPTIONS": {"options": "-c search_path=public"},
         "CONN_MAX_AGE": 60,
@@ -111,9 +116,9 @@ DATABASES = {
 HOSPITAL_DB_CONFIG_TEMPLATE = {
     "ENGINE": "django.db.backends.postgresql",
     "NAME": "",
-    "USER": config("HOSPITAL_DB_USER", default="postgres"),
-    "PASSWORD": config("HOSPITAL_DB_PASSWORD", default="password"),
-    "HOST": config("HOSPITAL_DB_HOST", default="localhost"),
+    "USER": _db_setting("HOSPITAL_DB_USER", "postgres"),
+    "PASSWORD": _db_setting("HOSPITAL_DB_PASSWORD", "password"),
+    "HOST": _db_setting("HOSPITAL_DB_HOST", "localhost"),
     "PORT": config("HOSPITAL_DB_PORT", default="5432"),
     "CONN_MAX_AGE": 60,
     "TIME_ZONE": None,
@@ -133,7 +138,20 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = "Asia/Kolkata"
+TIME_ZONE = config("TIME_ZONE", default="Asia/Kolkata")
+
+# Where the product is used: the country code put in front of a mobile number, how many digits the number itself has, and the currency sign in printed text.
+DEFAULT_COUNTRY_CODE = config("DEFAULT_COUNTRY_CODE", default="+91")
+MOBILE_NUMBER_LENGTH = config("MOBILE_NUMBER_LENGTH", default=10, cast=int)
+CURRENCY_SYMBOL = config("CURRENCY_SYMBOL", default="₹")
+
+# Booking and clinic rules
+BOOKING_WINDOW_DAYS = config("BOOKING_WINDOW_DAYS", default=62, cast=int)            # how far ahead a patient may book
+NO_SHOW_GRACE_HOURS = config("NO_SHOW_GRACE_HOURS", default=2, cast=int)             # how long past its slot an appointment waits before it counts as a no-show
+DEFAULT_SLOT_MINUTES = config("DEFAULT_SLOT_MINUTES", default=15, cast=int)          # slot length for a doctor who has no schedule yet
+DEFAULT_CLINIC_HOURS = [tuple(int(h) for h in part.split("-")) for part in config("DEFAULT_CLINIC_HOURS", default="9-13,14-18").split(",")]
+CONSULT_PAD_EXPIRY_HOURS = config("CONSULT_PAD_EXPIRY_HOURS", default=12, cast=int)  # an idle consult-pad session lapses after this
+BILLING_REPORT_DAYS = config("BILLING_REPORT_DAYS", default=30, cast=int)            # the billing reports show this many days, today included
 USE_I18N = True
 USE_TZ = True
 
@@ -141,13 +159,12 @@ STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'static/')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-CORS_ORIGIN_ALLOW_ALL = True
 
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 LOCAL_OR_AWS_S3_MEDIA = 'S3'
 if LOCAL_OR_AWS_S3_MEDIA == "S3":
-    AWS_ACCESS_KEY_ID = config("AWS_ACCESS_KEY_ID", default="")
+    AWS_ACCESS_KEY_ID = config("AWS_ACCESS_KEY_ID", default="") 
     AWS_SECRET_ACCESS_KEY = config("AWS_SECRET_ACCESS_KEY", default="")
     AWS_STORAGE_BUCKET_NAME = config("AWS_S3_BUCKET", default="")
     AWS_S3_FILE_OVERWRITE = False
@@ -239,6 +256,7 @@ DEFAULT_FROM_EMAIL  = config("DEFAULT_FROM_EMAIL", default="Atomwalk HMS <no-rep
 
 SMS_BACKEND = config("SMS_BACKEND", default="log")
 MSG91_AUTH_KEY     = config("MSG91_AUTH_KEY", default="")
+MSG91_FLOW_URL     = config("MSG91_FLOW_URL", default="")
 MSG91_TEMPLATE_ID  = config("MSG91_TEMPLATE_ID", default="")
 MSG91_OTP_VAR_NAME = config("MSG91_OTP_VAR_NAME", default="VAR1")
 SMS_GATEWAY_BASE_URL = config("SMS_GATEWAY_BASE_URL", default="")
@@ -253,12 +271,13 @@ else:
 
 DOC_QR_SECRET = config("DOC_QR_SECRET", default="") or SECRET_KEY
 
-CONSULT_PAD_LLM_BASE  = config("CONSULT_PAD_LLM_BASE", default="https://api.groq.com/openai/v1")
+CONSULT_PAD_LLM_BASE  = config("CONSULT_PAD_LLM_BASE", default="")
 CONSULT_PAD_LLM_MODEL = config("CONSULT_PAD_LLM_MODEL", default="qwen/qwen3.8-27b")
 CONSULT_PAD_LLM_KEY   = config("CONSULT_PAD_LLM_KEY", default="") or config("GROQ_API_KEY", default="")
 
-LLM_API_URL = config("LLM_API_URL", default="https://atomwalk.com/llm_api/ask/")
+LLM_API_URL = config("LLM_API_URL", default="")
 LLM_API_TOKEN = config("LLM_API_TOKEN", default="")
+LLM_API_TIMEOUT = config("LLM_API_TIMEOUT", default=900, cast=int)      # seconds to wait for one answer: a local model on a CPU needs minutes for a long report
 LLM_API_STYLE = config("LLM_API_STYLE", default="company")
 LLM_API_MODEL = config("LLM_API_MODEL", default="")
 PEDIATRIC_HEALTH_CONFIG = config("PEDIATRIC_HEALTH_CONFIG", default="") or None

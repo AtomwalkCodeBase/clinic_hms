@@ -80,7 +80,8 @@ class Command(BaseCommand):
                 StaffUser.objects.using(db)
                 .filter(is_active=True)
                 .filter(Q(employee_id__isnull=True) | Q(employee_id=""))
-                .order_by("role", "id")
+                .select_related("group")
+                .order_by("group__system_role_key", "id")
             )
             for staff in staff_needing_id:
                 prefix = ROLE_PREFIX.get(staff.role, DEFAULT_PREFIX)
@@ -94,7 +95,8 @@ class Command(BaseCommand):
         already = (
             StaffUser.objects.using(db).filter(is_active=True)
             .exclude(employee_id__isnull=True).exclude(employee_id="")
-            .order_by("role", "employee_id")
+            .select_related("group")
+            .order_by("group__system_role_key", "employee_id")
         )
         already_rows = [
             (ROLE_LABEL.get(s.role, s.role.title()), s.get_full_name(), s.employee_id, s.phone)

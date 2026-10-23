@@ -27,7 +27,8 @@ import { LabOrderSection } from "./encounter/LabOrderSection";
 import { PastConsultationTab } from "./encounter/PastConsultationTab";
 import { HistorySidebar } from "./encounter/HistorySidebar";
 import apiClient from "../../services/api.client";
-import HealthJourney from "../../components/healthJourney/HealthJourney";
+import HealthJourney from "../../components/healthJourneyDoctor/HealthJourney";
+import DoctorInsights from "../../components/healthJourneyDoctor/DoctorInsights";
 import { openDocumentWith } from "../../components/healthJourney/openDocument";
 import { AdmissionReferralModal } from "./encounter/AdmissionReferralModal";
 import { FollowUpModal } from "./encounter/FollowUpModal";
@@ -1365,8 +1366,11 @@ export default function EncounterPage() {
         {activeTab === "past" && <PastConsultationTab encounterId={id} />}
         {activeTab === "timeline" && (
           enc.patient_awpid
-            ? <HealthJourney key={enc.patient_awpid} http={apiClient} view="doctor" onOpenDocument={openDocumentWith(API_ENDPOINTS.PATIENTS.DOCUMENT)}
-                             children={[{ id: enc.patient_awpid, name: enc.patient_name }]} />
+            ? (
+              <HealthJourney key={enc.patient_awpid} http={apiClient} view="doctor" initialPeriod="all" onOpenDocument={openDocumentWith(API_ENDPOINTS.PATIENTS.DOCUMENT)}
+                             children={[{ id: enc.patient_awpid, name: enc.patient_name }]}
+                             clinicalExtra={<DoctorInsights key={`insights-${enc.patient_awpid}`} http={apiClient} awpid={enc.patient_awpid} onOpenDocument={openDocumentWith(API_ENDPOINTS.PATIENTS.DOCUMENT)} />} />
+            )
             : <p style={{ color: "var(--color-text-secondary)" }}>This patient has no shared record yet.</p>
         )}
       </PageShell>

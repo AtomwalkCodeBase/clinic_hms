@@ -114,7 +114,7 @@ export function EmergencyRegisterPageContent({ embedded = false } = {}) {
                 className="secondary-btn"
                 onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_OPD, {
                   state: {
-                    patient: { uuid: registered.id, awpid: registered.awpid, full_name: registered.full_name },
+                    patient: { id: registered.id, awpid: registered.awpid, full_name: registered.full_name },
                     justRegistered: true,
                     appointmentType: "emergency",
                   },

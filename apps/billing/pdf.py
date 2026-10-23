@@ -58,7 +58,7 @@ def generate_invoice_pdf(invoice, items, payments, patient, branch, hospital_nam
         qr_text = (
             f"{hospital_name or 'Hospital'}\n"
             f"Invoice: {invoice.invoice_number}\n"
-            f"Patient: {patient.full_name if patient else '—'} ({patient.uhid if patient else '—'})\n"
+            f"Patient: {patient.get_patient_details()['full_name'] if patient else '—'} ({patient.uhid if patient else '—'})\n"
             f"Amount: {_money(invoice.total_amount)}\n"
             f"Status: {invoice.status.replace('_', ' ').title()}\n"
             f"Date: {invoice.created_at.strftime('%d %b %Y') if invoice.created_at else '—'}"
@@ -81,15 +81,15 @@ def generate_invoice_pdf(invoice, items, payments, patient, branch, hospital_nam
     c.drawString(left, y, "Billed to")
     y -= 5 * mm
     c.setFont("Helvetica", 10)
-    c.drawString(left, y, patient.full_name if patient else "—")
+    c.drawString(left, y, patient.get_patient_details()["full_name"] if patient else "—")
     y -= 5 * mm
     c.setFont("Helvetica", 9)
     if patient:
         detail_bits = [f"UHID: {patient.uhid}"]
-        if patient.gender:
-            detail_bits.append({"M": "Male", "F": "Female", "O": "Other"}.get(patient.gender, patient.gender))
-        if patient.mobile:
-            detail_bits.append(patient.mobile)
+        if patient.get_patient_details()["gender"]:
+            detail_bits.append({"M": "Male", "F": "Female", "O": "Other"}.get(patient.get_patient_details()["gender"], patient.get_patient_details()["gender"]))
+        if patient.get_patient_details()["mobile"]:
+            detail_bits.append(patient.get_patient_details()["mobile"])
         c.drawString(left, y, " · ".join(detail_bits))
     y -= 12 * mm
 

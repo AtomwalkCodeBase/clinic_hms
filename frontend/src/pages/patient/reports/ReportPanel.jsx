@@ -6,6 +6,7 @@ import apiClient from "../../../services/api.client";
 import API_ENDPOINTS from "../../../config/api.config";
 import { chipsFor, fileKind, fmtDate, formatSize, stateOf, typeLabel } from "../../../utils/reports";
 import { FILE_TILE, TONE, chip, h3, iconBtn, inputStyle } from "./reportStyles";
+import { typeLook } from "./typeLook";
 
 const STATE_LABEL = { processing: "Being read", ready: "Available", unclassified: "Available — type unknown", failed: "Couldn’t read", duplicate: "Not added (duplicate)" };
 
@@ -45,7 +46,8 @@ export default function ReportPanel({ doc, original, patientAwpid, priv, onLock,
   const canRetype = !hospital && !doc.confirmed && state !== "duplicate" && state !== "processing";
   const note = explain(doc, original);
   const params = patientAwpid ? { patient_awpid: patientAwpid } : {};
-  const Icon = kind === "image" ? ImageIcon : FileText;
+  const look = typeLook(doc.doc_type, state);
+  const Icon = look ? look.Icon : kind === "image" ? ImageIcon : FileText;
 
   useEffect(() => {          // a different report: start again on Details
     setTab("details"); setChoosing(false); setNewType(doc.doc_type || ""); setDetail(null);
@@ -101,7 +103,7 @@ export default function ReportPanel({ doc, original, patientAwpid, priv, onLock,
           )}
           <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
             <div style={{ width: 120, flexShrink: 0, textAlign: "center" }}>
-              <div style={{ height: 130, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", ...FILE_TILE[kind] }}>
+              <div style={{ height: 130, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", ...(look ? { background: look.background, color: look.color } : FILE_TILE[kind]) }}>
                 {kind === "image" && detail?.file_data
                   ? <img src={detail.file_data} alt="" style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 8, objectFit: "cover" }} />
                   : <Icon size={40} />}

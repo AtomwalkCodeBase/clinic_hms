@@ -38,14 +38,14 @@ function RescheduleModal({ appt, onClose, onDone }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!date || !appt.doctor_user_id || !user?.hospital_id) return;
+    if (!date || !appt.doctor_id || !user?.hospital_id) return;
     setSlotsLoading(true);
     setSlot("");
-    apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(user.hospital_id, appt.doctor_user_id), { params: { date } })
+    apiClient.get(API_ENDPOINTS.PORTAL.SLOTS(user.hospital_id, appt.doctor_id), { params: { date } })
       .then(({ data }) => setSlots((data?.results || []).filter(s => !s.past)))
       .catch(() => setSlots([]))
       .finally(() => setSlotsLoading(false));
-  }, [date, appt.doctor_user_id, user]);
+  }, [date, appt.doctor_id, user]);
 
   async function confirm() {
     setSaving(true);
@@ -145,7 +145,7 @@ export default function FrontDeskQueuePage() {
   const sharedFilterParams = {
     ...(search ? { patient: search } : {}),
     ...(statusFilter ? { status: statusFilter } : {}),
-    ...(doctorFilter ? { doctor_user_id: doctorFilter } : {}),
+    ...(doctorFilter ? { doctor_id: doctorFilter } : {}),
     ...(roomFilter ? { room_id: roomFilter } : {}),
   };
 

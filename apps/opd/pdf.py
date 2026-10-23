@@ -87,16 +87,16 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
     c.drawString(left + 95 * mm, y, "Prescribing doctor")
     y -= 5 * mm
     c.setFont("Helvetica", 10)
-    c.drawString(left, y, patient.full_name if patient else "—")
+    c.drawString(left, y, patient.get_patient_details()["full_name"] if patient else "—")
     c.drawString(left + 95 * mm, y, f"Dr. {doctor_name}" if doctor_name else "—")
     y -= 5 * mm
     c.setFont("Helvetica", 9)
     if patient:
         detail_bits = [f"UHID: {patient.uhid}"]
-        if patient.gender:
-            detail_bits.append({"M": "Male", "F": "Female", "O": "Other"}.get(patient.gender, patient.gender))
+        if patient.get_patient_details()["gender"]:
+            detail_bits.append({"M": "Male", "F": "Female", "O": "Other"}.get(patient.get_patient_details()["gender"], patient.get_patient_details()["gender"]))
         if getattr(patient, "date_of_birth", None):
-            detail_bits.append(f"DOB: {patient.date_of_birth.strftime('%d %b %Y')}")
+            detail_bits.append(f"DOB: {patient.get_patient_details()['date_of_birth'].strftime('%d %b %Y')}")
         c.drawString(left, y, " · ".join(detail_bits))
     y -= 12 * mm
 
@@ -214,16 +214,16 @@ def generate_encounter_summary_pdf(encounter, appointment, diagnoses, rx_items, 
     c.drawString(left + 95 * mm, y, "Consulting doctor")
     y -= 5 * mm
     c.setFont("Helvetica", 10)
-    c.drawString(left, y, patient.full_name if patient else "—")
+    c.drawString(left, y, patient.get_patient_details()["full_name"] if patient else "—")
     c.drawString(left + 95 * mm, y, f"Dr. {doctor_name}" if doctor_name else "—")
     y -= 5 * mm
     c.setFont("Helvetica", 9)
     if patient:
         detail_bits = [f"UHID: {patient.uhid}"]
-        if patient.gender:
-            detail_bits.append({"M": "Male", "F": "Female", "O": "Other"}.get(patient.gender, patient.gender))
+        if patient.get_patient_details()["gender"]:
+            detail_bits.append({"M": "Male", "F": "Female", "O": "Other"}.get(patient.get_patient_details()["gender"], patient.get_patient_details()["gender"]))
         if getattr(patient, "date_of_birth", None):
-            detail_bits.append(f"DOB: {patient.date_of_birth.strftime('%d %b %Y')}")
+            detail_bits.append(f"DOB: {patient.get_patient_details()['date_of_birth'].strftime('%d %b %Y')}")
         c.drawString(left, y, " · ".join(detail_bits))
     y -= 10 * mm
 

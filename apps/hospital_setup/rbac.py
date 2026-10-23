@@ -2,6 +2,8 @@
 
 import logging
 
+from django.db.models import Q
+
 PERMISSION_CATALOG = {
     "patient.view":          "View patient records",
     "patient.register":      "Register new patients",
@@ -64,43 +66,56 @@ SYSTEM_ROLE_LABELS = {
 ACTS_AS_CHOICES = [k for k in SYSTEM_ROLE_LABELS.keys()]
 
 
+def acts_as_q(*role_keys, prefix=""):
+    """A filter for the staff who are one of these system roles, or hold a role the hospital defined that acts as one of them.
+
+    `prefix` reaches the staff row from another model: acts_as_q("doctor", prefix="doctor__")."""
+    system = Q(**{f"{prefix}group__is_system_role": True, f"{prefix}group__system_role_key__in": role_keys})
+    custom = Q(**{f"{prefix}group__is_system_role": False})
+    acts = Q()
+    for key in role_keys:
+        acts |= Q(**{f"{prefix}group__acts_as__contains": [key]})
+    return system | (custom & acts)
+
+
+def role_q(key, prefix=""):
+    """A filter for the staff whose own user group is this system role exactly; "custom" is any role the hospital defined."""
+    if key == "custom":
+        return Q(**{f"{prefix}group__is_system_role": False})
+    return Q(**{f"{prefix}group__is_system_role": True, f"{prefix}group__system_role_key": key})
+
+
+def system_role(db_name, key):
+    """The system role row (doctor, nurse...) of a hospital database: the user group a staff member of that role belongs to."""
+    from apps.hospital_setup.models import Role
+    return Role.objects.using(db_name).get(is_system_role=True, system_role_key=key)
+
+
 def resolve_acts_as(staff):
     """Which system-role identities this staff member should be treated as,"""
-    if staff.role != "custom":
-        return {staff.role} if staff.role else set()
-    custom_role = getattr(staff, "custom_role", None)
-    if not custom_role:
-        return set()
-    return set(custom_role.acts_as or [])
+    group = staff.group
+    if group.is_system_role:
+        return {group.system_role_key} if group.system_role_key else set()
+    return set(group.acts_as or [])
 
 
 def get_effective_permissions(staff, db_name):
     """Union of:"""
-    if staff.role == "custom":
-        custom_role = getattr(staff, "custom_role", None)
-        if custom_role:
-            try:
-                codes = set(custom_role.permissions.using(db_name).values_list("code", flat=True))
-            except Exception:
-                logging.getLogger(__name__).warning(
-                    "get_effective_permissions: custom_role permission lookup failed "
-                    "for staff_id=%s db=%s", getattr(staff, "id", None), db_name, exc_info=True,
-                )
-                codes = set()
-        else:
+    group = staff.group
+    if not group.is_system_role:
+        try:
+            codes = set(group.permissions.using(db_name).values_list("code", flat=True))
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "get_effective_permissions: custom_role permission lookup failed "
+                "for staff_id=%s db=%s", getattr(staff, "id", None), db_name, exc_info=True,
+            )
             codes = set()
     else:
-        codes = set(SYSTEM_ROLE_PERMISSIONS.get(staff.role, ()))
+        codes = set(SYSTEM_ROLE_PERMISSIONS.get(group.system_role_key, ()))
     try:
-        from apps.hospital_setup.models import UserRole
-        extra_roles = (
-            UserRole.objects.using(db_name)
-            .filter(staff_id=staff.id)
-            .select_related("role")
-            .prefetch_related("role__permissions")
-        )
-        for ur in extra_roles:
-            codes.update(ur.role.permissions.using(db_name).values_list("code", flat=True))
+        for role in staff.extra_roles.using(db_name).all():
+            codes.update(role.permissions.using(db_name).values_list("code", flat=True))
     except Exception:
         # Degrades to system-default permissions on any lookup failure — by
         logging.getLogger(__name__).warning(
@@ -116,7 +131,7 @@ def has_permission(staff, code, db_name):
 
 def sync_roles_and_permissions(db):
     """Make a hospital database's permission and system-role rows match this file; runs after every migrate."""
-    from apps.hospital_setup.models import Permission, Role, RolePermission
+    from apps.hospital_setup.models import Permission, Role
 
     permissions = {
         code: Permission.objects.using(db).update_or_create(code=code, defaults={"description": text})[0]
@@ -130,9 +145,8 @@ def sync_roles_and_permissions(db):
         elif not role.is_system_role or role.system_role_key != key:
             Role.objects.using(db).filter(pk=role.pk).update(is_system_role=True, system_role_key=key)
         wanted = set(SYSTEM_ROLE_PERMISSIONS.get(key, ()))
-        have = set(RolePermission.objects.using(db).filter(role=role).values_list("permission__code", flat=True))
-        RolePermission.objects.using(db).bulk_create(
-            [RolePermission(role=role, permission=permissions[code]) for code in sorted(wanted - have)])
+        have = set(role.permissions.using(db).values_list("code", flat=True))
+        role.permissions.add(*[permissions[code] for code in sorted(wanted - have)])
         if have - wanted:
-            RolePermission.objects.using(db).filter(role=role, permission__code__in=have - wanted).delete()
+            role.permissions.remove(*Permission.objects.using(db).filter(code__in=have - wanted))
     Permission.objects.using(db).exclude(code__in=PERMISSION_CATALOG).delete()

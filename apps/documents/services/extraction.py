@@ -1,19 +1,27 @@
-"""LLM extraction of pediatric clinical facts from already-OCR'd document text."""
+"""
+LLM extraction of pediatric clinical facts from already-OCR'd document text.
 
+The LLM (DeepSeek-R1 on the shared Ollama GPU box) is used ONLY to pull facts
+out of free text. It never decides chronic/acute, severity or recurrence -
+those are in clinical_rules / episodes and driven by config.
+
+Everything returned here is normalised (units, dates) and sanity-checked
+before it touches the database.
+"""
 import json
 import logging
+import os
 import re
 from datetime import date, datetime
 from typing import Callable, Optional
 
-from django.conf import settings
-
-from .clinical_rules import evaluate_lab, is_uncertain, resolve_analyte
+from .clinical_rules import evaluate_lab, resolve_analyte
 from .config import load_config
 
 logger = logging.getLogger(__name__)
 
-
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("PEDS_EXTRACTION_MODEL", "deepseek-r1:14b")
 MAX_CHUNK_CHARS = 9000
 EXTRACTOR_VERSION = "peds-extract-1.0"
 
@@ -69,32 +77,18 @@ def build_user_prompt(doc_type: str, text: str, patient_dob: Optional[date]) -> 
 
 
 # ------------------------------------------------------------------ LLM call
-def ask_llm(system: str, user: str, timeout: int = 180) -> str:
-    """The same prompt to the company LLM api (settings.LLM_API_URL, token auth, {"user_prompt": ...} in, the answer text"""
-    import requests
-
-    prompt = f"{system}\n\n{user}"
-    if settings.LLM_API_STYLE == "ollama":
-        resp = requests.post(
-            settings.LLM_API_URL,
-            json={"model": settings.LLM_API_MODEL, "messages": [{"role": "user", "content": prompt}], "stream": False, "format": "json"},
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        return resp.json()["message"]["content"]
+def ollama_chat(system: str, user: str, timeout: int = 180) -> str:
+    import requests  # local import: services stay importable without requests in tests
     resp = requests.post(
-        settings.LLM_API_URL,
-        json={"user_prompt": prompt},
-        headers={"Authorization": f"Token {settings.LLM_API_TOKEN}"},
+        f"{OLLAMA_URL}/api/chat",
+        json={"model": OLLAMA_MODEL, "stream": False, "format": "json",
+              "options": {"temperature": 0, "num_ctx": 8192},
+              "messages": [{"role": "system", "content": system},
+                           {"role": "user", "content": user}]},
         timeout=timeout,
     )
     resp.raise_for_status()
-    body = resp.json()
-    if isinstance(body, dict):
-        if body.get("error"):
-            raise ValueError(f"LLM api error: {body['error']}")
-        body = next((body[k] for k in ("response", "answer", "text", "content", "result", "output", "reply", "message") if k in body), json.dumps(body))
-    return body if isinstance(body, str) else json.dumps(body)
+    return resp.json()["message"]["content"]
 
 
 def _parse_json(raw: str) -> dict:
@@ -226,7 +220,7 @@ def normalise(raw: dict, dob: Optional[date], upload_date: date, cfg=None) -> di
            "vaccines": [], "warnings": warnings}
 
     bh = raw.get("birth_history") or None
-    if bh and (any(bh.get(k) is not None for k in ("gestation_weeks", "birth_weight_kg")) or bh.get("nicu_admission") is True):
+    if bh and any(bh.get(k) is not None for k in ("gestation_weeks", "birth_weight_kg", "nicu_admission")):
         gw = _num(bh.get("gestation_weeks"))
         bw = normalise_weight(bh.get("birth_weight_kg"), "kg")
         out["birth_history"] = {
@@ -261,7 +255,7 @@ def normalise(raw: dict, dob: Optional[date], upload_date: date, cfg=None) -> di
         out["diagnoses"].append({
             "condition_text": cond[:255],
             "icd10": (d.get("icd10_guess") or "").strip().upper()[:10] or None,
-            "is_provisional": is_uncertain(f"{cond} {d.get('evidence') or ''}"),
+            "is_provisional": bool(d.get("is_provisional")),
             "evidence": (d.get("evidence") or "")[:255],
         })
 
@@ -298,7 +292,7 @@ def normalise(raw: dict, dob: Optional[date], upload_date: date, cfg=None) -> di
 def extract_document(text: str, doc_type: str, dob: Optional[date], upload_date: date,
                      llm: Optional[Callable[[str, str], str]] = None, cfg=None) -> dict:
     cfg = cfg or load_config()
-    llm = llm or ask_llm
+    llm = llm or ollama_chat
     results = []
     for chunk in _chunks(text or ""):
         raw = llm(SYSTEM_PROMPT, build_user_prompt(doc_type, chunk, dob))

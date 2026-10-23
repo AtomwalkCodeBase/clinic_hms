@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { FileText, Image as ImageIcon, MoreVertical } from "lucide-react";
 import { NEEDS_ATTENTION, chipsFor, fileKind, fmtDate, formatSize, stateOf, statusLine } from "../../../utils/reports";
 import { FILE_TILE, TONE, chip, iconBtn } from "./reportStyles";
+import { typeLook } from "./typeLook";
 
 function Menu({ items }) {
   const [open, setOpen] = useState(false);
@@ -36,7 +37,8 @@ export default function ReportRow({ doc, active, selectMode, selected, onClick, 
   const kind = fileKind(doc);
   const chips = chipsFor(doc);
   const line = statusLine(doc);
-  const Icon = kind === "image" ? ImageIcon : FileText;
+  const look = typeLook(doc.doc_type, state);
+  const Icon = look ? look.Icon : kind === "image" ? ImageIcon : FileText;
   const hospital = !!doc.source_hospital_id || doc.uploaded_by === "staff";
 
   const items = [
@@ -54,7 +56,7 @@ export default function ReportRow({ doc, active, selectMode, selected, onClick, 
                borderColor: active || selected ? "var(--color-primary)" : undefined,
                background: active ? "var(--color-primary-light, #eef7f3)" : undefined }}>
       {selectMode && <input type="checkbox" checked={selected} readOnly aria-label={`Select ${doc.title}`} />}
-      <span style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", ...FILE_TILE[kind] }}>
+      <span style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", ...(look ? { background: look.background, color: look.color } : FILE_TILE[kind]) }}>
         <Icon size={19} />
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>

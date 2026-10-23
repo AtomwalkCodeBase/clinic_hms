@@ -24,17 +24,22 @@ class Patient(models.Model):
     email               = models.EmailField(blank=True)
     blood_group         = models.CharField(max_length=3, choices=BLOOD_GROUP_CHOICES, blank=True)
     preferred_language  = models.CharField(max_length=10, default="en")
-
     password      = models.CharField(max_length=128, blank=True)
     photo         = models.ImageField(upload_to=get_patient_photo_path, blank=True, null=True)
     is_active     = models.BooleanField(default=True)
     last_login    = models.DateTimeField(null=True, blank=True)
-
     emergency_contact_name     = models.CharField(max_length=100, blank=True)
     emergency_contact_phone    = models.CharField(max_length=15, blank=True)
     emergency_contact_relation = models.CharField(max_length=30, blank=True)
+    alternate_mobile           = models.CharField(max_length=15, blank=True, default="")
+    address_line1              = models.CharField(max_length=255, blank=True, default="")
+    city                       = models.CharField(max_length=100, blank=True, default="")
+    state                      = models.CharField(max_length=100, blank=True, default="")
+    pincode                    = models.CharField(max_length=10, blank=True, default="")
+    marital_status             = models.CharField(max_length=20, blank=True, default="")
+    nationality                = models.CharField(max_length=50, blank=True, default="Indian")
+    occupation                 = models.CharField(max_length=100, blank=True, default="")
     source_hospital    = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_patients")
-
     created_by          = models.CharField(max_length=10, choices=CREATED_BY_CHOICES, default="patient")
     created_at          = models.DateTimeField(auto_now_add=True)
 
@@ -72,7 +77,6 @@ class PatientBooking(models.Model):
     patient         = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_bookings")
     hospital        = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_bookings")
     appointment_id  = models.UUIDField(db_index=True)
-
     doctor_name     = models.CharField(max_length=100, blank=True)
     scheduled_date  = models.DateField()
     chief_complaint = models.TextField(blank=True)
@@ -134,21 +138,16 @@ class OTPCode(models.Model):
     CHANNEL_CHOICES = [(CHANNEL_SMS, "SMS"), (CHANNEL_EMAIL, "Email")]
 
     purpose     = models.CharField(max_length=30, choices=PURPOSE_CHOICES, db_index=True)
-
     identifier  = models.CharField(max_length=254, db_index=True)
     channel     = models.CharField(max_length=10, choices=CHANNEL_CHOICES)
     code_hash   = models.CharField(max_length=64)
-
     target_type = models.CharField(max_length=10, blank=True)
     target_id   = models.IntegerField(null=True, blank=True)
-
     hospital    = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.CASCADE, related_name="h_otp_codes")
-
     attempts    = models.PositiveSmallIntegerField(default=0)
     is_used     = models.BooleanField(default=False)
     expires_at  = models.DateTimeField(db_index=True)
     created_at  = models.DateTimeField(auto_now_add=True)
-
     class Meta:
         db_table  = "otp_code"
         indexes = [models.Index(fields=["identifier", "purpose", "-created_at"])]
@@ -167,9 +166,7 @@ class EmergencyAccessLog(models.Model):
 
     patient    = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_emergency_access_logs")
     event      = models.CharField(max_length=24, choices=EVENT_CHOICES)
-
     generated_by = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.SET_NULL, related_name="p_generated_access_logs")
-
     consent_confirmed = models.BooleanField(default=False)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -190,24 +187,17 @@ class ConsultSession(models.Model):
     ]
 
     token           = models.CharField(max_length=64, unique=True, db_index=True, default=new_pad_token)
-    patient         = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_consult_sessions")
-    hospital          = models.ForeignKey("hospital_master.Hospital", on_delete=models.CASCADE, related_name="h_consult_sessions")
+    patient         = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_consult_sessions")
+    hospital          = models.ForeignKey(Hospital  , on_delete=models.CASCADE, related_name="h_consult_sessions")
     encounter_id    = models.UUIDField(db_index=True)
     doctor_user_id  = models.UUIDField(null=True, blank=True)
-
     status = models.CharField(max_length=10, choices=STATUS_CHOICES,
                               default=STATUS_OPEN, db_index=True)
-
     rx_pages      = models.JSONField(default=list, blank=True)
-
     rx_recognised = models.JSONField(null=True, blank=True)
-
     note_pages      = models.JSONField(default=list, blank=True)
-
     note_recognised = models.JSONField(null=True, blank=True)
-
     note_pdf = models.CharField(max_length=500, blank=True)
-
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     expires_at = models.DateTimeField(null=True, blank=True)
@@ -239,36 +229,23 @@ class RecordsShareRequest(models.Model):
     WINDOW_HOURS = 2
 
     token       = models.CharField(max_length=32, unique=True, db_index=True)
-
     code        = models.CharField(max_length=8, db_index=True)
-
     requester_label = models.CharField(max_length=120, blank=True)
-
     opened_at   = models.DateTimeField(null=True, blank=True)
-
     device_hash = models.CharField(max_length=64, blank=True)
-
     pairing     = models.CharField(max_length=12, blank=True)
-
-    patient     = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_records_share_requests")
+    patient     = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_records_share_requests")
     status      = models.CharField(max_length=12, choices=STATUS_CHOICES,
                                    default=STATUS_PENDING, db_index=True)
-
     created_at  = models.DateTimeField(auto_now_add=True)
     decided_at  = models.DateTimeField(null=True, blank=True)
     expires_at  = models.DateTimeField(null=True, blank=True)
-
     last_seen_at = models.DateTimeField(null=True, blank=True)
     created_ip  = models.GenericIPAddressField(null=True, blank=True)
-
     download_unlocked_ids = models.JSONField(default=list, blank=True)
-
     shown_private_ids = models.JSONField(default=list, blank=True)
-
     share_all   = models.BooleanField(default=False)
-
     pending_download_id = models.IntegerField(null=True, blank=True)
-
     code_attempts = models.PositiveSmallIntegerField(default=0)
 
     MAX_CODE_ATTEMPTS = 5
@@ -286,7 +263,7 @@ class RecordsShareRequest(models.Model):
 class RecordsPrivacy(models.Model):
     SECTIONS = ("summary", "vitals", "diagnoses", "vaccinations")
 
-    patient           = models.OneToOneField("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_records_privacy")
+    patient           = models.OneToOneField(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_records_privacy")
     hide_all          = models.BooleanField(default=False)
     hidden_doc_ids    = models.JSONField(default=list, blank=True)
     hidden_categories = models.JSONField(default=list, blank=True)
@@ -301,7 +278,6 @@ class RecordsPrivacy(models.Model):
 
 class StaffMobileIndex(models.Model):
     mobile    = models.CharField(max_length=15, unique=True, db_index=True)
-
     email     = models.EmailField(max_length=254, unique=True, null=True, blank=True, db_index=True)
     hospital = models.ForeignKey("hospital_master.Hospital", on_delete=models.CASCADE, related_name="h_staff_mobile_index")
     created_at = models.DateTimeField(auto_now_add=True)

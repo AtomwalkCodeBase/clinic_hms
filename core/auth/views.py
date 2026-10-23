@@ -16,6 +16,7 @@ from core.api.response import success, error
 from apps.hospital_master.models import Hospital, Subscription
 from apps.hospital_master.services import TIER_FEATURE_DEFAULTS
 from apps.hospital_setup.models import StaffUser
+from apps.hospital_setup.branch_utils import PLACE_PREFETCH, primary_branch_id
 from apps.patients.models import StaffMobileIndex
 
 logger = logging.getLogger(__name__)
@@ -93,11 +94,11 @@ class StaffLoginView(APIView):
         # ── Step 4: Fetch StaffUser from hospital DB ────────────────────────────
         try:
             if login_by_employee_id:
-                staff = StaffUser.objects.using(db_name).select_related("custom_role").get(
+                staff = StaffUser.objects.using(db_name).select_related("group").prefetch_related(*PLACE_PREFETCH).get(
                     employee_id=d["employee_id"], is_active=True
                 )
             else:
-                staff = StaffUser.objects.using(db_name).select_related("custom_role").get(
+                staff = StaffUser.objects.using(db_name).select_related("group").prefetch_related(*PLACE_PREFETCH).get(
                     Q(phone=d["mobile"]) | Q(email__iexact=d["mobile"]), is_active=True
                 )
         except StaffUser.DoesNotExist:
@@ -134,7 +135,7 @@ class StaffLoginView(APIView):
             "hospital_name": hospital.name,
             "license_tier": subscription.license_tier,
             "is_platform":  False,
-            "branch_id":    staff.branch_id,
+            "branch_id":    primary_branch_id(staff, db_name),
         }
 
         # Update last_login

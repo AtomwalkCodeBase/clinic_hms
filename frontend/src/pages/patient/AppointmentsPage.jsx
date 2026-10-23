@@ -10,6 +10,8 @@ import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import HospitalDirections from "../../components/common/HospitalDirections";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
+import { useClientPaging } from "../../hooks/usePagedApi";
+import PaginationControls from "../../components/common/PaginationControls";
 import { useApi } from "../../hooks/useApi";
 import { useToast } from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
@@ -767,6 +769,7 @@ function BillsSection() {
   } = usePaginatedList(API_ENDPOINTS.PORTAL.INVOICES, {
     pageSize: 10, params: billsFor ? { patient_awpid: billsFor } : {},
   });
+  const billPaging = useClientPaging(invoices, 5);
 
   if (isLoading && !invoices.length && !familyMembers.length) return null;
   if (!isLoading && invoices.length === 0 && !familyMembers.length) return null;
@@ -798,7 +801,9 @@ function BillsSection() {
         <div style={{ fontSize: 12, color: "var(--color-text-muted)", fontStyle: "italic" }}>No bills on file.</div>
       ) : (
       <div style={{ display: "grid", gap: 10 }}>
-        {invoices.map(inv => <BillRow key={`${inv.hospital_db}-${inv.id}`} inv={inv} />)}
+        {billPaging.pageItems.map(inv => <BillRow key={`${inv.hospital_db}-${inv.id}`} inv={inv} />)}
+        <PaginationControls pagination={billPaging.pagination} page={billPaging.page} pageSize={billPaging.pageSize}
+          onPageChange={billPaging.setPage} onPageSizeChange={billPaging.setPageSize} pageSizeOptions={[5, 10, 20]} />
       </div>
       )}
       {hasMore && (
@@ -925,6 +930,7 @@ export default function PatientAppointmentsPage() {
   const showHeroCard = hero && activeTab === "upcoming" && !hasActiveFilters;
 
   const activeList = activeTab === "upcoming" ? filteredUpcoming : activeTab === "past" ? filteredPast : filteredCancelled;
+  const apptPaging = useClientPaging(activeList, 5);
   const activeListLabel = activeTab === "upcoming" ? "Upcoming Appointments" : activeTab === "past" ? "Past Appointments" : "Cancelled Appointments";
 
   return (
@@ -1089,7 +1095,7 @@ export default function PatientAppointmentsPage() {
 
             {activeList.length > 0 ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {activeList.map(b => (
+                {apptPaging.pageItems.map(b => (
                   <AppointmentRow
                     key={b.id} b={b} ownAwpid={ownAwpid}
                     onCancel={handleCancel}
@@ -1097,6 +1103,8 @@ export default function PatientAppointmentsPage() {
                     onOpenPrescriptions={() => navigate(ROUTES.PATIENT.PRESCRIPTIONS)}
                   />
                 ))}
+                <PaginationControls pagination={apptPaging.pagination} page={apptPaging.page} pageSize={apptPaging.pageSize}
+                  onPageChange={apptPaging.setPage} onPageSizeChange={apptPaging.setPageSize} pageSizeOptions={[5, 10, 20]} />
               </div>
             ) : (
               <div className="card" style={{ padding: 32, textAlign: "center", color: "var(--color-text-muted)" }}>

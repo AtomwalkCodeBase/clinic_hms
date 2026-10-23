@@ -153,6 +153,9 @@ class LabRequestListCreateView(APIView):
         if status_filter := request.query_params.get("status"):
             qs = qs.filter(status=status_filter)
         page_items, meta = paginate_queryset(request, qs)
+        patients = [r.patient for r in page_items]
+        for p in patients[:1]:
+            p.get_patient_details(batch=patients)
         return success(data={
             "results": LabRequestSerializer(page_items, many=True, context={"db": db}).data,
             "pagination": meta,
@@ -166,15 +169,11 @@ class LabRequestListCreateView(APIView):
         if not encounter_id:
             return error("encounter_id is required.", errors={"encounter_id": "Required."})
         try:
-            enc = OPDEncounter.objects.using(db).select_related("appointment").get(pk=encounter_id)
+            enc = OPDEncounter.objects.using(db).select_related("appointment__patient", "appointment__branch_department").get(pk=encounter_id)
         except OPDEncounter.DoesNotExist:
             return not_found("Encounter not found.")
 
-        from apps.opd.models import HospitalPatient
-        try:
-            patient = HospitalPatient.objects.using(db).get(uuid=enc.patient_id)
-        except HospitalPatient.DoesNotExist:
-            return error("Patient record not found for this encounter.")
+        patient = enc.appointment.patient
 
         test_ids = request.data.get("tests")
         if not test_ids:
@@ -186,14 +185,7 @@ class LabRequestListCreateView(APIView):
         urgency = request.data.get("urgency") or "routine"
         notes   = request.data.get("clinical_notes", "")
 
-        # appointment.branch_id predates some rows (see Appointment model
-        branch_id = enc.appointment.branch_id or patient.branch_id
-        if not branch_id:
-            from apps.hospital_setup.models import Branch
-            fallback_branch = Branch.objects.using(db).filter(is_active=True).order_by("id").first()
-            branch_id = fallback_branch.id if fallback_branch else None
-        if not branch_id:
-            return error("Could not determine a branch for this order — no active branch is configured for this hospital.")
+        branch_id = enc.appointment.branch_department.branch_id
 
         created_rows = []
         skipped = []
@@ -334,7 +326,7 @@ class LabRequestAttachDocumentView(APIView):
 
         file_name = blob_storage.display_file_name(
             "patient-document", mime_type,
-            detail=title, name=patient.full_name, identifier=patient.awpid,
+            detail=title, name=patient.get_patient_details()["full_name"], identifier=patient.awpid,
         )
 
         source_hospital_id = request.hospital_id
@@ -442,7 +434,7 @@ class LabReportUploadView(APIView):
             from apps.hospital_master.models import Hospital as _Hospital
             _hospital = _Hospital.objects.using("default").filter(pk=request.hospital_id).first()
             folder = blob_storage.hospital_folder(_hospital) if _hospital else db
-            identity = blob_storage.identity_slug(name=req.patient.full_name, identifier=req.patient.awpid)
+            identity = blob_storage.identity_slug(name=req.patient.get_patient_details()["full_name"], identifier=req.patient.awpid)
             old_file_key = report.file_url
             try:
                 report.file_url = blob_storage.upload_data_uri(
@@ -457,7 +449,7 @@ class LabReportUploadView(APIView):
             # Named after the specific test plus who it belongs to, not
             report.file_name = blob_storage.display_file_name(
                 "lab-report", verified_mime,
-                detail=req.test.name, name=req.patient.full_name, identifier=req.patient.awpid,
+                detail=req.test.name, name=req.patient.get_patient_details()["full_name"], identifier=req.patient.awpid,
             )
         report.performed_by_id = request.user.id
 

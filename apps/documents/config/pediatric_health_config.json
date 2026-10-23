@@ -1,0 +1,225 @@
+{
+  "_meta": {
+    "version": "2026.10.1",
+    "status": "SEED VALUES - require sign-off by a consultant pediatrician before production use",
+    "notes": "All ages in days unless the key says months. Lab units: mg/dL, g/dL, mmol/L as named in each key."
+  },
+
+  "age_bands": [
+    {"code": "NEONATE",    "label": "Newborn (0-28 days)",   "min_days": 0,    "max_days": 28},
+    {"code": "INFANT",     "label": "Infant (1-12 months)",  "min_days": 29,   "max_days": 365},
+    {"code": "TODDLER",    "label": "Toddler (1-3 years)",   "min_days": 366,  "max_days": 1095},
+    {"code": "CHILD",      "label": "Child (3-12 years)",    "min_days": 1096, "max_days": 4380},
+    {"code": "ADOLESCENT", "label": "Adolescent (12-18 years)", "min_days": 4381, "max_days": 6574},
+    {"code": "ADULT",      "label": "Adult (18+)",           "min_days": 6575, "max_days": 54750}
+  ],
+
+  "lab_thresholds": {
+    "_doc": "Per analyte, per age band: critical_low / critical_high trigger CRITICAL; low / high trigger ABNORMAL. Missing band falls back to 'DEFAULT'.",
+    "HEMOGLOBIN_G_DL": {
+      "aliases": ["hb", "hgb", "haemoglobin", "hemoglobin"],
+      "NEONATE":    {"critical_low": 10.0, "low": 14.0, "high": 22.0, "critical_high": 24.0},
+      "INFANT":     {"critical_low": 7.0,  "low": 9.5,  "high": 14.0},
+      "DEFAULT":    {"critical_low": 7.0,  "low": 11.0, "high": 16.0, "critical_high": 20.0}
+    },
+    "PLATELETS_PER_UL": {
+      "aliases": ["platelet", "platelets", "plt", "platelet count"],
+      "DEFAULT":    {"critical_low": 20000, "low": 150000, "high": 450000, "critical_high": 1000000}
+    },
+    "WBC_PER_UL": {
+      "aliases": ["wbc", "tlc", "total leucocyte count", "total leukocyte count"],
+      "NEONATE":    {"critical_low": 5000, "low": 9000, "high": 30000, "critical_high": 35000},
+      "DEFAULT":    {"critical_low": 2000, "low": 4500, "high": 15000, "critical_high": 30000}
+    },
+    "GLUCOSE_MG_DL": {
+      "aliases": ["glucose", "blood sugar", "rbs", "fbs", "grbs", "random blood sugar"],
+      "NEONATE":    {"critical_low": 40, "low": 47, "high": 145, "critical_high": 250},
+      "DEFAULT":    {"critical_low": 54, "low": 70, "high": 180, "critical_high": 300}
+    },
+    "SODIUM_MMOL_L": {
+      "aliases": ["sodium", "na", "s. sodium", "serum sodium"],
+      "DEFAULT":    {"critical_low": 125, "low": 135, "high": 145, "critical_high": 155}
+    },
+    "POTASSIUM_MMOL_L": {
+      "aliases": ["potassium", "k", "s. potassium", "serum potassium"],
+      "NEONATE":    {"critical_low": 2.8, "low": 3.7, "high": 5.9, "critical_high": 7.0},
+      "DEFAULT":    {"critical_low": 2.8, "low": 3.5, "high": 5.0, "critical_high": 6.0}
+    },
+    "BILIRUBIN_TOTAL_MG_DL": {
+      "aliases": ["total bilirubin", "tsb", "s. bilirubin total", "bilirubin total"],
+      "NEONATE":    {"high": 12.0, "critical_high": 20.0},
+      "DEFAULT":    {"high": 1.2, "critical_high": 10.0}
+    },
+    "CREATININE_MG_DL": {
+      "aliases": ["creatinine", "s. creatinine", "serum creatinine"],
+      "INFANT":     {"high": 0.5, "critical_high": 1.5},
+      "TODDLER":    {"high": 0.6, "critical_high": 2.0},
+      "DEFAULT":    {"high": 1.0, "critical_high": 3.0}
+    },
+    "CRP_MG_L": {
+      "aliases": ["crp", "c-reactive protein", "c reactive protein"],
+      "DEFAULT":    {"high": 10, "critical_high": 100}
+    }
+  },
+
+  "critical_keywords": {
+    "_doc": "Matched case-insensitively in discharge summaries / bills. Any hit marks the encounter CRITICAL.",
+    "terms": ["picu", "nicu", "icu", "ventilator", "mechanical ventilation", "intubated", "cpap",
+              "shock", "septic shock", "dka", "diabetic ketoacidosis", "status epilepticus",
+              "inotrope", "resuscitation", "cpr", "exchange transfusion", "emergency admission"]
+  },
+
+  "condition_groups": {
+    "_doc": "ICD-10 prefix -> group. Longest prefix wins. category: CHRONIC | ACUTE. merge_days: acute events of the same group within this gap are one episode.",
+    "ASTHMA":              {"label": "Asthma",                    "icd_prefixes": ["J45", "J46"],         "category": "CHRONIC"},
+    "EPILEPSY":            {"label": "Epilepsy",                  "icd_prefixes": ["G40", "G41"],         "category": "CHRONIC"},
+    "T1DM":                {"label": "Type 1 diabetes",           "icd_prefixes": ["E10"],                "category": "CHRONIC"},
+    "CONGENITAL_HEART":    {"label": "Congenital heart disease",  "icd_prefixes": ["Q20", "Q21", "Q22", "Q23", "Q24", "Q25"], "category": "CHRONIC"},
+    "NEPHROTIC":           {"label": "Nephrotic syndrome",        "icd_prefixes": ["N04"],                "category": "CHRONIC"},
+    "THALASSEMIA":         {"label": "Thalassemia",               "icd_prefixes": ["D56"],                "category": "CHRONIC"},
+    "SICKLE_CELL":         {"label": "Sickle cell disease",       "icd_prefixes": ["D57"],                "category": "CHRONIC"},
+    "CEREBRAL_PALSY":      {"label": "Cerebral palsy",            "icd_prefixes": ["G80"],                "category": "CHRONIC"},
+    "HYPOTHYROID":         {"label": "Hypothyroidism",            "icd_prefixes": ["E03", "E00"],         "category": "CHRONIC"},
+    "CELIAC":              {"label": "Celiac disease",            "icd_prefixes": ["K90.0"],              "category": "CHRONIC"},
+    "ATOPIC_DERMATITIS":   {"label": "Atopic dermatitis",         "icd_prefixes": ["L20"],                "category": "CHRONIC"},
+
+    "URTI":                {"label": "Cold / upper respiratory infection", "icd_prefixes": ["J00", "J06"], "category": "ACUTE", "merge_days": 10},
+    "PHARYNGO_TONSILLITIS":{"label": "Sore throat / tonsillitis", "icd_prefixes": ["J02", "J03"],         "category": "ACUTE", "merge_days": 10},
+    "OTITIS_MEDIA":        {"label": "Ear infection",             "icd_prefixes": ["H65", "H66"],         "category": "ACUTE", "merge_days": 14},
+    "WHEEZE":              {"label": "Wheezing episode",          "icd_prefixes": ["R06.2", "J21"],       "category": "ACUTE", "merge_days": 14},
+    "PNEUMONIA":           {"label": "Pneumonia",                 "icd_prefixes": ["J12", "J13", "J14", "J15", "J18"], "category": "ACUTE", "merge_days": 21},
+    "GASTROENTERITIS":     {"label": "Diarrhoea / gastroenteritis","icd_prefixes": ["A08", "A09", "K52"], "category": "ACUTE", "merge_days": 10},
+    "UTI":                 {"label": "Urinary tract infection",   "icd_prefixes": ["N39.0", "N30", "N10"],"category": "ACUTE", "merge_days": 14},
+    "DENGUE":              {"label": "Dengue",                    "icd_prefixes": ["A90", "A91", "A97"],  "category": "ACUTE", "merge_days": 21},
+    "TYPHOID":             {"label": "Typhoid",                   "icd_prefixes": ["A01"],                "category": "ACUTE", "merge_days": 28},
+    "HFMD":                {"label": "Hand-foot-mouth disease",   "icd_prefixes": ["B08.4"],              "category": "ACUTE", "merge_days": 14},
+    "FEBRILE_SEIZURE":     {"label": "Febrile seizure",           "icd_prefixes": ["R56.0"],              "category": "ACUTE", "merge_days": 3},
+    "FEVER_UNSPECIFIED":   {"label": "Fever",                     "icd_prefixes": ["R50"],                "category": "ACUTE", "merge_days": 7},
+    "NEONATAL_JAUNDICE":   {"label": "Newborn jaundice",          "icd_prefixes": ["P59"],                "category": "ACUTE", "merge_days": 14},
+    "INJURY":              {"label": "Injury",                    "icd_prefixes": ["S", "T0", "T1"],      "category": "ACUTE", "merge_days": 30}
+  },
+
+  "default_acute_merge_days": 14,
+
+  "recurrence_rules": {
+    "_doc": "Any one window rule satisfied => RECURRENT. min_count episodes within window_months. age_max_days limits the rule (e.g. wheeze rule only < 5y). expected_per_year: shown to parents as 'typical for age' context, never flagged.",
+    "OTITIS_MEDIA":         {"windows": [{"min_count": 3, "window_months": 6}, {"min_count": 4, "window_months": 12}]},
+    "WHEEZE":               {"windows": [{"min_count": 3, "window_months": 12}], "age_max_days": 1825,
+                             "clinical_hint": "Recurrent wheeze - review for asthma"},
+    "PHARYNGO_TONSILLITIS": {"windows": [{"min_count": 7, "window_months": 12}, {"min_count": 10, "window_months": 24}, {"min_count": 9, "window_months": 36}]},
+    "UTI":                  {"windows": [{"min_count": 3, "window_months": 12}],
+                             "clinical_hint": "Recurrent UTI - consider renal imaging"},
+    "PNEUMONIA":            {"windows": [{"min_count": 2, "window_months": 12}, {"min_count": 3, "window_months": 1200}],
+                             "clinical_hint": "Recurrent pneumonia - evaluate underlying cause"},
+    "GASTROENTERITIS":      {"windows": [{"min_count": 4, "window_months": 12}]},
+    "FEBRILE_SEIZURE":      {"windows": [{"min_count": 2, "window_months": 12}]},
+    "URTI":                 {"windows": [{"min_count": 10, "window_months": 12}],
+                             "expected_per_year": {"under_5y": 8, "over_5y": 4}}
+  },
+
+  "growth": {
+    "_doc": "LMS tables loaded from config/growth_reference/*.csv. WHO 2006 for 0-60 months, IAP 2015 for 5-18 years. z thresholds below drive flags.",
+    "who_max_months": 60,
+    "flags": {
+      "SEVERE_LOW":  {"z_max": -3.0, "label": "Severely below expected"},
+      "LOW":         {"z_max": -2.0, "label": "Below expected"},
+      "HIGH":        {"z_min": 2.0,  "label": "Above expected"},
+      "SEVERE_HIGH": {"z_min": 3.0,  "label": "Well above expected"}
+    },
+    "faltering_drop_z": 1.0,
+    "faltering_window_months": 6,
+    "plausible_ranges": {
+      "weight_kg": [0.4, 150], "height_cm": [25, 210], "head_circ_cm": [20, 65]
+    }
+  },
+
+  "immunization_schedule": {
+    "_doc": "Based on IAP ACVIP schedule. VERIFY against the current IAP release before go-live. due_days = age at which dose is due; grace_days = after this the dose is 'overdue'.",
+    "source": "IAP ACVIP (verify current edition)",
+    "doses": [
+      {"code": "BCG",        "vaccine": "BCG",                  "dose": 1, "due_days": 0,    "grace_days": 365},
+      {"code": "OPV0",       "vaccine": "OPV",                  "dose": 0, "due_days": 0,    "grace_days": 15},
+      {"code": "HEPB1",      "vaccine": "Hepatitis B",          "dose": 1, "due_days": 0,    "grace_days": 30},
+
+      {"code": "DTP1",       "vaccine": "DTwP/DTaP",            "dose": 1, "due_days": 42,   "grace_days": 28},
+      {"code": "IPV1",       "vaccine": "IPV",                  "dose": 1, "due_days": 42,   "grace_days": 28},
+      {"code": "HIB1",       "vaccine": "Hib",                  "dose": 1, "due_days": 42,   "grace_days": 28},
+      {"code": "HEPB2",      "vaccine": "Hepatitis B",          "dose": 2, "due_days": 42,   "grace_days": 28},
+      {"code": "ROTA1",      "vaccine": "Rotavirus",            "dose": 1, "due_days": 42,   "grace_days": 28},
+      {"code": "PCV1",       "vaccine": "Pneumococcal (PCV)",   "dose": 1, "due_days": 42,   "grace_days": 28},
+
+      {"code": "DTP2",       "vaccine": "DTwP/DTaP",            "dose": 2, "due_days": 70,   "grace_days": 28},
+      {"code": "IPV2",       "vaccine": "IPV",                  "dose": 2, "due_days": 70,   "grace_days": 28},
+      {"code": "HIB2",       "vaccine": "Hib",                  "dose": 2, "due_days": 70,   "grace_days": 28},
+      {"code": "HEPB3",      "vaccine": "Hepatitis B",          "dose": 3, "due_days": 70,   "grace_days": 28},
+      {"code": "ROTA2",      "vaccine": "Rotavirus",            "dose": 2, "due_days": 70,   "grace_days": 28},
+      {"code": "PCV2",       "vaccine": "Pneumococcal (PCV)",   "dose": 2, "due_days": 70,   "grace_days": 28},
+
+      {"code": "DTP3",       "vaccine": "DTwP/DTaP",            "dose": 3, "due_days": 98,   "grace_days": 28},
+      {"code": "IPV3",       "vaccine": "IPV",                  "dose": 3, "due_days": 98,   "grace_days": 28},
+      {"code": "HIB3",       "vaccine": "Hib",                  "dose": 3, "due_days": 98,   "grace_days": 28},
+      {"code": "HEPB4",      "vaccine": "Hepatitis B",          "dose": 4, "due_days": 98,   "grace_days": 28},
+      {"code": "ROTA3",      "vaccine": "Rotavirus",            "dose": 3, "due_days": 98,   "grace_days": 28},
+      {"code": "PCV3",       "vaccine": "Pneumococcal (PCV)",   "dose": 3, "due_days": 98,   "grace_days": 28},
+
+      {"code": "FLU1",       "vaccine": "Influenza",            "dose": 1, "due_days": 183,  "grace_days": 60},
+      {"code": "FLU2",       "vaccine": "Influenza",            "dose": 2, "due_days": 213,  "grace_days": 60},
+      {"code": "TCV",        "vaccine": "Typhoid conjugate",    "dose": 1, "due_days": 183,  "grace_days": 180},
+      {"code": "MMR1",       "vaccine": "MMR",                  "dose": 1, "due_days": 274,  "grace_days": 60},
+      {"code": "HEPA1",      "vaccine": "Hepatitis A",          "dose": 1, "due_days": 365,  "grace_days": 90},
+      {"code": "MMR2",       "vaccine": "MMR",                  "dose": 2, "due_days": 456,  "grace_days": 90},
+      {"code": "VAR1",       "vaccine": "Varicella",            "dose": 1, "due_days": 456,  "grace_days": 90},
+      {"code": "PCVB",       "vaccine": "Pneumococcal (PCV)",   "dose": 4, "due_days": 456,  "grace_days": 90},
+      {"code": "DTPB1",      "vaccine": "DTwP/DTaP",            "dose": 4, "due_days": 487,  "grace_days": 90},
+      {"code": "HIBB1",      "vaccine": "Hib",                  "dose": 4, "due_days": 487,  "grace_days": 90},
+      {"code": "IPVB1",      "vaccine": "IPV",                  "dose": 4, "due_days": 487,  "grace_days": 90},
+      {"code": "HEPA2",      "vaccine": "Hepatitis A",          "dose": 2, "due_days": 548,  "grace_days": 120},
+      {"code": "VAR2",       "vaccine": "Varicella",            "dose": 2, "due_days": 548,  "grace_days": 120},
+      {"code": "DTPB2",      "vaccine": "DTwP/DTaP",            "dose": 5, "due_days": 1461, "grace_days": 730},
+      {"code": "IPVB2",      "vaccine": "IPV",                  "dose": 5, "due_days": 1461, "grace_days": 730},
+      {"code": "MMR3",       "vaccine": "MMR",                  "dose": 3, "due_days": 1461, "grace_days": 730},
+      {"code": "TDAP",       "vaccine": "Tdap",                 "dose": 1, "due_days": 3653, "grace_days": 730},
+      {"code": "HPV1",       "vaccine": "HPV",                  "dose": 1, "due_days": 3288, "grace_days": 1825},
+      {"code": "HPV2",       "vaccine": "HPV",                  "dose": 2, "due_days": 3470, "grace_days": 1825}
+    ],
+    "vaccine_aliases": {
+      "DTwP/DTaP": ["dtp", "dtwp", "dtap", "pentavalent", "hexavalent", "penta", "hexa", "easyfive", "infanrix", "hexaxim"],
+      "IPV": ["ipv", "polio injection", "fipv"],
+      "OPV": ["opv", "oral polio", "polio drops"],
+      "Hib": ["hib", "pentavalent", "hexavalent", "penta", "hexa"],
+      "Hepatitis B": ["hep b", "hepb", "hepatitis b", "hbv", "pentavalent", "hexavalent", "penta", "hexa"],
+      "Rotavirus": ["rota", "rotavirus", "rotavac", "rotarix", "rotasiil"],
+      "Pneumococcal (PCV)": ["pcv", "pcv13", "pcv10", "pneumococcal", "prevenar", "synflorix", "pneumosil"],
+      "Influenza": ["influenza", "flu", "vaxigrip", "fluarix"],
+      "Typhoid conjugate": ["tcv", "typhoid conjugate", "typbar", "typhoid"],
+      "MMR": ["mmr", "measles", "mr vaccine"],
+      "Hepatitis A": ["hep a", "hepa", "hepatitis a", "havrix", "biovac"],
+      "Varicella": ["varicella", "chickenpox", "varivax", "varilrix"],
+      "Tdap": ["tdap", "boostrix", "adacel"],
+      "HPV": ["hpv", "gardasil", "cervavac", "cervarix"],
+      "BCG": ["bcg"]
+    },
+    "combination_vaccines": {
+      "_doc": "A single recorded shot that counts as multiple vaccines.",
+      "pentavalent": ["DTwP/DTaP", "Hib", "Hepatitis B"],
+      "penta":       ["DTwP/DTaP", "Hib", "Hepatitis B"],
+      "hexavalent":  ["DTwP/DTaP", "Hib", "Hepatitis B", "IPV"],
+      "hexa":        ["DTwP/DTaP", "Hib", "Hepatitis B", "IPV"],
+      "hexaxim":     ["DTwP/DTaP", "Hib", "Hepatitis B", "IPV"]
+    }
+  },
+
+  "patient_labels": {
+    "_doc": "Gentle wording for the guardian app. Doctor view uses the raw codes.",
+    "CRITICAL": "Hospital care needed",
+    "CRITICAL_LAB": "Result needed doctor's attention",
+    "ABNORMAL": "Outside usual range",
+    "RECURRENT": "Happens often",
+    "CHRONIC": "Ongoing condition",
+    "ACUTE": "Short illness",
+    "OVERDUE": "Overdue",
+    "DUE": "Due now",
+    "UPCOMING": "Coming up",
+    "GIVEN": "Given"
+  }
+}

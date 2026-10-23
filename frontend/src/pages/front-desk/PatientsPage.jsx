@@ -91,7 +91,7 @@ export default function FrontDeskPatientsPage() {
               </thead>
               <tbody>
                 {patients.map(p => (
-                  <tr key={p.uuid || p.id}>
+                  <tr key={p.id}>
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                         <span style={{ fontWeight: 600, fontSize: 13 }}>{p.full_name}</span>

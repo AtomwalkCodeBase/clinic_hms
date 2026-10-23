@@ -23,8 +23,14 @@ from core import storage as blob_storage
 from apps.patients.models import StaffMobileIndex
 from apps.hospital_master.services import parameters_of
 
-from apps.hospital_setup.models import Branch, Department, Room
-from apps.hospital_setup.models import StaffUser, DoctorProfile, StaffProfile, Role, Permission, UserRole, RoomAssignment
+from apps.hospital_setup.models import Branch, Room
+from apps.hospital_setup.models import StaffUser, Role, Permission
+from apps.hospital_setup.rbac import acts_as_q, resolve_acts_as, system_role
+from apps.hospital_setup.branch_utils import (
+    PLACE_PREFETCH, default_place, ensure_default_place, forget_places, place_for, primary_branch_id, primary_department_id,
+    set_primary_place, set_staff_branches,
+)
+from apps.hospital_setup import room_utils
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +94,11 @@ def _send_new_account_email(staff, temp_password):
     )
 
 
+def _profile_filled(staff, serializer_class):
+    """True once any of the profile fields the serializer covers has a value (the profile is part of the staff row, so "exists" means "filled in")."""
+    return any(getattr(staff, name) not in (None, "", {}) for name in serializer_class().fields)
+
+
 # ── Staff ─────────────────────────────────────────────────────────────────────
 
 class StaffListView(APIView):
@@ -95,12 +106,12 @@ class StaffListView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def get(self, request):
-        qs = StaffUser.objects.using(request.hospital_db).select_related(
-            "branch", "department"
-        ).prefetch_related("doctor_profile")
+        qs = StaffUser.objects.using(request.hospital_db).select_related("group").prefetch_related(*PLACE_PREFETCH)
         role_filter = request.query_params.get("role")
-        if role_filter:
-            qs = qs.filter(role=role_filter)
+        if role_filter == "custom":
+            qs = qs.filter(group__is_system_role=False)
+        elif role_filter:
+            qs = qs.filter(group__is_system_role=True, group__system_role_key=role_filter)
         active_only = request.query_params.get("active", "true")
         if active_only.lower() != "false":
             qs = qs.filter(is_active=True)
@@ -130,20 +141,24 @@ class StaffInviteView(APIView):
             return error("Validation error.", errors=s.errors)
         d = s.validated_data
 
-        # ── Resolve custom role (role="custom" only) ────────────────────────
-        custom_role_obj = None
+        # ── Resolve the user group: a system role, or a role the hospital defined ──
+        group = None
         acts_as = set()
         if d["role"] == "custom":
             if not d.get("custom_role_id"):
                 return error("Select a custom role.", errors={"custom_role_id": "Required."})
-            from apps.hospital_setup.models import Role
             try:
-                custom_role_obj = Role.objects.using(request.hospital_db).get(
+                group = Role.objects.using(request.hospital_db).get(
                     pk=d["custom_role_id"], is_system_role=False,
                 )
             except Role.DoesNotExist:
                 return error("Custom role not found.", errors={"custom_role_id": "Invalid."})
-            acts_as = set(custom_role_obj.acts_as or [])
+            acts_as = set(group.acts_as or [])
+        else:
+            try:
+                group = system_role(request.hospital_db, d["role"])
+            except Role.DoesNotExist:
+                return error("That role is not set up for this hospital.", errors={"role": "Invalid."})
         is_doctor_equivalent = d["role"] == "doctor" or "doctor" in acts_as
 
         # ── Subscription limit check (fails CLOSED — see apps.hospital_master.services) ──
@@ -178,8 +193,7 @@ class StaffInviteView(APIView):
             existing.is_active            = True
             existing.first_name           = d["first_name"]
             existing.last_name            = d.get("last_name", existing.last_name)
-            existing.role                 = d["role"]
-            existing.custom_role          = custom_role_obj
+            existing.group                = group
             existing.email                = d.get("email") or existing.email
             # Employee ID is auto-generated via NNTM, never typed in — see
             if not existing.employee_id:
@@ -195,9 +209,7 @@ class StaffInviteView(APIView):
                 },
             )
             if "branch_ids" in d:
-                from apps.hospital_setup.branch_utils import set_staff_branches
                 set_staff_branches(existing, d.get("branch_ids") or [], d.get("branch_id"), request.hospital_db)
-                existing.save(using=request.hospital_db, update_fields=["branch"])
             _send_new_account_email(existing, temp_password)
             return created(data={
                 **StaffSerializer(existing).data,
@@ -206,8 +218,9 @@ class StaffInviteView(APIView):
                         + (" A copy was also emailed to them." if existing.email else ""),
             }, message=f"{existing.get_full_name()} reactivated.")
 
-        # Resolve branch
+        # Resolve where they work: a department at a branch (the branch's default department when none is named)
         branch = None
+        place = None
         if d.get("branch_id"):
             try:
                 branch = Branch.objects.using(request.hospital_db).get(
@@ -215,16 +228,14 @@ class StaffInviteView(APIView):
                 )
             except Branch.DoesNotExist:
                 return error("Branch not found.", errors={"branch_id": "Invalid."})
-
-        # Resolve department (optional)
-        department = None
-        if d.get("department_id"):
-            try:
-                department = Department.objects.using(request.hospital_db).get(
-                    pk=d["department_id"], is_active=True
-                )
-            except Department.DoesNotExist:
-                return error("Department not found.", errors={"department_id": "Invalid."})
+            if d.get("department_id"):
+                place = place_for(request.hospital_db, branch.id, d["department_id"])
+                if place is None:
+                    return error("That branch does not offer this department.", errors={"department_id": "Invalid."})
+            else:
+                place = default_place(request.hospital_db, branch.id) or ensure_default_place(request.hospital_db, branch)
+        elif d.get("department_id"):
+            return error("Choose a branch for the department.", errors={"branch_id": "Required with a department."})
 
         email_error = _email_collision(d.get("email"), request.hospital_db)
         if email_error:
@@ -237,22 +248,20 @@ class StaffInviteView(APIView):
             employee_id=next_employee_id(request.hospital_db),
             first_name=d["first_name"],
             last_name=d.get("last_name", ""),
-            role=d["role"],
-            custom_role=custom_role_obj,
-            branch=branch,
-            department=department,
+            group=group,
             must_change_password=True,
         )
         staff.set_password(temp_password)
         staff.save(using=request.hospital_db)
+        if place is not None:
+            set_primary_place(staff, place, request.hospital_db)
 
         # Extra branches beyond the primary — meaningful for doctors who
         if d.get("branch_ids"):
-            from apps.hospital_setup.branch_utils import set_staff_branches
             set_staff_branches(staff, d["branch_ids"], branch.id if branch else None, request.hospital_db)
-            staff.save(using=request.hospital_db, update_fields=["branch"])
 
-        # Doctor basics — admin enters these now so patient-facing cards are
+        # Professional basics — admin enters these now so patient-facing cards are
+        profile_values = {}
         if is_doctor_equivalent and any(
             d.get(f) for f in ("registration_no", "specialisation", "qualification", "experience_years",
                                "consultation_fee", "followup_fee")
@@ -269,8 +278,7 @@ class StaffInviteView(APIView):
                 fee_value = None
                 followup_fee_value = None
 
-            DoctorProfile.objects.using(request.hospital_db).create(
-                staff=staff,
+            profile_values = dict(
                 registration_no=d.get("registration_no", ""),
                 specialisation=d.get("specialisation", ""),
                 qualification=d.get("qualification", ""),
@@ -281,33 +289,25 @@ class StaffInviteView(APIView):
 
         # Working-hours schedule — optional at registration; doctor can also
         if is_doctor_equivalent and d.get("schedule"):
-            from apps.hospital_setup.models import DoctorSchedule, DoctorAvailabilitySlot
-            from apps.hospital_setup.staff_serializers import DoctorScheduleSerializer as _SchedSer
-            sched_ser = _SchedSer(data=d["schedule"])
-            if sched_ser.is_valid():
-                sched_ser._db = request.hospital_db
-                sched_data = sched_ser.validated_data
-                days_data  = sched_data.pop("days", [])
-                sched = DoctorSchedule.objects.using(request.hospital_db).create(
-                    doctor=staff, **sched_data
-                )
-                for day in days_data:
-                    DoctorAvailabilitySlot.objects.using(request.hospital_db).create(
-                        schedule=sched, **day
-                    )
+            sched = room_utils.schedule_of(staff.id, request.hospital_db, create=True)
+            if sched is not None:
+                room_utils.set_hours(sched, d["schedule"].get("slot_duration_minutes", 15), d["schedule"]["days"], request.hospital_db)
         # Same basics for every other role — nursing/pharmacy council
         elif not is_doctor_equivalent and any(
             d.get(f) for f in ("registration_no", "council_name", "registration_expiry",
                                "qualification", "experience_years")
         ):
-            StaffProfile.objects.using(request.hospital_db).create(
-                staff=staff,
+            profile_values = dict(
                 registration_no=d.get("registration_no", ""),
                 council_name=d.get("council_name", ""),
                 registration_expiry=d.get("registration_expiry"),
                 qualification=d.get("qualification", ""),
                 experience_years=d.get("experience_years"),
             )
+        if profile_values:
+            for field, value in profile_values.items():
+                setattr(staff, field, value)
+            staff.save(using=request.hospital_db)
 
         # Write to atomwalk index so login can route by mobile (no hospital_code needed)
         StaffMobileIndex.objects.using("default").update_or_create(
@@ -333,7 +333,7 @@ class StaffDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return StaffUser.objects.using(request.hospital_db).get(pk=pk)
+            return StaffUser.objects.using(request.hospital_db).select_related("group").prefetch_related(*PLACE_PREFETCH).get(pk=pk)
         except StaffUser.DoesNotExist:
             return None
 
@@ -365,12 +365,11 @@ class StaffDetailView(APIView):
                 )
 
         # Refuse to role-change away the last active hospital_admin — see the
-        staff_old_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
-        staff_is_admin = staff.role == "hospital_admin" or "hospital_admin" in staff_old_acts_as
+        staff_old_acts_as = resolve_acts_as(staff)
+        staff_is_admin = "hospital_admin" in staff_old_acts_as
         if "role" in d and d["role"] != "hospital_admin" and staff_is_admin and staff.is_active:
-            ADMIN_Q = Q(role="hospital_admin") | Q(role="custom", custom_role__acts_as__contains=["hospital_admin"])
             other_admins = StaffUser.objects.using(request.hospital_db).filter(
-                ADMIN_Q, is_active=True
+                acts_as_q("hospital_admin"), is_active=True
             ).exclude(pk=staff.id).exists()
             if not other_admins:
                 return error(
@@ -379,25 +378,28 @@ class StaffDetailView(APIView):
                     "another staff member to hospital_admin first.",
                 )
 
-        # Resolve the custom role being moved TO, if any — needed both for
-        new_custom_role_obj = None
-        if d.get("role") == "custom":
-            if not d.get("custom_role_id"):
-                return error("Select a custom role.", errors={"custom_role_id": "Required."})
-            from apps.hospital_setup.models import Role
-            try:
-                new_custom_role_obj = Role.objects.using(request.hospital_db).get(
-                    pk=d["custom_role_id"], is_system_role=False,
-                )
-            except Role.DoesNotExist:
-                return error("Custom role not found.", errors={"custom_role_id": "Invalid."})
+        # Resolve the group being moved TO, if the role changes — needed both for
+        new_group = None
+        if "role" in d:
+            if d["role"] == "custom":
+                if not d.get("custom_role_id"):
+                    return error("Select a custom role.", errors={"custom_role_id": "Required."})
+                try:
+                    new_group = Role.objects.using(request.hospital_db).get(
+                        pk=d["custom_role_id"], is_system_role=False,
+                    )
+                except Role.DoesNotExist:
+                    return error("Custom role not found.", errors={"custom_role_id": "Invalid."})
+            else:
+                try:
+                    new_group = system_role(request.hospital_db, d["role"])
+                except Role.DoesNotExist:
+                    return error("That role is not set up for this hospital.", errors={"role": "Invalid."})
 
         # A role change that crosses the doctor / non-doctor line moves this
-        if "role" in d and staff.is_active and d["role"] != staff.role:
-            old_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
-            old_is_doctor = staff.role == "doctor" or "doctor" in old_acts_as
-            new_acts_as = set((new_custom_role_obj.acts_as if new_custom_role_obj else []) or [])
-            new_is_doctor = d["role"] == "doctor" or "doctor" in new_acts_as
+        if new_group is not None and staff.is_active and new_group.id != staff.group_id:
+            old_is_doctor = "doctor" in staff_old_acts_as
+            new_is_doctor = "doctor" in resolve_acts_as(StaffUser(group=new_group))
             old_resource = "doctors" if old_is_doctor else "staff"
             new_resource = "doctors" if new_is_doctor else "staff"
             if new_resource != old_resource:
@@ -415,35 +417,39 @@ class StaffDetailView(APIView):
         if not staff.employee_id:
             staff.employee_id = next_employee_id(request.hospital_db)
 
-        allowed = ["first_name", "last_name", "role", "phone", "date_of_birth", "branch_id", "department_id"]
-        for field in allowed:
+        # Where they work: a change of branch and/or department moves them to that department at that branch
+        new_place, clear_place = None, False
+        if "branch_id" in d or "department_id" in d:
+            target_branch_id = d["branch_id"] if "branch_id" in d else primary_branch_id(staff, request.hospital_db)
+            target_department_id = d["department_id"] if "department_id" in d else (primary_department_id(staff, request.hospital_db) if "branch_id" not in d else None)
+            if target_branch_id is None:
+                if target_department_id:
+                    return error("Choose a branch for the department.", errors={"branch_id": "Required with a department."})
+                clear_place = True
+            else:
+                if not Branch.objects.using(request.hospital_db).filter(pk=target_branch_id).exists():
+                    return error("Branch not found.")
+                new_place = place_for(request.hospital_db, target_branch_id, target_department_id)
+                if new_place is None:
+                    return error("That branch does not offer this department." if target_department_id else "Branch has no department yet.")
+
+        for field in ["first_name", "last_name", "phone"]:
             if field in d:
-                if field == "branch_id":
-                    try:
-                        staff.branch = Branch.objects.using(request.hospital_db).get(pk=d[field])
-                    except Branch.DoesNotExist:
-                        return error("Branch not found.")
-                elif field == "department_id":
-                    try:
-                        staff.department = Department.objects.using(request.hospital_db).get(pk=d[field])
-                    except Department.DoesNotExist:
-                        return error("Department not found.")
-                elif field == "date_of_birth":
-                    dob = d.get("date_of_birth") or None
-                    if dob:
-                        try:
-                            dob = datetime.strptime(dob, "%Y-%m-%d").date()
-                        except ValueError:
-                            return error("Date of birth must be YYYY-MM-DD.", errors={"date_of_birth": "Invalid format."})
-                    staff.date_of_birth = dob
-                elif field == "role":
-                    staff.role = d["role"]
-                    # Only ever set for role="custom" — cleared otherwise so
-                    staff.custom_role = new_custom_role_obj
-                else:
-                    setattr(staff, field, d[field])
+                setattr(staff, field, d[field])
+        if "date_of_birth" in d:
+            dob = d.get("date_of_birth") or None
+            if dob:
+                try:
+                    dob = datetime.strptime(dob, "%Y-%m-%d").date()
+                except ValueError:
+                    return error("Date of birth must be YYYY-MM-DD.", errors={"date_of_birth": "Invalid format."})
+            staff.date_of_birth = dob
+        if new_group is not None:
+            staff.group = new_group
 
         staff.save(using=request.hospital_db)
+        if new_place is not None or clear_place:
+            set_primary_place(staff, new_place, request.hospital_db)
 
         if "phone" in d:
             # NOTE: "email" is deliberately not in `allowed` above (no endpoint
@@ -455,11 +461,6 @@ class StaffDetailView(APIView):
                 },
             )
 
-        if "branch_id" in d:
-            # Keep the mapping table's primary row matching the legacy FK
-            from apps.hospital_setup.branch_utils import sync_primary_branch
-            sync_primary_branch(staff, request.hospital_db)
-
         return success(data=StaffSerializer(staff).data, message="Staff updated.")
 
     def delete(self, request, pk):
@@ -467,12 +468,10 @@ class StaffDetailView(APIView):
         if not staff:
             return not_found("Staff member not found.")
 
-        staff_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
-        staff_is_admin = staff.role == "hospital_admin" or "hospital_admin" in staff_acts_as
+        staff_is_admin = "hospital_admin" in resolve_acts_as(staff)
         if staff_is_admin and staff.is_active:
-            ADMIN_Q = Q(role="hospital_admin") | Q(role="custom", custom_role__acts_as__contains=["hospital_admin"])
             other_admins = StaffUser.objects.using(request.hospital_db).filter(
-                ADMIN_Q, is_active=True
+                acts_as_q("hospital_admin"), is_active=True
             ).exclude(pk=staff.id).exists()
             if not other_admins:
                 return error(
@@ -524,9 +523,7 @@ class StaffBranchesView(APIView):
             if primary_branch_id is not None and int(primary_branch_id) not in valid_ids:
                 return error("primary_branch_id must be one of branch_ids.", errors={"primary_branch_id": "Invalid."})
 
-        from apps.hospital_setup.branch_utils import set_staff_branches
         set_staff_branches(staff, branch_ids, primary_branch_id, request.hospital_db)
-        staff.save(using=request.hospital_db, update_fields=["branch"])
 
         return success(data=StaffSerializer(staff).data["branches"], message="Branch assignment updated.")
 
@@ -561,7 +558,7 @@ class StaffDoctorsView(APIView):
         if doctor_ids:
             valid_ids = set(
                 StaffUser.objects.using(request.hospital_db)
-                .filter(pk__in=doctor_ids, role="doctor", is_active=True)
+                .filter(acts_as_q("doctor"), pk__in=doctor_ids, is_active=True)
                 .values_list("id", flat=True)
             )
             invalid = set(int(d) for d in doctor_ids) - valid_ids
@@ -710,9 +707,9 @@ class RoleDetailView(APIView):
             return not_found("Role not found.")
         if role.is_system_role:
             return error("System roles can't be deleted.")
-        # Unlike UserRole (extra roles — CASCADE is fine, losing an extra
+        # Unlike extra_roles (extra roles — CASCADE is fine, losing an extra
         holders = StaffUser.objects.using(request.hospital_db).filter(
-            custom_role=role, is_active=True
+            group=role, is_active=True
         ).count()
         if holders:
             plural = "" if holders == 1 else "s"
@@ -736,13 +733,9 @@ class StaffRolesView(APIView):
             staff = StaffUser.objects.using(request.hospital_db).get(pk=pk)
         except StaffUser.DoesNotExist:
             return not_found("Staff member not found.")
-        extra = (
-            UserRole.objects.using(request.hospital_db)
-            .filter(staff_id=staff.id).select_related("role")
-        )
         return success(data={
             "primary_role": staff.role,
-            "extra_roles": [RoleSerializer(ur.role).data for ur in extra],
+            "extra_roles": [RoleSerializer(role).data for role in staff.extra_roles.all()],
         })
 
     def put(self, request, pk):
@@ -761,10 +754,7 @@ class StaffRolesView(APIView):
         if invalid:
             return error(f"Unknown role id(s): {sorted(invalid)}.", errors={"role_ids": "Contains unknown id(s)."})
 
-        UserRole.objects.using(request.hospital_db).filter(staff_id=staff.id).delete()
-        UserRole.objects.using(request.hospital_db).bulk_create([
-            UserRole(staff_id=staff.id, role_id=rid) for rid in valid_ids
-        ])
+        staff.extra_roles.set(valid_roles)
         return success(message="Roles updated.")
 
 
@@ -784,11 +774,7 @@ class DoctorProfileView(APIView):
         staff = self._get_staff(request, pk)
         if not staff:
             return not_found("Staff member not found.")
-        try:
-            profile = DoctorProfile.objects.using(request.hospital_db).get(staff=staff)
-            return success(data=DoctorProfileSerializer(profile).data)
-        except DoctorProfile.DoesNotExist:
-            return not_found("Doctor profile not found.")
+        return success(data=DoctorProfileSerializer(staff).data)
 
     def post(self, request, pk):
         staff = self._get_staff(request, pk)
@@ -796,33 +782,29 @@ class DoctorProfileView(APIView):
             return not_found("Staff member not found.")
         if staff.role != "doctor":
             return error("Doctor profile can only be created for staff with role 'doctor'.")
-        if DoctorProfile.objects.using(request.hospital_db).filter(staff=staff).exists():
+        if _profile_filled(staff, DoctorProfileSerializer):
             return error("Doctor profile already exists. Use PATCH to update.")
 
         s = DoctorProfileSerializer(data=request.data)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
 
-        profile = DoctorProfile(staff=staff, **s.validated_data)
-        profile.save(using=request.hospital_db)
-        return created(data=DoctorProfileSerializer(profile).data, message="Doctor profile created.")
+        for attr, val in s.validated_data.items():
+            setattr(staff, attr, val)
+        staff.save(using=request.hospital_db)
+        return created(data=DoctorProfileSerializer(staff).data, message="Doctor profile created.")
 
     def patch(self, request, pk):
         staff = self._get_staff(request, pk)
         if not staff:
             return not_found("Staff member not found.")
-        try:
-            profile = DoctorProfile.objects.using(request.hospital_db).get(staff=staff)
-        except DoctorProfile.DoesNotExist:
-            return not_found("Doctor profile not found. Create it first with POST.")
-
-        s = DoctorProfileSerializer(profile, data=request.data, partial=True)
+        s = DoctorProfileSerializer(staff, data=request.data, partial=True)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         for attr, val in s.validated_data.items():
-            setattr(profile, attr, val)
-        profile.save(using=request.hospital_db)
-        return success(data=DoctorProfileSerializer(profile).data, message="Doctor profile updated.")
+            setattr(staff, attr, val)
+        staff.save(using=request.hospital_db)
+        return success(data=DoctorProfileSerializer(staff).data, message="Doctor profile updated.")
 
 
 class MyDoctorProfileView(APIView):
@@ -840,16 +822,12 @@ class MyDoctorProfileView(APIView):
             return False
 
     def get(self, request):
-        profile, _ = DoctorProfile.objects.using(request.hospital_db).get_or_create(
-            staff_id=request.user.id
-        )
+        profile = StaffUser.objects.using(request.hospital_db).get(pk=request.user.id)
         ctx = {"fee_editable": self._fee_editable(request)}
         return success(data=DoctorSelfProfileSerializer(profile, context=ctx).data)
 
     def patch(self, request):
-        profile, _ = DoctorProfile.objects.using(request.hospital_db).get_or_create(
-            staff_id=request.user.id
-        )
+        profile = StaffUser.objects.using(request.hospital_db).get(pk=request.user.id)
         ctx = {"fee_editable": self._fee_editable(request)}
 
         # digital_signature is handled separately from the generic serializer
@@ -905,11 +883,7 @@ class StaffProfileView(APIView):
         staff = self._get_staff(request, pk)
         if not staff:
             return not_found("Staff member not found.")
-        try:
-            profile = StaffProfile.objects.using(request.hospital_db).get(staff=staff)
-            return success(data=StaffProfileSerializer(profile).data)
-        except StaffProfile.DoesNotExist:
-            return not_found("Profile not found.")
+        return success(data=StaffProfileSerializer(staff).data)
 
     def post(self, request, pk):
         staff = self._get_staff(request, pk)
@@ -918,33 +892,29 @@ class StaffProfileView(APIView):
         from apps.hospital_setup.rbac import resolve_acts_as
         if "doctor" in resolve_acts_as(staff):
             return error("Doctors use /doctor-profile/, not /profile/.")
-        if StaffProfile.objects.using(request.hospital_db).filter(staff=staff).exists():
+        if _profile_filled(staff, StaffProfileSerializer):
             return error("Profile already exists. Use PATCH to update.")
 
         s = StaffProfileSerializer(data=request.data)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
 
-        profile = StaffProfile(staff=staff, **s.validated_data)
-        profile.save(using=request.hospital_db)
-        return created(data=StaffProfileSerializer(profile).data, message="Profile created.")
+        for attr, val in s.validated_data.items():
+            setattr(staff, attr, val)
+        staff.save(using=request.hospital_db)
+        return created(data=StaffProfileSerializer(staff).data, message="Profile created.")
 
     def patch(self, request, pk):
         staff = self._get_staff(request, pk)
         if not staff:
             return not_found("Staff member not found.")
-        try:
-            profile = StaffProfile.objects.using(request.hospital_db).get(staff=staff)
-        except StaffProfile.DoesNotExist:
-            return not_found("Profile not found. Create it first with POST.")
-
-        s = StaffProfileSerializer(profile, data=request.data, partial=True)
+        s = StaffProfileSerializer(staff, data=request.data, partial=True)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         for attr, val in s.validated_data.items():
-            setattr(profile, attr, val)
-        profile.save(using=request.hospital_db)
-        return success(data=StaffProfileSerializer(profile).data, message="Profile updated.")
+            setattr(staff, attr, val)
+        staff.save(using=request.hospital_db)
+        return success(data=StaffProfileSerializer(staff).data, message="Profile updated.")
 
 
 class MyStaffProfileDetailsView(APIView):
@@ -954,17 +924,13 @@ class MyStaffProfileDetailsView(APIView):
     def get(self, request):
         if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
             return error("Doctors use /me/doctor-profile/, not /me/staff-profile/.")
-        profile, _ = StaffProfile.objects.using(request.hospital_db).get_or_create(
-            staff_id=request.user.id
-        )
+        profile = StaffUser.objects.using(request.hospital_db).get(pk=request.user.id)
         return success(data=StaffProfileSelfSerializer(profile).data)
 
     def patch(self, request):
         if request.user.role == "doctor" or "doctor" in getattr(request.user, "acts_as", []):
             return error("Doctors use /me/doctor-profile/, not /me/staff-profile/.")
-        profile, _ = StaffProfile.objects.using(request.hospital_db).get_or_create(
-            staff_id=request.user.id
-        )
+        profile = StaffUser.objects.using(request.hospital_db).get(pk=request.user.id)
         s = StaffProfileSelfSerializer(profile, data=request.data, partial=True)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
@@ -1036,21 +1002,21 @@ class DoctorListView(APIView):
 
     def get(self, request):
         qs = StaffUser.objects.using(request.hospital_db).filter(
-            Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"]),
+            acts_as_q("doctor"),
             is_active=True,
-        ).prefetch_related("doctor_profile")
+        ).select_related("group").prefetch_related(*PLACE_PREFETCH)
 
         q = (request.query_params.get("q") or "").strip()
         if q:
             qs = qs.filter(
                 Q(first_name__icontains=q) | Q(last_name__icontains=q)
-                | Q(doctor_profile__specialisation__icontains=q)
-                | Q(doctor_profile__known_for__icontains=q)
+                | Q(specialisation__icontains=q)
+                | Q(known_for__icontains=q)
             )
 
         specialisation = (request.query_params.get("specialisation") or "").strip()
         if specialisation:
-            qs = qs.filter(doctor_profile__specialisation__iexact=specialisation)
+            qs = qs.filter(specialisation__iexact=specialisation)
 
         branch_id = request.query_params.get("branch_id")
         if branch_id:
@@ -1067,14 +1033,11 @@ class DoctorSpecialisationListView(APIView):
     def get(self, request):
         values = (
             StaffUser.objects.using(request.hospital_db)
-            .filter(
-                Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"]),
-                is_active=True,
-            )
-            .exclude(doctor_profile__specialisation="")
-            .values_list("doctor_profile__specialisation", flat=True)
+            .filter(acts_as_q("doctor"), is_active=True)
+            .exclude(specialisation="")
+            .values_list("specialisation", flat=True)
             .distinct()
-            .order_by("doctor_profile__specialisation")
+            .order_by("specialisation")
         )
         return success(data=[v for v in values if v])
 
@@ -1182,7 +1145,7 @@ class HospitalSettingsView(APIView):
 # ── Doctor working-hours schedule ─────────────────────────────────────────────
 
 class DoctorScheduleView(APIView):
-    """GET   /api/v1/org/staff/<pk>/schedule/  — get doctor's working hours"""
+    """GET   /api/v1/org/staff/<pk>/schedule/[?branch_id=]  — get doctor's working hours at one of their places (default: the primary one)"""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def _get_doctor(self, request, pk):
@@ -1204,19 +1167,15 @@ class DoctorScheduleView(APIView):
         return False
 
     def get(self, request, pk):
-        from apps.hospital_setup.models import DoctorSchedule as _DS
-        from apps.hospital_setup.staff_serializers import DoctorScheduleSerializer as _SS
         staff, err = self._get_doctor(request, pk)
         if err:
             return err
-        try:
-            sched = _DS.objects.using(request.hospital_db).prefetch_related("days").get(doctor=staff)
-        except _DS.DoesNotExist:
+        sched = room_utils.schedule_of(staff.id, request.hospital_db, branch_id=request.query_params.get("branch_id"))
+        if sched is None or not room_utils.hours_of(sched):
             return success(data=None)   # no schedule configured yet
-        return success(data=_SS(sched).data)
+        return success(data=room_utils.schedule_json(sched))
 
     def put(self, request, pk):
-        from apps.hospital_setup.models import DoctorSchedule as _DS, DoctorAvailabilitySlot as _DAS
         from apps.hospital_setup.staff_serializers import DoctorScheduleSerializer as _SS
         staff, err = self._get_doctor(request, pk)
         if err:
@@ -1228,20 +1187,12 @@ class DoctorScheduleView(APIView):
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
 
-        vd        = s.validated_data
-        days_data = vd.pop("days", [])
-
-        sched, _ = _DS.objects.using(request.hospital_db).get_or_create(doctor=staff)
-        sched.slot_duration_minutes = vd.get("slot_duration_minutes", sched.slot_duration_minutes)
-        sched.save(using=request.hospital_db)
-
-        # Full replace of day rows
-        sched.days.using(request.hospital_db).all().delete()
-        for day in days_data:
-            _DAS.objects.using(request.hospital_db).create(schedule=sched, **day)
-
-        sched.refresh_from_db(using=request.hospital_db)
-        return success(data=_SS(sched).data, message="Schedule updated.")
+        sched = room_utils.schedule_of(staff.id, request.hospital_db, branch_id=request.query_params.get("branch_id"), create=True)
+        if sched is None:
+            return error("Give this doctor a branch before setting a schedule.", errors={"branch_id": "No place of work."})
+        vd = s.validated_data
+        room_utils.set_hours(sched, vd.get("slot_duration_minutes", sched.slot_duration_minutes), vd["days"], request.hospital_db)
+        return success(data=room_utils.schedule_json(sched), message="Schedule updated.")
 
 
 class RoomAssignmentListCreateView(APIView):
@@ -1252,113 +1203,96 @@ class RoomAssignmentListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        qs = RoomAssignment.objects.using(request.hospital_db).filter(
-            is_active=True
-        ).select_related("room", "doctor")
-        room_id = request.query_params.get("room_id")
-        if room_id:
-            qs = qs.filter(room_id=room_id)
-        doctor_id = request.query_params.get("doctor_id")
-        if doctor_id:
-            qs = qs.filter(doctor_id=doctor_id)
-        branch_id = request.query_params.get("branch_id")
-        if branch_id:
-            qs = qs.filter(room__branch_id=branch_id)
-        return success(data=RoomAssignmentSerializer(qs, many=True).data)
+        db = request.hospital_db
+        blocks = room_utils.room_blocks(db, room_id=request.query_params.get("room_id"), doctor_id=request.query_params.get("doctor_id"),
+                                        branch_id=request.query_params.get("branch_id"))
+        return success(data=[room_utils.block_json(db, block) for block in blocks])
 
     def post(self, request):
         from django.db import transaction
-        from apps.hospital_setup.room_utils import find_overlapping_assignment
 
         s = RoomAssignmentSerializer(data=request.data)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         d = s.validated_data
+        db = request.hospital_db
 
         try:
-            room = Room.objects.using(request.hospital_db).get(pk=d["room"].id, is_active=True)
+            room = Room.objects.using(db).select_related("floor").get(pk=d["room"].id, is_active=True)
         except Room.DoesNotExist:
             return error("Room not found.", errors={"room": "Invalid room."})
         try:
-            doctor = StaffUser.objects.using(request.hospital_db).get(
-                Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"]),
-                pk=d["doctor"].id, is_active=True,
-            )
+            doctor = StaffUser.objects.using(db).get(acts_as_q("doctor"), pk=d["doctor"].id, is_active=True)
         except StaffUser.DoesNotExist:
             return error("Doctor not found.", errors={"doctor": "Invalid doctor."})
 
-        with transaction.atomic(using=request.hospital_db):
-            clash = find_overlapping_assignment(
-                request.hospital_db, room.id, d["day_of_week"], d["start_time"], d["end_time"],
-            )
+        with transaction.atomic(using=db):
+            clash = room_utils.find_overlapping_assignment(db, room.id, d["day_of_week"], d["start_time"], d["end_time"])
             if clash:
                 return error(
-                    f"{room.name} is already assigned to Dr. {clash.doctor.get_full_name()} "
-                    f"on {clash.get_day_of_week_display()} from {clash.start_time.strftime('%H:%M')} "
-                    f"to {clash.end_time.strftime('%H:%M')} — times overlap.",
+                    f"{room.name} is already assigned to Dr. {clash['doctor'].get_full_name()} "
+                    f"on {dict(room_utils.DoctorSchedule.DAY_CHOICES)[clash['day_of_week']]} from {clash['start_time'].strftime('%H:%M')} "
+                    f"to {clash['end_time'].strftime('%H:%M')} — times overlap.",
                     errors={"start_time": "Overlaps an existing assignment."},
                     status=409,
                 )
-            assignment = RoomAssignment(
-                room=room, doctor=doctor, day_of_week=d["day_of_week"],
-                start_time=d["start_time"], end_time=d["end_time"],
-            )
-            assignment.save(using=request.hospital_db)
+            block = room_utils.save_block(db, room, doctor, d["day_of_week"], d["start_time"], d["end_time"])
+            if block is None:
+                return error("This doctor does not work at the room's branch.", errors={"doctor": "No place of work at this branch."})
 
-        return created(data=RoomAssignmentSerializer(assignment).data, message="Room assignment created.")
+        return created(data=room_utils.block_json(db, block), message="Room assignment created.")
 
 
 class RoomAssignmentDetailView(APIView):
     """PATCH  /api/v1/org/room-assignments/{id}/ — edit day/time/doctor (re-checks overlap)"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
-    def _get(self, request, pk):
-        try:
-            return RoomAssignment.objects.using(request.hospital_db).select_related("room", "doctor").get(pk=pk)
-        except RoomAssignment.DoesNotExist:
-            return None
-
     def patch(self, request, pk):
         from django.db import transaction
-        from apps.hospital_setup.room_utils import find_overlapping_assignment
 
-        assignment = self._get(request, pk)
-        if not assignment:
+        db = request.hospital_db
+        block = room_utils.get_block(db, pk)
+        if not block:
             return not_found("Room assignment not found.")
 
-        s = RoomAssignmentSerializer(assignment, data=request.data, partial=True)
+        s = RoomAssignmentSerializer(data=request.data, partial=True)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         d = s.validated_data
 
-        room_id     = d["room"].id if "room" in d else assignment.room_id
-        day_of_week = d.get("day_of_week", assignment.day_of_week)
-        start_time  = d.get("start_time", assignment.start_time)
-        end_time    = d.get("end_time", assignment.end_time)
+        day_of_week = d.get("day_of_week", block["day_of_week"])
+        start_time  = d.get("start_time", block["start_time"])
+        end_time    = d.get("end_time", block["end_time"])
+        is_active   = d.get("is_active", block["is_active"])
+        if start_time >= end_time:
+            return error("Validation error.", errors={"end_time": ["End time must be after start time."]})
+        try:
+            room = Room.objects.using(db).select_related("floor").get(pk=d["room"].id if "room" in d else block["room_id"])
+            doctor = StaffUser.objects.using(db).get(pk=d["doctor"].id if "doctor" in d else block["doctor_id"])
+        except (Room.DoesNotExist, StaffUser.DoesNotExist):
+            return not_found("Room or doctor not found.")
 
-        with transaction.atomic(using=request.hospital_db):
-            clash = find_overlapping_assignment(
-                request.hospital_db, room_id, day_of_week, start_time, end_time,
-                exclude_pk=assignment.pk,
-            )
+        with transaction.atomic(using=db):
+            clash = room_utils.find_overlapping_assignment(db, room.id, day_of_week, start_time, end_time, exclude_id=block["id"]) if is_active else None
             if clash:
                 return error(
-                    f"Overlaps Dr. {clash.doctor.get_full_name()}'s existing assignment "
-                    f"({clash.get_day_of_week_display()} {clash.start_time.strftime('%H:%M')}"
-                    f"–{clash.end_time.strftime('%H:%M')}).",
+                    f"Overlaps Dr. {clash['doctor'].get_full_name()}'s existing assignment "
+                    f"({dict(room_utils.DoctorSchedule.DAY_CHOICES)[clash['day_of_week']]} {clash['start_time'].strftime('%H:%M')}"
+                    f"–{clash['end_time'].strftime('%H:%M')}).",
                     errors={"start_time": "Overlaps an existing assignment."},
                     status=409,
                 )
-            for attr, val in d.items():
-                setattr(assignment, attr, val)
-            assignment.save(using=request.hospital_db)
+            saved = room_utils.save_block(db, room, doctor, day_of_week, start_time, end_time, is_active=is_active, block_id=block["id"])
+            if saved is None:
+                return error("This doctor does not work at the room's branch.", errors={"doctor": "No place of work at this branch."})
 
-        return success(data=RoomAssignmentSerializer(assignment).data, message="Room assignment updated.")
+        return success(data=room_utils.block_json(db, saved), message="Room assignment updated.")
 
     def delete(self, request, pk):
-        assignment = self._get(request, pk)
-        if not assignment:
+        db = request.hospital_db
+        block = room_utils.get_block(db, pk)
+        if not block:
             return not_found("Room assignment not found.")
-        assignment.is_active = False
-        assignment.save(using=request.hospital_db, update_fields=["is_active"])
+        saved = room_utils.save_block(db, Room.objects.using(db).select_related("floor").get(pk=block["room_id"]), block["doctor"],
+                                      block["day_of_week"], block["start_time"], block["end_time"], is_active=False, block_id=block["id"])
         return success(message="Room assignment removed.")

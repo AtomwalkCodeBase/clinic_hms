@@ -5,6 +5,8 @@ import { Link } from "react-router-dom";
 import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
+import { useClientPaging } from "../../hooks/usePagedApi";
+import PaginationControls from "../../components/common/PaginationControls";
 import { useToast } from "../../hooks/useToast";
 import apiClient from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
@@ -201,6 +203,7 @@ export default function MyReportsPage() {
     (activeTab === "all" || (activeTab === ATTENTION ? NEEDS_ATTENTION.has(stateOf(d)) : stateOf(d) === "ready" && d.doc_type === activeTab))
     && matchesSearch(d, q)), sort), [docs, activeTab, q, sort]);
   const byId = useMemo(() => new Map(docs.map(d => [d.id, d])), [docs]);
+  const paging = useClientPaging(shown, 10);
   const openDoc = openId ? byId.get(openId) || null : null;           // always the freshest copy from the list
 
   const toggleSel = (id) => setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -331,12 +334,14 @@ export default function MyReportsPage() {
               </div>
             ) : (
               <>
-                {shown.map(d => (
+                {paging.pageItems.map(d => (
                   <ReportRow key={d.id} doc={d} active={d.id === openId} selectMode={selectMode} selected={sel.has(d.id)}
                     priv={privEnabled ? privMap.get(d.id) : undefined} onLock={privEnabled ? onLock : undefined}
                     onClick={() => (selectMode ? toggleSel(d.id) : setOpenId(d.id))} onOpen={() => setOpenId(d.id)}
                     onAct={actOn} onDismiss={askDismiss} />
                 ))}
+                <PaginationControls pagination={paging.pagination} page={paging.page} pageSize={paging.pageSize}
+                  onPageChange={paging.setPage} onPageSizeChange={paging.setPageSize} />
                 {hasMore && <button className="btn-outline" style={{ width: "100%" }} onClick={loadMore}>Load more</button>}
               </>
             )}

@@ -11,19 +11,19 @@ export const APP_CONFIG = {
   VERSION: "1.0.0",
 
   /** Company name for footers and legal text */
-  COMPANY_NAME: "Atomwalk Technologies Pvt. Ltd.",
+  COMPANY_NAME: import.meta.env.VITE_COMPANY_NAME || "Atomwalk Technologies Pvt. Ltd.",
 
   /** Support email shown in error pages */
-  SUPPORT_EMAIL: "support@atomwalk.com",
+  SUPPORT_EMAIL: import.meta.env.VITE_SUPPORT_EMAIL || "support@atomwalk.com",
 
   /** Support phone number */
-  SUPPORT_PHONE: "+91 80 1234 5678",
+  SUPPORT_PHONE: import.meta.env.VITE_SUPPORT_PHONE || "",
 
   /** Default locale for date/number formatting */
-  DEFAULT_LOCALE: "en-IN",
+  DEFAULT_LOCALE: import.meta.env.VITE_LOCALE || "en-IN",
 
   /** Default currency for billing display */
-  DEFAULT_CURRENCY: "INR",
+  DEFAULT_CURRENCY: import.meta.env.VITE_CURRENCY || "INR",
 
   /** Number of results per page for list views */
   DEFAULT_PAGE_SIZE: 20,

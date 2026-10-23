@@ -502,6 +502,7 @@ def correct_document(doc, document_type):
         raise ValueError("This file is still being read.")
     store_human_choice(doc, document_type)
     _end(doc, Status.COMPLETED, error_message="")
+    _queue_processing(doc.pk)               # confirmed: only now is it read for the timeline
 # ── the review step: which uploads still wait for the patient's decision ─────
 def review_starts_at():
     """When the review step began (settings.RECORDS_REVIEW_FROM, an ISO date-time). Everything uploaded before it is"""
@@ -511,6 +512,9 @@ def review_starts_at():
         from django.utils import timezone
         when = timezone.make_aware(when)
     return when
+def is_awaiting_review(document):
+    """A patient's own upload whose type the patient has not confirmed yet: it is not read for the timeline until they do."""
+    return MedicalDocument.objects.using("default").filter(pk=document.pk).filter(awaiting_review_q()).exists()
 def awaiting_review_q():
     """Q for a patient's own uploads, made after the review step began, whose type nobody has confirmed yet."""
     start = review_starts_at()
@@ -700,7 +704,7 @@ def _queue_processing(document_id):
             logger.warning("records: couldn't queue the timeline facts for document %s", document_id, exc_info=True)
     transaction.on_commit(queue, using="default")
 def create_issued_document(*, awpid, file_path, name, doc_type, source_hospital_id, source_type, source_id, mime_type="application/pdf",
-                           public_document_id="", document_date=None):
+                           public_document_id="", document_date=None, read_facts=True):
     """A document a hospital made for the patient (signed prescription, lab report, handwriting): it is already in"""
     doc = MedicalDocument(
         patient=Patient.objects.using("default").get(awpid=awpid), created_by_type="H",
@@ -710,7 +714,8 @@ def create_issued_document(*, awpid, file_path, name, doc_type, source_hospital_
     doc.save(using="default")
     store_issued_type(doc, doc_type)
     doc.save(using="default", update_fields=["doc_classification"])
-    _queue_processing(doc.pk)
+    if read_facts:
+        _queue_processing(doc.pk)           # a note made from the doctor's own coded diagnoses has nothing new to read
     return MedicalDocument.objects.using("default").get(pk=doc.pk)
 def extract_text(raw, mime):
     """(text, engine). PDF text layer if it has one ("pdf_text"), otherwise RapidOCR on the image or the first PDF"""

@@ -1,6 +1,6 @@
 /** config/api.config.js */
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? "http://localhost:8000" : "");
 const API_V1 = `${BASE_URL}/api/v1`;
 
 export const API_ENDPOINTS = {
@@ -28,6 +28,7 @@ export const API_ENDPOINTS = {
     GROWTH:           (awpid) => `${API_V1}/peds/patients/${awpid}/growth/`,
     IMMUNIZATION:     (awpid) => `${API_V1}/peds/patients/${awpid}/immunization/`,
     REBUILD_TIMELINE: (awpid) => `${API_V1}/peds/patients/${awpid}/rebuild/`,
+    CLINICAL_SUMMARY: (awpid) => `${API_V1}/peds/patients/${awpid}/clinical-summary/`,   // doctors: lab trends, medicines, data gaps
     REVIEW_EVENT:     (eventId)   => `${API_V1}/peds/events/${eventId}/`,
     ACKNOWLEDGE_RECURRENCE: (flagId) => `${API_V1}/peds/recurrence/${flagId}/acknowledge/`,
   },
@@ -152,6 +153,7 @@ export const API_ENDPOINTS = {
     DOCTOR_DETAIL: (hospitalId, doctorId) => `${API_V1}/portal/hospitals/${hospitalId}/doctors/${doctorId}/`,
     SLOTS: (hospitalId, doctorId) => `${API_V1}/portal/hospitals/${hospitalId}/doctors/${doctorId}/slots/`,
     BOOK:                  `${API_V1}/portal/book/`,
+    HOSPITAL_SHARING:      `${API_V1}/portal/hospital-sharing/`,   // which hospitals may see the history, and withdrawing it
     MY_BOOKINGS:           `${API_V1}/portal/my-bookings/`,
     CANCEL_BOOKING:  (id) => `${API_V1}/portal/my-bookings/${id}/cancel/`,
     RESCHEDULE_BOOKING:(id) => `${API_V1}/portal/my-bookings/${id}/reschedule/`,

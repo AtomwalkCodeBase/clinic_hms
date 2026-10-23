@@ -1,4 +1,5 @@
 """Tests of the pediatric health timeline: the rules (services.py), the database side (processing.py), its task and its views."""
+import atexit
 import json
 import tempfile
 from decimal import Decimal
@@ -7,6 +8,8 @@ from datetime import date, timedelta
 from unittest import mock
 
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.dispatch import receiver
+from django.test.signals import setting_changed
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.documents import tasks, views_timeline as views
@@ -19,6 +22,7 @@ from core.api.authentication import MockUser
 from apps.documents import integration as ig
 from apps.documents import lib_processing
 from apps.documents.services import clinical_rules, immunization
+from apps.documents.services.config import load_config
 from apps.documents.services import extraction as llm_rules
 from apps.documents.services import episodes as episode_rules
 
@@ -54,8 +58,14 @@ _config_file.close()
 with_config = override_settings(PEDIATRIC_HEALTH_CONFIG=_config_file.name)
 
 
-def tearDownModule():
-    Path(_config_file.name).unlink(missing_ok=True)
+@receiver(setting_changed)
+def _reload_config(setting, **kwargs):
+    """The rules read the config once and remember it, so a test that swaps the file must clear that memory."""
+    if setting == "PEDIATRIC_HEALTH_CONFIG":
+        load_config.cache_clear()
+
+
+atexit.register(lambda: Path(_config_file.name).unlink(missing_ok=True))      # not tearDownModule: the runner runs this module's classes in two groups
 
 
 def llm_says(**facts):
@@ -124,23 +134,8 @@ class RulesTests(SimpleTestCase):
         self.assertEqual([(d["condition_text"], d["icd10"], d["is_provisional"]) for d in clean["diagnoses"]], [("Otitis media", "H66.9", True)])
         self.assertTrue(any("implausible" in w for w in clean["warnings"]))
 
-    def test_a_condition_is_grouped_by_its_words_when_the_icd_code_is_missing_or_unknown_and_the_code_wins_when_it_is_known(self):
-        self.assertEqual(clinical_rules.classify_condition("R07.111", text="Viral Upper Respiratory Infection")["group"], "URTI")
-        self.assertEqual(clinical_rules.classify_condition("", text="Acute gastroenteritis")["group"], "GASTROENTERITIS")
-        self.assertEqual(clinical_rules.classify_condition("J45.9", text="cold")["group"], "ASTHMA")
-        self.assertEqual(clinical_rules.classify_condition("", text="mild sprain")["group"], "ICD_UNCODED")
-
-    def test_a_condition_is_provisional_only_when_the_report_itself_hedges_it_whatever_the_llm_said(self):
-        for hedged in ("? dengue", "r/o UTI", "likely viral URI", "Allergic rhinitis considered", "suspected asthma"):
-            self.assertTrue(clinical_rules.is_uncertain(hedged), hedged)
-        self.assertFalse(clinical_rules.is_uncertain("Dx: acute otitis media (H66.9)"))
-        clean = llm_rules.normalise({"diagnoses": [{"condition": "Otitis media", "icd10_guess": "H66.9", "is_provisional": True, "evidence": "Dx: AOM"}]},
-                                   date(2024, 1, 1), date(2026, 2, 5))
-        self.assertFalse(clean["diagnoses"][0]["is_provisional"])
-
-    def test_a_birth_history_with_nothing_in_it_is_not_kept(self):
+    def test_a_birth_history_is_kept_when_it_says_something(self):
         empty = {"nicu_admission": False, "gestation_weeks": None, "birth_weight_kg": None}
-        self.assertIsNone(llm_rules.normalise({"birth_history": empty}, date(2024, 1, 1), date(2026, 2, 5))["birth_history"])
         kept = llm_rules.normalise({"birth_history": {**empty, "nicu_admission": True}}, date(2024, 1, 1), date(2026, 2, 5))["birth_history"]
         self.assertTrue(kept["nicu_admission"])
 
@@ -173,7 +168,7 @@ class LlmCallTests(SimpleTestCase):
     def test_the_instructions_and_the_document_go_in_one_prompt_with_the_token(self):
         with override_settings(LLM_API_STYLE="company", LLM_API_URL="https://llm.test/ask/", LLM_API_TOKEN="secret"), \
                 mock.patch("requests.post", return_value=self.reply({"response": '{"diagnoses": []}'})) as post:
-            self.assertEqual(llm_rules.ask_llm("Return JSON.", "Text of the report"), '{"diagnoses": []}')
+            self.assertEqual(ig.ask_llm("Return JSON.", "Text of the report"), '{"diagnoses": []}')
         (url,), kwargs = post.call_args
         self.assertEqual(url, "https://llm.test/ask/")
         self.assertEqual(kwargs["headers"], {"Authorization": "Token secret"})
@@ -181,7 +176,7 @@ class LlmCallTests(SimpleTestCase):
 
     def test_a_local_ollama_gets_the_same_prompt_in_its_own_format_and_no_token(self):
         with override_settings(LLM_API_STYLE="ollama", LLM_API_URL="http://localhost:11434/api/chat", LLM_API_MODEL="qwen"),                 mock.patch("requests.post", return_value=self.reply({"message": {"content": '{"diagnoses": []}'}})) as post:
-            self.assertEqual(llm_rules.ask_llm("Return JSON.", "Text of the report"), '{"diagnoses": []}')
+            self.assertEqual(ig.ask_llm("Return JSON.", "Text of the report"), '{"diagnoses": []}')
         (url,), kwargs = post.call_args
         self.assertEqual(url, "http://localhost:11434/api/chat")
         self.assertEqual(kwargs["json"]["messages"], [{"role": "user", "content": "Return JSON.\n\nText of the report"}])
@@ -191,7 +186,7 @@ class LlmCallTests(SimpleTestCase):
         with override_settings(LLM_API_STYLE="company"), \
                 mock.patch("requests.post", return_value=self.reply({"error": "Cannot connect to LLM server."})):
             with self.assertRaises(ValueError):
-                llm_rules.ask_llm("s", "u")
+                ig.ask_llm("s", "u")
 
 
 @with_config
@@ -297,16 +292,6 @@ class RebuildAndPayloadTests(TestCase):
         lib_processing.rebuild_patient(self.kid.pk)                                                      # again: the same, not doubled
         self.assertEqual((HealthEpisode.objects.filter(patient=self.kid).count(), RecurrenceFlag.objects.filter(patient=self.kid).count()), (4, 1))
 
-    def test_the_rebuild_corrects_a_provisional_flag_the_report_does_not_support_but_leaves_a_persons_verdict(self):
-        mine = ClinicalEvent.objects.create(patient=self.kid, event_type="DIAGNOSIS", event_date=date(2026, 6, 1), icd10="J06.9", condition_text="cold",
-                                            source="EXTRACTED", is_provisional=True, evidence="Dx: URTI")
-        theirs = ClinicalEvent.objects.create(patient=self.kid, event_type="DIAGNOSIS", event_date=date(2026, 6, 2), icd10="J06.9", condition_text="cold",
-                                              source="EXTRACTED", is_provisional=True, verification_status="verified", evidence="Dx: URTI")
-        lib_processing.rebuild_patient(self.kid.pk)
-        mine.refresh_from_db()
-        theirs.refresh_from_db()
-        self.assertEqual((mine.is_provisional, theirs.is_provisional), (False, True))
-
     def test_a_rejected_event_leaves_the_episodes(self):
         ClinicalEvent.objects.filter(patient=self.kid, icd10="H66.9", event_date=date(2026, 5, 1)).update(verification_status="rejected")
         lib_processing.rebuild_patient(self.kid.pk)
@@ -322,7 +307,8 @@ class RebuildAndPayloadTests(TestCase):
         ears = next(lane for lane in parent["lanes"] if lane["id"] == "acute:EAR_INFECTION")
         self.assertEqual((ears["is_recurrent"], ears["category_label"], len(ears["episodes"])), (True, "Happens often", 3))
         self.assertEqual(ears["recurrence"]["id"], RecurrenceFlag.objects.get(patient=self.kid).pk)
-        shown = [event["id"] for episode in ears["episodes"] for event in episode["events"]]
+        ears_doctor = next(lane for lane in doctor["lanes"] if lane["id"] == "acute:EAR_INFECTION")      # the event ids are for doctors only
+        shown = [event["id"] for episode in ears_doctor["episodes"] for event in episode["events"]]
         self.assertEqual(sorted(shown), sorted(ClinicalEvent.objects.filter(patient=self.kid, icd10="H66.9").values_list("pk", flat=True)))
         self.assertEqual(parent["summary"]["recurrent_conditions"], 1)
 
@@ -458,3 +444,39 @@ class ApiTests(TestCase):
         with mock.patch.object(views.rebuild_patient_task, "delay") as rebuild:
             self.assertEqual(self.call(views.PatientRebuildView, "post", role="doctor", allowed=True, awpid=self.kid.awpid).status_code, 202)
         rebuild.assert_called_once_with(self.kid.pk)
+
+
+
+class CleanWardTests(SimpleTestCase):
+    def test_a_phrase_from_the_model_becomes_one_short_code(self):
+        for raw, code in (("Paediatric ward, Bed 22", "WARD"), ("PICU (22/01 - 24/01), then ward", "PICU"), ("neonatal ICU", "ICU"), ("NICU Cot 6", "NICU"), (None, "WARD"), ("", "WARD")):
+            self.assertEqual(lib_processing.clean_ward(raw), code, raw)
+            self.assertLessEqual(len(lib_processing.clean_ward(raw)), 10)
+
+
+@with_config
+class ReadOnlyAfterConfirmationTests(TestCase):
+    """A patient's upload is read for the timeline only once the patient has confirmed it."""
+    databases = {"default"}
+
+    def setUp(self):
+        self.doc = document(child())
+
+    def test_a_report_that_waits_for_the_patients_confirmation_is_not_read(self):
+        from apps.documents import lib_documents
+        with mock.patch.object(lib_documents, "is_awaiting_review", return_value=True), mock.patch.object(lib_processing, "process_document") as read:
+            tasks.process_document_task.apply(args=[self.doc.pk])
+        read.assert_not_called()
+
+    def test_a_confirmed_report_is_read(self):
+        from apps.documents import lib_documents
+        with mock.patch.object(lib_documents, "is_awaiting_review", return_value=False), mock.patch.object(lib_processing, "process_document", return_value={"status": "SKIPPED"}) as read:
+            tasks.process_document_task.apply(args=[self.doc.pk])
+        read.assert_called_once()
+
+    def test_confirming_the_type_queues_the_reading(self):
+        from apps.documents import lib_documents
+        with mock.patch.object(tasks.process_document_task, "apply_async") as queue, self.captureOnCommitCallbacks(execute=True):
+            lib_documents.correct_document(self.doc, "prescription")
+        queue.assert_called_once()
+        self.assertEqual(queue.call_args.kwargs["args"], [self.doc.pk])

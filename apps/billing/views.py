@@ -1,3 +1,4 @@
+from django.conf import settings
 from decimal import Decimal
 from datetime import timedelta
 
@@ -162,6 +163,9 @@ class InvoiceListCreateView(APIView):
         if status_filter := request.query_params.get("status"):
             qs = qs.filter(status=status_filter)
         page_items, meta = paginate_queryset(request, qs)
+        patients = [i.patient for i in page_items]
+        for p in patients[:1]:
+            p.get_patient_details(batch=patients)             # the whole page at once
         return success(data={
             "results": InvoiceSerializer(page_items, many=True).data,
             "pagination": meta,
@@ -176,17 +180,12 @@ class InvoiceListCreateView(APIView):
         appointment_id = request.data.get("appointment_id")
         if appointment_id:
             from apps.opd.models import Appointment
-            from apps.opd.models import HospitalPatient
             try:
-                appt = Appointment.objects.using(db).get(pk=appointment_id)
+                appt = Appointment.objects.using(db).select_related("branch_department").get(pk=appointment_id)
             except Appointment.DoesNotExist:
                 return error("Appointment not found.")
-            try:
-                patient = HospitalPatient.objects.using(db).get(uuid=appt.patient_id)
-            except HospitalPatient.DoesNotExist:
-                return error("Patient record not found for this appointment.")
-            patient_pk = patient.id
-            branch_id = branch_id or appt.branch_id or patient.branch_id
+            patient_pk = appt.patient_id
+            branch_id = branch_id or appt.branch_department.branch_id
 
         if not patient_pk:
             return error("patient (or appointment_id) is required.", errors={"patient": "Required."})
@@ -194,9 +193,6 @@ class InvoiceListCreateView(APIView):
         # No appointment_id (billing without a visit — e.g. a registration
         if not branch_id:
             branch_id = getattr(request.user, "branch_id", None)
-        if not branch_id:
-            from apps.opd.models import HospitalPatient
-            branch_id = HospitalPatient.objects.using(db).filter(pk=patient_pk).values_list("branch_id", flat=True).first()
         if not branch_id:
             return error(
                 "Could not determine which branch to bill this invoice to — pass branch explicitly.",
@@ -294,7 +290,7 @@ class InvoicePDFView(APIView):
 
         db = request.hospital_db
         try:
-            inv = Invoice.objects.using(db).prefetch_related("items", "payments").get(pk=pk)
+            inv = Invoice.objects.using(db).prefetch_related("i_items", "i_payments").get(pk=pk)
         except Invoice.DoesNotExist:
             return not_found("Invoice not found.")
 
@@ -305,8 +301,8 @@ class InvoicePDFView(APIView):
 
         pdf_bytes = generate_invoice_pdf(
             invoice=inv,
-            items=list(inv.items.all()),
-            payments=list(inv.payments.all().order_by("paid_at")),
+            items=list(inv.i_items.all()),
+            payments=list(inv.i_payments.all().order_by("paid_at")),
             patient=patient,
             branch=branch,
             hospital_name=hospital_name,
@@ -374,7 +370,10 @@ class PaymentCreateView(APIView):
         page_items, meta = paginate_queryset(request, qs)
 
         patient_ids = {p.invoice.patient_id for p in page_items}
-        patients = {p.id: p for p in HospitalPatient.objects.using(db).filter(pk__in=patient_ids)}
+        rows = list(HospitalPatient.objects.using(db).filter(pk__in=patient_ids))
+        for p in rows[:1]:
+            p.get_patient_details(batch=rows)
+        patients = {p.id: p for p in rows}
         recorder_ids = {p.recorded_by_id for p in page_items if p.recorded_by_id}
         recorders = {s.id: s for s in StaffUser.objects.using(db).filter(pk__in=recorder_ids)}
 
@@ -391,7 +390,7 @@ class PaymentCreateView(APIView):
                 "invoice_id": p.invoice_id,
                 "invoice_number": p.invoice.invoice_number,
                 "invoice_status": p.invoice.status,
-                "patient_name": patient.full_name if patient else "",
+                "patient_name": patient.get_patient_details()["full_name"] if patient else "",
                 "patient_uhid": patient.uhid if patient else "",
                 "recorded_by_name": (f"{recorder.first_name} {recorder.last_name}".strip() or recorder.email) if recorder else "",
             })
@@ -435,7 +434,7 @@ class RevenueReportView(APIView):
         db = request.hospital_db
         date_to = request.query_params.get("date_to") or timezone.localdate().isoformat()
         date_from = request.query_params.get("date_from") or (
-            timezone.localdate() - timedelta(days=29)
+            timezone.localdate() - timedelta(days=settings.BILLING_REPORT_DAYS - 1)
         ).isoformat()
 
         invoices = Invoice.objects.using(db).filter(
@@ -500,11 +499,9 @@ class BillingSummaryView(APIView):
 
         if not patient_id and request.query_params.get("appointment_id"):
             from apps.opd.models import Appointment
-            from apps.opd.models import HospitalPatient
             try:
-                appt = Appointment.objects.using(db).get(pk=request.query_params["appointment_id"])
-                patient_id = HospitalPatient.objects.using(db).get(uuid=appt.patient_id).id
-            except (Appointment.DoesNotExist, HospitalPatient.DoesNotExist):
+                patient_id = Appointment.objects.using(db).get(pk=request.query_params["appointment_id"]).patient_id
+            except Appointment.DoesNotExist:
                 return error("Appointment/patient not found.")
 
         if not patient_id:
@@ -535,7 +532,7 @@ class BillingSummaryView(APIView):
         from apps.pharmacy.models import Dispense
         dispenses = (
             Dispense.objects.using(db)
-            .filter(prescription_item__prescription__patient_id=patient_id)
+            .filter(prescription_item__prescription__encounter__appointment__patient_id=patient_id)
             .select_related("stock")
         )
         pharmacy_estimated_total = sum(

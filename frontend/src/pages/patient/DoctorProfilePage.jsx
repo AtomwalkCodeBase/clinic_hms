@@ -72,7 +72,6 @@ export default function PatientDoctorProfilePage() {
 
   const [date,   setDate]   = useState(TODAY);
   const [reason, setReason] = useState("");
-  const [contactMobile, setContactMobile] = useState("");
   const [slots, setSlots] = useState([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState(null);
@@ -152,7 +151,7 @@ export default function PatientDoctorProfilePage() {
     return () => clearInterval(id);
   }, [hospitalId, doctorId, date, confirmation]);
 
-  async function book(dataSharingConsent) {
+  async function book(sharing) {          // sharing: "share" the history from other hospitals, or "own" to keep only this hospital's own record
     if (!selectedSlot) return;
     setBooking(true);
     setConfirmation(null);
@@ -164,9 +163,9 @@ export default function PatientDoctorProfilePage() {
         scheduled_time: selectedSlot,
         chief_complaint: reason,
         payment_preference: paymentPreference,
-        ...(contactMobile.trim() ? { mobile: contactMobile.trim() } : {}),
         ...(bookingFor !== "self" ? { patient_awpid: bookingFor } : {}),
-        ...(dataSharingConsent ? { data_sharing_consent: true } : {}),
+        ...(sharing === "share" ? { data_sharing_consent: true } : {}),
+        ...(sharing === "own" ? { visit_record_consent: true } : {}),
       });
       setConfirmation(data);
       setConsentPrompt(null);
@@ -577,13 +576,6 @@ export default function PatientDoctorProfilePage() {
                 style={{ marginBottom: 16, width: "100%" }}
               />
 
-              <label className="stat-label" style={{ display: "block", marginBottom: 6 }}>Your mobile number (so the hospital can reach you)</label>
-              <input
-                className="form-input" placeholder="10-digit number on your account" inputMode="numeric" maxLength={10}
-                value={contactMobile} onChange={e => setContactMobile(e.target.value.replace(/\D/g, ""))}
-                style={{ marginBottom: 16, width: "100%" }}
-              />
-
               <label className="stat-label" style={{ display: "block", marginBottom: 8 }}>
                 How will you pay{doctor?.consultation_fee ? ` (₹${doctor.consultation_fee})` : ""}?
               </label>
@@ -688,15 +680,19 @@ export default function PatientDoctorProfilePage() {
                 {(consentPrompt.share_categories || []).map(c => <li key={c}>{c}</li>)}
               </ul>
               <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 20 }}>
-                They will not see which other hospital or doctor any of this came from. If you'd rather not share
-                this, you can cancel and choose a different hospital instead.
+                They will not see which other hospital or doctor any of this came from. Sharing is your choice: you can
+                book without it, and then this hospital sees only what it records itself. You can change this at any time
+                under <b>Shared Records Privacy</b>.
               </div>
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
                 <button className="btn-outline" disabled={booking} onClick={() => setConsentPrompt(null)}>
                   Cancel
                 </button>
-                <button className="btn-primary" disabled={booking} onClick={() => book(true)}>
-                  {booking ? "Booking…" : "Agree & confirm booking"}
+                <button className="btn-outline" disabled={booking} onClick={() => book("own")}>
+                  {booking ? "Booking…" : "Book without sharing"}
+                </button>
+                <button className="btn-primary" disabled={booking} onClick={() => book("share")}>
+                  {booking ? "Booking…" : "Share & confirm booking"}
                 </button>
               </div>
             </div>

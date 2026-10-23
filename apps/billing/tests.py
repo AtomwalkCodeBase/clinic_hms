@@ -6,13 +6,10 @@ from decimal import Decimal
 from django.db import connections
 
 from core.db_router import set_hospital_db
-from core.tests.testing import HospitalDBTestCase, HospitalDBTransactionTestCase, requires_hospital_db
+from core.tests.testing import HospitalDBTestCase, HospitalDBTransactionTestCase, make_branch, make_patient, make_staff, requires_hospital_db
 
 from apps.billing.models import Invoice, Payment
 from apps.billing.views import PaymentCreateView
-from apps.hospital_setup.models import Branch
-from apps.hospital_setup.models import StaffUser
-from apps.opd.models import HospitalPatient
 
 
 @requires_hospital_db
@@ -20,13 +17,9 @@ class PaymentCreateTests(HospitalDBTestCase):
     def setUp(self):
         super().setUp()
         db = self.hospital_alias
-        self.branch = Branch.objects.using(db).create(name="Main")
-        self.staff = StaffUser.objects.using(db).create(
-            email="fd@example.test", role="front_desk", phone="9000000002", branch=self.branch,
-        )
-        self.patient = HospitalPatient.objects.using(db).create(
-            awpid="AW-TEST-2", uhid="UHID-2", branch=self.branch, full_name="Test Patient",
-        )
+        self.branch, place = make_branch(db)
+        self.staff = make_staff(db, "front_desk", email="fd@example.test", phone="9000000002", place=place)
+        self.patient = make_patient(db, "AW-TEST-2", uhid="UHID-2", branch=self.branch)
         self.invoice = Invoice.objects.using(db).create(
             patient=self.patient, branch=self.branch, invoice_number="INV-1",
             status="issued", subtotal=Decimal("100"), total_amount=Decimal("100"),
@@ -68,9 +61,9 @@ class ConcurrentPaymentTests(HospitalDBTransactionTestCase):
     def test_simultaneous_payments_are_all_counted(self):
         """paid_amount was read, incremented in Python and saved, so racing payments lost updates."""
         db = self.hospital_alias
-        branch = Branch.objects.using(db).create(name="Main")
-        staff = StaffUser.objects.using(db).create(email="fd2@example.test", role="front_desk", phone="9000000003", branch=branch)
-        patient = HospitalPatient.objects.using(db).create(awpid="AW-TEST-3", uhid="UHID-3", branch=branch, full_name="P")
+        branch, place = make_branch(db)
+        staff = make_staff(db, "front_desk", email="fd2@example.test", phone="9000000003", place=place)
+        patient = make_patient(db, "AW-TEST-3", uhid="UHID-3", branch=branch, full_name="P")
         invoice = Invoice.objects.using(db).create(
             patient=patient, branch=branch, invoice_number="INV-2", status="issued",
             subtotal=Decimal("100"), total_amount=Decimal("100"),
@@ -106,10 +99,9 @@ class RecomputeInvoiceTotalsTests(HospitalDBTestCase):
     """Golden numbers for the shared totals helper (used by billing, opd, ipd, lab, pharmacy, patients)."""
 
     def make_invoice(self, discount="0"):
-        from apps.billing.models import InvoiceItem  # noqa: F401  (imported for the helper below)
         db = self.hospital_alias
-        branch = Branch.objects.using(db).create(name="Main")
-        patient = HospitalPatient.objects.using(db).create(awpid="AW-T-4", uhid="UHID-4", branch=branch, full_name="P")
+        branch, _place = make_branch(db)
+        patient = make_patient(db, "AW-T-4", uhid="UHID-4", branch=branch, full_name="P")
         return Invoice.objects.using(db).create(
             patient=patient, branch=branch, invoice_number="INV-9", discount_amount=Decimal(discount),
         )

@@ -1,0 +1,135 @@
+/* Health Journey - tokens first; light and dark are each chosen, not flipped.
+   Chronic = blue (categorical slot 1); acute = neutral ink; status colours are reserved
+   for meaning and always paired with a shape/icon. Swap the values for Atomwalk brand tokens. */
+:root {
+  --dhj-surface-1: #fcfcfb;
+  --dhj-page: #f9f9f7;
+  --dhj-text-primary: #0b0b0b;
+  --dhj-text-secondary: #52514e;
+  --dhj-text-muted: #898781;
+  --dhj-grid: #e1e0d9;
+  --dhj-axis: #c3c2b7;
+  --dhj-border: rgba(11, 11, 11, 0.10);
+
+  --dhj-chronic: #2a78d6;
+  --dhj-acute: #52514e;
+  --dhj-growth-line: #0b0b0b;
+  --dhj-band-inner: #cde2fb;
+  --dhj-band-outer: #eaf2fc;
+  --dhj-band-median: #3987e5;
+
+  --dhj-status-good: #0ca30c;
+  --dhj-status-warning: #fab219;
+  --dhj-status-serious: #ec835a;
+  --dhj-status-critical: #d03b3b;
+  --dhj-good-text: #006300;
+  /* badge tints (clinician view) */
+  --dhj-critical-text: #a12b22; --dhj-critical-tint: #fbeae7;
+  --dhj-serious-text: #8f4317; --dhj-serious-tint: #fceee3;
+  --dhj-warning-text: #7a5200; --dhj-warning-tint: #fcf3dc;
+  --dhj-good-tint: #e3f2e7; --dhj-info-text: #1d5ba6; --dhj-info-tint: #e4eefa;
+}
+/* the dark-mode block of the original is left out: the clinic screens are light, like the doctor design */
+:root[data-theme="dark"] {
+  --dhj-surface-1: #1a1a19; --dhj-page: #0d0d0d;
+  --dhj-text-primary: #f0efec; --dhj-text-secondary: #c3c2b7; --dhj-text-muted: #898781;
+  --dhj-grid: #2c2c2a; --dhj-axis: #383835; --dhj-border: rgba(255, 255, 255, 0.10);
+  --dhj-chronic: #3987e5; --dhj-acute: #c3c2b7; --dhj-growth-line: #f0efec;
+  --dhj-band-inner: #1d3350; --dhj-band-outer: #15202e; --dhj-band-median: #5598e7;
+  --dhj-good-text: #0ca30c;
+  --dhj-critical-text: #f4a39b; --dhj-critical-tint: #3a1f1d; --dhj-serious-text: #f2b38f; --dhj-serious-tint: #3a2619;
+  --dhj-warning-text: #f0cf7a; --dhj-warning-tint: #3a2f12; --dhj-good-tint: #18301f; --dhj-info-text: #9cc3f2; --dhj-info-tint: #1b2c42;
+}
+
+.dhj { color: var(--dhj-text-primary); font-variant-numeric: tabular-nums; display: grid; gap: 14px; }
+.dhj-h2 { font-size: 1.15rem; margin: 0; }
+.dhj-h3 { font-size: 1rem; margin: 0; }
+.dhj-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.dhj-between { justify-content: space-between; }
+.dhj-gap { gap: 12px; margin: 8px 0; }
+.dhj-muted { color: var(--dhj-text-secondary); font-size: 0.875rem; margin: 0; }
+.dhj-note { color: var(--dhj-text-muted); font-size: 0.8rem; margin: 8px 0 0; }
+
+.dhj-card { background: var(--dhj-surface-1); border: 1px solid var(--dhj-border); border-radius: 12px; padding: 14px; display: grid; gap: 10px; }
+.dhj-callout { background: var(--dhj-surface-1); border: 1px solid var(--dhj-border); border-left: 3px solid var(--dhj-chronic); border-radius: 8px; padding: 8px 12px; margin: 0; font-size: 0.9rem; }
+
+.dhj-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.dhj-tile { background: var(--dhj-surface-1); border: 1px solid var(--dhj-border); border-radius: 10px; padding: 10px 12px; }
+.dhj-tile-v { font-size: 1.6rem; font-weight: 600; line-height: 1.1; }
+.dhj-tile-l { color: var(--dhj-text-secondary); font-size: 0.8rem; }
+.dhj-tone-critical { border-left: 3px solid var(--dhj-status-critical); }
+.dhj-tone-serious { border-left: 3px solid var(--dhj-status-serious); }
+.dhj-tone-good { border-left: 3px solid var(--dhj-status-good); }
+
+.dhj-seg, .dhj-tabs { display: inline-flex; border: 1px solid var(--dhj-border); border-radius: 8px; overflow: hidden; }
+.dhj-seg button, .dhj-tabs button { background: transparent; border: 0; padding: 6px 12px; color: var(--dhj-text-secondary); cursor: pointer; font: inherit; font-size: 0.85rem; min-height: 32px; }
+.dhj-seg button.on, .dhj-tabs button.on { background: var(--dhj-text-primary); color: var(--dhj-surface-1); }
+.dhj-tabs { justify-self: start; }
+
+.dhj-btn { border: 1px solid var(--dhj-border); background: var(--dhj-surface-1); color: var(--dhj-text-primary); border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; font-size: 0.85rem; }
+.dhj-btn-primary { background: var(--dhj-chronic); color: #fff; border-color: transparent; }
+.dhj-link { background: none; border: 0; color: var(--dhj-chronic); cursor: pointer; padding: 0; font: inherit; font-size: 0.85rem; text-decoration: underline; }
+.dhj-form { display: flex; flex-wrap: wrap; gap: 8px; }
+.dhj-form input { flex: 1 1 180px; padding: 6px 8px; border: 1px solid var(--dhj-border); border-radius: 6px; background: var(--dhj-surface-1); color: var(--dhj-text-primary); }
+
+.dhj-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--dhj-text-secondary); font-size: 0.8rem; }
+.dhj-legend .sw { display: inline-block; width: 14px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.dhj-legend .ln { display: inline-block; width: 16px; height: 2px; margin-right: 6px; vertical-align: middle; }
+.dhj-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.dhj-c-chronic { background: var(--dhj-chronic); }
+.dhj-c-acute { background: var(--dhj-acute); }
+.dhj-c-critical-t { color: var(--dhj-status-critical); }
+.dhj-c-good-t { color: var(--dhj-good-text); }
+
+.dhj-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.dhj-table th { text-align: left; color: var(--dhj-text-muted); font-weight: 500; border-bottom: 1px solid var(--dhj-grid); padding: 6px 8px; }
+.dhj-table td { border-bottom: 1px solid var(--dhj-grid); padding: 6px 8px; vertical-align: top; }
+.dhj-age { color: var(--dhj-text-secondary); white-space: nowrap; }
+.dhj-pill { border: 1px solid var(--dhj-border); border-radius: 999px; padding: 2px 10px; font-size: 0.8rem; }
+.dhj-pill-critical { border-color: var(--dhj-status-critical); }
+.dhj-pill-warning { border-color: var(--dhj-status-warning); }
+.dhj-status { white-space: nowrap; }
+.dhj-ico { display: inline-block; width: 1em; text-align: center; font-weight: 700; }
+.dhj-ico-given { color: var(--dhj-good-text); }
+.dhj-ico-overdue { color: var(--dhj-status-critical); }
+.dhj-ico-due { color: var(--dhj-text-primary); }
+.dhj-ico-upcoming, .dhj-ico-scheduled { color: var(--dhj-text-muted); }
+
+.dhj-tt-h { font-weight: 600; margin-bottom: 2px; }
+.dhj-tt-k { color: var(--dhj-text-muted); }
+.dhj-skeleton { border-radius: 12px; background: linear-gradient(90deg, var(--dhj-grid), var(--dhj-surface-1), var(--dhj-grid)); background-size: 200% 100%; animation: dhj-sh 1.4s infinite; }
+@keyframes dhj-sh { to { background-position: -200% 0; } }
+
+@media (max-width: 600px) {
+  .dhj-card { padding: 10px; }
+  .dhj-table { font-size: 0.8rem; }
+}
+
+/* ---- clinician view ---------------------------------------------------- */
+.dhj-clin { display: grid; gap: 14px; }
+.dhj-clin-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); align-items: start; }
+.dhj-clin-item { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid var(--dhj-grid); }
+.dhj-clin-title { font-weight: 600; }
+.dhj-clin-birth { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--dhj-grid); }
+.dhj-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.8rem; color: var(--dhj-text-secondary); }
+.dhj-badge { display: inline-block; justify-self: start; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.3px; border-radius: 999px; padding: 2px 8px; white-space: nowrap; background: var(--dhj-grid); color: var(--dhj-text-secondary); }
+.dhj-badge.critical { background: var(--dhj-critical-tint); color: var(--dhj-critical-text); }
+.dhj-badge.serious { background: var(--dhj-serious-tint); color: var(--dhj-serious-text); }
+.dhj-badge.warning { background: var(--dhj-warning-tint); color: var(--dhj-warning-text); }
+.dhj-badge.good { background: var(--dhj-good-tint); color: var(--dhj-good-text); }
+.dhj-badge.info { background: var(--dhj-info-tint); color: var(--dhj-info-text); }
+.dhj-btn:disabled, .dhj-link:disabled { opacity: 0.5; cursor: default; }
+.dhj-btn-good { background: var(--dhj-status-good); border-color: transparent; color: #fff; }
+.dhj-btn-danger { border-color: var(--dhj-status-critical); color: var(--dhj-critical-text); }
+.dhj-link-danger { color: var(--dhj-critical-text); }
+.dhj-btn:focus-visible, .dhj-link:focus-visible, .dhj-seg button:focus-visible, .dhj-tabs button:focus-visible { outline: 2px solid var(--dhj-chronic); outline-offset: 2px; }
+.dhj-scroll { overflow-x: auto; }
+.dhj-scroll .dhj-table { min-width: 720px; }
+.dhj-table .num { text-align: right; white-space: nowrap; }
+.dhj-row-prov td { background: var(--dhj-warning-tint); }
+.dhj-evidence { font-style: italic; color: var(--dhj-text-secondary); max-width: 260px; }
+.dhj-actions { white-space: nowrap; }
+.dhj-actions .dhj-link + .dhj-link { margin-left: 10px; }
+.dhj-check { display: inline-flex; gap: 6px; align-items: center; font-size: 0.85rem; color: var(--dhj-text-secondary); }
+.dhj-err { color: var(--dhj-critical-text); margin: 6px 0 0; font-size: 0.85rem; }
+.dhj-table td.dhj-mono { white-space: nowrap; }

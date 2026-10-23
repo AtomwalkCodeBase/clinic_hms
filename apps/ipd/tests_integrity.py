@@ -1,20 +1,19 @@
 from django.db import IntegrityError, transaction
 
-from apps.hospital_setup.models import Bed, Branch, Department, Room, StaffUser
+from apps.hospital_setup.models import Bed, Room
 from apps.ipd.models import Admission, AdmissionReferral
-from apps.opd.models import HospitalPatient
-from core.tests.testing import HospitalDBTestCase
+from core.tests.testing import HospitalDBTestCase, make_branch, make_patient, make_staff
 
 
 class OpenAdmissionRulesTests(HospitalDBTestCase):
     def setUp(self):
         super().setUp()
         db = self.hospital_alias
-        self.branch = Branch.objects.using(db).create(name="Main")
-        self.department = Department.objects.using(db).create(branch=self.branch, name="General")
-        self.staff = StaffUser.objects.using(db).create(phone="9000000001", role="doctor")
-        self.room = Room.objects.using(db).create(branch=self.branch, name="W1")
-        self.patients = [HospitalPatient.objects.using(db).create(awpid=f"AWP-I{i}", uhid=f"U-{i}", branch=self.branch, full_name=f"P{i}") for i in (1, 2)]
+        self.branch, place = make_branch(db)
+        self.department = place.department
+        self.staff = make_staff(db, "doctor", phone="9000000001", place=place)
+        self.room = Room.objects.using(db).create(floor=place.floor, name="W1")
+        self.patients = [make_patient(db, f"AWP-I{i}", uhid=f"U-{i}", branch=self.branch, full_name=f"P{i}") for i in (1, 2)]
 
     def admit(self, patient, number, status="admitted", bed=None):
         db = self.hospital_alias

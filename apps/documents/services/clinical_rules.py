@@ -1,11 +1,16 @@
-"""Deterministic clinical rules: age bands, condition grouping, lab thresholds,"""
+"""
+Deterministic clinical rules: age bands, condition grouping, lab thresholds,
+critical-keyword detection. No Django imports - unit-testable on its own.
 
+The LLM only *extracts* facts. Every judgement (chronic vs acute, critical or
+not, recurrent or not) is made here from the reviewed config, so the numbers
+on the timeline are reproducible and auditable.
+"""
 import re
 from datetime import date
 from typing import Optional
 
 from .config import load_config
-
 
 SEVERITY_ORDER = {"NORMAL": 0, "MILD": 1, "ABNORMAL": 2, "CRITICAL": 3}
 
@@ -75,30 +80,14 @@ def condition_group_for_icd(icd10: Optional[str], cfg=None) -> Optional[str]:
     return best
 
 
-UNCERTAIN = re.compile(r"\?|\br/o\b|rule[ -]?out|suspect|probable|provisional|possible|likely|considered|differential|query", re.I)
-
-
-def is_uncertain(text: str) -> bool:
-    """A condition is provisional only when the report's own words hedge it ("? dengue", "r/o UTI", "suspected"); the LLM's"""
-    return bool(UNCERTAIN.search(text or ""))
-
-
-def condition_group_for_text(text: Optional[str], cfg=None) -> Optional[str]:
-    """The group whose alias words are in the condition's name (longest alias wins), for when the ICD code is missing or unknown."""
+def classify_condition(icd10: Optional[str], cfg=None) -> dict:
+    """
+    -> {"group": "ASTHMA", "label": "Asthma", "category": "CHRONIC", "merge_days": None}
+    Unknown codes default to ACUTE with their own ICD 3-char stem as the group,
+    so they still get episode grouping; they are surfaced for config review.
+    """
     cfg = cfg or load_config()
-    name = (text or "").lower()
-    best, best_len = None, 0
-    for group, spec in _group_items(cfg).items():
-        for alias in spec.get("aliases", []):
-            if len(alias) > best_len and re.search(rf"\b{re.escape(alias.lower())}\b", name):
-                best, best_len = group, len(alias)
-    return best
-
-
-def classify_condition(icd10: Optional[str], cfg=None, text: str = "") -> dict:
-    """-> {"group": "ASTHMA", "label": "Asthma", "category": "CHRONIC", "merge_days": None}"""
-    cfg = cfg or load_config()
-    group = condition_group_for_icd(icd10, cfg) or condition_group_for_text(text, cfg)
+    group = condition_group_for_icd(icd10, cfg)
     if group:
         spec = cfg["condition_groups"][group]
         return {
@@ -137,7 +126,10 @@ def resolve_analyte(test_name: str, cfg=None) -> Optional[str]:
 
 
 def evaluate_lab(analyte: str, value: float, age_days: int, cfg=None) -> dict:
-    """-> {"severity": "CRITICAL"|"ABNORMAL"|"NORMAL", "direction": "LOW"|"HIGH"|None,"""
+    """
+    -> {"severity": "CRITICAL"|"ABNORMAL"|"NORMAL", "direction": "LOW"|"HIGH"|None,
+        "band": "INFANT", "limits": {...}}
+    """
     cfg = cfg or load_config()
     spec = cfg["lab_thresholds"].get(analyte)
     if spec is None or value is None:

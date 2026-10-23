@@ -67,8 +67,8 @@ class PaymentSerializer(serializers.ModelSerializer):
 
 
 class InvoiceSerializer(serializers.ModelSerializer):
-    items    = InvoiceItemSerializer(many=True, read_only=True)
-    payments = PaymentSerializer(many=True, read_only=True)
+    items    = InvoiceItemSerializer(many=True, read_only=True, source="i_items")
+    payments = PaymentSerializer(many=True, read_only=True, source="i_payments")
     # `patient` on its own is just a FK id — front desk's billing list needs
     patient_name = serializers.SerializerMethodField()
     patient_uhid = serializers.SerializerMethodField()
@@ -81,7 +81,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "invoice_number", "created_at"]
 
     def get_patient_name(self, obj):
-        return obj.patient.full_name if obj.patient_id else None
+        return obj.patient.get_patient_details()["full_name"] if obj.patient_id else None
 
     def get_patient_uhid(self, obj):
         return obj.patient.uhid if obj.patient_id else None

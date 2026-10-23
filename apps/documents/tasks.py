@@ -59,6 +59,8 @@ def process_document_task(self, document_id, queue=records.BULK_QUEUE, force=Fal
     document = MedicalDocument.objects.select_related("patient").filter(pk=document_id).first()
     if document is None:
         return
+    if records.is_awaiting_review(document):
+        return                              # not confirmed by the patient yet: it is queued again the moment they confirm it
     try:
         result = lib_processing.process_document(document, force=force)
     except Exception as exc:

@@ -6,7 +6,6 @@ import string
 import logging
 from datetime import date
 
-from django.db.models import Q
 from django.utils.text import slugify
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
@@ -20,6 +19,7 @@ from apps.hospital_master.services import TIER_FEATURE_DEFAULTS
 from apps.hospital_master.services import get_usage_counts
 from apps.hospital_master.services import parameters_of
 from apps.hospital_setup.models import StaffUser
+from apps.hospital_setup.rbac import SYSTEM_ROLE_LABELS, acts_as_q, resolve_acts_as, role_q, system_role
 from apps.hospital_setup.models import Branch
 from apps.patients.models import StaffMobileIndex
 
@@ -244,7 +244,7 @@ class HospitalListCreateView(APIView):
                 employee_id=next_employee_id(db_name),
                 first_name="Hospital",
                 last_name="Admin",
-                role="hospital_admin",
+                group=system_role(db_name, "hospital_admin"),
                 must_change_password=True,
             )
             admin_staff.set_password(temp_password)
@@ -474,7 +474,7 @@ class PlatformStatsView(APIView):
         for t in hospitals:
             try:
                 totals["doctors"] += StaffUser.objects.using(t.db_name).filter(
-                    role="doctor", is_active=True).count()
+                    role_q("doctor"), is_active=True).count()
                 totals["staff"] += StaffUser.objects.using(t.db_name).filter(is_active=True).count()
                 totals["patients"] += HospitalPatient.objects.using(t.db_name).count()
                 totals["appointments_today"] += Appointment.objects.using(t.db_name).filter(
@@ -522,7 +522,7 @@ class HospitalOverviewView(APIView):
             data = {
                 "branches": Branch.objects.using(hospital.db_name).filter(is_active=True).count(),
                 "doctors": StaffUser.objects.using(hospital.db_name).filter(
-                    role="doctor", is_active=True).count(),
+                    role_q("doctor"), is_active=True).count(),
                 "staff": StaffUser.objects.using(hospital.db_name).filter(is_active=True).count(),
                 "patients": HospitalPatient.objects.using(hospital.db_name).count(),
                 "appointments_today": Appointment.objects.using(hospital.db_name).filter(
@@ -546,7 +546,7 @@ class HospitalStaffListView(APIView):
             return not_found("Hospital not found.")
 
         try:
-            staff = StaffUser.objects.using(hospital.db_name).all().order_by("role", "first_name")
+            staff = StaffUser.objects.using(hospital.db_name).select_related("group").order_by("group__system_role_key", "first_name")
         except Exception as exc:
             logger.warning("Staff list failed for %s: %s", hospital.db_name, exc)
             return error("This hospital's database couldn't be reached.", status=502)
@@ -589,8 +589,8 @@ class HospitalStaffDetailView(APIView):
         d = request.data
 
         # Refuse to deactivate or role-change away the last active
-        staff_acts_as = set((staff.custom_role.acts_as if staff.custom_role else []) or [])
-        staff_is_admin = staff.role == "hospital_admin" or "hospital_admin" in staff_acts_as
+        staff_acts_as = resolve_acts_as(staff)
+        staff_is_admin = "hospital_admin" in staff_acts_as
         would_lose_admin_status = (
             staff_is_admin and staff.is_active and (
                 ("is_active" in d and not bool(d["is_active"])) or
@@ -598,9 +598,8 @@ class HospitalStaffDetailView(APIView):
             )
         )
         if would_lose_admin_status:
-            ADMIN_Q = Q(role="hospital_admin") | Q(role="custom", custom_role__acts_as__contains=["hospital_admin"])
             other_admins = StaffUser.objects.using(hospital.db_name).filter(
-                ADMIN_Q, is_active=True
+                acts_as_q("hospital_admin"), is_active=True
             ).exclude(pk=staff.id).exists()
             if not other_admins:
                 return error(
@@ -615,12 +614,12 @@ class HospitalStaffDetailView(APIView):
         final_active = bool(d["is_active"]) if "is_active" in d else was_active
         new_role = d.get("role")
         if new_role:
-            valid_roles = dict(StaffUser.ROLE_CHOICES)
+            valid_roles = dict(SYSTEM_ROLE_LABELS)
             if new_role not in valid_roles:
                 return error(f"Invalid role. Choose: {', '.join(valid_roles)}")
         final_role = new_role or staff.role
         # Checks acts_as too — a custom role bundling "doctor" must count
-        old_is_doctor = staff.role == "doctor" or "doctor" in staff_acts_as
+        old_is_doctor = "doctor" in staff_acts_as
         old_resource = "doctors" if old_is_doctor else "staff"
         new_resource = "doctors" if final_role == "doctor" else "staff"
         needs_limit_check = (
@@ -639,10 +638,10 @@ class HospitalStaffDetailView(APIView):
             staff.is_active = final_active
             updated.append("is_active")
         if new_role:
-            staff.role = new_role
+            staff.group = system_role(hospital.db_name, new_role)
             updated.append("role")
         if updated:
-            staff.save(using=hospital.db_name, update_fields=updated)
+            staff.save(using=hospital.db_name, update_fields=["group" if f == "role" else f for f in updated])
         return success(data={"id": staff.id, "is_active": staff.is_active, "role": staff.role},
                        message=f"Updated: {', '.join(updated) or 'nothing'}.")
 
@@ -685,9 +684,9 @@ class PlatformUserListView(APIView):
         results = []
         for t in hospitals:
             try:
-                qs = StaffUser.objects.using(t.db_name).all()
+                qs = StaffUser.objects.using(t.db_name).select_related("group")
                 if role_filter:
-                    qs = qs.filter(role=role_filter)
+                    qs = qs.filter(role_q(role_filter))
                 if status_filter == "active":
                     qs = qs.filter(is_active=True)
                 elif status_filter == "inactive":

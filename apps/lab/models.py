@@ -1,6 +1,6 @@
 """Hospital database: the lab test catalogue, lab requests raised in an encounter, and the reports and result lines that answer them.
 
-One-line docstring and __str__ on every model; created_at / updated_at on records that change; UniqueConstraint, never unique_together; every foreign key has on_delete and related_name. Reverse names here are plain descriptive words (plural for a foreign key, singular for a one-to-one) because the API reads them as field names (items, payments, doctor_profile, encounter, beds).
+One-line docstring and __str__ on every model; created_at / updated_at on records that change; UniqueConstraint, never unique_together; every foreign key has on_delete and related_name. Reverse names start with the first letters of the model they point at, as in the shared models: b_ Branch, u_ StaffUser, p_ HospitalPatient, d_ Department, f_ Floor, r_ Room, bd_ Bed, ro_ Role, pm_ Permission, ds_ DoctorSchedule, a_ Appointment, e_ OPDEncounter, rx_ Prescription, pi_ PrescriptionItem, i_ Invoice, bs_ BillingService, lr_ LabRequest, lp_ LabReport, lt_ LabTest, dg_ Drug, st_ Stock, ad_ Admission, ar_ AdmissionReferral. Plural for a foreign key, singular for a one-to-one. Serializers that must keep an old JSON key use source=.
 
 Deliberate exceptions: PROTECT on patient, encounter and test links so ordered tests and delivered reports are never deleted; LabTest.sample_type is plain text checked against OptionList; no created_at or updated_at on LabReportItem (its report carries them).
 """
@@ -48,17 +48,17 @@ class LabRequest(PatientChoiceFields):
     URGENCY_CHOICES = [("routine", "Routine"), ("urgent", "Urgent")]
 
     patient            = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT,
-                                        related_name="lab_requests")
+                                        related_name="p_lab_requests")
     encounter          = models.ForeignKey(OPDEncounter, on_delete=models.PROTECT,
-                                        related_name="lab_requests")
+                                        related_name="e_lab_requests")
     # Denormalised for cheap filtering (nurse's queue works off appointment,
     appointment        = models.ForeignKey(Appointment, on_delete=models.SET_NULL, null=True, blank=True,
-                                        related_name="lab_requests")
-    test               = models.ForeignKey(LabTest, on_delete=models.PROTECT, related_name="requests")
+                                        related_name="a_lab_requests")
+    test               = models.ForeignKey(LabTest, on_delete=models.PROTECT, related_name="lt_requests")
     requested_by       = models.ForeignKey(StaffUser, on_delete=models.PROTECT,
-                                        related_name="lab_requests_made",
-                                        limit_choices_to={"role": "doctor"})
-    branch             = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="lab_requests")
+                                        related_name="u_lab_requests_made",
+                                        limit_choices_to={"group__system_role_key": "doctor"})
+    branch             = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="b_lab_requests")
     status             = models.CharField(max_length=20, choices=STATUS_CHOICES, default="ordered", db_index=True)
     urgency            = models.CharField(max_length=10, choices=URGENCY_CHOICES, default="routine")
     clinical_notes     = models.TextField(blank=True)
@@ -91,9 +91,9 @@ class LabReport(models.Model):
     ]
 
     request        = models.OneToOneField(LabRequest, on_delete=models.PROTECT,
-                                           related_name="report")
+                                           related_name="lr_report")
     patient        = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT,
-                                        related_name="lab_reports")
+                                        related_name="p_lab_reports")
     report_number  = models.CharField(max_length=30, unique=True)
     status         = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     result_summary = models.TextField(blank=True)
@@ -102,11 +102,11 @@ class LabReport(models.Model):
     mime_type      = models.CharField(max_length=100, blank=True)
     performed_by   = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,
                                         null=True, blank=True,
-                                        related_name="lab_reports_performed",
-                                        limit_choices_to={"role": "lab_tech"})
+                                        related_name="u_lab_reports_performed",
+                                        limit_choices_to={"group__system_role_key": "lab_tech"})
     verified_by    = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,
                                         null=True, blank=True,
-                                        related_name="lab_reports_verified")
+                                        related_name="u_lab_reports_verified")
     delivered_at   = models.DateTimeField(null=True, blank=True)
     created_at     = models.DateTimeField(auto_now_add=True)
     updated_at     = models.DateTimeField(auto_now=True)
@@ -121,7 +121,7 @@ class LabReport(models.Model):
 class LabReportItem(models.Model):
     """Individual parameter result within a lab report."""
     report          = models.ForeignKey(LabReport, on_delete=models.CASCADE,
-                                        related_name="items")
+                                        related_name="lp_items")
     parameter_name  = models.CharField(max_length=100)
     result_value    = models.CharField(max_length=100)
     unit            = models.CharField(max_length=30, blank=True)

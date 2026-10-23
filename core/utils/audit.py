@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 
 def log_action(request, db, action, resource_type="", resource_id="", patient_id=None, metadata=None):
-    """Write one AuditLog row to the given hospital db. `request` is used to pull"""
+    """Write one AuditLog row to the given hospital db. `request` is used to pull the actor and address; `patient_id` is the patient's uhid (or the HospitalPatient itself)."""
     try:
         from apps.hospital_setup.models import AuditLog
 
@@ -24,6 +24,10 @@ def log_action(request, db, action, resource_type="", resource_id="", patient_id
             xff = request.META.get("HTTP_X_FORWARDED_FOR")
             ip_address = xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR")
 
+        if isinstance(patient_id, int):             # a HospitalPatient id: the trail keeps the patient's uhid
+            from apps.opd.models import HospitalPatient
+            patient_id = HospitalPatient.objects.using(db).filter(pk=patient_id).values_list("uhid", flat=True).first()
+
         AuditLog.objects.using(db).create(
             actor_user_id=actor_user_id,
             actor_email=actor_email,
@@ -31,7 +35,7 @@ def log_action(request, db, action, resource_type="", resource_id="", patient_id
             action=action,
             resource_type=resource_type,
             resource_id=str(resource_id) if resource_id else "",
-            patient_id=patient_id,
+            patient_id=getattr(patient_id, "uhid", patient_id),
             ip_address=ip_address,
             metadata=metadata or {},
         )

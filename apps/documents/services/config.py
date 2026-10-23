@@ -1,28 +1,39 @@
-"""Config loader for the pediatric health timeline."""
+"""
+Config loader for the pediatric health timeline.
 
+Loaded once at process start (Atomwalk convention: JSON config loaded at startup).
+Path resolution order:
+  1. explicit argument
+  2. settings.PEDIATRIC_HEALTH_CONFIG (if Django is configured)
+  3. env PEDIATRIC_HEALTH_CONFIG
+  4. <this package>/config/pediatric_health_config.json
+"""
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 
-from django.conf import settings
-
-
-APP_DIR = Path(__file__).resolve().parent.parent                      # apps/documents
-DEFAULT_CONFIG_PATH = APP_DIR / "health_config.json"
-GROWTH_REFERENCE_DIR = APP_DIR / "growth_reference"
+PACKAGE_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_CONFIG_PATH = PACKAGE_DIR / "config" / "pediatric_health_config.json"
+GROWTH_REFERENCE_DIR = PACKAGE_DIR / "config" / "growth_reference"
 
 
 def _resolve_path(path=None):
-    return Path(path or getattr(settings, "PEDIATRIC_HEALTH_CONFIG", None) or DEFAULT_CONFIG_PATH)
-
-
-def load_config(path=None):
-    return _read_config(str(_resolve_path(path)))
+    if path:
+        return Path(path)
+    try:
+        from django.conf import settings  # noqa: WPS433
+        if settings.configured and getattr(settings, "PEDIATRIC_HEALTH_CONFIG", None):
+            return Path(settings.PEDIATRIC_HEALTH_CONFIG)
+    except Exception:  # Django not installed / not configured (unit tests)
+        pass
+    env = os.environ.get("PEDIATRIC_HEALTH_CONFIG")
+    return Path(env) if env else DEFAULT_CONFIG_PATH
 
 
 @lru_cache(maxsize=4)
-def _read_config(path):
-    with open(path, encoding="utf-8") as fh:
+def load_config(path=None):
+    with open(_resolve_path(path), encoding="utf-8") as fh:
         cfg = json.load(fh)
     _validate(cfg)
     return cfg

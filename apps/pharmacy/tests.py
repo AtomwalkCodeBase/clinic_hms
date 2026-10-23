@@ -8,19 +8,16 @@ from unittest import mock
 from django.db import connections
 from django.test.utils import CaptureQueriesContext
 
-from core.tests.testing import HospitalDBTestCase, HospitalDBTransactionTestCase, requires_hospital_db
+from core.tests.testing import HospitalDBTestCase, HospitalDBTransactionTestCase, make_branch, make_patient, make_staff, requires_hospital_db
 
 from apps.billing.models import Invoice
 from apps.opd.models import Appointment, OPDEncounter, Prescription, PrescriptionItem
-from apps.hospital_setup.models import Branch, NextNumber
-from apps.hospital_setup.models import StaffUser
-from apps.opd.models import HospitalPatient
+from apps.hospital_setup.models import NextNumber
 from apps.pharmacy.models import Dispense, Stock, StockTransaction
 from apps.pharmacy.views import DispenseView, StockListView
 from apps.pharmacy.models import Drug
 
 import datetime
-import uuid
 
 from core.db_router import set_hospital_db
 
@@ -30,30 +27,21 @@ class PharmacyFixtureMixin:
 
     def make_fixture(self, stock_qty=10):
         db = self.hospital_alias
-        self.branch = Branch.objects.using(db).create(name="Main")
-        self.pharmacist = StaffUser.objects.using(db).create(
-            email="ph@example.test", role="pharmacist", phone="9000000001", branch=self.branch,
-        )
-        self.patient = HospitalPatient.objects.using(db).create(
-            awpid="AW-TEST-1", uhid="UHID-1", branch=self.branch, full_name="Test Patient",
-        )
+        self.branch, place = make_branch(db)
+        self.pharmacist = make_staff(db, "pharmacist", email="ph@example.test", phone="9000000001", place=place)
+        self.patient = make_patient(db, "AW-TEST-1", uhid="UHID-1", branch=self.branch)
         self.drug = Drug.objects.using(db).create(name="Paracetamol", default_mrp=Decimal("2.00"))
         self.stock = Stock.objects.using(db).create(
             drug=self.drug, branch=self.branch, batch_number="B1",
             quantity=stock_qty, mrp=Decimal("2.00"),
         )
-        doctor_id = uuid.uuid4()
+        doctor = make_staff(db, "doctor", email="dr@example.test", phone="9000000002", place=place)
         appt = Appointment.objects.using(db).create(
-            patient_id=self.patient.uuid, patient_awpid=self.patient.awpid,
-            doctor_user_id=doctor_id, doctor_name="Dr Test",
-            scheduled_date=datetime.date.today(),
+            patient=self.patient, doctor=doctor, branch_department=place, scheduled_date=datetime.date.today(),
         )
-        enc = OPDEncounter.objects.using(db).create(
-            appointment=appt, patient_id=self.patient.uuid, doctor_user_id=doctor_id,
-        )
+        enc = OPDEncounter.objects.using(db).create(appointment=appt)
         self.rx = Prescription.objects.using(db).create(
-            encounter=enc, patient_id=self.patient.uuid, doctor_user_id=doctor_id,
-            rx_number="RX-1",
+            encounter=enc, rx_number="RX-1",
         )
         self.item = PrescriptionItem.objects.using(db).create(
             prescription=self.rx, drug=self.drug, drug_name="Paracetamol",
