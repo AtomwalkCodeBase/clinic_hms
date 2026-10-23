@@ -50,6 +50,60 @@ GUARDIAN = {"full_name": "Ruchitha Gowda", "email": "rnd@atomwalk.com", "mobile"
             "gender": "female", "date_of_birth": date(2003, 10, 25)}
 DEPENDENT = {"full_name": "Aarav", "date_of_birth": date(2010, 10, 25), "gender": "M", "relationship": "child"}
 
+# Aarav's demo health history (birth record, clinical events, growth and immunisations) — no source
+# MedicalDocument/files, these are the clinical rows the Health Journey / Insights Timeline reads directly.
+DEPENDENT_BIRTH_HISTORY = {
+    "gestational_age_weeks": 36, "birth_weight_kg": "2.500", "nicu_admission": False, "source": "EXTRACTED",
+}
+# (event_date, condition_text, icd10, condition_group, category, severity)
+DEPENDENT_CLINICAL_EVENTS = [
+    ("2010-10-29", "Neonatal jaundice", "P59.9", "NEONATAL_JAUNDICE", "ACUTE", "CRITICAL"),
+    ("2012-06-18", "Simple febrile seizure", "R56.0", "FEBRILE_SEIZURE", "ACUTE", "NORMAL"),
+    ("2012-12-05", "Wheeze-associated lower respiratory tract infection (WALRI)", "R06.2", "WHEEZE", "ACUTE", "NORMAL"),
+    ("2013-01-28", "Community acquired pneumonia, right lower lobe", "J18.9", "PNEUMONIA", "ACUTE", "CRITICAL"),
+    ("2013-03-19", "Wheeze-associated lower respiratory tract infection (WALRI)", "R06.2", "WHEEZE", "ACUTE", "NORMAL"),
+    ("2013-08-27", "Wheeze-associated lower respiratory tract infection (WALRI)", "R06.2", "WHEEZE", "ACUTE", "NORMAL"),
+    ("2013-11-10", "Community acquired pneumonia, left lower lobe", "J18.9", "PNEUMONIA", "ACUTE", "CRITICAL"),
+    ("2014-06-09", "Hand, foot and mouth disease", "B08.4", "HFMD", "ACUTE", "NORMAL"),
+    ("2016-08-11", "Bronchial asthma", "J45.909", "ASTHMA", "CHRONIC", "NORMAL"),
+    ("2016-08-11", "Atopic dermatitis", "L20.9", "ATOPIC_DERMATITIS", "CHRONIC", "NORMAL"),
+    ("2019-03-14", "Enteric fever (typhoid fever)", "A01.0", "TYPHOID", "ACUTE", "NORMAL"),
+    ("2019-09-23", "Dengue fever with warning signs and thrombocytopenia", "A97.1", "DENGUE", "ACUTE", "ABNORMAL"),
+    ("2021-12-04", "Fracture of the distal end of the left radius", "S52.5", "INJURY", "ACUTE", "NORMAL"),
+    ("2021-12-07", "Fracture of the distal end of the left radius", "S52.5", "INJURY", "ACUTE", "ABNORMAL"),
+    ("2025-11-18", "Acute upper respiratory tract infection (URTI)", "J06.9", "URTI", "ACUTE", "NORMAL"),
+    ("2026-03-02", "Acute gastroenteritis", "A09", "GASTROENTERITIS", "ACUTE", "NORMAL"),
+    ("2026-09-22", "bronchial asthma", "J45.909", "ASTHMA", "CHRONIC", "NORMAL"),
+    ("2026-09-22", "iron deficiency anaemia", "D50.9", "ICD_D50", "ACUTE", "NORMAL"),
+]
+# (measured_on, weight_kg, height_cm, head_circumference_cm)
+DEPENDENT_GROWTH = [
+    ("2010-10-25", "2.500", "46.0", "32.5"), ("2010-10-28", "3.000", None, None), ("2010-10-29", "2.400", None, None),
+    ("2010-12-06", "3.800", "53.0", "36.6"), ("2011-01-25", "5.300", "60.0", "40.0"), ("2011-04-25", "7.600", "67.0", "43.5"),
+    ("2011-07-25", "8.900", "72.0", "45.2"), ("2011-10-25", "9.800", "75.0", "46.3"), ("2012-04-25", "11.200", "81.0", "47.4"),
+    ("2012-06-18", "11.600", "83.0", "47.6"), ("2012-10-25", "12.500", "87.0", "48.2"), ("2012-12-05", "12.700", "88.0", "48.3"),
+    ("2013-01-22", "13.000", None, None), ("2013-01-28", "12.200", None, None), ("2013-03-19", "13.300", "91.0", "48.6"),
+    ("2013-08-27", "14.300", "95.0", "49.0"), ("2013-11-10", "14.700", None, None), ("2013-11-16", "14.000", None, None),
+    ("2014-06-09", "15.800", "100.0", "49.6"), ("2016-08-11", "20.400", "115.0", None), ("2017-01-12", "21.400", "117.0", None),
+    ("2019-03-14", "27.200", "130.0", None), ("2019-12-10", "29.400", "134.0", None), ("2021-12-04", "36.000", "144.0", None),
+    ("2021-12-05", "36.100", None, None), ("2022-12-14", "41.300", "151.0", None), ("2025-11-18", "58.200", "169.0", None),
+    ("2026-03-02", "59.100", "170.0", None), ("2026-09-22", "60.700", "171.0", None),
+]
+# (vaccine_name, administered_date)
+DEPENDENT_IMMUNIZATIONS = [
+    ("Hepatitis B", "2010-10-29"), ("BCG", "2010-10-29"), ("OPV 0 (oral polio)", "2010-10-29"),
+    ("BCG, OPV 0 and hepatitis B vaccine", "2010-11-05"), ("Rotavirus (Rotavac)", "2010-12-06"),
+    ("Pentavalent (DTwP, Hib, Hep B)", "2010-12-06"), ("IPV", "2010-12-06"), ("PCV", "2010-12-06"),
+    ("Rotavirus (Rotavac)", "2011-01-04"), ("Pentavalent (DTwP, Hib, Hep B)", "2011-01-04"), ("IPV", "2011-01-04"),
+    ("PCV", "2011-01-04"), ("PCV", "2011-02-01"), ("Pentavalent (DTwP, Hib, Hep B)", "2011-02-01"), ("IPV", "2011-02-01"),
+    ("Rotavirus (Rotavac)", "2011-02-01"), ("Typhoid conjugate vaccine (TCV)", "2011-04-26"), ("MMR", "2011-07-26"),
+    ("Hepatitis A", "2011-10-28"), ("Varicella", "2012-01-25"), ("MMR", "2012-01-25"), ("PCV booster", "2012-01-25"),
+    ("IPV booster", "2012-02-27"), ("DTwP booster", "2012-02-27"), ("Hib booster", "2012-02-27"),
+    ("Hepatitis A", "2012-04-25"), ("Influenza (annual)", "2013-10-14"), ("Varicella", "2014-10-28"),
+    ("IPV booster", "2014-10-28"), ("MMR", "2014-10-28"), ("DTwP booster", "2014-10-28"),
+    ("Influenza (annual)", "2019-10-14"), ("Influenza (annual)", "2020-10-12"), ("Tdap", "2020-11-02"),
+]
+
 
 class Command(BaseCommand):
     help = "Seed the fixed demo hospital staff logins and the Ruchitha/Aarav patient persona (idempotent)."
@@ -66,6 +120,7 @@ class Command(BaseCommand):
         for h in HOSPITALS:
             self._register_at_hospital(h["db_name"], guardian["awpid"])
             self._register_at_hospital(h["db_name"], dependent["awpid"])
+        self._dependent_history(dependent)
 
         self.stdout.write(self.style.SUCCESS(
             "Demo data ready: Novacare + Mahanandi staff logins (mobile + demo@123), "
@@ -132,9 +187,8 @@ class Command(BaseCommand):
 
         acct = Patient.objects.using("default").filter(email__iexact=GUARDIAN["email"]).first()
         if acct is not None:
-            if not acct.password:
-                set_password(acct, DEMO_PASSWORD)
-                acct.save(using="default", update_fields=["password"])
+            set_password(acct, DEMO_PASSWORD)
+            acct.save(using="default", update_fields=["password"])
             return {"awpid": acct.awpid, "record": acct}
 
         from core.utils.awpid import generate_unique_awpid
@@ -161,6 +215,53 @@ class Command(BaseCommand):
             data={"full_name": DEPENDENT["full_name"], "date_of_birth": str(DEPENDENT["date_of_birth"]),
                   "gender": DEPENDENT["gender"], "relationship": DEPENDENT["relationship"]})
         return {"awpid": member["awpid"]}
+
+    # ── dependent's demo health history (drives the Health Journey / Insights Timeline) ──
+    def _dependent_history(self, dependent):
+        from decimal import Decimal
+        from apps.patients.models import Patient
+        from apps.documents.models import BirthHistory, ClinicalEvent, ImmunizationRecord
+        from apps.documents.lib_vitals import GrowthMeasurement
+        from apps.documents.lib_processing import rebuild_patient
+
+        patient = Patient.objects.using("default").get(awpid=dependent["awpid"])
+
+        BirthHistory.objects.using("default").get_or_create(
+            patient=patient, defaults={
+                "gestational_age_weeks": DEPENDENT_BIRTH_HISTORY["gestational_age_weeks"],
+                "birth_weight_kg": Decimal(DEPENDENT_BIRTH_HISTORY["birth_weight_kg"]),
+                "nicu_admission": DEPENDENT_BIRTH_HISTORY["nicu_admission"],
+                "source": DEPENDENT_BIRTH_HISTORY["source"],
+            })
+
+        for event_date, text, icd10, group, category, severity in DEPENDENT_CLINICAL_EVENTS:
+            qs = ClinicalEvent.objects.using("default").filter(
+                patient=patient, event_date=event_date, icd10=icd10, event_type="DIAGNOSIS")
+            if not qs.exists():
+                ClinicalEvent.objects.using("default").create(
+                    patient=patient, event_date=event_date, icd10=icd10, event_type="DIAGNOSIS",
+                    condition_text=text, condition_group=group, category=category,
+                    severity=severity, clinical_status="active", source="EXTRACTED")
+
+        for measured_on, weight, height, head in DEPENDENT_GROWTH:
+            qs = GrowthMeasurement.objects.using("default").filter(
+                patient=patient, measured_on=measured_on, source_id=None)
+            if not qs.exists():
+                GrowthMeasurement.objects.using("default").create(
+                    patient=patient, measured_on=measured_on,
+                    weight_kg=Decimal(weight) if weight else None,
+                    height_cm=Decimal(height) if height else None,
+                    head_circumference_cm=Decimal(head) if head else None, source="extracted")
+
+        for vaccine_name, administered_date in DEPENDENT_IMMUNIZATIONS:
+            qs = ImmunizationRecord.objects.using("default").filter(
+                patient=patient, vaccine_name=vaccine_name, administered_date=administered_date)
+            if not qs.exists():
+                ImmunizationRecord.objects.using("default").create(
+                    patient=patient, vaccine_name=vaccine_name, administered_date=administered_date,
+                    verification_status="pending_review", source="extracted")
+
+        rebuild_patient(patient.pk)
 
     def _register_at_hospital(self, db_name, awpid):
         from apps.opd.models import HospitalPatient
