@@ -294,14 +294,11 @@ export function AppointmentsPageContent({ embedded = false }) {
 
   const book = useCallback(async () => {
     if (!patient || !doctorId) return;
-    const doc = doctorList.find(d => String(d.id) === String(doctorId));
     setBooking(true);
     try {
       const { data: res } = await apiClient.post(API_ENDPOINTS.OPD.APPOINTMENTS, {
-        patient_id:      patient.uuid,
-        patient_awpid:   patient.awpid,
-        doctor_user_id:  doctorId,
-        doctor_name:     doc ? `${doc.first_name || ""} ${doc.last_name || ""}`.trim() || doc.full_name || doc.email : "",
+        patient_id:      patient.id,
+        doctor_id:       doctorId,
         appointment_type: appointmentType,
         scheduled_date:  date,
         ...(slot ? { scheduled_time: slot } : {}),
@@ -322,7 +319,7 @@ export function AppointmentsPageContent({ embedded = false }) {
     } finally {
       setBooking(false);
     }
-  }, [patient, doctorId, date, slot, complaint, doctorList, appointmentType, refetch, fetchTodayPatients, toastSuccess, toastApiError]);
+  }, [patient, doctorId, date, slot, complaint, appointmentType, refetch, fetchTodayPatients, toastSuccess, toastApiError]);
 
   const frame = (content) => embedded ? content : <AppShell><PageShell title="">{content}</PageShell></AppShell>;
 
@@ -404,7 +401,7 @@ export function AppointmentsPageContent({ embedded = false }) {
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, padding: 16 }}>
               {todayPatients.map(p => (
-                <div key={p.uuid || p.id} style={{
+                <div key={p.id} style={{
                   display: "flex", alignItems: "center", gap: 10,
                   border: "1px solid var(--color-border)", borderRadius: 10,
                   padding: "8px 10px 8px 8px", background: "var(--color-surface)",
@@ -518,7 +515,7 @@ export function AppointmentsPageContent({ embedded = false }) {
                       )}
                     </div>
                   ) : patientOpts.map(p => (
-                    <button key={p.uuid || p.id}
+                    <button key={p.id}
                       onClick={() => { setPatient(p); setSearchOpen(false); setPatientQuery(""); }}
                       style={{
                         display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left",

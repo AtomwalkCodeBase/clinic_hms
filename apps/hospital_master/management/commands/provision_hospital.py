@@ -111,13 +111,14 @@ class Command(BaseCommand):
         try:
             from apps.hospital_setup.models import StaffUser
             from apps.hospital_setup.staff_services import next_employee_id
+            from apps.hospital_setup.rbac import system_role
             admin = StaffUser(
                 phone=admin_mobile,
                 email=admin_email,
                 employee_id=next_employee_id(db_name),
                 first_name="Hospital",
                 last_name="Admin",
-                role="hospital_admin",
+                group=system_role(db_name, "hospital_admin"),
                 must_change_password=True,
             )
             admin.set_password(temp_password)

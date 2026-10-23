@@ -1,5 +1,7 @@
-"""Assembles the timeline API payload from already-computed pieces."""
-
+"""
+Assembles the timeline API payload from already-computed pieces.
+Pure function - views.py fetches rows, converts them, and calls build_timeline().
+"""
 from datetime import date
 from typing import List, Optional
 
@@ -23,7 +25,22 @@ def build_timeline(*, dob: date, sex: str, p_from: date, p_to: date,
                    immunization: dict, admissions: List[dict], critical_labs: List[dict],
                    birth_history: Optional[dict], audience: str = "guardian",
                    cfg=None) -> dict:
-    """events_by_id: {event_id: {"date": date, "severity": str, "document_id": int,"""
+    """
+    events_by_id: {event_id: {"date": date, "severity": str, "document_id": int,
+                              "condition_text": str, "is_verified": bool,
+                              # doctor audience only (optional):
+                              "icd10": str, "evidence": str, "is_provisional": bool}}
+
+    audience="doctor" adds, without changing any guardian field:
+      events[]   -> id, icd10, evidence, is_provisional   (ids drive verify / reject)
+      episodes[] -> icd10_codes
+      recurrence -> whatever the caller merged in (flag_id, acknowledged_at, age_max_days)
+    growth_points: [{"measured_on": date, "age_months", "weight_kg": {...}, "height_cm": {...},
+                     "head_circ_cm": {...}, "document_id"}]
+    admissions: [{"admitted_on": date, "discharged_on": date|None, "ward": str, "document_id",
+                  "reason": str|None, "is_critical": bool}]
+    critical_labs: [{"date": date, "analyte", "value", "direction", "severity", "document_id"}]
+    """
     cfg = cfg or load_config()
     labels = cfg.get("patient_labels", {})
     lbl = (lambda code: labels.get(code, code)) if audience == "guardian" else (lambda code: code)
@@ -44,7 +61,7 @@ def build_timeline(*, dob: date, sex: str, p_from: date, p_to: date,
         for p in pts:
             for k in series:
                 m = p.get(k)
-                if m and m.get("value") is not None:
+                if m and m.get("z") is not None:
                     series[k].append({"date": p["measured_on"].isoformat(),
                                       "age_months": p["age_months"], "value": m["value"],
                                       "z": m["z"], "percentile": m["percentile"],
@@ -64,15 +81,21 @@ def build_timeline(*, dob: date, sex: str, p_from: date, p_to: date,
                       "items": imm_items, "summary": immunization.get("summary")})
 
     # 4. conditions - chronic first, then acute groups (recurrent ones first)
+    doctor = audience == "doctor"
+
     def episode_events(ep):
         evs = []
         for eid in ep.event_ids:
             e = events_by_id.get(eid)
             if e and in_period(e["date"]):
-                evs.append({"id": eid, "date": e["date"].isoformat(), "severity": e["severity"],
-                            "severity_label": lbl(e["severity"]), "document_id": e.get("document_id"),
-                            "text": e.get("condition_text"), "verified": e.get("is_verified", False),
-                            **_age_fields(dob, e["date"])})
+                ev = {"date": e["date"].isoformat(), "severity": e["severity"],
+                      "severity_label": lbl(e["severity"]), "document_id": e.get("document_id"),
+                      "text": e.get("condition_text"), "verified": e.get("is_verified", False),
+                      **_age_fields(dob, e["date"])}
+                if doctor:
+                    ev.update(id=eid, icd10=e.get("icd10") or None, evidence=e.get("evidence") or None,
+                              is_provisional=bool(e.get("is_provisional")))
+                evs.append(ev)
         return evs
 
     chronic_lanes, acute_by_group = [], {}
@@ -84,6 +107,9 @@ def build_timeline(*, dob: date, sex: str, p_from: date, p_to: date,
         item = {**ep.as_dict(), "events": episode_events(ep),
                 "onset_age": format_age(age_in_days(dob, ep.start)),
                 "peak_severity_label": lbl(ep.peak_severity)}
+        if doctor:
+            item["icd10_codes"] = sorted({events_by_id[i].get("icd10") for i in ep.event_ids
+                                          if i in events_by_id and events_by_id[i].get("icd10")})
         if ep.category == "CHRONIC":
             chronic_lanes.append({"id": f"chronic:{ep.group}", "type": "chronic", "label": ep.label,
                                   "category_label": lbl("CHRONIC"), "episode": item})

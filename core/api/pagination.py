@@ -45,6 +45,16 @@ def paginate_queryset(request, queryset, default_page_size=DEFAULT_PAGE_SIZE, ma
     return queryset[start:end], meta
 
 
+def page_payload(request, source, serialize=list, **kw):
+    """One page with its pagination block when the caller asked for ?page=, else None, so a list that used to come back whole still does for
+    every caller that does not ask. `source` is a QuerySet or a list; `serialize` turns the page's items into JSON-ready rows."""
+    if "page" not in request.query_params:
+        return None
+    paginate = paginate_list if isinstance(source, (list, tuple)) else paginate_queryset
+    items, meta = paginate(request, source, **kw)
+    return {"results": serialize(items), "pagination": meta}
+
+
 def paginate_list(request, items, default_page_size=DEFAULT_PAGE_SIZE, max_page_size=MAX_PAGE_SIZE):
     """Slice an already-materialized Python list (e.g. aggregated across"""
     page, page_size = _parse_page_params(request, default_page_size, max_page_size)

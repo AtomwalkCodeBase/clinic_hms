@@ -1,5 +1,22 @@
-"""Growth z-scores, percentiles, flags and faltering detection (LMS method)."""
+"""
+Growth z-scores, percentiles, flags and faltering detection (LMS method).
 
+Reference data
+--------------
+LMS tables live in config/growth_reference/ as CSV: age_months,L,M,S
+File naming:  {indicator}_{sex}_{source}.csv
+  indicator : wfa (weight-for-age), lhfa (length/height-for-age),
+              hcfa (head-circumference-for-age), bfa (BMI-for-age)
+  sex       : male | female
+  source    : who (0-60 months)  |  iap (60-216 months)
+
+Get them from:
+  * WHO Child Growth Standards 2006 "expanded tables" (who.int/tools/child-growth-standards)
+  * IAP 2015 growth charts for 5-18 year Indian children (LMS values published by IAP)
+Convert with:  python manage.py load_growth_reference <file> --indicator wfa --sex male --source who
+
+Note: IAP 5-18 charts have no head-circumference reference; HC is plotted to 5 y only.
+"""
 import csv
 import math
 from bisect import bisect_left
@@ -11,7 +28,6 @@ from typing import Dict, List, Optional
 
 from .clinical_rules import age_in_months
 from .config import GROWTH_REFERENCE_DIR, load_config
-
 
 INDICATORS = {"weight_kg": "wfa", "height_cm": "lhfa", "head_circ_cm": "hcfa"}
 
@@ -77,6 +93,7 @@ def lms_z(x: float, L: float, M: float, S: float, restricted: bool = False) -> f
         z = ((x / M) ** L - 1) / (L * S)
     if restricted and abs(z) > 3:
         # WHO restricted application for weight-based indicators: beyond +/-3 the
+        # distance is measured in units of the SD between z=2 and z=3.
         sd3 = lms_value(L, M, S, 3 if z > 0 else -3)
         sd2 = lms_value(L, M, S, 2 if z > 0 else -2)
         sd23 = abs(sd3 - sd2)
@@ -106,7 +123,10 @@ def flag_for_z(z: Optional[float], cfg=None) -> Optional[str]:
 # --------------------------------------------------------------- per reading
 def score_measurement(dob: date, sex: str, measured_on: date, values: Dict[str, Optional[float]],
                       cfg=None, ref_dir=None) -> dict:
-    """values: {"weight_kg": 9.1, "height_cm": 74.0, "head_circ_cm": 45.2}"""
+    """
+    values: {"weight_kg": 9.1, "height_cm": 74.0, "head_circ_cm": 45.2}
+    -> {"age_months": 9.4, "weight_kg": {"value", "z", "percentile", "flag", "source"}, ...}
+    """
     cfg = cfg or load_config()
     age_m = age_in_months(dob, measured_on)
     out = {"age_months": round(age_m, 2)}
@@ -129,7 +149,11 @@ def score_measurement(dob: date, sex: str, measured_on: date, values: Dict[str, 
 
 
 def detect_faltering(scored: List[dict], cfg=None) -> List[dict]:
-    """scored: chronologically sorted [{"measured_on": date, "weight_kg": {"z": ...}}, ...]"""
+    """
+    scored: chronologically sorted [{"measured_on": date, "weight_kg": {"z": ...}}, ...]
+    A drop of >= faltering_drop_z in weight-for-age z within faltering_window_months
+    between any two readings is reported once per starting reading.
+    """
     cfg = cfg or load_config()
     drop = cfg["growth"]["faltering_drop_z"]
     window_m = cfg["growth"]["faltering_window_months"]

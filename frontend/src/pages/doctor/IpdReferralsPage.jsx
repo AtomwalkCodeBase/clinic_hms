@@ -3,6 +3,8 @@ import { useState, useEffect } from "react";
 import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useApi } from "../../hooks/useApi";
+import { usePagedApi } from "../../hooks/usePagedApi";
+import PaginationControls from "../../components/common/PaginationControls";
 import { useToast } from "../../hooks/useToast";
 import apiClient from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
@@ -215,10 +217,9 @@ const TABS = [
 
 export default function IpdReferralsPage() {
   const [tab, setTab] = useState("all");
-  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.IPD.REFERRALS_MINE, {
+  const { items: referrals, pagination, page, setPage, pageSize, setPageSize, isLoading, refetch } = usePagedApi(API_ENDPOINTS.IPD.REFERRALS_MINE, {
     params: tab === "all" ? {} : { status: tab },
   });
-  const referrals = data || [];
   const [creating, setCreating] = useState(false);
 
   return (
@@ -278,6 +279,7 @@ export default function IpdReferralsPage() {
               )}
             </tbody>
           </table>
+          <PaginationControls pagination={pagination} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
         </div>
 
         {creating && (

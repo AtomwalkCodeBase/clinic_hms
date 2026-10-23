@@ -1,6 +1,7 @@
 """apps/hospital_patients/views.py"""
 
 import logging
+import re
 
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
@@ -23,7 +24,7 @@ from apps.opd.patient_services import PatientService
 from apps.opd.models import HospitalPatient, Allergy
 
 
-def _maybe_charge_registration_fee(patient, hospital_id, db, user):
+def _maybe_charge_registration_fee(patient, branch_id, hospital_id, db, user):
     """If this hospital has registration_fee_enabled (Hospital Admin → Settings,"""
     try:
         from apps.hospital_master.models import Hospital
@@ -36,13 +37,13 @@ def _maybe_charge_registration_fee(patient, hospital_id, db, user):
         params = parameters_of(hospital)
         if not params.registration_fee_enabled or not params.registration_fee_amount:
             return
-        if not getattr(patient, "branch_id", None):
+        if not branch_id:
             return
 
-        invoice_number, _ = get_next_number(branch_id=patient.branch_id, entity="invoice", using=db)
+        invoice_number, _ = get_next_number(branch_id=branch_id, entity="invoice", using=db)
         invoice = Invoice.objects.using(db).create(
             patient=patient,
-            branch_id=patient.branch_id,
+            branch_id=branch_id,
             invoice_number=invoice_number,
             status="draft",
             created_by_id=getattr(user, "id", None),
@@ -84,11 +85,11 @@ class PatientRegisterView(APIView):
                 message=f"Registration failed: {exc}",
                 status=500,
             )
-        _maybe_charge_registration_fee(patient, request.hospital_id, request.hospital_db, request.user)
+        _maybe_charge_registration_fee(patient, request.data.get("branch_id"), request.hospital_id, request.hospital_db, request.user)
 
         from core.utils.audit import log_action
         log_action(request, request.hospital_db, action="patient.register",
-                    resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
+                    resource_type="Patient", resource_id=patient.pk, patient_id=patient)
 
         return created(
             data=PatientDetailSerializer(patient).data,
@@ -119,8 +120,8 @@ class PatientEmergencyRegisterView(APIView):
         from core.utils.audit import log_action
         log_action(
             request, request.hospital_db, action="patient.register_emergency",
-            resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk,
-            metadata={"is_mlc": patient.is_mlc, "arrival_channel": patient.arrival_channel},
+            resource_type="Patient", resource_id=patient.pk, patient_id=patient,
+            metadata={"is_mlc": patient.get_patient_details()["is_mlc"], "arrival_channel": patient.get_patient_details()["arrival_channel"]},
         )
 
         return created(
@@ -175,6 +176,8 @@ class PatientSearchView(APIView):
         # Two callers share this endpoint:
         if "page" in request.query_params:
             page_items, meta = paginate_queryset(request, qs)
+            for p in page_items[:1]:
+                p.get_patient_details(batch=page_items)
             return success(data={
                 "results": PatientSearchSerializer(page_items, many=True).data,
                 "pagination": meta,
@@ -183,12 +186,21 @@ class PatientSearchView(APIView):
 
         total_matches = qs.count()
         limit = 50
+        # Name order: the names are in the shared record, so the matches (the most recent 500 at most) are sorted here
+        found = list(qs[:500])
+        for p in found[:1]:
+            p.get_patient_details(batch=found)
+        found.sort(key=lambda p: (p.get_patient_details()["full_name"] or "").lower())
 
         # If nothing matched locally and the query looks like a mobile
         network_match = None
         digits = "".join(ch for ch in query if ch.isdigit())
-        if total_matches == 0 and len(digits) >= 6:
-            result = PatientService.lookup_by_mobile(mobile_raw=query, db_name=request.hospital_db)
+        looks_like_mobile = re.fullmatch(r"[+\d\s-]+", query) is not None      # an AWPID or a name with digits is not a number
+        if total_matches == 0 and len(digits) >= 6 and looks_like_mobile:
+            try:
+                result = PatientService.lookup_by_mobile(mobile_raw=query, db_name=request.hospital_db)
+            except ValueError:                                                   # digits that are not a valid mobile number
+                result = {}
             if result.get("exists_in_network") and not result.get("already_registered_here"):
                 network_match = {
                     "full_name": result.get("full_name"),
@@ -197,7 +209,7 @@ class PatientSearchView(APIView):
                 }
 
         return success(data={
-            "results": PatientSearchSerializer(qs[:limit], many=True).data,
+            "results": PatientSearchSerializer(found[:limit], many=True).data,
             "total_matches": total_matches,
             "truncated": total_matches > limit,
             "is_browse": not query,
@@ -229,7 +241,7 @@ class PatientDetailView(APIView):
 
         from core.utils.audit import log_action
         log_action(request, request.hospital_db, action="patient.view",
-                    resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
+                    resource_type="Patient", resource_id=patient.pk, patient_id=patient)
 
         return success(data=PatientDetailSerializer(patient).data)
 
@@ -247,7 +259,7 @@ class PatientHistoryView(APIView):
         if not patient.hie_consent_given:
             from core.utils.audit import log_action
             log_action(request, request.hospital_db, action="patient.history.view_blocked_no_consent",
-                        resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
+                        resource_type="Patient", resource_id=patient.pk, patient_id=patient)
             # Documents THIS hospital captured for THIS visit — the consult
             from apps.documents.models import MedicalDocument
             from apps.documents.lib_documents import document_rows
@@ -266,7 +278,7 @@ class PatientHistoryView(APIView):
 
         from core.utils.audit import log_action
         log_action(request, request.hospital_db, action="patient.history.view",
-                    resource_type="Patient", resource_id=patient.pk, patient_id=patient.pk)
+                    resource_type="Patient", resource_id=patient.pk, patient_id=patient)
 
         return success(data=history)
 

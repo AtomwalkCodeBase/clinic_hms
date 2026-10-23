@@ -53,7 +53,7 @@ class RecommendAdmissionSerializer(serializers.Serializer):
 
 
 class AdmissionReferralSerializer(serializers.ModelSerializer):
-    patient_name   = serializers.CharField(source="patient.full_name", read_only=True)
+    patient_name   = serializers.CharField(source="patient.get_patient_details.full_name", read_only=True)
     patient_uhid   = serializers.CharField(source="patient.uhid", read_only=True)
     department_name = serializers.CharField(source="department.name", read_only=True)
     recommended_by_name = serializers.SerializerMethodField()
@@ -144,7 +144,7 @@ class CompleteAdmissionSerializer(serializers.Serializer):
 
 
 class AdmissionSerializer(serializers.ModelSerializer):
-    patient_name = serializers.CharField(source="patient.full_name", read_only=True)
+    patient_name = serializers.CharField(source="patient.get_patient_details.full_name", read_only=True)
     patient_uhid = serializers.CharField(source="patient.uhid", read_only=True)
     department_name = serializers.CharField(source="department.name", read_only=True)
     ordering_doctor_name = serializers.SerializerMethodField()

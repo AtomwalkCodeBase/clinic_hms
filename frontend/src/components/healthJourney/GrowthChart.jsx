@@ -87,7 +87,7 @@ export default function GrowthChart({ api, patientId, onOpenDocument }) {
         bands,
         { name: 'Median', type: 'line', data: curve('0'), symbol: 'none', silent: true,
           lineStyle: { color: t['band-median'], width: 1.5, type: 'dashed' }, tooltip: { show: false }, z: 2,
-          endLabel: { show: true, formatter: '50th', color: t['text-muted'], fontSize: 13 } },
+          endLabel: { show: false } },
         { name: 'Your child', type: 'line', data: pts, symbolSize: 9, z: 5,
           lineStyle: { color: t['growth-line'], width: 2 } },
       ],

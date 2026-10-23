@@ -1,10 +1,11 @@
 """Hospital database: the price list, invoices with their lines and payments, and the hospital-managed dropdown lists.
 
-One-line docstring and __str__ on every model; created_at / updated_at on records that change; UniqueConstraint, never unique_together; every foreign key has on_delete and related_name. Reverse names here are plain descriptive words (plural for a foreign key, singular for a one-to-one) because the API reads them as field names (items, payments, doctor_profile, encounter, beds).
+One-line docstring and __str__ on every model; created_at / updated_at on records that change; UniqueConstraint, never unique_together; every foreign key has on_delete and related_name. Reverse names start with the first letters of the model they point at, as in the shared models: b_ Branch, u_ StaffUser, p_ HospitalPatient, d_ Department, f_ Floor, r_ Room, bd_ Bed, ro_ Role, pm_ Permission, ds_ DoctorSchedule, a_ Appointment, e_ OPDEncounter, rx_ Prescription, pi_ PrescriptionItem, i_ Invoice, bs_ BillingService, lr_ LabRequest, lp_ LabReport, lt_ LabTest, dg_ Drug, st_ Stock, ad_ Admission, ar_ AdmissionReferral. Plural for a foreign key, singular for a one-to-one. Serializers that must keep an old JSON key use source=.
 
 Deliberate exceptions: Invoice.status, Payment.payment_mode and BillingService.category are plain text checked against OptionList, because each hospital edits those lists; PROTECT on invoice links so billed records are never deleted; no created_at or updated_at on InvoiceItem (its invoice carries them) or Payment (paid_at is its time).
 """
 
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 from apps.hospital_setup.models import StaffUser
@@ -90,7 +91,7 @@ class BillingService(models.Model):
         ordering  = ["name"]
 
     def __str__(self):
-        return f"{self.name} (₹{self.unit_price})"
+        return f"{self.name} ({settings.CURRENCY_SYMBOL}{self.unit_price})"
 
 
 class Invoice(models.Model):
@@ -103,9 +104,9 @@ class Invoice(models.Model):
     STATUS_CANCELLED      = "cancelled"
 
     patient         = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT,
-                                        related_name="invoices")
+                                        related_name="p_invoices")
     # `encounter` (FK to apps.clinical.Encounter) was removed (HMS-07c-1) —
-    branch          = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="invoices")
+    branch          = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="b_invoices")
     invoice_number  = models.CharField(max_length=30, unique=True)
     status          = models.CharField(max_length=20, default=STATUS_DRAFT, db_index=True)  # validated against OptionList(list_type="invoice_status")
     subtotal        = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -115,7 +116,7 @@ class Invoice(models.Model):
     paid_amount     = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     notes           = models.TextField(blank=True)
     created_by      = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,
-                                        null=True, blank=True, related_name="invoices_created")
+                                        null=True, blank=True, related_name="u_invoices_created")
     issued_at       = models.DateTimeField(null=True, blank=True)
     created_at      = models.DateTimeField(auto_now_add=True)
     updated_at      = models.DateTimeField(auto_now=True)
@@ -129,15 +130,15 @@ class Invoice(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.invoice_number} — {self.patient.uhid} (₹{self.total_amount})"
+        return f"{self.invoice_number} — {self.patient.uhid} ({settings.CURRENCY_SYMBOL}{self.total_amount})"
 
 
 class InvoiceItem(models.Model):
     """One line on an invoice, with its price and tax at billing time."""
     invoice     = models.ForeignKey(Invoice, on_delete=models.CASCADE,
-                                        related_name="items")
+                                        related_name="i_items")
     service     = models.ForeignKey(BillingService, on_delete=models.PROTECT,
-                                        null=True, blank=True, related_name="invoice_items")
+                                        null=True, blank=True, related_name="bs_invoice_items")
     description = models.CharField(max_length=200)  # denormalized
     quantity    = models.PositiveSmallIntegerField(default=1)
     unit_price  = models.DecimalField(max_digits=10, decimal_places=2)
@@ -157,11 +158,11 @@ class InvoiceItem(models.Model):
 class Payment(models.Model):
     """Payment record against an invoice. Multiple payments allowed (partial payments)."""
     invoice         = models.ForeignKey(Invoice, on_delete=models.PROTECT,
-                                        related_name="payments")
+                                        related_name="i_payments")
     amount          = models.DecimalField(max_digits=12, decimal_places=2)
     payment_mode    = models.CharField(max_length=50)
     transaction_ref = models.CharField(max_length=100, blank=True)
-    recorded_by     = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="payments_recorded")
+    recorded_by     = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="u_payments_recorded")
     paid_at         = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -173,4 +174,4 @@ class Payment(models.Model):
         ]
 
     def __str__(self):
-        return f"₹{self.amount} via {self.payment_mode} for {self.invoice.invoice_number}"
+        return f"{settings.CURRENCY_SYMBOL}{self.amount} via {self.payment_mode} for {self.invoice.invoice_number}"

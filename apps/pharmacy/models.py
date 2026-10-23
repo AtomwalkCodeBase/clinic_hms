@@ -1,6 +1,6 @@
 """Hospital database: the drug catalogue, stock per branch and batch, the stock ledger, dispensing and inpatient dose logs.
 
-One-line docstring and __str__ on every model; created_at / updated_at on records that change; UniqueConstraint, never unique_together; every foreign key has on_delete and related_name. Reverse names here are plain descriptive words (plural for a foreign key, singular for a one-to-one) because the API reads them as field names (items, payments, doctor_profile, encounter, beds).
+One-line docstring and __str__ on every model; created_at / updated_at on records that change; UniqueConstraint, never unique_together; every foreign key has on_delete and related_name. Reverse names start with the first letters of the model they point at, as in the shared models: b_ Branch, u_ StaffUser, p_ HospitalPatient, d_ Department, f_ Floor, r_ Room, bd_ Bed, ro_ Role, pm_ Permission, ds_ DoctorSchedule, a_ Appointment, e_ OPDEncounter, rx_ Prescription, pi_ PrescriptionItem, i_ Invoice, bs_ BillingService, lr_ LabRequest, lp_ LabReport, lt_ LabTest, dg_ Drug, st_ Stock, ad_ Admission, ar_ AdmissionReferral. Plural for a foreign key, singular for a one-to-one. Serializers that must keep an old JSON key use source=.
 
 Deliberate exceptions: PROTECT on drug, stock and patient links so stock history and dispensing records are never deleted; Drug.form is plain text checked against OptionList; StockTransaction, Dispense and MedicationDoseLog are append-only, so they carry their own time and no updated_at.
 """
@@ -37,8 +37,8 @@ class Drug(models.Model):
 
 class Stock(models.Model):
     """Current inventory for a drug at a branch."""
-    drug          = models.ForeignKey(Drug, on_delete=models.PROTECT, related_name="stocks")
-    branch        = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="stocks")
+    drug          = models.ForeignKey(Drug, on_delete=models.PROTECT, related_name="dg_stocks")
+    branch        = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="b_stocks")
     batch_number  = models.CharField(max_length=50, blank=True)
     expiry_date   = models.DateField(null=True, blank=True)
     quantity      = models.IntegerField(default=0)   # current quantity
@@ -70,14 +70,14 @@ class StockTransaction(models.Model):
     ]
 
     stock           = models.ForeignKey(Stock, on_delete=models.PROTECT,
-                                        related_name="transactions")
+                                        related_name="st_transactions")
     txn_type        = models.CharField(max_length=20, choices=TXN_TYPE_CHOICES)
     quantity_change = models.IntegerField()   # + for in, - for out
     quantity_before = models.IntegerField()
     quantity_after  = models.IntegerField()
     reference_type  = models.CharField(max_length=50, blank=True)   # "Dispense", "Purchase", etc.
     notes           = models.TextField(blank=True)
-    recorded_by     = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="stock_transactions")
+    recorded_by     = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="u_stock_transactions")
     recorded_at     = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -95,11 +95,11 @@ class StockTransaction(models.Model):
 class Dispense(models.Model):
     """Drug dispensing record linked to a prescription item."""
     prescription_item = models.ForeignKey(PrescriptionItem, on_delete=models.PROTECT,
-                                          related_name="dispenses")
-    stock             = models.ForeignKey(Stock, on_delete=models.PROTECT, related_name="dispenses")
+                                          related_name="pi_dispenses")
+    stock             = models.ForeignKey(Stock, on_delete=models.PROTECT, related_name="st_dispenses")
     quantity          = models.PositiveIntegerField()
     dispensed_by      = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True,
-                                        related_name="dispenses_made", limit_choices_to={"role": "pharmacist"})
+                                        related_name="u_dispenses_made", limit_choices_to={"group__system_role_key": "pharmacist"})
     dispensed_at      = models.DateTimeField(auto_now_add=True)
     notes             = models.TextField(blank=True)
 
@@ -120,11 +120,11 @@ class MedicationDoseLog(models.Model):
     ]
 
     prescription_item = models.ForeignKey(PrescriptionItem, on_delete=models.PROTECT,
-                                          related_name="dose_logs")
-    patient           = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT, related_name="dose_logs")
+                                          related_name="pi_dose_logs")
+    patient           = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT, related_name="p_dose_logs")
     status            = models.CharField(max_length=20, choices=STATUS_CHOICES, default="given")
     administered_by   = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True,
-                                        related_name="doses_administered", limit_choices_to={"role": "nurse"})
+                                        related_name="u_doses_administered", limit_choices_to={"group__system_role_key": "nurse"})
     administered_at   = models.DateTimeField()
     notes             = models.TextField(blank=True)
 

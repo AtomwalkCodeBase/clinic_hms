@@ -31,15 +31,24 @@ class HospitalDatabaseRouter:
             return True
         return getattr(model._meta, "db_table", "") in self._DEFAULT_ONLY_TABLES
 
+    def _hospital_db_for(self, model, hints):
+        """The hospital database a hospital model belongs in: the one the related object was loaded from (a lazy foreign key lookup), else the current request's."""
+        instance = hints.get("instance")
+        if instance is not None and not self._is_atomwalk_model(instance.__class__):
+            alias = getattr(instance._state, "db", None)
+            if alias and alias != "default":
+                return alias
+        return get_hospital_db()
+
     def db_for_read(self, model, **hints):
         if self._is_atomwalk_model(model):
             return "default"
-        return get_hospital_db()
+        return self._hospital_db_for(model, hints)
 
     def db_for_write(self, model, **hints):
         if self._is_atomwalk_model(model):
             return "default"
-        return get_hospital_db()
+        return self._hospital_db_for(model, hints)
 
     def allow_relation(self, obj1, obj2, **hints):
         """Allow relations only within the same database."""

@@ -141,10 +141,11 @@ class DispenseView(APIView):
                 if rx.invoice_id:
                     invoice = Invoice.objects.using(db).get(pk=rx.invoice_id)
                 else:
-                    patient = HospitalPatient.objects.using(db).get(uuid=rx.patient_id)
-                    invoice_number, _ = get_next_number(branch_id=patient.branch_id or 1, entity="invoice", using=db)
+                    appointment = rx.encounter.appointment
+                    branch = appointment.branch_department.branch
+                    invoice_number, _ = get_next_number(branch_id=branch.id, entity="invoice", using=db)
                     invoice = Invoice.objects.using(db).create(
-                        patient=patient, branch=patient.branch, invoice_number=invoice_number,
+                        patient=appointment.patient, branch=branch, invoice_number=invoice_number,
                         status="draft", created_by_id=request.user.id,
                         notes=f"Auto-generated for prescription {rx.rx_number or rx.id}",
                     )
@@ -171,25 +172,20 @@ class PendingPrescriptionsView(APIView):
     def get(self, request):
         from django.db.models import Sum
         from apps.opd.models import Prescription
-        from apps.opd.models import HospitalPatient
-        from apps.hospital_setup.models import StaffUser
 
         db = request.hospital_db
         status_filter = request.query_params.get("status", Prescription.STATUS_ACTIVE)
-        qs = (Prescription.objects.using(db)
+        qs = (Prescription.objects.using(db).select_related("encounter__appointment__patient", "encounter__appointment__doctor")
               .filter(status=status_filter, patient_choice=Prescription.CHOICE_IN_HOUSE)
-              .prefetch_related("items")
+              .prefetch_related("rx_items")
               .order_by("-created_at"))
         page_items, meta = paginate_queryset(request, qs)
-
-        # Batch-resolve patient/doctor names in two queries instead of one
-        patient_uuids = {p.patient_id for p in page_items}
-        doctor_pks = {(d.int if hasattr(d, "int") else d) for d in {p.doctor_user_id for p in page_items}}
-        patients = {p.uuid: p for p in HospitalPatient.objects.using(db).filter(uuid__in=patient_uuids)}
-        doctors  = {d.id: d for d in StaffUser.objects.using(db).filter(pk__in=doctor_pks)}
+        patients = [rx.encounter.appointment.patient for rx in page_items]
+        for p in patients[:1]:
+            p.get_patient_details(batch=patients)                 # the patients' names, in one go
 
         # Per-item dispensed quantity, in one query for the whole page.
-        item_ids = [it.id for p in page_items for it in p.items.all()]
+        item_ids = [it.id for p in page_items for it in p.rx_items.all()]
         dispensed_by_item = {}
         for row in (Dispense.objects.using(db).filter(prescription_item_id__in=item_ids)
                     .values("prescription_item_id")
@@ -198,26 +194,25 @@ class PendingPrescriptionsView(APIView):
 
         results = []
         for rx in page_items:
-            patient = patients.get(rx.patient_id)
-            doctor_pk = rx.doctor_user_id.int if hasattr(rx.doctor_user_id, "int") else rx.doctor_user_id
-            doctor = doctors.get(doctor_pk)
+            patient = rx.encounter.appointment.patient
+            doctor = rx.encounter.appointment.doctor
             results.append({
                 # rx_number: the real NNTM-generated token (e.g. "RX-000123")
                 "id": str(rx.id), "rx_number": rx.rx_number or str(rx.id)[:8].upper(), "status": rx.status,
                 "patient_choice": rx.patient_choice, "payment_status": rx.payment_status,
                 "notes": rx.notes, "finalized_at": rx.created_at, "created_at": rx.created_at,
-                "patient_id": str(patient.id) if patient else None,
-                "patient": str(patient.id) if patient else None,
-                "patient_name": patient.full_name if patient else "",
-                "patient_uhid": patient.uhid if patient else "",
-                "doctor_name": (f"{doctor.first_name} {doctor.last_name}".strip() or doctor.email or "") if doctor else "",
+                "patient_id": str(patient.id),
+                "patient": str(patient.id),
+                "patient_name": patient.get_patient_details()["full_name"],
+                "patient_uhid": patient.uhid,
+                "doctor_name": doctor.get_full_name(),
                 "items": [{
                     "id": str(it.id), "drug": it.drug_id, "drug_name": it.drug_name,
                     "dose": it.dosage, "unit": "", "frequency": it.frequency,
                     "route": it.route, "duration_days": it.duration_days,
                     "instructions": it.instructions,
                     "dispensed_qty": dispensed_by_item.get(it.id, 0),
-                } for it in rx.items.all()],
+                } for it in rx.rx_items.all()],
             })
 
         return success(data={"results": results, "pagination": meta})
@@ -229,8 +224,6 @@ class PrescriptionLookupView(APIView):
 
     def get(self, request):
         from apps.opd.models import Prescription
-        from apps.opd.models import HospitalPatient
-        from apps.hospital_setup.models import StaffUser
         from django.db.models import Sum
 
         rx_number = (request.query_params.get("rx_number") or "").strip()
@@ -239,15 +232,15 @@ class PrescriptionLookupView(APIView):
 
         db = request.hospital_db
         try:
-            rx = Prescription.objects.using(db).prefetch_related("items").get(rx_number__iexact=rx_number)
+            rx = (Prescription.objects.using(db).select_related("encounter__appointment__patient", "encounter__appointment__doctor")
+                  .prefetch_related("rx_items").get(rx_number__iexact=rx_number))
         except Prescription.DoesNotExist:
             return not_found("No prescription found for that number.")
 
-        patient = HospitalPatient.objects.using(db).filter(uuid=rx.patient_id).first()
-        doctor_pk = rx.doctor_user_id.int if hasattr(rx.doctor_user_id, "int") else rx.doctor_user_id
-        doctor = StaffUser.objects.using(db).filter(pk=doctor_pk).first()
+        patient = rx.encounter.appointment.patient
+        doctor = rx.encounter.appointment.doctor
 
-        item_ids = [it.id for it in rx.items.all()]
+        item_ids = [it.id for it in rx.rx_items.all()]
         dispensed_by_item = {
             row["prescription_item_id"]: row["total"]
             for row in (Dispense.objects.using(db).filter(prescription_item_id__in=item_ids)
@@ -258,16 +251,16 @@ class PrescriptionLookupView(APIView):
             "id": str(rx.id), "rx_number": rx.rx_number, "status": rx.status,
             "patient_choice": rx.patient_choice, "payment_status": rx.payment_status,
             "notes": rx.notes, "created_at": rx.created_at,
-            "patient_id": str(patient.id) if patient else None,
-            "patient_name": patient.full_name if patient else "",
-            "patient_uhid": patient.uhid if patient else "",
-            "patient_phone": patient.mobile if patient else "",
-            "doctor_name": (f"{doctor.first_name} {doctor.last_name}".strip() or doctor.email or "") if doctor else "",
+            "patient_id": str(patient.id),
+            "patient_name": patient.get_patient_details()["full_name"],
+            "patient_uhid": patient.uhid,
+            "patient_phone": patient.get_patient_details()["mobile"],
+            "doctor_name": doctor.get_full_name(),
             "items": [{
                 "id": str(it.id), "drug": it.drug_id, "drug_name": it.drug_name,
                 "dose": it.dosage, "unit": "", "frequency": it.frequency,
                 "route": it.route, "duration_days": it.duration_days,
                 "instructions": it.instructions,
                 "dispensed_qty": dispensed_by_item.get(it.id, 0),
-            } for it in rx.items.all()],
+            } for it in rx.rx_items.all()],
         })

@@ -1,18 +1,14 @@
 from apps.documents import views as vax_views
 from apps.documents.models import ImmunizationRecord as V
-from apps.documents.tests.tests import identity
-from apps.hospital_setup.models import Branch
-from apps.opd.models import HospitalPatient
-from core.tests.testing import HospitalDBTestCase, ensure_hospital
+from core.tests.testing import HospitalDBTestCase, ensure_hospital, make_branch, make_patient
 
 
 class StaffVaccineActionTests(HospitalDBTestCase):
     def setUp(self):
         super().setUp()
         ensure_hospital(1)
-        branch = Branch.objects.using(self.hospital_alias).create(name="Main")
-        identity("AWP-V9")
-        self.patient = HospitalPatient.objects.using(self.hospital_alias).create(awpid="AWP-V9", uhid="U-9", branch=branch, full_name="V9")
+        branch, _place = make_branch(self.hospital_alias)
+        self.patient = make_patient(self.hospital_alias, "AWP-V9", uhid="U-9", branch=branch, full_name="V9")
 
     def act(self, view, role, **data):
         return self.call_view(view.as_view(), "post", "/x", user_id=7, role=role, hospital_id=1, data=data, view_kwargs={"pk": self.patient.pk})

@@ -114,7 +114,7 @@ def _send_via_msg91(to: str, code: str) -> bool:
 
     try:
         resp = requests.post(
-            "https://control.msg91.com/api/v5/flow",
+            settings.MSG91_FLOW_URL,
             json=payload, headers=headers, timeout=10,
         )
         if resp.status_code == 200:
@@ -144,10 +144,10 @@ def _send_via_android_gateway(to: str, message: str) -> bool:
     # The gateway expects E.164 (leading '+') — `to` here is always a bare
     if to.startswith("+"):
         phone = to
-    elif to.startswith("91") and len(to) == 12:
+    elif to.startswith(settings.DEFAULT_COUNTRY_CODE.lstrip("+")) and len(to) == len(settings.DEFAULT_COUNTRY_CODE) - 1 + settings.MOBILE_NUMBER_LENGTH:
         phone = f"+{to}"
     else:
-        phone = f"+91{to}"
+        phone = f"{settings.DEFAULT_COUNTRY_CODE}{to}"
 
     try:
         import requests

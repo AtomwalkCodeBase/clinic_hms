@@ -53,22 +53,18 @@ class EncounterSignSideEffectsTests(TestCase):
 # ── Sign-off characterization (hospital DB) ────────────────────────────────────
 
 import datetime as _dt
-import uuid as _uuid
 from decimal import Decimal as _Decimal
 from unittest import mock as _mock
 
-from core.tests.testing import HospitalDBTestCase, requires_hospital_db
+from core.tests.testing import HospitalDBTestCase, make_branch, make_patient, make_staff, requires_hospital_db
 
 
 @requires_hospital_db
 class EncounterSignWorkflowTests(HospitalDBTestCase):
     def setUp(self):
         super().setUp()
-        from apps.billing.models import Invoice  # noqa: F401
         from apps.opd.models import Appointment, OPDEncounter
-        from apps.hospital_setup.models import Branch, NextNumber
-        from apps.hospital_setup.models import DoctorProfile, StaffUser
-        from apps.opd.models import HospitalPatient
+        from apps.hospital_setup.models import NextNumber
         from apps.hospital_master.models import Hospital, HospitalParameters
 
         db = self.hospital_alias
@@ -76,24 +72,17 @@ class EncounterSignWorkflowTests(HospitalDBTestCase):
             name="Sign Hospital", hospital_code="sign-h", db_name=db,
         )
         HospitalParameters.objects.using("default").create(hospital=self.hospital, default_tax_rate=_Decimal("10"))
-        self.branch = Branch.objects.using(db).create(name="Main")
-        self.doctor = StaffUser.objects.using(db).create(
-            email="dr.sign@example.test", role="doctor", phone="9000000020", branch=self.branch,
-        )
-        DoctorProfile.objects.using(db).create(staff=self.doctor, consultation_fee=_Decimal("500.00"))
-        self.patient = HospitalPatient.objects.using(db).create(
-            awpid="AW-SIGN-1", uhid="UHID-S1", branch=self.branch, full_name="Sign Patient",
-        )
-        from apps.patients.models import Patient
-        Patient.objects.using("default").get_or_create(awpid="AW-SIGN-1", defaults={"full_name": "Sign Patient"})
+        self.branch, self.place = make_branch(db)
+        self.doctor = make_staff(db, "doctor", email="dr.sign@example.test", phone="9000000020", place=self.place)
+        self.doctor.consultation_fee = _Decimal("500.00")
+        self.doctor.save(using=db)
+        self.patient = make_patient(db, "AW-SIGN-1", uhid="UHID-S1", branch=self.branch, full_name="Sign Patient")
         NextNumber.objects.using(db).create(branch_id=self.branch.id, entity="invoice", prefix="INV-")
         appt = Appointment.objects.using(db).create(
-            patient_id=self.patient.uuid, patient_awpid=self.patient.awpid,
-            doctor_user_id=_uuid.UUID(int=self.doctor.id), doctor_name="Dr Sign",
-            branch_id=self.branch.id, scheduled_date=_dt.date.today(),
+            patient=self.patient, doctor=self.doctor, branch_department=self.place, scheduled_date=_dt.date.today(),
         )
         self.enc = OPDEncounter.objects.using(db).create(
-            appointment=appt, patient_id=self.patient.uuid, doctor_user_id=_uuid.UUID(int=self.doctor.id),
+            appointment=appt,
             assessment="Viral fever", diagnoses=[{"code": "B34.9", "description": "Viral infection"}],
         )
 
@@ -129,6 +118,21 @@ class EncounterSignWorkflowTests(HospitalDBTestCase):
         self.assertEqual((dx.patient.awpid, dx.icd10, dx.source_hospital_id), ("AW-SIGN-1", "B34.9", self.hospital.id))
 
         self.assertTrue(AuditLog.objects.using(db).filter(action="encounter.sign").exists())
+
+    def test_sign_files_the_typed_note_with_the_patients_documents_once(self):
+        from apps.documents.models import MedicalDocument
+        from apps.opd.archive import store_consultation_note_document
+        self.enc.subjective, self.enc.plan = "Fever for 2 days", "Paracetamol, review in 48 h"
+        self.enc.save(using=self.hospital_alias)
+        with _mock.patch("apps.opd.views._store_prescription_pdf"), \
+                _mock.patch("core.storage.upload_data_uri", return_value="patients/AW-SIGN-1/consult-notes/n.pdf"), \
+                _mock.patch("apps.documents.lib_documents._queue_processing") as queued:
+            self.sign()
+            again = store_consultation_note_document(self.enc, self.hospital_alias, self.hospital.id)
+        note = MedicalDocument.objects.using("default").get(patient__awpid="AW-SIGN-1")      # one, not two
+        self.assertEqual((note.doc_classification, note.created_by_type, note.source_hospital_id), ("consultation_note", "H", self.hospital.id))
+        self.assertEqual(again.pk, note.pk)
+        queued.assert_not_called()                      # its diagnoses are the doctor's own: the LLM has nothing to add
 
     def test_signing_twice_is_rejected_and_does_not_bill_again(self):
         from apps.billing.models import Invoice

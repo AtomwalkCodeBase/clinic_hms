@@ -3,16 +3,14 @@ from decimal import Decimal
 from django.db import IntegrityError, transaction
 
 from apps.billing.models import Invoice, Payment
-from apps.hospital_setup.models import Branch
-from apps.opd.models import HospitalPatient
-from core.tests.testing import HospitalDBTestCase
+from core.tests.testing import HospitalDBTestCase, make_branch, make_patient
 
 
 class MoneyRulesTests(HospitalDBTestCase):
     def setUp(self):
         super().setUp()
-        branch = Branch.objects.using(self.hospital_alias).create(name="Main")
-        patient = HospitalPatient.objects.using(self.hospital_alias).create(awpid="AWP-B1", uhid="U-1", branch=branch, full_name="B")
+        branch, _place = make_branch(self.hospital_alias)
+        patient = make_patient(self.hospital_alias, "AWP-B1", uhid="U-1", branch=branch, full_name="B")
         self.invoice = Invoice.objects.using(self.hospital_alias).create(
             patient=patient, branch=branch, invoice_number="INV-1", total_amount=Decimal("100"))
 

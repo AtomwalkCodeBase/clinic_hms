@@ -5,6 +5,8 @@ import { Search } from "lucide-react";
 import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useApi } from "../../hooks/useApi";
+import { useClientPaging } from "../../hooks/usePagedApi";
+import PaginationControls from "../../components/common/PaginationControls";
 import API_ENDPOINTS from "../../config/api.config";
 import { ROUTES } from "../../config/routes.config";
 import { timeAgo } from "../../utils/dates";
@@ -42,6 +44,8 @@ export default function IpdPatientsPage() {
     }
     return rows;
   }, [current, filter, query]);
+
+  const paging = useClientPaging(filtered, 10);
 
   const counts = {
     all: current.length,
@@ -100,7 +104,7 @@ export default function IpdPatientsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((a) => (
+                {paging.pageItems.map((a) => (
                   <tr key={a.id} style={{ cursor: "pointer" }}
                     onClick={() => navigate(ROUTES.FRONT_DESK.ADMISSION_DETAIL(a.id))}>
                     <td>
@@ -132,6 +136,7 @@ export default function IpdPatientsPage() {
               </tbody>
             </table>
           </div>
+          <PaginationControls pagination={paging.pagination} page={paging.page} pageSize={paging.pageSize} onPageChange={paging.setPage} onPageSizeChange={paging.setPageSize} />
         </div>
       </PageShell>
     </AppShell>

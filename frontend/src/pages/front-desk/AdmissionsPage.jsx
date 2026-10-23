@@ -5,6 +5,8 @@ import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { ROUTES } from "../../config/routes.config";
 import { useApi }    from "../../hooks/useApi";
+import { usePagedApi } from "../../hooks/usePagedApi";
+import PaginationControls from "../../components/common/PaginationControls";
 import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
 import apiClient     from "../../services/api.client";
@@ -589,8 +591,10 @@ export function AdmissionsPageContent({ embedded = false }) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const branchId = user?.branch_id;
-  const { data: referrals, isLoading, refetch } = useApi(API_ENDPOINTS.IPD.REFERRALS, { params: { status: "pending" } });
-  const { data: awaitingBed, refetch: refetchAwaitingBed } = useApi(API_ENDPOINTS.IPD.ADMISSION_AWAITING_BED);
+  const referralPaging = usePagedApi(API_ENDPOINTS.IPD.REFERRALS, { params: { status: "pending" }, pageSize: 10 });
+  const { items: referrals, isLoading, refetch } = referralPaging;
+  const bedPaging = usePagedApi(API_ENDPOINTS.IPD.ADMISSION_AWAITING_BED, { pageSize: 10 });
+  const { items: awaitingBed, refetch: refetchAwaitingBed } = bedPaging;
   const [active, setActive] = useState(null);
   const [assigningFor, setAssigningFor] = useState(null);
   const [loggingExternal, setLoggingExternal] = useState(false);
@@ -617,7 +621,7 @@ export function AdmissionsPageContent({ embedded = false }) {
             <div className="panel-head">
               <h2>Referral queue — pending registration</h2>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span className="chip chip-ipd">{referrals?.length ?? (isLoading ? "…" : 0)} pending</span>
+                <span className="chip chip-ipd">{referralPaging.pagination?.total_count ?? (isLoading ? "…" : 0)} pending</span>
                 <button className="primary-btn ipd" onClick={() => setLoggingExternal(true)}>
                   + Log External Referral Letter
                 </button>
@@ -683,12 +687,14 @@ export function AdmissionsPageContent({ embedded = false }) {
                 </tbody>
               </table>
             </div>
+            <PaginationControls pagination={referralPaging.pagination} page={referralPaging.page} pageSize={referralPaging.pageSize}
+              onPageChange={referralPaging.setPage} onPageSizeChange={referralPaging.setPageSize} />
           </div>
 
           <div className="panel" style={{ marginTop: 14 }}>
             <div className="panel-head">
               <h2>Awaiting bed</h2>
-              <span className="chip chip-shared">{awaitingBed?.length ?? 0}</span>
+              <span className="chip chip-shared">{bedPaging.pagination?.total_count ?? 0}</span>
             </div>
             <div className="section" style={{ overflowX: "auto" }}>
               <table className="wtable">
@@ -717,6 +723,8 @@ export function AdmissionsPageContent({ embedded = false }) {
                 </tbody>
               </table>
             </div>
+            <PaginationControls pagination={bedPaging.pagination} page={bedPaging.page} pageSize={bedPaging.pageSize}
+              onPageChange={bedPaging.setPage} onPageSizeChange={bedPaging.setPageSize} />
           </div>
       </div>
 

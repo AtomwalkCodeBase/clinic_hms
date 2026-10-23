@@ -3,7 +3,7 @@
 from django.core.validators import RegexValidator
 from rest_framework import serializers
 from apps.documents.models import BirthHistory
-from apps.opd.models import HospitalPatient, Allergy
+from apps.opd.models import Allergy, PatientEmergencyIntake
 
 # Consent is never withheld from an emergency patient because a reason
 DEFAULT_EMERGENCY_CONSENT_DEFERRED_REASON = (
@@ -106,7 +106,7 @@ class PatientEmergencyRegisterSerializer(serializers.Serializer):
     date_of_birth      = serializers.DateField(required=False, allow_null=True)
     is_mlc             = serializers.BooleanField(required=False, default=False)
     arrival_channel    = serializers.ChoiceField(
-        choices=[c[0] for c in HospitalPatient.ARRIVAL_CHANNEL_CHOICES], required=False, allow_blank=True,
+        choices=[c[0] for c in PatientEmergencyIntake.ARRIVAL_CHANNEL_CHOICES], required=False, allow_blank=True,
     )
     # Whatever is known about the patient at intake, best-effort — none of
     mobile             = serializers.CharField(max_length=15, required=False, allow_blank=True,
@@ -124,36 +124,37 @@ class PatientEmergencyRegisterSerializer(serializers.Serializer):
         return data
 
 
-class PatientDetailSerializer(serializers.ModelSerializer):
-    """Full patient detail. Never exposes internal IDs from other hospitals."""
+class PatientDetailSerializer(serializers.BaseSerializer):
+    """Full patient detail, read-only: the hospital's own row plus everything from `patient.get_patient_details()`.
+    Never exposes internal IDs from other hospitals."""
+    FROM_DETAILS = [
+        "full_name", "date_of_birth", "gender", "blood_group", "marital_status", "nationality", "occupation",
+        "mobile", "alternate_mobile", "email", "address_line1", "city", "state", "pincode",
+        "emergency_contact_name", "emergency_contact_phone", "emergency_contact_relation",
+        "payer_type", "insurance_provider", "policy_number", "tpa_name",
+        "is_dependent", "guardian_name", "guardian_mobile", "guardian_relation", "guardian_awpid", "preferred_language",
+        "identity_status", "is_mlc", "arrival_channel", "placeholder_label", "consent_deferred_reason",
+    ]
 
-    class Meta:
-        model  = HospitalPatient
-        fields = [
-            "id", "uuid", "awpid", "uhid", "branch",
-            "full_name", "date_of_birth", "gender", "blood_group",
-            "marital_status", "nationality", "occupation",
-            "mobile", "alternate_mobile", "email",
-            "address_line1", "city", "state", "pincode",
-            "emergency_contact_name", "emergency_contact_phone", "emergency_contact_relation",
-            "payer_type", "insurance_provider", "policy_number", "tpa_name",
-            "is_dependent", "guardian_name", "guardian_mobile", "guardian_relation", "guardian_awpid",
-            "dpdp_consent_captured", "preferred_language", "registered_at",
-            "identity_status", "is_mlc", "arrival_channel", "placeholder_label", "consent_deferred_reason",
-        ]
-        read_only_fields = ["id", "awpid", "uhid", "registered_at", "dpdp_consent_captured"]
+    def to_representation(self, patient):
+        row = {
+            "id": patient.id, "awpid": patient.awpid, "uhid": patient.uhid,
+            "dpdp_consent_captured": patient.dpdp_consent_captured, "registered_at": patient.registered_at,
+        }
+        details = patient.get_patient_details()
+        return {**row, **{name: details[name] for name in self.FROM_DETAILS}}
 
 
-class PatientSearchSerializer(serializers.ModelSerializer):
+class PatientSearchSerializer(serializers.BaseSerializer):
     """Lightweight result for patient search (name/mobile/UHID/AWPID)."""
-    branch_name = serializers.CharField(source="branch.name", read_only=True, default="")
+    FROM_DETAILS = ["full_name", "mobile", "date_of_birth", "gender", "blood_group", "is_dependent", "guardian_name", "guardian_relation"]
 
-    class Meta:
-        model  = HospitalPatient
-        fields = [
-            "id", "uuid", "awpid", "uhid", "full_name", "mobile", "date_of_birth", "gender", "blood_group",
-            "is_dependent", "guardian_name", "guardian_relation", "branch_name", "registered_at",
-        ]
+    def to_representation(self, patient):
+        row = {
+            "id": patient.id, "awpid": patient.awpid, "uhid": patient.uhid, "registered_at": patient.registered_at,
+        }
+        details = patient.get_patient_details()
+        return {**row, **{name: details[name] for name in self.FROM_DETAILS}}
 
 
 class AllergySerializer(serializers.ModelSerializer):

@@ -8,12 +8,11 @@ from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from core.auth.views import LogoutView, TokenRefreshView, _make_tokens
-from apps.hospital_setup.models import Branch
 from apps.hospital_setup.models import StaffUser
 from apps.patients.models import BlacklistedToken
 from apps.hospital_master.models import Subscription, Hospital
 from core.api.authentication import JWTHospitalAuthentication
-from core.tests.testing import HospitalDBTestCase, requires_hospital_db
+from core.tests.testing import HospitalDBTestCase, make_branch, make_staff, requires_hospital_db
 from apps.patients.services import accounts, create_account
 
 FAR_FUTURE = "2099-01-01T00:00:00Z"
@@ -28,10 +27,8 @@ class AuthenticationTests(HospitalDBTestCase):
         self.sub = Subscription.objects.using("default").create(
             hospital=self.hospital, license_tier="starter", status="active",
         )
-        branch = Branch.objects.using(db).create(name="Main")
-        self.staff = StaffUser.objects.using(db).create(
-            email="a@x.test", role="doctor", phone="9000000030", branch=branch,
-        )
+        _branch, place = make_branch(db)
+        self.staff = make_staff(db, "doctor", email="a@x.test", phone="9000000030", place=place)
         self.staff_payload = {
             "user_id": self.staff.id, "role": "doctor", "hospital_id": self.hospital.id,
             "db_name": db, "email": "a@x.test",

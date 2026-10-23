@@ -4,6 +4,8 @@ import { FlaskConical, Search, Filter, X, Download } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
+import { useClientPaging } from "../../hooks/usePagedApi";
+import PaginationControls from "../../components/common/PaginationControls";
 import { useToast } from "../../hooks/useToast";
 import apiClient from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
@@ -405,6 +407,8 @@ export default function PatientPrescriptionsPage() {
       // Most recent first — dates are ISO strings, so a plain string
       .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   }, [withRx, search, dateFrom, dateTo, statusFilter, doctorFilter]);
+  const rxPaging = useClientPaging(rxOrders, 5);
+  const recordPaging = useClientPaging(records, 5);
 
   return (
     <AppShell>
@@ -465,9 +469,11 @@ export default function PatientPrescriptionsPage() {
         {/* Buy in-house or elsewhere — one card per Rx, same pattern as lab tests */}
         {!rxLoading && rxOrders.length > 0 && (
           <div style={{ display: "grid", gap: 14, marginBottom: 24 }}>
-            {rxOrders.map(rx => (
+            {rxPaging.pageItems.map(rx => (
               <PrescriptionOrderCard key={`${rx.hospital_db}-${rx.id}`} rx={rx} onChanged={refetchRxOrders} patientAwpid={patientAwpid} />
             ))}
+            <PaginationControls pagination={rxPaging.pagination} page={rxPaging.page} pageSize={rxPaging.pageSize}
+              onPageChange={rxPaging.setPage} onPageSizeChange={rxPaging.setPageSize} pageSizeOptions={[5, 10, 20]} />
           </div>
         )}
 
@@ -495,9 +501,11 @@ export default function PatientPrescriptionsPage() {
           </div>
         ) : (
           <div style={{ display: "grid", gap: 16 }}>
-            {records.map((r, idx) => (
+            {recordPaging.pageItems.map((r, idx) => (
               <ConsultRecordCard key={idx} r={r} />
             ))}
+            <PaginationControls pagination={recordPaging.pagination} page={recordPaging.page} pageSize={recordPaging.pageSize}
+              onPageChange={recordPaging.setPage} onPageSizeChange={recordPaging.setPageSize} pageSizeOptions={[5, 10, 20]} />
             {hasMore && (
               <button
                 onClick={loadMore}

@@ -2,7 +2,8 @@
 import { useState } from "react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
-import { useApi }    from "../../hooks/useApi";
+import { usePagedApi } from "../../hooks/usePagedApi";
+import PaginationControls from "../../components/common/PaginationControls";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { usePatientContext } from "../../context/PatientContext";
@@ -31,12 +32,11 @@ export default function NotificationsPage() {
   const { familyMembers } = usePatientContext();
   // Like PortalInvoiceListView, notifications resolve one target patient at
   const [notifFor, setNotifFor] = useState(""); // "" = self, else a family member's awpid
-  const { data, isLoading, refetch } = useApi(
+  const { data, items: notifications, pagination, page, setPage, pageSize, setPageSize, isLoading, refetch } = usePagedApi(
     API_ENDPOINTS.PORTAL.NOTIFICATIONS,
-    { params: notifFor ? { patient_awpid: notifFor } : {} },
+    { params: notifFor ? { patient_awpid: notifFor } : {}, pageSize: 10 },
   );
   const [markingId, setMarkingId] = useState(null);
-  const notifications = data?.results || [];
   const unreadCount = data?.unread_count ?? 0;
 
   async function markRead(n) {
@@ -62,7 +62,7 @@ export default function NotificationsPage() {
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: "1px solid var(--color-border)", flexWrap: "wrap", gap: 8 }}>
             <span className="dot-label dot-label--green">
-              {unreadCount > 0 ? `${unreadCount} unread` : "All caught up"} ({notifications.length})
+              {unreadCount > 0 ? `${unreadCount} unread` : "All caught up"} ({pagination?.total_count ?? notifications.length})
             </span>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               {familyMembers.length > 0 && (
@@ -143,6 +143,7 @@ export default function NotificationsPage() {
               })}
             </div>
           )}
+          <PaginationControls pagination={pagination} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
         </div>
       </PageShell>
     </AppShell>

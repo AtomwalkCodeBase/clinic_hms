@@ -7,6 +7,8 @@ import { PageShell } from "../../components/common/PageShell";
 import DoctorCard    from "../../components/common/DoctorCard";
 import HospitalDirections from "../../components/common/HospitalDirections";
 import { useApi }    from "../../hooks/useApi";
+import { useClientPaging } from "../../hooks/usePagedApi";
+import PaginationControls from "../../components/common/PaginationControls";
 import API_ENDPOINTS from "../../config/api.config";
 import ROUTES        from "../../config/routes.config";
 
@@ -43,6 +45,7 @@ export default function PatientHospitalDoctorsPage() {
         .some(f => (f || "").toLowerCase().includes(q));
     });
   }, [allDoctors, query, specialty]);
+  const doctorPaging = useClientPaging(doctors, 10);
 
   const activeFilterCount = specialty ? 1 : 0;
   function clearFilters() { setQuery(""); setSpecialty(""); }
@@ -205,18 +208,22 @@ export default function PatientHospitalDoctorsPage() {
             No doctors match your search or filters.
           </div>
         ) : (
-          <div style={{ display: "grid", gap: 14 }}>
-            {doctors.map(d => (
-              <DoctorCard
-                key={d.id}
-                d={d}
-                hospitalName={hospital?.name}
-                hospitalCity={hospital?.city}
-                onBook={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(hospitalId, d.id))}
-                onViewProfile={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(hospitalId, d.id))}
-              />
-            ))}
-          </div>
+          <>
+            <div style={{ display: "grid", gap: 14 }}>
+              {doctorPaging.pageItems.map(d => (
+                <DoctorCard
+                  key={d.id}
+                  d={d}
+                  hospitalName={hospital?.name}
+                  hospitalCity={hospital?.city}
+                  onBook={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(hospitalId, d.id))}
+                  onViewProfile={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(hospitalId, d.id))}
+                />
+              ))}
+            </div>
+            <PaginationControls pagination={doctorPaging.pagination} page={doctorPaging.page} pageSize={doctorPaging.pageSize}
+              onPageChange={doctorPaging.setPage} onPageSizeChange={doctorPaging.setPageSize} pageSizeOptions={[5, 10, 15, 20]} />
+          </>
         )}
       </PageShell>
     </AppShell>

@@ -1,14 +1,13 @@
 from django.db import IntegrityError, transaction
 
-from apps.hospital_setup.models import Branch
 from apps.pharmacy.models import Drug, Stock, StockTransaction
-from core.tests.testing import HospitalDBTestCase
+from core.tests.testing import HospitalDBTestCase, make_branch
 
 
 class StockRulesTests(HospitalDBTestCase):
     def setUp(self):
         super().setUp()
-        self.branch = Branch.objects.using(self.hospital_alias).create(name="Main")
+        self.branch, _place = make_branch(self.hospital_alias)
         self.drug = Drug.objects.using(self.hospital_alias).create(name="Paracetamol", drug_code="D-1")
 
     def test_stock_cannot_go_below_zero(self):

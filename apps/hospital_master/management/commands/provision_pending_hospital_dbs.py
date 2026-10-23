@@ -103,9 +103,10 @@ class Command(BaseCommand):
         # ── Hospital admin login ────────────────────────────────────────
         from apps.hospital_setup.models import StaffUser
         from apps.hospital_setup.staff_services import next_employee_id
+        from apps.hospital_setup.rbac import role_q, system_role
         from apps.patients.models import StaffMobileIndex
 
-        if StaffUser.objects.using(db).filter(role="hospital_admin").exists():
+        if StaffUser.objects.using(db).filter(role_q("hospital_admin")).exists():
             self.stdout.write(self.style.WARNING("  hospital_admin already exists — skipping."))
             return
 
@@ -117,7 +118,7 @@ class Command(BaseCommand):
             employee_id=next_employee_id(db),
             first_name="Hospital",
             last_name="Admin",
-            role="hospital_admin",
+            group=system_role(db, "hospital_admin"),
             must_change_password=True,
         )
         admin.set_password(password)

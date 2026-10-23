@@ -8,6 +8,8 @@ import {
 import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useToast } from "../../hooks/useToast";
+import HospitalSharingCard from "../../components/common/HospitalSharingCard";
+import { usePatientContext } from "../../context/PatientContext";
 import apiClient from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { TEST_CATEGORY_LABELS as CATEGORY_LABELS } from "../../constants/labels";
@@ -174,6 +176,7 @@ function Pager({ meta, onPage }) {
 }
 
 export default function SharedRecordsPrivacyPage() {
+  const { selectedPatient } = usePatientContext();
   const { toastApiError } = useToast();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -361,6 +364,7 @@ export default function SharedRecordsPrivacyPage() {
   return (
     <AppShell>
       <PageShell title="Shared records privacy">
+        <HospitalSharingCard key={selectedPatient.awpid || "self"} awpid={selectedPatient.awpid || ""} name={selectedPatient.isSelf ? "" : selectedPatient.name} />
         <p style={{ marginTop: -8, marginBottom: 16, fontSize: 13, color: "var(--color-text-secondary)", maxWidth: "62ch" }}>
           Choose what a doctor sees when you share your records. Nothing here is hidden from you, and nothing is deleted.
         </p>

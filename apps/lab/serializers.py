@@ -38,7 +38,7 @@ class LabReportItemSerializer(serializers.ModelSerializer):
 
 
 class LabReportSerializer(serializers.ModelSerializer):
-    items = LabReportItemSerializer(many=True, read_only=True)
+    items = LabReportItemSerializer(many=True, read_only=True, source="lp_items")
     # file_url stores an S3 object key (see core/storage.py), not a usable
     file_url = serializers.SerializerMethodField()
 
@@ -58,9 +58,9 @@ class LabRequestSerializer(serializers.ModelSerializer):
     test_code        = serializers.CharField(source="test.code", read_only=True)
     test_price       = serializers.DecimalField(source="test.price", max_digits=8, decimal_places=2, read_only=True)
     test_turnaround_hours = serializers.IntegerField(source="test.turnaround_hours", read_only=True)
-    patient_name     = serializers.CharField(source="patient.full_name", read_only=True)
+    patient_name     = serializers.CharField(source="patient.get_patient_details.full_name", read_only=True)
     patient_uhid     = serializers.CharField(source="patient.uhid", read_only=True)
-    patient_phone    = serializers.CharField(source="patient.mobile", read_only=True)
+    patient_phone    = serializers.CharField(source="patient.get_patient_details.mobile", read_only=True)
     patient_age      = serializers.SerializerMethodField()
     patient_age_months = serializers.SerializerMethodField()
     requested_by_name = serializers.SerializerMethodField()
@@ -90,16 +90,16 @@ class LabRequestSerializer(serializers.ModelSerializer):
 
     # Real age at read time, derived from the patient's real date_of_birth —
     def get_patient_age(self, obj):
-        ym = _age_years_months(obj.patient.date_of_birth) if obj.patient else None
+        ym = _age_years_months(obj.patient.get_patient_details()["date_of_birth"]) if obj.patient else None
         return ym[0] if ym else None
 
     def get_patient_age_months(self, obj):
-        ym = _age_years_months(obj.patient.date_of_birth) if obj.patient else None
+        ym = _age_years_months(obj.patient.get_patient_details()["date_of_birth"]) if obj.patient else None
         return ym[1] if ym else None
 
     def get_report(self, obj):
         try:
-            r = obj.report
+            r = obj.lr_report
         except LabReport.DoesNotExist:
             return None
         return {
@@ -107,7 +107,7 @@ class LabRequestSerializer(serializers.ModelSerializer):
             "result_summary": r.result_summary, "file_data": blob_storage.signed_url(r.file_url),
             "file_name": r.file_name, "mime_type": r.mime_type,
             "delivered_at": r.delivered_at,
-            "items": LabReportItemSerializer(r.items.all(), many=True).data,
+            "items": LabReportItemSerializer(r.lp_items.all(), many=True).data,
         }
 
     def get_attached_document(self, obj):

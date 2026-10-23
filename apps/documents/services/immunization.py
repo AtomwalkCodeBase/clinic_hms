@@ -1,12 +1,17 @@
-"""Immunization status against the configured (IAP) schedule."""
+"""
+Immunization status against the configured (IAP) schedule.
 
+Given records come from vaccination cards / prescriptions via extraction, or
+are entered by clinic staff. Brand and combination names are resolved to
+component vaccines ("Hexaxim" -> DTaP, Hib, Hep B, IPV) so one shot fills
+several schedule rows.
+"""
 import re
 from datetime import date, timedelta
 from typing import List, Optional
 
 from .clinical_rules import format_age
 from .config import load_config
-
 
 UPCOMING_WINDOW_DAYS = 60
 EARLY_TOLERANCE_DAYS = 4  # IAP allows a short grace before the minimum age
@@ -32,7 +37,14 @@ def resolve_vaccines(text: str, cfg=None) -> List[str]:
 
 
 def immunization_status(dob: date, given: List[dict], as_of: date, cfg=None) -> dict:
-    """given: [{"vaccine_text": "Penta 1", "given_on": date, "document_id": 12, "id": 5}, ...]"""
+    """
+    given: [{"vaccine_text": "Penta 1", "given_on": date, "document_id": 12, "id": 5}, ...]
+    -> {
+         "rows": [{code, vaccine, dose, due_on, due_age, status, given_on, delay_days, document_id}],
+         "extra_doses": [...], "unresolved": [...],
+         "summary": {"given", "overdue", "due", "upcoming", "coverage_pct"}
+       }
+    """
     cfg = cfg or load_config()
     doses = sorted(cfg["immunization_schedule"]["doses"], key=lambda d: (d["vaccine"], d["due_days"]))
 
@@ -65,6 +77,7 @@ def immunization_status(dob: date, given: List[dict], as_of: date, cfg=None) -> 
                 "document_id": None, "early": False, "late": False,
             }
             # skip shots clearly given before this dose's window (they belong to an earlier dose
+            # that is not in the schedule, e.g. pulse-polio OPV)
             while queue and (queue[0][0] - due_on).days < -EARLY_TOLERANCE_DAYS - 28:
                 extra.append({"vaccine": vaccine, "given_on": queue[0][0].isoformat()})
                 queue.pop(0)

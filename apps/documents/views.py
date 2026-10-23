@@ -459,9 +459,10 @@ class PatientVaccinationListCreateView(APIView):
         patient = get_patient(request, pk)
         if not patient:
             return not_found(PATIENT_NOT_FOUND)
-        roadmap = build_roadmap(patient.awpid, patient.date_of_birth, rules_for("vaccination", request.hospital_id),
+        details = patient.get_patient_details()
+        roadmap = build_roadmap(patient.awpid, details["date_of_birth"], rules_for("vaccination", request.hospital_id),
                                 viewer_hospital_id=request.hospital_id, hie_consent=patient.hie_consent_given)
-        return success(data={"patient_name": patient.full_name, "date_of_birth": patient.date_of_birth,
+        return success(data={"patient_name": details["full_name"], "date_of_birth": details["date_of_birth"],
                              "consent_given": patient.hie_consent_given, "roadmap": roadmap})
 
     def post(self, request, pk):
@@ -623,7 +624,7 @@ class BirthHistoryView(APIView):
         bh = BirthHistory.objects.using("default").create(
             patient=shared, source_hospital_id=request.hospital_id, **serializer.validated_data)
         log_action(request, request.hospital_db, "birth_history.create", resource_type="BirthHistory",
-                   resource_id=bh.id, patient_id=patient.uuid, metadata={"replaced_other_hospitals_copy": None})
+                   resource_id=bh.id, patient_id=patient, metadata={"replaced_other_hospitals_copy": None})
         return created(data=BirthHistorySerializer(bh).data, message="Birth history recorded.")
 
     def patch(self, request, pk):
@@ -642,7 +643,7 @@ class BirthHistoryView(APIView):
         changed = {f: [str(old), str(getattr(bh, f))] for f, old in before.items() if getattr(bh, f) != old}
         replaced = previous_hospital if previous_hospital not in (None, request.hospital_id) else None
         log_action(request, request.hospital_db, "birth_history.update", resource_type="BirthHistory",
-                   resource_id=bh.id, patient_id=patient.uuid,
+                   resource_id=bh.id, patient_id=patient,
                    metadata={"changed": changed, "replaced_other_hospitals_copy": replaced})
         return success(data=BirthHistorySerializer(bh).data, message="Birth history updated.")
 class PatientMilestoneListCreateView(APIView):
@@ -655,9 +656,10 @@ class PatientMilestoneListCreateView(APIView):
         patient = get_patient(request, pk)
         if not patient:
             return not_found(PATIENT_NOT_FOUND)
-        roadmap = build_roadmap(patient.awpid, patient.date_of_birth, rules_for("milestone", request.hospital_id),
+        details = patient.get_patient_details()
+        roadmap = build_roadmap(patient.awpid, details["date_of_birth"], rules_for("milestone", request.hospital_id),
                                 viewer_hospital_id=request.hospital_id, hie_consent=patient.hie_consent_given)
-        return success(data={"patient_name": patient.full_name, "date_of_birth": patient.date_of_birth,
+        return success(data={"patient_name": details["full_name"], "date_of_birth": details["date_of_birth"],
                              "consent_given": patient.hie_consent_given, "roadmap": roadmap})
 
     def post(self, request, pk):
@@ -804,10 +806,11 @@ class PortalVaccinationFileView(APIView):
         if owner_awpid != account.awpid and not PatientRelationship.objects.using("default").filter(
                 guardian__awpid=account.awpid, dependent__awpid=owner_awpid).exists():
             return error("This record does not belong to you.", status=403)
-        if not record.file_data:
+        doc = record.document
+        if not doc or not doc.file_name:
             return not_found("No certificate has been uploaded for this record.")
-        return success(data={"file_data": blob_storage.signed_url(record.file_data),
-                             "file_name": record.file_name, "mime_type": record.mime_type})
+        return success(data={"file_data": blob_storage.signed_url(doc.file_name.name),
+                             "file_name": records.display_name(doc), "mime_type": records.mime_of(doc)})
 # ── family ────────────────────────────────────────────────────────────────────────────────────────────────────────
 class PortalFamilyListCreateView(APIView):
     """POST body: {full_name, date_of_birth, gender?, relationship?}. A member added here and one added by a hospital's"""

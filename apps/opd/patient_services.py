@@ -13,10 +13,11 @@ from apps.patients.models import Patient, PatientRelationship
 from apps.documents.models import ClinicalEvent, SharedAllergy, LabResult
 from apps.documents.lib_vitals import history_readings
 from apps.documents.models import MedicalDocument
-from apps.opd.models import HospitalPatient
+from apps.opd.models import HospitalPatient, PatientEmergencyIntake, PatientPayer
 
 logger = logging.getLogger(__name__)
 
+PERSONAL_FIELDS = ("alternate_mobile", "address_line1", "city", "state", "pincode", "marital_status", "nationality", "occupation")
 _GENDER_MAP = {"male": "M", "female": "F", "other": "O", "prefer_not_to_say": "O"}
 
 
@@ -46,13 +47,7 @@ class PatientService:
         except Branch.DoesNotExist:
             raise ValueError("Select an active branch before booking this patient.")
         uhid, _ = get_next_number(branch_id=branch.id, entity="uhid", using=db_name)
-        return HospitalPatient.objects.using(db_name).create(
-            awpid=identity.awpid, uhid=uhid, branch=branch,
-            full_name=identity.full_name, date_of_birth=identity.date_of_birth,
-            gender=_normalize_gender(identity.gender), blood_group=identity.blood_group,
-            mobile=mobile_raw, email=identity.email,
-            preferred_language=identity.preferred_language,
-        )
+        return HospitalPatient.objects.using(db_name).create(awpid=identity.awpid, uhid=uhid)
 
     # ── Registration ──────────────────────────────────────────────────────
     @staticmethod
@@ -65,6 +60,7 @@ class PatientService:
             raise ValueError(f"Branch {branch_id} not found.")
 
         is_dependent = bool(data.get("is_dependent"))
+        personal = {f: data[f] for f in PERSONAL_FIELDS if data.get(f)}
         mobile_raw = ""
 
         if is_dependent:
@@ -103,7 +99,7 @@ class PatientService:
                 email=data.get("email", ""),
                 blood_group=data.get("blood_group", ""),
                 preferred_language=data.get("preferred_language", "en"),
-                created_by="hospital", source_hospital_id=hospital_id,
+                created_by="hospital", source_hospital_id=hospital_id, personal=personal,
             )
         else:
             mobile_raw  = data.get("mobile", "")
@@ -118,10 +114,14 @@ class PatientService:
                         "awpid":              generate_unique_awpid(),
                         "full_name":          data["full_name"],
                         "date_of_birth":      data.get("date_of_birth"),
-                        "gender":             data.get("gender", ""),
+                        "gender":             _normalize_gender(data.get("gender", "")),
                         "email":              data.get("email", ""),
                         "blood_group":        data.get("blood_group", ""),
                         "preferred_language": data.get("preferred_language", "en"),
+                        "emergency_contact_name": data.get("emergency_name", "") or data.get("emergency_contact_name", ""),
+                        "emergency_contact_phone": data.get("emergency_phone", "") or data.get("emergency_contact_phone", ""),
+                        "emergency_contact_relation": data.get("emergency_relation", ""),
+                        **personal,
                         "created_by": "hospital", "source_hospital_id": hospital_id,
                     },
                 )
@@ -130,57 +130,28 @@ class PatientService:
         existing = HospitalPatient.objects.using(db_name).filter(awpid=identity.awpid).first()
         if existing:
             raise ValueError(
-                f"Patient already registered at this hospital — UHID {existing.uhid}"
-                f"{f' ({existing.branch.name})' if existing.branch else ''}. Use their existing record."
+                f"Patient already registered at this hospital — UHID {existing.uhid}. Use their existing record."
             )
 
         # ── Generate UHID ─────────────────────────────────────────────────
         uhid, _ = get_next_number(branch_id=branch.id, entity="uhid", using=db_name)
 
-        # ── Normalise gender from frontend verbose → model single char ────────
-        gender = _normalize_gender(data.get("gender", ""))
-
-        # ── Create hospital Patient ─────────────────────────────────────────────
+        # ── Create the hospital's own patient row (who the patient is lives in the shared record above) ──
         patient = HospitalPatient.objects.using(db_name).create(
             awpid=identity.awpid,
             uhid=uhid,
-            branch=branch,
-            # Personal
-            full_name=data["full_name"],
-            date_of_birth=data.get("date_of_birth"),
-            gender=gender,
-            blood_group=data.get("blood_group", ""),
-            marital_status=data.get("marital_status", ""),
-            nationality=data.get("nationality", "Indian"),
-            occupation=data.get("occupation", ""),
-            # Contact
-            mobile=mobile_raw,
-            alternate_mobile=data.get("alternate_mobile", ""),
-            email=data.get("email", ""),
-            address_line1=data.get("address_line1", ""),
-            city=data.get("city", ""),
-            state=data.get("state", ""),
-            pincode=data.get("pincode", ""),
-            # Emergency — frontend sends emergency_name / emergency_phone
-            emergency_contact_name=data.get("emergency_name", "") or data.get("emergency_contact_name", ""),
-            emergency_contact_phone=data.get("emergency_phone", "") or data.get("emergency_contact_phone", ""),
-            emergency_contact_relation=data.get("emergency_relation", ""),
-            # Insurance
-            payer_type=data.get("payer_type", "self"),
-            insurance_provider=data.get("insurance_provider", ""),
-            policy_number=data.get("policy_number", ""),
-            tpa_name=data.get("tpa_name", ""),
-            # Dependent / guardian (plain per-hospital copy for display here)
-            is_dependent=is_dependent,
-            guardian_name=data.get("guardian_name", "") if is_dependent else "",
-            guardian_mobile=data.get("guardian_mobile", "") if is_dependent else "",
             # Consent
             dpdp_consent_captured=bool(data.get("dpdp_consent", False)),
             dpdp_consent_at=timezone.now() if data.get("dpdp_consent") else None,
             hie_consent_given=bool(data.get("hie_consent", False)),
             hie_consent_at=timezone.now() if data.get("hie_consent") else None,
-            preferred_language=data.get("preferred_language", "en"),
         )
+        # What only this hospital knows: who pays
+        if (data.get("payer_type", "self") != "self" or data.get("insurance_provider") or data.get("policy_number")
+                or data.get("tpa_name")):
+            PatientPayer.objects.using(db_name).create(
+                patient=patient, payer_type=data.get("payer_type", "self"), insurance_provider=data.get("insurance_provider", ""),
+                policy_number=data.get("policy_number", ""), tpa_name=data.get("tpa_name", ""))
 
         logger.info(
             "Patient registered: awpid=%s uhid=%s branch=%s (new_identity=%s, dependent=%s)",
@@ -228,6 +199,10 @@ class PatientService:
                 mobile=None,
                 is_dependent=False,
                 preferred_language=data.get("preferred_language", "en"),
+                # Who came with the patient is noted on the shared record, as the person to reach
+                emergency_contact_name=(data.get("guardian_name") or "").strip(),
+                emergency_contact_phone=(data.get("guardian_mobile") or data.get("mobile") or "").strip(),
+                guardian_mobile=(data.get("guardian_mobile") or "").strip(),
                 created_by="hospital", source_hospital_id=getattr(request, "hospital_id", None),
             )
 
@@ -242,27 +217,22 @@ class PatientService:
         patient = HospitalPatient.objects.using(db_name).create(
             awpid=identity.awpid,
             uhid=uhid,
-            branch=branch,
-            full_name=full_name,
-            date_of_birth=data.get("date_of_birth"),
-            gender=_normalize_gender(data.get("gender", "")),
-            mobile=data.get("mobile", ""),
-            guardian_name=data.get("guardian_name", ""),
-            guardian_mobile=data.get("guardian_mobile", ""),
-            identity_status=HospitalPatient.IDENTITY_PROVISIONAL,
+            # Deliberately NOT captured — see consent_deferred_reason below.
+            dpdp_consent_captured=False,
+            hie_consent_given=False,
+        )
+        PatientEmergencyIntake.objects.using(db_name).create(
+            patient=patient,
+            identity_status=PatientEmergencyIntake.IDENTITY_PROVISIONAL,
             is_mlc=bool(data.get("is_mlc", False)),
             arrival_channel=data.get("arrival_channel", ""),
             placeholder_label=placeholder_label,
             consent_deferred_reason=consent_deferred_reason,
-            # Deliberately NOT captured — see consent_deferred_reason above.
-            dpdp_consent_captured=False,
-            hie_consent_given=False,
-            preferred_language=data.get("preferred_language", "en"),
         )
 
         logger.info(
             "Emergency patient registered: awpid=%s uhid=%s branch=%s is_mlc=%s",
-            identity.awpid, uhid, branch.name, patient.is_mlc,
+            identity.awpid, uhid, branch.name, bool(data.get("is_mlc", False)),
         )
 
         # Consent is deliberately NOT recorded as granted here (unlike
@@ -275,7 +245,7 @@ class PatientService:
                                     date_of_birth, gender: str = "", relationship: str = "other",
                                     email: str = "", blood_group: str = "",
                                     preferred_language: str = "en", created_by: str = "patient",
-                                    source_hospital_id=None):
+                                    source_hospital_id=None, personal=None):
         """Find-or-create a dependent's Patient under a guardian."""
         with transaction.atomic(using="default"):
             existing_rel_awpids = list(
@@ -312,7 +282,7 @@ class PatientService:
                     email=email,
                     blood_group=blood_group,
                     preferred_language=preferred_language,
-                    created_by=created_by, source_hospital_id=source_hospital_id,
+                    created_by=created_by, source_hospital_id=source_hospital_id, **(personal or {}),
                 )
             # Covers all three paths above uniformly: brand-new identity (no
             PatientRelationship.objects.using("default").get_or_create(
@@ -493,17 +463,16 @@ class PatientService:
             "already_registered_here": bool(local),
             "existing_patient_id": local.id if local else None,
             "existing_uhid": local.uhid if local else None,
-            "existing_branch_name": local.branch.name if local and local.branch else None,
+            "existing_branch_name": None,
             "family_members": family_members,
         }
 
     # ── Search ────────────────────────────────────────────────────────────
     @staticmethod
     def search(query: str, branch_id: int | None, db_name: str):
-        """Search patients by UHID, AWPID, name, or mobile (prefix match)."""
-        qs = HospitalPatient.objects.using(db_name).select_related("branch")
-        if branch_id:
-            qs = qs.filter(branch_id=branch_id)
+        """Search patients by UHID, AWPID, name, or mobile (prefix match). The name and mobile are in the shared record: the words are
+        looked up there first, then matched to this hospital's patients by awpid."""
+        qs = HospitalPatient.objects.using(db_name)
 
         query = (query or "").strip()
         if not query:
@@ -511,15 +480,38 @@ class PatientService:
 
         combined = Q()
         for word in query.split():
-            combined &= (
-                Q(full_name__icontains=word)
-                | Q(uhid__icontains=word)
-                | Q(awpid__icontains=word)
-                | Q(mobile__startswith=word)
-                # Dependents (children etc.) often get searched for by the
-                | Q(guardian_name__icontains=word)
+            in_shared_record = list(
+                Patient.objects.using("default").filter(
+                    Q(full_name__icontains=word) | Q(awpid__icontains=word) | Q(mobile__startswith=word)
+                ).values_list("awpid", flat=True)
             )
-        return qs.filter(combined).distinct().order_by("full_name")
+            # Dependents (children etc.) often get searched for by the guardian's name
+            of_guardian = list(
+                PatientRelationship.objects.using("default").filter(guardian__full_name__icontains=word)
+                .values_list("dependent__awpid", flat=True)
+            )
+            combined &= (
+                Q(uhid__icontains=word)
+                | Q(awpid__icontains=word)
+                | Q(awpid__in=in_shared_record)
+                | Q(awpid__in=of_guardian)
+            )
+        return qs.filter(combined).distinct().order_by("-registered_at")
+
+    @staticmethod
+    def matching_awpids(db_name: str, text: str) -> list:
+        """The awpids of this hospital's patients matching `text` in their number (UHID), awpid, name or mobile number."""
+        text = (text or "").strip()
+        if not text:
+            return []
+        shared = Patient.objects.using("default").filter(
+            Q(full_name__icontains=text) | Q(mobile__icontains=text) | Q(awpid__icontains=text)
+        ).values_list("awpid", flat=True)
+        return list(
+            HospitalPatient.objects.using(db_name).filter(
+                Q(uhid__icontains=text) | Q(awpid__in=list(shared))
+            ).values_list("awpid", flat=True)
+        )
 
     # ── Cross-hospital HIE history ──────────────────────────────────────────
     @staticmethod
@@ -552,13 +544,13 @@ class PatientService:
         prescriptions = []
         for rx in (
             MedicalDocument.objects.using("default")
-            .filter(patient__awpid=awpid, source_type=MedicalDocument.Source.ENCOUNTER)
-            .prefetch_related("drug_items")
+            .filter(patient__awpid=awpid, source_type=MedicalDocument.Source.ENCOUNTER, doc_classification="prescription")
+            .prefetch_related("d_drug_items")
             .order_by("-document_date")[:10]
         ):
             prescriptions.append({
                 "prescribed_on": rx.document_date,
-                "items": list(rx.drug_items.values(
+                "items": list(rx.d_drug_items.values(
                     "drug_name", "dose", "unit", "frequency", "route", "duration_days"
                 )),
             })

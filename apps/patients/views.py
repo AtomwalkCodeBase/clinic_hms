@@ -1,6 +1,5 @@
 """Views of the patient portal, the emergency summary, the consult pad and record sharing."""
 import re
-import uuid
 import logging
 import hashlib
 import secrets
@@ -18,7 +17,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from apps.documents.lib_roadmap import rules_for
 from core.api.permissions import IsPatient
 from core.api.response import success, error, not_found
-from core.api.pagination import paginate_list, paginate_queryset
+from core.api.pagination import page_payload, paginate_list, paginate_queryset
 from apps.hospital_master.services import parameters_of
 from apps.patients.services import resolve_target_awpid_and_dob
 from apps.hospital_master.services import ensure_hospital_db
@@ -40,6 +39,7 @@ from core.utils.age import age_years_months as _age_years_months
 from apps.documents.models import DOCUMENT_TYPES
 from apps.documents.lib_documents import awaiting_review_q
 from apps.documents.lib_documents import clean_doctor_name
+from apps.hospital_setup.rbac import acts_as_q
 from collections import Counter
 from apps.patients.services import accounts, accounts_with_mobile, awpid_of, privacy_for_awpid, pending_stale, device_matches, is_live, lapse_if_due, seconds_left, set_password, check_password
 from apps.documents import lib_documents as classification
@@ -48,7 +48,7 @@ from apps.documents import lib_documents as records
 
 logger = logging.getLogger(__name__)
 # Matches literal doctors AND custom-role staff whose Role.acts_as includes
-DOCTOR_Q = Q(role="doctor") | Q(role="custom", custom_role__acts_as__contains=["doctor"])
+DOCTOR_Q = acts_as_q("doctor")
 # What actually gets pulled from the Atomwalk DB into a new hospital's view —
 HIE_SHARE_CATEGORIES = [
     "Past diagnoses and clinical notes",
@@ -177,7 +177,7 @@ class PortalHospitalListView(APIView):
         ]
         if lat is not None:
             _sort_by_distance(hospitals)
-        return Response({"results": hospitals})
+        return Response(page_payload(request, hospitals) or {"results": hospitals})
 class PortalPlatformStatsView(APIView):
     """GET /api/v1/portal/stats/ — real counts for the dashboard's hero panel"""
     permission_classes = [IsPatient]
@@ -191,7 +191,7 @@ class PortalPlatformStatsView(APIView):
             try:
                 ensure_hospital_db(hospital.db_name)
                 doctor_count += StaffUser.objects.using(hospital.db_name).filter(
-                    role="doctor", is_active=True
+                    DOCTOR_Q, is_active=True
                 ).count()
             except Exception as exc:
                 logger.warning("portal stats: skipped %s (%s)", hospital.db_name, exc)
@@ -283,7 +283,7 @@ class PortalSearchView(APIView):
         if lat is not None:
             _sort_by_distance(hospitals)
 
-        from apps.hospital_setup.models import StaffUser, DoctorProfile
+        from apps.hospital_setup.models import StaffUser
 
         specialty_terms = _expand_search_terms(specialty) if specialty else set()
 
@@ -308,7 +308,7 @@ class PortalSearchView(APIView):
                     profile_q |= (Q(specialisation__icontains=t) | Q(qualification__icontains=t)
                                   | Q(known_for__icontains=t))
                 profile_matches = set(
-                    DoctorProfile.objects.using(db).filter(profile_q).values_list("staff_id", flat=True)
+                    StaffUser.objects.using(db).filter(DOCTOR_Q, is_active=True).filter(profile_q).values_list("id", flat=True)
                 ) if terms else set()
 
                 matched_ids = name_matches | profile_matches
@@ -318,7 +318,7 @@ class PortalSearchView(APIView):
                     for t in specialty_terms:
                         spec_q |= (Q(specialisation__icontains=t) | Q(known_for__icontains=t))
                     spec_matches = set(
-                        DoctorProfile.objects.using(db).filter(spec_q).values_list("staff_id", flat=True)
+                        StaffUser.objects.using(db).filter(DOCTOR_Q, is_active=True).filter(spec_q).values_list("id", flat=True)
                     )
                     matched_ids = (matched_ids & spec_matches) if matched_ids else spec_matches
                 elif not terms:
@@ -335,16 +335,12 @@ class PortalSearchView(APIView):
                     s.id: s for s in
                     StaffUser.objects.using(db).filter(DOCTOR_Q, id__in=matched_ids, is_active=True)
                 }
-                profiles_by_staff = {
-                    p.staff_id: p for p in
-                    DoctorProfile.objects.using(db).filter(staff_id__in=staff_by_id.keys())
-                }
                 params = parameters_of(hospital)
                 hospital_distance_km = None
                 if lat is not None and params.latitude is not None and params.longitude is not None:
                     hospital_distance_km = round(haversine_km(lat, lng, params.latitude, params.longitude), 1)
                 for sid, staff in staff_by_id.items():
-                    card = _doctor_card(staff, profiles_by_staff.get(sid))
+                    card = _doctor_card(staff, staff)
                     card["hospital_id"] = hospital.id
                     card["hospital"] = hospital.name
                     card["hospital_city"] = hospital.city or ""
@@ -399,21 +395,15 @@ class PortalSpecialtyListView(APIView):
 
     def get(self, request):
         from collections import Counter
-        from apps.hospital_setup.models import StaffUser, DoctorProfile
+        from apps.hospital_setup.models import StaffUser
 
         counts = Counter()
         for hospital in Hospital.objects.using("default").filter(is_active=True):
             db = hospital.db_name
             try:
                 ensure_hospital_db(db)
-                doctor_ids = set(
-                    StaffUser.objects.using(db).filter(DOCTOR_Q, is_active=True).values_list("id", flat=True)
-                )
-                if not doctor_ids:
-                    continue
                 specs = (
-                    DoctorProfile.objects.using(db)
-                    .filter(staff_id__in=doctor_ids)
+                    StaffUser.objects.using(db).filter(DOCTOR_Q, is_active=True)
                     .exclude(specialisation="")
                     .values_list("specialisation", flat=True)
                 )
@@ -439,26 +429,22 @@ class PortalDoctorListView(APIView):
             return Response({"error": "This hospital isn't available for online booking."}, status=403)
 
         ensure_hospital_db(hospital.db_name)
-        from apps.hospital_setup.models import StaffUser, DoctorProfile
+        from apps.hospital_setup.models import StaffUser
 
         try:
             staff_list = list(
                 StaffUser.objects.using(hospital.db_name)
                 .filter(DOCTOR_Q, is_active=True).order_by("first_name")
             )
-            profiles = {
-                p.staff_id: p
-                for p in DoctorProfile.objects.using(hospital.db_name)
-                    .filter(staff_id__in=[s.id for s in staff_list])
-            }
-            doctors = [_doctor_card(s, profiles.get(s.id)) for s in staff_list]
+            doctors = [_doctor_card(s, s) for s in staff_list]
         except Exception:
             # A hospital can exist in the atomwalk (listed, bookable-in-theory)
             logger.warning("portal doctors: hospital db %s unreachable", hospital.db_name, exc_info=True)
             doctors = []
         params = parameters_of(hospital)
+        paged = page_payload(request, doctors) or {"results": doctors}
         return Response({
-            "results": doctors,
+            **paged,
             "hospital": {
                 "hospital_id": hospital.id, "name": hospital.name, "logo": blob_storage.signed_url(params.logo),
                 "latitude": params.latitude, "longitude": params.longitude,
@@ -477,7 +463,7 @@ class PortalDoctorDetailView(APIView):
             return Response({"error": "This hospital isn't available for online booking."}, status=403)
 
         ensure_hospital_db(hospital.db_name)
-        from apps.hospital_setup.models import StaffUser, DoctorProfile
+        from apps.hospital_setup.models import StaffUser
 
         try:
             staff = StaffUser.objects.using(hospital.db_name).get(
@@ -486,8 +472,7 @@ class PortalDoctorDetailView(APIView):
         except StaffUser.DoesNotExist:
             return Response({"error": "Doctor not found at this hospital."}, status=404)
 
-        profile = DoctorProfile.objects.using(hospital.db_name).filter(staff_id=staff.id).first()
-        data = _doctor_card(staff, profile)
+        data = _doctor_card(staff, staff)
         params = parameters_of(hospital)
         data["hospital"] = {
             "hospital_id": hospital.id, "name": hospital.name, "city": hospital.city or "",
@@ -508,18 +493,14 @@ class PortalDoctorDetailView(APIView):
         # Real count, not a marketing number — signed (finalized) consultations
         from apps.opd.models import OPDEncounter
         data["consultations_count"] = OPDEncounter.objects.using(hospital.db_name).filter(
-            doctor_user_id=staff.id, status=OPDEncounter.STATUS_SIGNED
+            appointment__doctor_id=staff.id, status=OPDEncounter.STATUS_SIGNED
         ).count()
 
         # Which weekdays this doctor actually works (0=Monday..6=Sunday, same
-        from apps.hospital_setup.models import DoctorSchedule, DoctorAvailabilitySlot
-        schedule = DoctorSchedule.objects.using(hospital.db_name).filter(doctor_id=staff.id).first()
-        if schedule:
-            data["working_days"] = sorted(
-                DoctorAvailabilitySlot.objects.using(hospital.db_name)
-                .filter(schedule=schedule, is_available=True)
-                .values_list("day_of_week", flat=True)
-            )
+        from apps.hospital_setup import room_utils
+        schedule = room_utils.schedule_of(staff.id, hospital.db_name)
+        if schedule and room_utils.hours_of(schedule):
+            data["working_days"] = sorted(row["day_of_week"] for row in room_utils.hours_of(schedule) if row["is_available"])
         else:
             data["working_days"] = None
 
@@ -542,29 +523,33 @@ class PortalNextTokenView(APIView):
         ensure_hospital_db(db)
         target_date = request.query_params.get("date") or str(date.today())
 
-        tokens = Appointment.objects.using(db).filter(
-            scheduled_date=target_date, doctor_user_id=doctor_id,
-        ).exclude(status="cancelled").values_list("token_number", flat=True)
-        next_token = (max(tokens) + 1) if tokens else 1
+        from django.db.models import Max
+        from apps.hospital_setup.branch_utils import primary_place
+        from apps.hospital_setup.models import StaffUser
+        doctor = StaffUser.objects.using(db).filter(pk=doctor_id).first()
+        place = primary_place(doctor, db) if doctor else None
+        last = Appointment.objects.using(db).filter(
+            scheduled_date=target_date, branch_department=place,
+        ).aggregate(last=Max("token_number"))["last"] if place else None
 
-        return Response({"date": target_date, "next_token": next_token})
+        return Response({"date": target_date, "next_token": (last or 0) + 1})
 # ── Slots ────────────────────────────────────────────────────────────────────
 
 def _generic_slot_grid():
-    """Fallback grid — 09:00-13:00 and 14:00-18:00, 15-minute slots. Only used"""
+    """Fallback grid — settings.DEFAULT_CLINIC_HOURS in settings.DEFAULT_SLOT_MINUTES slots. Only used"""
     slots = []
-    for start_h, end_h in ((9, 13), (14, 18)):
+    for start_h, end_h in settings.DEFAULT_CLINIC_HOURS:
         t = dtime(start_h, 0)
         while t < dtime(end_h, 0):
             slots.append(t.strftime("%H:%M"))
-            t = (datetime.combine(date.today(), t) + timedelta(minutes=15)).time()
+            t = (datetime.combine(date.today(), t) + timedelta(minutes=settings.DEFAULT_SLOT_MINUTES)).time()
     return slots
 def _slot_grid(doctor_id, db, slot_date):
     """Per-doctor, per-day time grid — reads the doctor's own configured"""
-    from apps.hospital_setup.models import DoctorSchedule, DoctorAvailabilitySlot
+    from apps.hospital_setup import room_utils
 
-    schedule = DoctorSchedule.objects.using(db).filter(doctor_id=doctor_id).first()
-    if not schedule:
+    schedule = room_utils.schedule_of(doctor_id, db)
+    if not schedule or not room_utils.hours_of(schedule):
         return _generic_slot_grid()
 
     try:
@@ -572,16 +557,14 @@ def _slot_grid(doctor_id, db, slot_date):
     except ValueError:
         weekday = date.today().weekday()
 
-    day = DoctorAvailabilitySlot.objects.using(db).filter(
-        schedule=schedule, day_of_week=weekday
-    ).first()
-    if not day or not day.is_available:
+    day = next((row for row in room_utils.hours_of(schedule) if row["day_of_week"] == weekday), None)
+    if not day or not day["is_available"]:
         return []  # doctor doesn't work this day — no slots, not an error
 
     slots = []
-    t = day.start_time
+    t = day["start_time"]
     step = max(schedule.slot_duration_minutes, 1)
-    while t < day.end_time:
+    while t < day["end_time"]:
         slots.append(t.strftime("%H:%M"))
         t = (datetime.combine(date.today(), t) + timedelta(minutes=step)).time()
     return slots
@@ -604,7 +587,7 @@ class PortalSlotListView(APIView):
         booked = {
             t.strftime("%H:%M")
             for t in Appointment.objects.using(db).filter(
-                scheduled_date=slot_date, doctor_user_id=doctor_id,
+                scheduled_date=slot_date, doctor_id=doctor_id,
             ).exclude(status="cancelled").values_list("scheduled_time", flat=True)
             if t
         }
@@ -660,8 +643,8 @@ class PortalBookView(APIView):
             return Response({"error": "Invalid date."}, status=400)
         if requested_date < date.today():
             return Response({"error": "Can't book a date in the past."}, status=400)
-        if requested_date > date.today() + timedelta(days=62):
-            return Response({"error": "Appointments can only be booked up to 2 months in advance."}, status=400)
+        if requested_date > date.today() + timedelta(days=settings.BOOKING_WINDOW_DAYS):
+            return Response({"error": f"Appointments can only be booked up to {settings.BOOKING_WINDOW_DAYS} days in advance."}, status=400)
 
         # scheduled_time is optional — the patient portal is token/queue-based
 
@@ -679,7 +662,7 @@ class PortalBookView(APIView):
             doctor = StaffUser.objects.using(db).get(DOCTOR_Q, pk=doctor_id, is_active=True)
         except StaffUser.DoesNotExist:
             return Response({"error": "Doctor not found at this hospital."}, status=404)
-        # Appointment.doctor_name is a plain snapshot string (not a live FK
+        # PatientBooking keeps the doctor's name as the patient saw it when booking
         doctor_name = _doctor_display_name(doctor).replace("Dr. ", "", 1) or doctor.email
 
         acct = accounts().get(pk=request.user.id)
@@ -687,7 +670,7 @@ class PortalBookView(APIView):
         # ── Who is this booking actually for? ──────────────────────────────
         target_awpid = (d.get("patient_awpid") or "").strip() or acct.awpid
         if target_awpid == acct.awpid:
-            target_name, target_gender, target_dob = acct.full_name, acct.gender, acct.date_of_birth
+            target_name = acct.full_name
         else:
             from apps.patients.models import PatientRelationship, Patient
             is_family = PatientRelationship.objects.using("default").filter(
@@ -698,96 +681,84 @@ class PortalBookView(APIView):
             dep_identity = Patient.objects.using("default").filter(awpid=target_awpid).first()
             if not dep_identity:
                 return Response({"error": "Family member record not found."}, status=404)
-            target_name, target_gender, target_dob = dep_identity.full_name, dep_identity.gender, dep_identity.date_of_birth
+            target_name = dep_identity.full_name
 
-        # ── Find-or-create the hospital-local Patient record ────────────────
-        patient = HospitalPatient.objects.using(db).filter(awpid=target_awpid).first()
-        if not patient:
-            # First time this patient is being registered at THIS hospital —
-            if not d.get("data_sharing_consent"):
-                return Response({
-                    "consent_required": True,
-                    "hospital_name": hospital.name,
-                    "share_categories": HIE_SHARE_CATEGORIES,
-                    "message": f"This is {'your' if target_awpid == acct.awpid else target_name + chr(39) + 's'} first booking at {hospital.name}. Please confirm you're okay sharing this medical history with them.",
-                }, status=428)
+        # The hospital's rows (patient, consent proof, appointment) are written together or not at all.
+        with transaction.atomic(using=db):
+            # ── Find-or-create the hospital-local Patient record ────────────────
+            patient = HospitalPatient.objects.using(db).filter(awpid=target_awpid).first()
+            if not patient:
+                # First time this patient is being registered at THIS hospital —
+                share_history = bool(d.get("data_sharing_consent"))
+                own_record_only = bool(d.get("visit_record_consent")) and not share_history        # keeps this visit's record here, shares nothing from other hospitals
+                if not (share_history or own_record_only):
+                    return Response({
+                        "consent_required": True,
+                        "hospital_name": hospital.name,
+                        "share_categories": HIE_SHARE_CATEGORIES,
+                        "message": f"This is {'your' if target_awpid == acct.awpid else target_name + chr(39) + 's'} first booking at {hospital.name}. Please confirm you're okay sharing this medical history with them.",
+                    }, status=428)
 
-            branch = Branch.objects.using(db).filter(is_active=True).order_by("id").first()
-            if not branch:
-                return Response({"error": "Hospital is not accepting registrations yet."}, status=400)
-            from core.utils.nntm import get_next_number
-            uhid, _ = get_next_number(branch_id=branch.id, entity="uhid", using=db)
-            # These Patient columns are all NOT NULL (blank=True, no null=True) —
-            patient = HospitalPatient.objects.using(db).create(
-                awpid=target_awpid,
-                uhid=uhid,
-                branch=branch,
-                full_name=target_name or "",
-                gender=target_gender or "",
-                date_of_birth=target_dob,
-                # Patient.mobile/email are NOT NULL — a portal account that
-                mobile=contact_mobile if target_awpid == acct.awpid else "",
-                email=(acct.email or "") if target_awpid == acct.awpid else "",
-                is_dependent=target_awpid != acct.awpid,
-                guardian_name=(acct.full_name or "") if target_awpid != acct.awpid else "",
-                guardian_mobile=contact_mobile if target_awpid != acct.awpid else "",
-                hie_consent_given=True,
-                hie_consent_at=timezone.now(),
-                payer_type="self",
-                dpdp_consent_captured=True,
-                dpdp_consent_at=timezone.now(),
-            )
-            # Durable proof trail behind the two booleans above — patient
-            from apps.hospital_setup.compliance_services import record_consent
-            from apps.hospital_setup.models import ConsentRecord
-            record_consent(db, patient, ConsentRecord.CONSENT_DPDP_PROCESSING,
-                            ConsentRecord.SOURCE_PORTAL, request=request)
-            record_consent(db, patient, ConsentRecord.CONSENT_HIE_SHARING,
-                            ConsentRecord.SOURCE_PORTAL, request=request)
+                branch = Branch.objects.using(db).filter(is_active=True).order_by("id").first()
+                if not branch:
+                    return Response({"error": "Hospital is not accepting registrations yet."}, status=400)
+                from core.utils.nntm import get_next_number
+                uhid, _ = get_next_number(branch_id=branch.id, entity="uhid", using=db)
+                # The hospital keeps its own number and consents; who the patient is stays in the shared record
+                patient = HospitalPatient.objects.using(db).create(
+                    awpid=target_awpid,
+                    uhid=uhid,
+                    hie_consent_given=share_history,
+                    hie_consent_at=timezone.now() if share_history else None,
+                    dpdp_consent_captured=True,
+                    dpdp_consent_at=timezone.now(),
+                )
+                # Durable proof trail behind the two booleans above — patient
+                from apps.hospital_setup.compliance_services import record_consent
+                from apps.hospital_setup.models import ConsentRecord
+                record_consent(db, patient, ConsentRecord.CONSENT_DPDP_PROCESSING,
+                                ConsentRecord.SOURCE_PORTAL, request=request)
+                record_consent(db, patient, ConsentRecord.CONSENT_HIE_SHARING,
+                                ConsentRecord.SOURCE_PORTAL, request=request, granted=share_history)
 
-        # ── If a specific time was given (front-desk flow), it must still be free ──
-        if scheduled_time:
-            taken = Appointment.objects.using(db).filter(
-                scheduled_date=scheduled_date, doctor_user_id=doctor.id,
+            # ── If a specific time was given (front-desk flow), it must still be free ──
+            if scheduled_time:
+                taken = Appointment.objects.using(db).filter(
+                    scheduled_date=scheduled_date, doctor_id=doctor.id,
+                    scheduled_time=scheduled_time,
+                ).exclude(status="cancelled").exists()
+                if taken:
+                    return Response({"error": "That slot was just taken. Please pick another."}, status=409)
+
+            # ── Create the appointment (scheduled — front desk checks in) ─────
+            # Resolve the room the same way front desk's own booking flow does
+            room, room_fields = None, {}
+            if scheduled_time:
+                from apps.hospital_setup.room_utils import resolve_room_for_slot
+                room = resolve_room_for_slot(db, doctor.id, requested_date.weekday(), scheduled_time)
+                if room:
+                    room_fields = {"room_id": room.id}
+
+            # The visit is in the department where this doctor sits
+            from apps.hospital_setup.branch_utils import primary_place
+            place = primary_place(doctor, db)
+            if place is None:
+                return Response({"error": "This doctor has not been placed in a branch yet."}, status=400)
+            next_token = Appointment.next_token(place.id, scheduled_date, db)
+            appt = Appointment.objects.using(db).create(
+                patient=patient,
+                doctor=doctor,
+                appointment_type="opd",
+                status=Appointment.STATUS_SCHEDULED,
+                scheduled_date=scheduled_date,
                 scheduled_time=scheduled_time,
-            ).exclude(status="cancelled").exists()
-            if taken:
-                return Response({"error": "That slot was just taken. Please pick another."}, status=409)
-
-        # ── Create the appointment (scheduled — front desk checks in) ─────
-        tokens = Appointment.objects.using(db).filter(
-            scheduled_date=scheduled_date, doctor_user_id=doctor.id,
-        ).values_list("token_number", flat=True)
-        next_token = (max(tokens) + 1) if tokens else 1
-
-        # Resolve room/floor the same way front desk's own booking flow does
-        room_fields = {}
-        if scheduled_time:
-            from apps.hospital_setup.room_utils import resolve_room_for_slot
-            match = resolve_room_for_slot(db, doctor.id, requested_date.weekday(), scheduled_time)
-            if match:
-                room_fields = {
-                    "room_id": match.room_id,
-                    "room_name": match.room.name,
-                    "floor": match.room.floor,
-                }
-
-        appt = Appointment.objects.using(db).create(
-            patient_id=patient.uuid,
-            patient_awpid=patient.awpid,
-            doctor_user_id=doctor.id,
-            doctor_name=doctor_name,
-            appointment_type="opd",
-            status=Appointment.STATUS_SCHEDULED,
-            scheduled_date=scheduled_date,
-            scheduled_time=scheduled_time,
-            token_number=next_token,
-            chief_complaint=chief_complaint,
-            # Front desk/nurse queues are branch-scoped (AppointmentListCreateView,
-            branch_id=doctor.branch_id,
-            payment_preference=payment_preference,
-            **room_fields,
-        )
+                token_number=next_token,
+                chief_complaint=chief_complaint,
+                # Front desk/nurse queues are branch-scoped (AppointmentListCreateView,
+                branch_department=place,
+                payment_preference=payment_preference,
+                **room_fields,
+            )
 
         booking = PatientBooking.objects.using("default").create(
             booked_by=acct,
@@ -812,8 +783,8 @@ class PortalBookView(APIView):
             "payment_preference": payment_preference,
             "patient_name": target_name,
             # Only resolved when scheduled_time was given (a specific slot) —
-            "room_name": room_fields.get("room_name") or None,
-            "floor": room_fields.get("floor") or None,
+            "room_name": room.name if room else None,
+            "floor": room.floor.name if room else None,
             # For the confirmation screen's "Get Directions" / map preview —
             "latitude": parameters_of(hospital).latitude,
             "longitude": parameters_of(hospital).longitude,
@@ -849,8 +820,8 @@ class PortalMyRecordsView(APIView):
                 patient = HospitalPatient.objects.using(db).filter(awpid=target_awpid).first()
                 if not patient:
                     continue
-                appts = (Appointment.objects.using(db)
-                         .filter(patient_id=patient.uuid)
+                appts = (Appointment.objects.using(db).select_related("doctor")
+                         .filter(patient_id=patient.id)
                          .order_by("-scheduled_date", "-created_at")[:50])
                 for appt in appts:
                     enc = OPDEncounter.objects.using(db).filter(appointment_id=appt.id).first()
@@ -859,7 +830,7 @@ class PortalMyRecordsView(APIView):
                         "hospital_db":       db,
                         "date":            str(appt.scheduled_date),
                         "time":            appt.scheduled_time.strftime("%H:%M") if appt.scheduled_time else None,
-                        "doctor":          appt.doctor_name,
+                        "doctor":          appt.doctor.get_full_name(),
                         "status":          appt.status,
                         "chief_complaint": appt.chief_complaint,
                         "diagnoses":       [],
@@ -900,7 +871,7 @@ class PortalMyRecordsView(APIView):
                                     "duration_days": i.duration_days,
                                     "instructions":  i.instructions,
                                 }
-                                for i in rx.items.using(db).all()
+                                for i in rx.rx_items.using(db).all()
                             ]
                             # So the frontend can offer a PDF download right
                             record["prescription_id"] = str(rx.id)
@@ -1002,8 +973,8 @@ class PortalInvoiceReceiptPDFView(APIView):
         pdf_bytes = generate_invoice_pdf(
             invoice=inv,
             # .using(hospital_db) explicitly — see the comment on the inv
-            items=list(inv.items.using(hospital_db).all()),
-            payments=list(inv.payments.using(hospital_db).all().order_by("paid_at")),
+            items=list(inv.i_items.using(hospital_db).all()),
+            payments=list(inv.i_payments.using(hospital_db).all().order_by("paid_at")),
             patient=patient,
             branch=branch,
             hospital_name=hospital_name,
@@ -1017,7 +988,6 @@ class PortalInvoiceReceiptPDFView(APIView):
 # ── My bookings ──────────────────────────────────────────────────────────────
 
 # How long past the scheduled time an appointment is given before it's
-_NO_SHOW_GRACE = timedelta(hours=2)
 _STALE_IF_PAST = ("scheduled", "waiting", "vitals_done")
 def _auto_expire_if_stale(appt, db_name):
     """An appointment left in a pre-consultation status well past its slot"""
@@ -1025,10 +995,57 @@ def _auto_expire_if_stale(appt, db_name):
         return appt.status
     appt_time = appt.scheduled_time or dtime(23, 59)
     appt_dt = timezone.make_aware(datetime.combine(appt.scheduled_date, appt_time))
-    if timezone.now() > appt_dt + _NO_SHOW_GRACE:
+    if timezone.now() > appt_dt + timedelta(hours=settings.NO_SHOW_GRACE_HOURS):
         appt.status = "no_show"
         appt.save(using=db_name, update_fields=["status"])
     return appt.status
+class PortalHospitalSharingView(APIView):
+    """GET  /api/v1/portal/hospital-sharing/?patient_awpid=   which hospitals hold this patient's record and whether each may see their history from other hospitals.
+    POST /api/v1/portal/hospital-sharing/  {hospital_id, share, patient_awpid?}   grant or withdraw that, for one hospital, with a proof row each time."""
+    permission_classes = [IsPatient]
+
+    def get(self, request):
+        from apps.opd.models import HospitalPatient
+
+        target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        out = []
+        for hospital in Hospital.objects.using("default").filter(is_active=True).order_by("name"):
+            try:
+                ensure_hospital_db(hospital.db_name)
+                held = HospitalPatient.objects.using(hospital.db_name).filter(awpid=target_awpid).first()
+            except Exception:
+                logger.warning("hospital-sharing: skipped %s", hospital.db_name, exc_info=True)
+                continue
+            if held:
+                out.append({"hospital_id": hospital.id, "hospital": hospital.name, "share": bool(held.hie_consent_given),
+                            "since": held.hie_consent_at})
+        return Response({"results": out})
+
+    def post(self, request):
+        from apps.hospital_setup.compliance_services import record_consent
+        from apps.hospital_setup.models import ConsentRecord
+        from apps.opd.models import HospitalPatient
+
+        target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
+        if err:
+            return err
+        if "share" not in request.data:
+            return Response({"error": "share (true or false) is required."}, status=400)
+        try:
+            hospital = Hospital.objects.using("default").get(pk=request.data.get("hospital_id"), is_active=True)
+        except (Hospital.DoesNotExist, ValueError, TypeError):
+            return Response({"error": "Hospital not found."}, status=404)
+        ensure_hospital_db(hospital.db_name)
+        held = HospitalPatient.objects.using(hospital.db_name).filter(awpid=target_awpid).first()
+        if not held:
+            return Response({"error": "This patient has no record at that hospital."}, status=404)
+        share = bool(request.data.get("share"))
+        record_consent(hospital.db_name, held, ConsentRecord.CONSENT_HIE_SHARING, ConsentRecord.SOURCE_PORTAL, request=request, granted=share)
+        return Response({"hospital_id": hospital.id, "share": share})
+
+
 class PortalMyBookingsView(APIView):
     permission_classes = [IsPatient]
 
@@ -1060,24 +1077,22 @@ class PortalMyBookingsView(APIView):
             doctor_specialisation = ""
             try:
                 ensure_hospital_db(b.hospital.db_name)
-                appt = Appointment.objects.using(b.hospital.db_name).get(pk=b.appointment_id)
+                appt = Appointment.objects.using(b.hospital.db_name).select_related("doctor", "room__floor").get(pk=b.appointment_id)
                 status_now = _auto_expire_if_stale(appt, b.hospital.db_name)
                 token = appt.token_number
                 slot_time = appt.scheduled_time.strftime("%H:%M") if appt.scheduled_time else None
-                # appt.doctor_user_id is a UUIDField, but the value actually
-                doctor_id = appt.doctor_user_id.int if isinstance(appt.doctor_user_id, uuid.UUID) else appt.doctor_user_id
-                room_name = appt.room_name or None
-                floor = appt.floor or None
+                doctor_id = appt.doctor_id
+                room_name = appt.room.name if appt.room_id else None
+                floor = appt.room.floor.name if appt.room_id else None
 
                 # Same doctor detail already shown on "Find Doctors" (see
                 if doctor_id:
-                    from apps.hospital_setup.models import StaffUser, DoctorProfile
+                    from apps.hospital_setup.models import StaffUser
                     staff_obj = StaffUser.objects.using(b.hospital.db_name).filter(pk=doctor_id).first()
                     if staff_obj and staff_obj.photo:
                         doctor_photo = blob_storage.signed_url(staff_obj.photo) or None
-                    profile_obj = DoctorProfile.objects.using(b.hospital.db_name).filter(staff_id=doctor_id).first()
-                    if profile_obj:
-                        doctor_specialisation = profile_obj.specialisation or ""
+                    if staff_obj:
+                        doctor_specialisation = staff_obj.specialisation or ""
 
                 # Self-heal every ledger field that a STAFF-side action can
                 dirty_fields = []
@@ -1090,8 +1105,8 @@ class PortalMyBookingsView(APIView):
                 if (appt.chief_complaint or "") != b.chief_complaint:
                     b.chief_complaint = appt.chief_complaint or ""
                     dirty_fields.append("chief_complaint")
-                if (appt.doctor_name or "") != b.doctor_name:
-                    b.doctor_name = appt.doctor_name or ""
+                if appt.doctor.get_full_name() != b.doctor_name:
+                    b.doctor_name = appt.doctor.get_full_name()
                     dirty_fields.append("doctor_name")
                 if dirty_fields:
                     b.save(using="default", update_fields=dirty_fields)
@@ -1099,7 +1114,7 @@ class PortalMyBookingsView(APIView):
                 # Real, live queue position — only meaningful same-day, and
                 if str(appt.scheduled_date) == today and status_now in QUEUE_PENDING and token is not None:
                     same_day_doctor = Appointment.objects.using(b.hospital.db_name).filter(
-                        doctor_user_id=appt.doctor_user_id, scheduled_date=appt.scheduled_date,
+                        doctor_id=appt.doctor_id, scheduled_date=appt.scheduled_date,
                     )
                     people_ahead = same_day_doctor.filter(
                         token_number__lt=token
@@ -1192,8 +1207,8 @@ class PortalRescheduleBookingView(APIView):
             return error("Invalid date.")
         if new_date < date.today():
             return error("Can't reschedule to a date in the past.")
-        if new_date > date.today() + timedelta(days=62):
-            return error("Appointments can only be booked up to 2 months in advance.")
+        if new_date > date.today() + timedelta(days=settings.BOOKING_WINDOW_DAYS):
+            return error(f"Appointments can only be booked up to {settings.BOOKING_WINDOW_DAYS} days in advance.")
 
         ensure_hospital_db(booking.hospital.db_name)
         db = booking.hospital.db_name
@@ -1208,30 +1223,24 @@ class PortalRescheduleBookingView(APIView):
 
         if new_time:
             taken = Appointment.objects.using(db).filter(
-                scheduled_date=new_date, doctor_user_id=appt.doctor_user_id, scheduled_time=new_time,
+                scheduled_date=new_date, doctor_id=appt.doctor_id, scheduled_time=new_time,
             ).exclude(status="cancelled").exclude(pk=appt.pk).exists()
             if taken:
                 return error("That slot was just taken. Please pick another.", status=409)
 
-        last_token = Appointment.objects.using(db).filter(
-            scheduled_date=new_date, doctor_user_id=appt.doctor_user_id,
-        ).exclude(pk=appt.pk).values_list("token_number", flat=True)
-        next_token = (max(last_token) + 1) if last_token else 1
-
-        room_fields = {"room_id": None, "room_name": "", "floor": ""}
+        room = None
         if new_time:
             from apps.hospital_setup.room_utils import resolve_room_for_slot
-            match = resolve_room_for_slot(db, appt.doctor_user_id, new_date.weekday(), new_time)
-            if match:
-                room_fields = {"room_id": match.room_id, "room_name": match.room.name, "floor": match.room.floor}
+            room = resolve_room_for_slot(db, appt.doctor_id, new_date.weekday(), new_time)
 
-        appt.scheduled_date = new_date
-        appt.scheduled_time = new_time
-        appt.token_number = next_token
-        appt.status = Appointment.STATUS_SCHEDULED
-        for k, v in room_fields.items():
-            setattr(appt, k, v)
-        appt.save(using=db)
+        with transaction.atomic(using=db):
+            next_token = Appointment.next_token(appt.branch_department_id, new_date, db)
+            appt.scheduled_date = new_date
+            appt.scheduled_time = new_time
+            appt.token_number = next_token
+            appt.status = Appointment.STATUS_SCHEDULED
+            appt.room = room
+            appt.save(using=db)
 
         booking.scheduled_date = new_date
         booking.status = Appointment.STATUS_SCHEDULED
@@ -1240,8 +1249,8 @@ class PortalRescheduleBookingView(APIView):
         return Response({
             "status": "scheduled", "date": str(new_date), "time": new_time,
             "token_number": next_token,
-            "room_name": room_fields.get("room_name") or None,
-            "floor": room_fields.get("floor") or None,
+            "room_name": room.name if room else None,
+            "floor": room.floor.name if room else None,
         })
 # ── My documents ─────────────────────────────────────────────────────────────
 
@@ -1561,20 +1570,20 @@ class PortalLabOrderListView(APIView):
                     continue
                 # select_related("report") pulls the LabReport in the SAME
                 reqs = (LabRequest.objects.using(db)
-                        .select_related("test", "report")
+                        .select_related("test", "lr_report")
                         .filter(patient=patient)
                         .order_by("-ordered_at")[:50])
                 for r in reqs:
                     report = None
                     try:
-                        rep = r.report
+                        rep = r.lr_report
                         report = {
                             "id": rep.id,
                             "status": rep.status,
                             "result_summary": rep.result_summary,
                             "has_file": bool(rep.file_url),
                             "delivered_at": rep.delivered_at,
-                            "items": list(rep.items.values(
+                            "items": list(rep.lp_items.values(
                                 "parameter_name", "result_value", "unit", "reference_range", "is_abnormal",
                             )),
                         }
@@ -1673,10 +1682,8 @@ class PortalPrescriptionListView(APIView):
 
     def get(self, request):
         from apps.opd.models import Appointment, OPDEncounter, Prescription
-        from apps.hospital_setup.models import StaffUser
         from apps.opd.models import HospitalPatient
         from apps.documents.models import MedicalDocument
-        import uuid as _uuid
 
         target_awpid, _dob, err = resolve_target_awpid_and_dob(request)
         if err:
@@ -1691,10 +1698,10 @@ class PortalPrescriptionListView(APIView):
                 if not patient:
                     continue
                 # Resolved via Appointment -> OPDEncounter -> Prescription
-                appt_ids = Appointment.objects.using(db).filter(patient_id=patient.uuid).values_list("id", flat=True)
+                appt_ids = Appointment.objects.using(db).filter(patient_id=patient.id).values_list("id", flat=True)
                 enc_ids = OPDEncounter.objects.using(db).filter(appointment_id__in=list(appt_ids)).values_list("id", flat=True)
                 # NOT prefetch_related("items") — under this app's custom
-                rxs = (Prescription.objects.using(db)
+                rxs = (Prescription.objects.using(db).select_related("encounter__appointment__doctor")
                        .filter(encounter_id__in=list(enc_ids))
                        .order_by("-created_at")[:50])
 
@@ -1708,13 +1715,7 @@ class PortalPrescriptionListView(APIView):
                 }
 
                 for rx in rxs:
-                    doctor_name = None
-                    try:
-                        raw = rx.doctor_user_id.int if isinstance(rx.doctor_user_id, _uuid.UUID) else rx.doctor_user_id
-                        doc = StaffUser.objects.using(db).get(pk=raw)
-                        doctor_name = doc.get_full_name()
-                    except Exception:
-                        logger.debug("PortalPrescriptionListView: doctor lookup failed for rx=%s", rx.id, exc_info=True)
+                    doctor_name = rx.encounter.appointment.doctor.get_full_name()
 
                     results.append({
                         "id": str(rx.id),
@@ -1734,7 +1735,7 @@ class PortalPrescriptionListView(APIView):
                             "dosage": it.dosage,
                             "frequency": it.frequency,
                             "quantity": it.quantity,
-                        } for it in rx.items.using(db).all()],
+                        } for it in rx.rx_items.using(db).all()],
                     })
             except Exception as e:
                 logger.warning("prescriptions: skipped %s (%s)", db, e)
@@ -1777,7 +1778,7 @@ class PortalPrescriptionChoiceView(APIView):
         from apps.opd.models import Appointment
         try:
             appt = Appointment.objects.using(hospital_db).get(pk=rx.encounter.appointment_id)
-            rx_patient = HospitalPatient.objects.using(hospital_db).get(uuid=appt.patient_id)
+            rx_patient = HospitalPatient.objects.using(hospital_db).get(pk=appt.patient_id)
         except (Appointment.DoesNotExist, HospitalPatient.DoesNotExist, AttributeError):
             return error("Prescription not found.")
         rx_awpid = rx_patient.awpid
@@ -1807,10 +1808,7 @@ class PortalPrescriptionReceiptPDFView(APIView):
 
     def get(self, request, hospital_db, pk):
         import base64
-        import uuid as _uuid
         from apps.opd.models import Appointment, Prescription
-        from apps.hospital_setup.models import StaffUser
-        from apps.hospital_setup.models import Branch
         from apps.opd.pdf import generate_prescription_pdf
         from apps.opd.models import HospitalPatient
 
@@ -1820,13 +1818,13 @@ class PortalPrescriptionReceiptPDFView(APIView):
 
         try:
             # NOT prefetch_related("items") — under this app's custom
-            rx = Prescription.objects.using(hospital_db).select_related("encounter").get(pk=pk)
+            rx = Prescription.objects.using(hospital_db).select_related("encounter__appointment__doctor").get(pk=pk)
         except Prescription.DoesNotExist:
             return not_found("Prescription not found.")
 
         try:
-            appt = Appointment.objects.using(hospital_db).get(pk=rx.encounter.appointment_id)
-            patient = HospitalPatient.objects.using(hospital_db).get(uuid=appt.patient_id)
+            appt = Appointment.objects.using(hospital_db).select_related("branch_department__branch").get(pk=rx.encounter.appointment_id)
+            patient = HospitalPatient.objects.using(hospital_db).get(pk=appt.patient_id)
         except (Appointment.DoesNotExist, HospitalPatient.DoesNotExist, AttributeError):
             return not_found("Prescription not found.")
 
@@ -1839,20 +1837,14 @@ class PortalPrescriptionReceiptPDFView(APIView):
             if not is_family:
                 return error("This prescription does not belong to you.")
 
-        doctor_name = None
-        try:
-            raw = rx.doctor_user_id.int if isinstance(rx.doctor_user_id, _uuid.UUID) else rx.doctor_user_id
-            doctor_name = StaffUser.objects.using(hospital_db).get(pk=raw).get_full_name()
-        except Exception:
-            logger.debug("PortalPrescriptionReceiptPDFView: doctor lookup failed for rx=%s", rx.id, exc_info=True)
-
-        branch = Branch.objects.using(hospital_db).filter(pk=appt.branch_id).first() if appt.branch_id else None
+        doctor_name = appt.doctor.get_full_name()
+        branch = appt.branch_department.branch
         hospital = Hospital.objects.using("default").filter(db_name=hospital_db).first()
         hospital_name = hospital.name if hospital else "Hospital"
 
         pdf_bytes = generate_prescription_pdf(
             # .using(hospital_db) explicitly — see the comment on the rx fetch
-            prescription=rx, items=list(rx.items.using(hospital_db).all()), doctor_name=doctor_name,
+            prescription=rx, items=list(rx.rx_items.using(hospital_db).all()), doctor_name=doctor_name,
             patient=patient, branch=branch, hospital_name=hospital_name,
             visit_date=appt.scheduled_date,
         )
@@ -1876,7 +1868,7 @@ class PortalLabReportFileView(APIView):
 
         try:
             # select_related("report") — see the identical fix + comment on
-            lab_req = LabRequest.objects.using(hospital_db).select_related("patient", "report").get(pk=request_id)
+            lab_req = LabRequest.objects.using(hospital_db).select_related("patient", "lr_report").get(pk=request_id)
         except LabRequest.DoesNotExist:
             return not_found("Lab order not found.")
 
@@ -1891,7 +1883,7 @@ class PortalLabReportFileView(APIView):
                 return error("This order does not belong to you.")
 
         try:
-            report = lab_req.report
+            report = lab_req.lr_report
         except LabReport.DoesNotExist:
             return not_found("No report has been uploaded for this order yet.")
         if report.status != "delivered":
@@ -2181,8 +2173,8 @@ class PortalHealthTimelineView(APIView):
                 patient = HospitalPatient.objects.using(db).filter(awpid=target_awpid).first()
                 if not patient:
                     continue
-                appts = (Appointment.objects.using(db)
-                         .filter(patient_id=patient.uuid)
+                appts = (Appointment.objects.using(db).select_related("doctor")
+                         .filter(patient_id=patient.id)
                          .order_by("-scheduled_date", "-created_at")[:limit])
                 for appt in appts:
                     enc = OPDEncounter.objects.using(db).filter(appointment_id=appt.id).first()
@@ -2197,7 +2189,7 @@ class PortalHealthTimelineView(APIView):
                         "type":      "visit",
                         "icon_hint": "stethoscope",
                         "title":     f"Visit — {hospital.name}",
-                        "subtitle":  (f"Dr. {appt.doctor_name}" + (f" · {subtitle_bits[0]}" if subtitle_bits else "")) if appt.doctor_name else (subtitle_bits[0] if subtitle_bits else None),
+                        "subtitle":  (f"Dr. {appt.doctor.get_full_name()}" + (f" · {subtitle_bits[0]}" if subtitle_bits else "")) if appt.doctor.get_full_name() else (subtitle_bits[0] if subtitle_bits else None),
                         "detail":    None,  # no dedicated single-visit viewer on the portal yet
                     })
             except Exception as e:
@@ -2253,13 +2245,13 @@ class PortalHealthTimelineView(APIView):
                 if not patient:
                     continue
                 reqs = (LabRequest.objects.using(db)
-                        .select_related("test", "report")
+                        .select_related("test", "lr_report")
                         .filter(patient=patient)
                         .order_by("-ordered_at")[:limit])
                 for r in reqs:
                     rep = None
                     try:
-                        rep = r.report
+                        rep = r.lr_report
                     except Exception:
                         logger.debug("timeline: no lab report for request_id=%s", r.id, exc_info=True)
 
@@ -2368,7 +2360,7 @@ class PortalNotificationsView(APIView):
 
         results.sort(key=lambda r: r["date"], reverse=True)
         return success(data={
-            "results": results,
+            **(page_payload(request, results) or {"results": results}),
             "unread_count": sum(1 for r in results if not r["read"]),
         })
 class PortalNotificationMarkReadView(APIView):
@@ -2564,6 +2556,7 @@ def _vaccination_history(awpid):
         ImmunizationRecord.objects.using("default")
         .filter(patient__awpid=awpid)
         .exclude(verification_status=ImmunizationRecord.STATUS_DECLINED)
+        .select_related("document")
         .order_by("-administered_date", "-created_at")[:50]
     )
     out = []
@@ -2574,7 +2567,7 @@ def _vaccination_history(awpid):
             "dose_number": v.dose_number,
             "source": v.source,
             "verification_status": v.verification_status,
-            "certificate_url": blob_storage.signed_url(v.file_data),
+            "certificate_url": blob_storage.signed_url(v.document.file_name.name) if v.document_id and v.document.file_name else "",
         })
     return out
 class EmergencySummaryView(APIView):
@@ -2696,6 +2689,12 @@ def _audit(awpid, event, ip=None):
 def _self_awpid(request):
     acct = accounts().filter(pk=request.user.id).first()
     return acct.awpid if acct else None
+def _acts_for(me, awpid):
+    """True when the signed-in account is this patient, or is the guardian of this dependent."""
+    if not me or not awpid:
+        return False
+    return me == awpid or PatientRelationship.objects.using("default").filter(
+        guardian__awpid=me, dependent__awpid=awpid).exists()
 def _patient_name(awpid):
     """Identity is the source of truth, but a self-registered patient may only"""
     identity = Patient.objects.using("default").filter(awpid=awpid).first()
@@ -2791,11 +2790,19 @@ class RecordsShareCreateView(APIView):
 
         note = (request.data.get("note") or request.data.get("requester_label") or "").strip()[:120]
 
+        # A guardian can share a dependent's records; the grant belongs to that child.
+        target = (request.data.get("patient_awpid") or "").strip() or me
+        if not _acts_for(me, target):
+            return error("That patient isn't linked to your account.", status=403)
+        subject = Patient.objects.using("default").filter(awpid=target).first()
+        if not subject:
+            return error("Family member record not found.", status=404)
+
         token = secrets.token_hex(16)                    # 32 hex chars
         code = f"{secrets.randbelow(1_000_000):06d}"     # spoken fallback
 
         grant = RecordsShareRequest.objects.using("default").create(
-            token=token, code=code, requester_label=note, patient=Patient.objects.using("default").get(awpid=me),
+            token=token, code=code, requester_label=note, patient=subject,
             status=RecordsShareRequest.STATUS_PENDING, created_ip=_client_ip(request),
         )
 
@@ -3099,7 +3106,7 @@ class RecordsShareDecisionView(APIView):
         me = _self_awpid(request)
         if not me:
             return error("No patient account found.", status=403)
-        if awpid_of(grant) and awpid_of(grant) != me:
+        if awpid_of(grant) and not _acts_for(me, awpid_of(grant)):
             return error("This share link was created by a different account.", status=403)
 
         approve = bool(request.data.get("approve"))
@@ -3107,7 +3114,7 @@ class RecordsShareDecisionView(APIView):
         if not approve:
             grant.status = RecordsShareRequest.STATUS_DENIED
             grant.decided_at = timezone.now()
-            grant.patient = Patient.objects.using("default").get(awpid=me)
+            grant.patient = Patient.objects.using("default").get(awpid=awpid_of(grant) or me)
             grant.save(using="default", update_fields=["status", "decided_at", "patient"])
             _audit(me, EmergencyAccessLog.EVENT_GENERATED, _client_ip(request))
             return success(data={"status": grant.status}, message="Request declined.")
@@ -3130,7 +3137,7 @@ class RecordsShareDecisionView(APIView):
             if locked:
                 grant.status = RecordsShareRequest.STATUS_DENIED
                 grant.decided_at = timezone.now()
-                grant.patient = Patient.objects.using("default").get(awpid=me)
+                grant.patient = Patient.objects.using("default").get(awpid=awpid_of(grant) or me)
                 fields += ["status", "decided_at", "patient"]
             grant.save(using="default", update_fields=fields)
             if locked:
@@ -3163,7 +3170,7 @@ class RecordsShareDecisionView(APIView):
         share_all = (request.data.get("share_scope") or "default").strip() == "all"
 
         now = timezone.now()
-        grant.patient = Patient.objects.using("default").get(awpid=me)
+        grant.patient = Patient.objects.using("default").get(awpid=awpid_of(grant) or me)
         grant.status = RecordsShareRequest.STATUS_APPROVED
         grant.decided_at = now
         grant.expires_at = now + timedelta(hours=RecordsShareRequest.WINDOW_HOURS)
@@ -3191,7 +3198,7 @@ class RecordsShareEndView(APIView):
             return error("This access code is not valid.", status=404)
 
         me = _self_awpid(request)
-        if awpid_of(grant) and awpid_of(grant) != me:
+        if awpid_of(grant) and not _acts_for(me, awpid_of(grant)):
             return error("This isn't your access grant.", status=403)
         if grant.status not in (RecordsShareRequest.STATUS_APPROVED, RecordsShareRequest.STATUS_PENDING):
             return success(data={"status": grant.status})
@@ -3211,7 +3218,7 @@ class RecordsShareDownloadDecisionView(APIView):
             return error("This access has ended.", status=403)
 
         me = _self_awpid(request)
-        if awpid_of(grant) != me:
+        if not _acts_for(me, awpid_of(grant)):
             return error("This isn't your access grant.", status=403)
         if not grant.pending_download_id:
             return success(data={"pending_download": None})
@@ -3236,9 +3243,10 @@ class RecordsShareMineView(APIView):
         if not me:
             return error("No patient account found.", status=403)
 
+        family = PatientRelationship.objects.using("default").filter(guardian__awpid=me).values_list("dependent__awpid", flat=True)
         grants = (
             RecordsShareRequest.objects.using("default")
-            .filter(patient__awpid=me, status=RecordsShareRequest.STATUS_APPROVED)
+            .filter(patient__awpid__in=[me, *family], status=RecordsShareRequest.STATUS_APPROVED)
             .order_by("-decided_at")
         )
         out = []
@@ -3502,7 +3510,7 @@ class RecordsShareRevealView(APIView):
         grant = _get_grant(token)
         if not grant:
             return error("This access code is not valid.", status=404)
-        if awpid_of(grant) and awpid_of(grant) != me:
+        if awpid_of(grant) and not _acts_for(me, awpid_of(grant)):
             return error("This isn't your access grant.", status=403)
         if not is_live(grant):
             return error("This access has ended.", status=403)
@@ -3510,10 +3518,11 @@ class RecordsShareRevealView(APIView):
         scope = (request.data.get("scope") or "visit").strip()
         if scope not in ("visit", "always", "conceal"):
             scope = "visit"
+        subject = awpid_of(grant) or me
         want = {int(x) for x in (request.data.get("doc_ids") or []) if str(x).lstrip("-").isdigit()}
         ids = set(
             MedicalDocument.objects.using("default")
-            .filter(patient__awpid=me, id__in=want).values_list("id", flat=True)
+            .filter(patient__awpid=subject, id__in=want).values_list("id", flat=True)
         )
 
         shown = set(grant.shown_private_ids or [])
@@ -3522,7 +3531,7 @@ class RecordsShareRevealView(APIView):
         grant.save(using="default", update_fields=["shown_private_ids"])
 
         if scope == "always" and ids:
-            p = privacy_for_awpid(me)
+            p = privacy_for_awpid(subject)
             p.hidden_doc_ids = sorted(set(p.hidden_doc_ids or []) - ids)
             p.save(using="default", update_fields=["hidden_doc_ids", "updated_at"])
 
@@ -3969,7 +3978,7 @@ class ConsultPadView(APIView):
             pages_field: pages,
             recog_field: new_recog,
             # Sliding expiry — an actively-used pad shouldn't lapse mid-write.
-            "expires_at": now + timedelta(hours=12),
+            "expires_at": now + timedelta(hours=settings.CONSULT_PAD_EXPIRY_HOURS),
             "updated_at": now,
         })
 

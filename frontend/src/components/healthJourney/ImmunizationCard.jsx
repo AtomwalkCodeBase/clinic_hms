@@ -1,5 +1,7 @@
 // Vaccination card grouped by due age, IAP schedule. Status always icon + text, never colour alone.
 import React, { useEffect, useMemo, useState } from 'react';
+import { useClientPaging } from '../../hooks/usePagedApi';
+import PaginationControls from '../../components/common/PaginationControls';
 import { VACCINE_STYLE } from './theme';
 
 export default function ImmunizationCard({ api, patientId, canAdd = true, onOpenDocument }) {
@@ -16,6 +18,7 @@ export default function ImmunizationCard({ api, patientId, canAdd = true, onOpen
     data.rows.forEach((r) => { (g[r.due_age] ||= { due_age: r.due_age, due_on: r.due_on, rows: [] }).rows.push(r); });
     return Object.values(g).sort((a, b) => a.due_on.localeCompare(b.due_on));
   }, [data]);
+  const paging = useClientPaging(groups, 6);
 
   if (!data) return <section className="phj-card"><div className="phj-skeleton" style={{ height: 240 }} /></section>;
   const s = data.summary;
@@ -65,7 +68,7 @@ export default function ImmunizationCard({ api, patientId, canAdd = true, onOpen
       <table className="phj-table">
         <thead><tr><th>Age</th><th>Vaccine</th><th>Status</th><th>Date</th></tr></thead>
         <tbody>
-          {groups.map((g) => g.rows.map((r, idx) => {
+          {paging.pageItems.map((g) => g.rows.map((r, idx) => {
             const st = VACCINE_STYLE[r.status] || VACCINE_STYLE.SCHEDULED;
             return (
               <tr key={r.code}>
@@ -81,6 +84,8 @@ export default function ImmunizationCard({ api, patientId, canAdd = true, onOpen
           }))}
         </tbody>
       </table>
+      <PaginationControls pagination={paging.pagination} page={paging.page} pageSize={paging.pageSize} onPageChange={paging.setPage}
+        onPageSizeChange={paging.setPageSize} pageSizeOptions={[4, 6, 10, 20]} />
       {data.unresolved.length > 0 && (
         <p className="phj-note">{data.unresolved.length} vaccine entr{data.unresolved.length > 1 ? 'ies' : 'y'} from uploaded cards could not be read and will be checked by the clinic.</p>
       )}

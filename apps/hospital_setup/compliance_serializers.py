@@ -21,7 +21,7 @@ class AuditLogSerializer(serializers.Serializer):
 
 
 class RecordAmendmentSerializer(serializers.ModelSerializer):
-    patient_name      = serializers.CharField(source="patient.full_name", read_only=True)
+    patient_name      = serializers.CharField(source="patient.get_patient_details.full_name", read_only=True)
     patient_uhid      = serializers.CharField(source="patient.uhid", read_only=True)
     reviewed_by_name  = serializers.SerializerMethodField()
     status_display    = serializers.CharField(source="get_status_display", read_only=True)
@@ -64,7 +64,7 @@ class RecordAmendmentResolveSerializer(serializers.Serializer):
 
 
 class ConsentRecordSerializer(serializers.ModelSerializer):
-    patient_name         = serializers.CharField(source="patient.full_name", read_only=True)
+    patient_name         = serializers.CharField(source="patient.get_patient_details.full_name", read_only=True)
     patient_uhid         = serializers.CharField(source="patient.uhid", read_only=True)
     consent_type_display = serializers.CharField(source="get_consent_type_display", read_only=True)
     source_display       = serializers.CharField(source="get_source_display", read_only=True)

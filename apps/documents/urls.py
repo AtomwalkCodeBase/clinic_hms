@@ -13,6 +13,7 @@ from apps.documents.views_timeline import (
     PatientHealthTimelineView,
     PatientImmunizationView,
     PatientRebuildView,
+    PatientClinicalSummaryView,
     RecurrenceAckView,
 )
 from apps.documents.views import (
@@ -38,6 +39,7 @@ peds_urlpatterns = [
     path("patients/<str:awpid>/growth/", PatientGrowthView.as_view(), name="growth"),
     path("patients/<str:awpid>/immunization/", PatientImmunizationView.as_view(), name="immunization"),
     path("patients/<str:awpid>/rebuild/", PatientRebuildView.as_view(), name="rebuild"),
+    path("patients/<str:awpid>/clinical-summary/", PatientClinicalSummaryView.as_view(), name="clinical-summary"),
     path("events/<int:event_id>/", ClinicalEventView.as_view(), name="event"),
     path("recurrence/<int:flag_id>/acknowledge/", RecurrenceAckView.as_view(), name="recurrence-ack"),
 ]

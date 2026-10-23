@@ -68,14 +68,14 @@ function buildItems(payload, axisMode) {
         lane.episodes.forEach((ep) => {
           const st = SEVERITY_STYLE[ep.peak_severity] || SEVERITY_STYLE.NORMAL;
           const multiDay = ep.end && ep.end !== ep.start;
-          push(i, ep.start, multiDay ? ep.end : null, multiDay ? 'bar' : st.shape, st.token,
+          push(i, ep.start, multiDay ? ep.end : null, multiDay ? 'span' : st.shape, st.token,
             { kind: 'acute', label: lane.label, recurrent: lane.is_recurrent, ...ep });
         });
         break;
       case 'hospital':
         lane.items.forEach((h) => {
           const token = h.is_critical ? 'status-critical' : 'status-serious';
-          if (h.kind === 'ADMISSION') push(i, h.start, h.end || h.start, 'bar', token, { kind: 'admission', ...h });
+          if (h.kind === 'ADMISSION') push(i, h.start, h.end || h.start, 'stay', token, { kind: 'admission', ...h });
           else push(i, h.start, null, 'diamond', token, { kind: 'lab', ...h });
         });
         break;
@@ -92,6 +92,12 @@ function shapeFor(shape, cx, cy, x1, color, surface) {
     case 'bar':
       return { type: 'rect', shape: { x: cx, y: cy - BAR_H / 2, width: Math.max(x1 - cx, 6), height: BAR_H, r: 4 },
         style: { fill: color, ...ring } };
+    case 'span':      // an illness that lasted days, and
+    case 'stay': {    // a hospital stay: a bar when it is long enough to see, else the same round or diamond mark as a one-day event (never a squashed oval)
+      const w = x1 - cx;
+      if (w >= 2 * DOT_R) return shapeFor('bar', cx, cy, x1, color, surface);
+      return shapeFor(shape === 'stay' ? 'diamond' : 'dot', cx + w / 2, cy, x1, color, surface);
+    }
     case 'band':
       return { type: 'rect', shape: { x: cx, y: cy - BAR_H, width: Math.max(x1 - cx, 6), height: BAR_H * 2, r: 4 },
         style: { fill: color, opacity: 0.18 }, z2: -1 };
@@ -177,7 +183,7 @@ export default function TimelineChart({ payload, axisMode = 'age', onOpenDocumen
     return {
       backgroundColor: 'transparent',
       animation: false,
-      grid: { left: narrow ? 104 : 180, right: narrow ? 16 : 36, top: 16, bottom: zoomable ? 78 : 40 },
+      grid: { left: narrow ? 104 : 220, right: narrow ? 16 : 36, top: 16, bottom: zoomable ? 78 : 40 },
       dataZoom: zoomable ? [
         { type: 'inside', xAxisIndex: 0, filterMode: 'none', start: 0, end: 100 },
         { type: 'slider', xAxisIndex: 0, filterMode: 'none', start: 0, end: 100, height: 22, bottom: 8, brushSelect: false, borderColor: t.grid,
@@ -199,7 +205,7 @@ export default function TimelineChart({ payload, axisMode = 'age', onOpenDocumen
       yAxis: {
         type: 'category', data: lanes, inverse: true,
         axisTick: { show: false }, axisLine: { show: false },
-        axisLabel: { color: t['text-secondary'], fontSize: narrow ? 12 : 14, fontWeight: 500, width: narrow ? 96 : 165, overflow: 'truncate' },
+        axisLabel: { color: t['text-secondary'], fontSize: narrow ? 12 : 14, fontWeight: 500, width: narrow ? 96 : 200, overflow: 'break' },
         splitLine: { show: true, lineStyle: { color: t.grid, width: 1 } },
         splitArea: { show: true, areaStyle: { color: ['transparent', t['band-outer']] } },
       },
@@ -211,7 +217,10 @@ export default function TimelineChart({ payload, axisMode = 'age', onOpenDocumen
         renderItem: (params, api) => {
           const [x0, cy] = api.coord([api.value(0), api.value(2)]);
           const [x1] = api.coord([api.value(1), api.value(2)]);
-          return shapeFor(api.value(3), x0, cy, x1, t[api.value(4)] || t['text-primary'], t['surface-1']);
+          const cs = params.coordSys;
+          const isSpan = ['bar', 'band', 'span', 'stay'].includes(api.value(3));
+          const px = isSpan ? x0 : Math.min(Math.max(x0, cs.x + 7), cs.x + cs.width - 7);      // a point mark never sits half outside the plot
+          return shapeFor(api.value(3), px, cy, x1, t[api.value(4)] || t['text-primary'], t['surface-1']);
         },
       }],
     };

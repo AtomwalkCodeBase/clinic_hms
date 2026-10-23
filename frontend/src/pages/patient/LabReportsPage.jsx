@@ -4,6 +4,8 @@ import { FlaskConical } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
+import { useClientPaging } from "../../hooks/usePagedApi";
+import PaginationControls from "../../components/common/PaginationControls";
 import { useToast }  from "../../hooks/useToast";
 import apiClient      from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
@@ -433,6 +435,7 @@ export default function PatientLabReportsPage() {
       pageSize: 20,
       params: patientAwpid ? { patient_awpid: patientAwpid } : {},
     });
+  const orderPaging = useClientPaging(orders, 5);
 
   return (
     <AppShell>
@@ -461,9 +464,11 @@ export default function PatientLabReportsPage() {
           </div>
         ) : (
           <div style={{ display: "grid", gap: 14, marginBottom: 18 }}>
-            {orders.map(o => (
+            {orderPaging.pageItems.map(o => (
               <LabOrderCard key={`${o.hospital_db}-${o.id}`} order={o} onChanged={() => { refetchOrders(); refetchDocs(); }} patientAwpid={patientAwpid} />
             ))}
+            <PaginationControls pagination={orderPaging.pagination} page={orderPaging.page} pageSize={orderPaging.pageSize}
+              onPageChange={orderPaging.setPage} onPageSizeChange={orderPaging.setPageSize} pageSizeOptions={[5, 10, 20]} />
           </div>
         )}
 

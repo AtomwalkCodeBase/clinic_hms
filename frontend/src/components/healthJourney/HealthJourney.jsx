@@ -2,6 +2,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Building2, FileUp, HeartPulse, Repeat, Stethoscope, Syringe, TrendingUp } from 'lucide-react';
 import { makePedsApi } from './api';
+import { useClientPaging } from '../../hooks/usePagedApi';
+import PaginationControls from '../../components/common/PaginationControls';
 import GrowthChart from './GrowthChart';
 import ImmunizationCard from './ImmunizationCard';
 import TimelineChart from './TimelineChart';
@@ -64,11 +66,16 @@ function TimelineList({ payload }) {
     }
   });
   rows.sort((a, b) => b.d.localeCompare(a.d));
+  const paging = useClientPaging(rows, 10);
   return (
-    <table className="phj-table">
-      <thead><tr><th>Date</th><th>What</th><th>Details</th></tr></thead>
-      <tbody>{rows.map((r, i) => <tr key={i}><td>{r.d}</td><td>{r.what}</td><td>{r.detail}</td></tr>)}</tbody>
-    </table>
+    <>
+      <table className="phj-table">
+        <thead><tr><th>Date</th><th>What</th><th>Details</th></tr></thead>
+        <tbody>{paging.pageItems.map((r, i) => <tr key={i}><td>{r.d}</td><td>{r.what}</td><td>{r.detail}</td></tr>)}</tbody>
+      </table>
+      <PaginationControls pagination={paging.pagination} page={paging.page} pageSize={paging.pageSize} onPageChange={paging.setPage}
+        onPageSizeChange={paging.setPageSize} pageSizeOptions={[10, 20, 50]} />
+    </>
   );
 }
 

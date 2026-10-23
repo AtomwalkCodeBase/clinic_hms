@@ -150,22 +150,12 @@ LIMIT_LABELS = {
 }
 def get_usage_counts(db_name):
     """Live counts from one hospital's own database: {doctors, branches, staff}."""
-    doctors = StaffUser.objects.using(db_name).filter(role="doctor", is_active=True).count()
+    from apps.hospital_setup.rbac import acts_as_q
+    # A hospital-defined role (see apps.hospital_setup.rbac) counts as what it acts as; one that acts as a doctor counts once, as a doctor
+    active = StaffUser.objects.using(db_name).filter(is_active=True)
+    doctors = active.filter(acts_as_q("doctor")).count()
     branches = Branch.objects.using(db_name).filter(is_active=True).count()
-    staff = StaffUser.objects.using(db_name).filter(
-        role__in=_NON_DOCTOR_ROLES, is_active=True
-    ).count()
-
-    # Custom-role staff (a hospital-defined Role — see apps.hospital_setup.rbac) count
-    custom_staff = StaffUser.objects.using(db_name).filter(
-        role="custom", is_active=True
-    ).select_related("custom_role")
-    for cs in custom_staff:
-        acts_as = set((cs.custom_role.acts_as if cs.custom_role else []) or [])
-        if "doctor" in acts_as:
-            doctors += 1
-        elif acts_as & set(_NON_DOCTOR_ROLES):
-            staff += 1
+    staff = active.filter(acts_as_q(*_NON_DOCTOR_ROLES)).exclude(acts_as_q("doctor")).count()
 
     return {"doctors": doctors, "branches": branches, "staff": staff}
 class LimitCheckFailed(Exception):

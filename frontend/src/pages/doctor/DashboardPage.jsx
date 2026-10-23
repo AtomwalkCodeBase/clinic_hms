@@ -105,7 +105,6 @@ export default function DoctorDashboardPage() {
       const { data } = await apiClient.post(API_ENDPOINTS.OPD.ENCOUNTERS, {
         appointment_id: appt.id,
         patient_id:     appt.patient_id,
-        doctor_user_id: user?.user_id,
       });
       const encId = data?.id || data?.data?.id;
       navigate(`/doctor/encounter/${encId}`);
@@ -113,7 +112,7 @@ export default function DoctorDashboardPage() {
       toastApiError(err, "Could not start encounter.");
       setStarting(null);
     }
-  }, [navigate, user, toastApiError]);
+  }, [navigate, toastApiError]);
 
   // page_size: 100 — this dashboard only needs today's totals, not a paged
   const { data: apptData, isLoading } = useApi(API_ENDPOINTS.OPD.APPOINTMENTS, {

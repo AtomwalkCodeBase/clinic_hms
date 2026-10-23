@@ -2,7 +2,8 @@
 import { useState } from "react";
 import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
-import { useApi } from "../../hooks/useApi";
+import { usePagedApi } from "../../hooks/usePagedApi";
+import PaginationControls from "../../components/common/PaginationControls";
 import API_ENDPOINTS from "../../config/api.config";
 import { ADMISSION_STATUS_BADGE as STATUS_BADGE } from "../../constants/badges";
 
@@ -15,11 +16,10 @@ function daysSince(iso) {
 
 export default function IpdPatientsPage() {
   const [includeDischarged, setIncludeDischarged] = useState(false);
-  const { data, isLoading, refetch } = useApi(API_ENDPOINTS.IPD.ADMISSIONS_MINE, {
+  const { items: admissions, pagination, page, setPage, pageSize, setPageSize, isLoading } = usePagedApi(API_ENDPOINTS.IPD.ADMISSIONS_MINE, {
     params: includeDischarged ? { include_discharged: 1 } : {},
     pollMs: 30000,
   });
-  const admissions = data || [];
 
   return (
     <AppShell>
@@ -73,6 +73,7 @@ export default function IpdPatientsPage() {
               )}
             </tbody>
           </table>
+          <PaginationControls pagination={pagination} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
         </div>
       </PageShell>
     </AppShell>

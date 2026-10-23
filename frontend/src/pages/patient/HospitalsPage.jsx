@@ -7,6 +7,8 @@ import { PageShell } from "../../components/common/PageShell";
 import DoctorCard    from "../../components/common/DoctorCard";
 import HospitalDirections from "../../components/common/HospitalDirections";
 import { useApi }    from "../../hooks/useApi";
+import { useClientPaging } from "../../hooks/usePagedApi";
+import PaginationControls from "../../components/common/PaginationControls";
 import { useGeolocation } from "../../hooks/useGeolocation";
 import apiClient     from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
@@ -117,6 +119,10 @@ export default function PatientHospitalsPage() {
   const [searchResults, setSearchResults] = useState(null); // { hospitals, doctors }
   const [searching, setSearching] = useState(false);
   const debounceRef = useRef(null);
+  const hospitalPaging = useClientPaging(allHospitals, 9);
+  const foundDoctors = useClientPaging(searchResults?.doctors || [], 6);
+  const foundHospitals = useClientPaging(searchResults?.hospitals || [], 9);
+  const PAGE_SIZES = [6, 9, 12, 18];
 
   const activeFilterCount = [specialty, city].filter(Boolean).length;
   const isFilterActive = query.trim().length >= 2 || specialty !== "" || city !== "";
@@ -285,12 +291,14 @@ export default function PatientHospitalsPage() {
                     Doctors ({searchResults.doctors.length})
                   </div>
                   <div style={{ display: "grid", gap: 14 }}>
-                    {searchResults.doctors.map(d => (
+                    {foundDoctors.pageItems.map(d => (
                       <DoctorCard key={`${d.hospital_id}-${d.id}`} d={d}
                         onBook={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.hospital_id, d.id))}
                         onViewProfile={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.hospital_id, d.id))} />
                     ))}
                   </div>
+                  <PaginationControls pagination={foundDoctors.pagination} page={foundDoctors.page} pageSize={foundDoctors.pageSize}
+                    onPageChange={foundDoctors.setPage} onPageSizeChange={foundDoctors.setPageSize} pageSizeOptions={PAGE_SIZES} />
                 </div>
               )}
               {searchResults.hospitals.length > 0 && (
@@ -299,10 +307,12 @@ export default function PatientHospitalsPage() {
                     Hospitals ({searchResults.hospitals.length})
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 18 }}>
-                    {searchResults.hospitals.map(h => (
+                    {foundHospitals.pageItems.map(h => (
                       <HospitalCard key={h.hospital_id} h={h} onClick={() => navigate(ROUTES.PATIENT.HOSPITAL_DOCTORS(h.hospital_id))} />
                     ))}
                   </div>
+                  <PaginationControls pagination={foundHospitals.pagination} page={foundHospitals.page} pageSize={foundHospitals.pageSize}
+                    onPageChange={foundHospitals.setPage} onPageSizeChange={foundHospitals.setPageSize} pageSizeOptions={PAGE_SIZES} />
                 </div>
               )}
             </div>
@@ -324,11 +334,15 @@ export default function PatientHospitalsPage() {
             No hospitals available right now.
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 18 }}>
-            {allHospitals.map(h => (
-              <HospitalCard key={h.hospital_id} h={h} onClick={() => navigate(ROUTES.PATIENT.HOSPITAL_DOCTORS(h.hospital_id))} />
-            ))}
-          </div>
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 18 }}>
+              {hospitalPaging.pageItems.map(h => (
+                <HospitalCard key={h.hospital_id} h={h} onClick={() => navigate(ROUTES.PATIENT.HOSPITAL_DOCTORS(h.hospital_id))} />
+              ))}
+            </div>
+            <PaginationControls pagination={hospitalPaging.pagination} page={hospitalPaging.page} pageSize={hospitalPaging.pageSize}
+              onPageChange={hospitalPaging.setPage} onPageSizeChange={hospitalPaging.setPageSize} pageSizeOptions={PAGE_SIZES} />
+          </>
         )}
       </PageShell>
     </AppShell>

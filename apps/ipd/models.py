@@ -1,6 +1,7 @@
 """apps/ipd/models.py"""
 
 import uuid
+from django.conf import settings
 from django.db import models
 
 from apps.hospital_setup.models import StaffUser
@@ -28,8 +29,8 @@ class AdmissionReferral(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    patient    = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT, related_name="admission_referrals")
-    department = models.ForeignKey(Department, on_delete=models.PROTECT, related_name="admission_referrals")
+    patient    = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT, related_name="p_admission_referrals")
+    department = models.ForeignKey(Department, on_delete=models.PROTECT, related_name="d_admission_referrals")
 
     # Validated against billing.OptionList(list_type="admission_type" /
     admission_type   = models.CharField(max_length=30)
@@ -40,16 +41,16 @@ class AdmissionReferral(models.Model):
     # Populated when this referral originates inside this hospital's own
     source_appointment = models.ForeignKey(
         Appointment, on_delete=models.SET_NULL, null=True, blank=True,
-        related_name="admission_referrals",
+        related_name="a_admission_referrals",
     )
     source_encounter = models.ForeignKey(
         OPDEncounter, on_delete=models.SET_NULL, null=True, blank=True,
-        related_name="admission_referrals",
+        related_name="e_admission_referrals",
     )
 
     # Set only by RecommendAdmissionView from request.user — never accepted
     recommended_by = models.ForeignKey(
-        StaffUser, on_delete=models.PROTECT, related_name="admission_referrals_made",
+        StaffUser, on_delete=models.PROTECT, related_name="u_admission_referrals_made",
     )
     recommended_at = models.DateTimeField(auto_now_add=True)
 
@@ -60,7 +61,7 @@ class AdmissionReferral(models.Model):
     # Set only by AcceptExternalReferralView from request.user of THIS
     accepted_by = models.ForeignKey(
         StaffUser, on_delete=models.PROTECT, null=True, blank=True,
-        related_name="admission_referrals_accepted",
+        related_name="u_admission_referrals_accepted",
     )
     accepted_at = models.DateTimeField(null=True, blank=True)
 
@@ -108,18 +109,18 @@ class Admission(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     admission_number = models.CharField(max_length=20, unique=True)  # NNTM, entity="admission"
-    branch           = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="admissions")
+    branch           = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="b_admissions")
 
-    referral   = models.OneToOneField(AdmissionReferral, on_delete=models.PROTECT, related_name="admission")
-    patient    = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT, related_name="admissions")
-    department = models.ForeignKey(Department, on_delete=models.PROTECT, related_name="admissions")
+    referral   = models.OneToOneField(AdmissionReferral, on_delete=models.PROTECT, related_name="ar_admission")
+    patient    = models.ForeignKey(HospitalPatient, on_delete=models.PROTECT, related_name="p_admissions")
+    department = models.ForeignKey(Department, on_delete=models.PROTECT, related_name="d_admissions")
 
     # Denormalized off the referral at creation (same rationale as
     admission_type   = models.CharField(max_length=30)
     admission_source = models.CharField(max_length=30)
 
-    ordering_doctor = models.ForeignKey(StaffUser, on_delete=models.PROTECT, related_name="admissions_ordered")
-    logged_by_staff = models.ForeignKey(StaffUser, on_delete=models.PROTECT, related_name="admissions_logged")
+    ordering_doctor = models.ForeignKey(StaffUser, on_delete=models.PROTECT, related_name="u_admissions_ordered")
+    logged_by_staff = models.ForeignKey(StaffUser, on_delete=models.PROTECT, related_name="u_admissions_logged")
 
     reason_for_admission    = models.TextField()
     expected_discharge_date = models.DateField(null=True, blank=True)
@@ -132,12 +133,12 @@ class Admission(models.Model):
 
     # Re-admission tracking — a self-FK rather than a boolean, so
     previous_admission = models.ForeignKey(
-        "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="readmissions",
+        "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="ad_readmissions",
     )
 
     # Bed assignment — deliberately optional and independent of `status`.
     bed = models.ForeignKey(
-        "hospital_setup.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="admissions",
+        "hospital_setup.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="bd_admissions",
     )
     bed_assigned_at = models.DateTimeField(null=True, blank=True)
 
@@ -170,17 +171,17 @@ class Admission(models.Model):
 class AdmissionDeposit(models.Model):
     """Advance/deposit collected against an Admission, independent of any"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    admission       = models.ForeignKey(Admission, on_delete=models.PROTECT, related_name="deposits")
+    admission       = models.ForeignKey(Admission, on_delete=models.PROTECT, related_name="ad_deposits")
     amount          = models.DecimalField(max_digits=12, decimal_places=2)
     payment_mode    = models.CharField(max_length=50)
     transaction_ref = models.CharField(max_length=100, blank=True)
-    collected_by    = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="deposits_collected")
+    collected_by    = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="u_deposits_collected")
     collected_at    = models.DateTimeField(auto_now_add=True)
 
     # The reconciliation this docstring used to describe as "Phase 2, not
     reconciled_invoice = models.ForeignKey(
         "billing.Invoice", on_delete=models.SET_NULL, null=True, blank=True,
-        related_name="reconciled_ipd_deposits",
+        related_name="i_reconciled_ipd_deposits",
     )
 
     class Meta:
@@ -189,7 +190,7 @@ class AdmissionDeposit(models.Model):
         constraints = [models.CheckConstraint(check=models.Q(amount__gt=0), name="deposit_amount_positive")]
 
     def __str__(self):
-        return f"₹{self.amount} advance for {self.admission.admission_number}"
+        return f"{settings.CURRENCY_SYMBOL}{self.amount} advance for {self.admission.admission_number}"
 
 
 class PatientMovement(models.Model):
@@ -206,16 +207,16 @@ class PatientMovement(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    admission     = models.ForeignKey(Admission, on_delete=models.CASCADE, related_name="movements")
+    admission     = models.ForeignKey(Admission, on_delete=models.CASCADE, related_name="ad_movements")
     movement_type = models.CharField(max_length=20, choices=MOVEMENT_CHOICES)
-    from_bed      = models.ForeignKey("hospital_setup.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="movements_from")
-    to_bed        = models.ForeignKey("hospital_setup.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="movements_to")
+    from_bed      = models.ForeignKey("hospital_setup.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="bd_movements_from")
+    to_bed        = models.ForeignKey("hospital_setup.Bed", on_delete=models.SET_NULL, null=True, blank=True, related_name="bd_movements_to")
     # Denormalized at write time (same rationale as Admission.admission_type/
     from_room_name = models.CharField(max_length=100, blank=True)
     from_bed_number = models.CharField(max_length=20, blank=True)
     to_room_name   = models.CharField(max_length=100, blank=True)
     to_bed_number  = models.CharField(max_length=20, blank=True)
-    moved_by  = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, related_name="patient_movements_recorded")
+    moved_by  = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, related_name="u_patient_movements_recorded")
     notes     = models.CharField(max_length=255, blank=True)
     moved_at  = models.DateTimeField(auto_now_add=True)
 

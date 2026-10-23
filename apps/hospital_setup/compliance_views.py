@@ -67,6 +67,9 @@ class RecordAmendmentStaffListView(APIView):
             qs = qs.filter(status=status_filter)
 
         page_items, meta = paginate_queryset(request, qs)
+        patients = [a.patient for a in page_items]
+        for p in patients[:1]:
+            p.get_patient_details(batch=patients)
         return success(data={
             "results": RecordAmendmentSerializer(page_items, many=True).data,
             "pagination": meta,
@@ -118,6 +121,9 @@ class ConsentRecordListView(APIView):
             qs = qs.filter(patient_id=patient_id)
 
         page_items, meta = paginate_queryset(request, qs)
+        patients = [c.patient for c in page_items]
+        for p in patients[:1]:
+            p.get_patient_details(batch=patients)
         return success(data={
             "results": ConsentRecordSerializer(page_items, many=True).data,
             "pagination": meta,

@@ -4,6 +4,8 @@ import { useNavigate }       from "react-router-dom";
 import { AppShell }          from "../../components/layout/AppShell";
 import { PageShell }         from "../../components/common/PageShell";
 import DependentBadge        from "../../components/common/DependentBadge";
+import PaginationControls    from "../../components/common/PaginationControls";
+import { useClientPaging }   from "../../hooks/usePagedApi";
 import apiClient             from "../../services/api.client";
 import API_ENDPOINTS         from "../../config/api.config";
 import { ROUTES }            from "../../config/routes.config";
@@ -107,6 +109,8 @@ export default function DoctorPatientsPage() {
       return true;
     });
   }, [results, genderFilter, dependentFilter]);
+  const rosterPaging = useClientPaging(filteredRoster || [], 10);
+  const resultPaging = useClientPaging(filteredResults || [], 10);
 
   function viewInHistory(uhid) {
     navigate(ROUTES.DOCTOR.HISTORY, { state: { patient: uhid } });
@@ -252,7 +256,7 @@ export default function DoctorPatientsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRoster.map(p => (
+                  {rosterPaging.pageItems.map(p => (
                     <tr key={p.awpid || p.patient_uhid}>
                       <td>
                         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -290,6 +294,8 @@ export default function DoctorPatientsPage() {
                   ))}
                 </tbody>
               </table>
+              <PaginationControls pagination={rosterPaging.pagination} page={rosterPaging.page} pageSize={rosterPaging.pageSize}
+                onPageChange={rosterPaging.setPage} onPageSizeChange={rosterPaging.setPageSize} />
             </div>
           )
         )}
@@ -365,7 +371,7 @@ export default function DoctorPatientsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredResults.map(p => (
+                    {resultPaging.pageItems.map(p => (
                       <tr key={p.id}>
                         <td>
                           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -412,6 +418,8 @@ export default function DoctorPatientsPage() {
                     ))}
                   </tbody>
                 </table>
+                <PaginationControls pagination={resultPaging.pagination} page={resultPaging.page} pageSize={resultPaging.pageSize}
+                  onPageChange={resultPaging.setPage} onPageSizeChange={resultPaging.setPageSize} />
               </div>
             )}
           </>
