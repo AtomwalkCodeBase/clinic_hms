@@ -22,7 +22,7 @@ from apps.documents.models import (
     Schedule,
 )
 from apps.patients.models import Patient, ConsultSession, PatientRelationship
-from core.tests.testing import ensure_hospital, HospitalDBTestCase, requires_hospital_db
+from core.tests.testing import ensure_hospital, HospitalDBTestCase, make_branch, make_patient, make_staff, requires_hospital_db
 from django.test import SimpleTestCase, TestCase, override_settings
 from unittest import mock
 from rest_framework.test import APIRequestFactory, force_authenticate
@@ -41,13 +41,11 @@ from apps.documents.views import (
 )
 from apps.documents.tasks import classify_document_task, extract_document_task
 from types import SimpleNamespace
-from apps.opd.models import HospitalPatient, Allergy
+from apps.opd.models import Allergy
 from apps.lab.models import LabReport, LabRequest, LabTest
 from apps.lab.views import LabRequestAttachDocumentView
 from apps.opd.models import Appointment, OPDEncounter
 from apps.documents.lib_vitals import sync_encounter_to_hie
-from apps.hospital_setup.models import Branch
-from apps.hospital_setup.models import StaffUser
 from apps.hospital_master.models import Hospital, HospitalParameters
 from decimal import Decimal
 from datetime import timedelta
@@ -1131,14 +1129,9 @@ class ProvenanceFixtureMixin:
     def make_fixture(self):
         db = self.hospital_alias
         self.hospital = _hospital(db, "hospital-test", "Test Hospital")
-        self.branch = Branch.objects.using(db).create(name="Main")
-        self.doctor = StaffUser.objects.using(db).create(
-            email="dr@example.test", role="doctor", phone="9000000010", branch=self.branch,
-        )
-        self.patient = HospitalPatient.objects.using(db).create(
-            awpid="AW-PROV-1", uhid="UHID-P1", branch=self.branch, full_name="Prov Patient",
-        )
-        Patient.objects.using("default").get_or_create(awpid="AW-PROV-1", defaults={"full_name": "Prov Patient"})
+        self.branch, self.place = make_branch(db)
+        self.doctor = make_staff(db, "doctor", email="dr@example.test", phone="9000000010", place=self.place)
+        self.patient = make_patient(db, "AW-PROV-1", uhid="UHID-P1", branch=self.branch, full_name="Prov Patient")
 def _fake_encounter():
     """Only what sync_encounter_to_hie reads: no vitals, no prescription."""
     class NoRx:
@@ -1182,14 +1175,10 @@ class LabHospitalIdTests(ProvenanceFixtureMixin, HospitalDBTestCase):
     def make_lab_request(self):
         db = self.hospital_alias
         test = LabTest.objects.using(db).create(name="CBC")
-        doctor_uuid = uuid.uuid4()
         appt = Appointment.objects.using(db).create(
-            patient_id=self.patient.uuid, patient_awpid=self.patient.awpid, doctor_user_id=doctor_uuid,
-            doctor_name="Dr Test", scheduled_date=datetime.date.today(),
+            patient=self.patient, doctor=self.doctor, branch_department=self.place, scheduled_date=datetime.date.today(),
         )
-        enc = OPDEncounter.objects.using(db).create(
-            appointment=appt, patient_id=self.patient.uuid, doctor_user_id=doctor_uuid,
-        )
+        enc = OPDEncounter.objects.using(db).create(appointment=appt)
         return LabRequest.objects.using(db).create(
             patient=self.patient, encounter=enc, test=test, requested_by=self.doctor, branch=self.branch,
         )
@@ -1584,23 +1573,21 @@ class PediatricStaffTests(HospitalDBTestCase):
     def setUp(self):
         super().setUp()
         from apps.opd.models import Appointment
-        from apps.hospital_setup.models import Branch
-        from apps.opd.models import HospitalPatient
         from apps.hospital_master.models import Hospital
 
         db = self.hospital_alias
         self.hospital = Hospital.objects.using("default").create(name="Peds H", hospital_code="peds-h", db_name=db)
-        self.branch = Branch.objects.using(db).create(name="Main")
-        self.child = HospitalPatient.objects.using(db).create(
-            awpid="AW-KID-1", uhid="UHID-K1", branch=self.branch, full_name="Kid One", gender="F",
+        self.branch, place = make_branch(db)
+        self.child = make_patient(
+            db, "AW-KID-1", uhid="UHID-K1", branch=self.branch, full_name="Kid One", gender="F",
             date_of_birth=dt.date.today() - timedelta(days=730), is_dependent=True,
         )
         ensure_hospital(self.hospital.id + 1)
         ensure_hospital(self.hospital.id + 50)
-        self.shared = Patient.objects.using("default").create(awpid="AW-KID-1", full_name="Kid One", gender="F", is_dependent=True)
+        self.shared = Patient.objects.using("default").get(awpid="AW-KID-1")
+        self.doctor = make_staff(db, "doctor", email="dr.x@example.test", phone="9000000011", place=place)
         self.appt = Appointment.objects.using(db).create(
-            patient_id=self.child.uuid, patient_awpid=self.child.awpid, doctor_user_id=uuid.UUID(int=5),
-            doctor_name="Dr X", branch_id=self.branch.id, scheduled_date=dt.date.today(),
+            patient=self.child, doctor=self.doctor, branch_department=place, scheduled_date=dt.date.today(),
         )
 
     # ── helpers ───────────────────────────────────────────────────────────────
@@ -1663,7 +1650,7 @@ class PediatricStaffTests(HospitalDBTestCase):
         rows = list(AuditLog.objects.using(self.hospital_alias).filter(resource_type="BirthHistory").order_by("id"))
         self.assertEqual([r.action for r in rows], ["birth_history.create", "birth_history.update"])
         self.assertEqual(rows[1].metadata["changed"]["gestational_age_weeks"], ["38", "36"])
-        self.assertEqual(rows[1].patient_id, self.child.uuid)
+        self.assertEqual(rows[1].patient_id, self.child.uhid)
 
     def test_the_audit_log_notes_when_another_hospitals_birth_history_is_replaced(self):
         from apps.hospital_setup.models import AuditLog

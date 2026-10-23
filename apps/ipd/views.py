@@ -5,6 +5,7 @@ from django.db.models import Q
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 
+from core.api.pagination import page_payload
 from core.api.response import success, created, error, not_found
 from core.api.permissions import IsDoctor, IsFrontDesk, IsHospitalStaff
 from core.utils.audit import log_action
@@ -99,7 +100,7 @@ class RecommendAdmissionView(APIView):
         log_action(
             request, request.hospital_db, action="ipd.referral.recommend",
             resource_type="AdmissionReferral", resource_id=str(referral.id),
-            patient_id=referral.patient_id,
+            patient_id=referral.patient,
             metadata={"admission_type": referral.admission_type, "admission_source": referral.admission_source},
         )
         return created(
@@ -171,7 +172,7 @@ class RegisterExternalReferralView(APIView):
         log_action(
             request, request.hospital_db, action="ipd.referral.register_external",
             resource_type="AdmissionReferral", resource_id=str(referral.id),
-            patient_id=referral.patient_id,
+            patient_id=referral.patient,
             metadata={
                 "admission_source": referral.admission_source,
                 "external_referring_facility": referral.external_referring_facility,
@@ -183,6 +184,15 @@ class RegisterExternalReferralView(APIView):
         )
 
 
+def _with_patients(rows):
+    """The rows, with their patients' shared records loaded in one query so the names read without asking once per row."""
+    rows = list(rows)
+    patients = [r.patient for r in rows]
+    for p in patients[:1]:
+        p.get_patient_details(batch=patients)
+    return rows
+
+
 class PendingReferralsListView(APIView):
     """Worklist for referrals awaiting action — shared by two different"""
     permission_classes = [IsAuthenticated, (IsFrontDesk | IsDoctor)]
@@ -191,14 +201,14 @@ class PendingReferralsListView(APIView):
         db = request.hospital_db
         if IsFrontDesk().has_permission(request, self):
             status_filter = request.query_params.get("status", AdmissionReferral.STATUS_PENDING)
-            qs = AdmissionReferral.objects.using(db).filter(status=status_filter)
+            qs = AdmissionReferral.objects.using(db).select_related("patient").filter(status=status_filter)
         else:
-            qs = AdmissionReferral.objects.using(db).filter(
+            qs = AdmissionReferral.objects.using(db).select_related("patient").filter(
                 status=AdmissionReferral.STATUS_PENDING,
                 accepted_by__isnull=True,
                 admission_source__in=AdmissionReferral.SOURCES_REQUIRING_ACCEPTANCE,
             )
-        return success(data=AdmissionReferralSerializer(qs, many=True).data)
+        return success(data=page_payload(request, qs, lambda rows: AdmissionReferralSerializer(_with_patients(rows), many=True).data) or AdmissionReferralSerializer(_with_patients(qs), many=True).data)
 
 
 # ── Front desk — registration only ───────────────────────────────────────────
@@ -232,7 +242,12 @@ class CompleteAdmissionView(APIView):
             patient = HospitalPatient.objects.using(db).get(pk=referral.patient_id)
 
             # NNTM — same collision-free sequence mechanism as UHID/invoice/
-            admission_number, _ = get_next_number(patient.branch_id, entity="admission", using=db)
+            # The admission belongs to the branch of the front-desk user registering it
+            from apps.hospital_setup.models import Branch
+            branch_id = getattr(request.user, "branch_id", None) or Branch.objects.using(db).filter(is_active=True).order_by("id").values_list("id", flat=True).first()
+            if not branch_id:
+                return error("No active branch is configured for this hospital.")
+            admission_number, _ = get_next_number(branch_id, entity="admission", using=db)
 
             # Re-admission tracking — most recent non-cancelled prior admission
             previous = (
@@ -245,7 +260,7 @@ class CompleteAdmissionView(APIView):
 
             admission = Admission(
                 admission_number=admission_number,
-                branch_id=patient.branch_id,
+                branch_id=branch_id,
                 referral=referral,
                 patient_id=referral.patient_id,
                 department_id=referral.department_id,
@@ -257,8 +272,8 @@ class CompleteAdmissionView(APIView):
                 expected_discharge_date=v.get("expected_discharge_date"),
                 attendant_name=v.get("attendant_name", ""),
                 attendant_phone=v.get("attendant_phone", ""),
-                payer_type=v.get("payer_type") or patient.payer_type,
-                insurance_provider=v.get("insurance_provider") or patient.insurance_provider,
+                payer_type=v.get("payer_type") or patient.get_patient_details()["payer_type"],
+                insurance_provider=v.get("insurance_provider") or patient.get_patient_details()["insurance_provider"],
                 previous_admission=previous,
                 status=Admission.STATUS_ADMITTED,
             )
@@ -324,11 +339,11 @@ class AdmissionListView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
-        qs = Admission.objects.using(request.hospital_db).all()
+        qs = Admission.objects.using(request.hospital_db).select_related("patient")
         status_filter = request.query_params.get("status")
         if status_filter:
             qs = qs.filter(status=status_filter)
-        return success(data=AdmissionSerializer(qs, many=True).data)
+        return success(data=page_payload(request, qs, lambda rows: AdmissionSerializer(_with_patients(rows), many=True).data) or AdmissionSerializer(_with_patients(qs), many=True).data)
 
 
 class AdmissionDetailView(APIView):
@@ -713,7 +728,7 @@ class GenerateInvoiceView(APIView):
 
         recompute_invoice_totals(invoice, db)
         invoice.refresh_from_db(using=db)
-        paid = sum((p.amount for p in invoice.payments.using(db).all()), Decimal("0"))
+        paid = sum((p.amount for p in invoice.i_payments.using(db).all()), Decimal("0"))
         if paid > 0:
             invoice.paid_amount = paid
             invoice.status = Invoice.STATUS_PAID if paid >= invoice.total_amount else Invoice.STATUS_PARTIALLY_PAID
@@ -733,10 +748,10 @@ class AwaitingBedListView(APIView):
     permission_classes = [IsAuthenticated, IsFrontDesk]
 
     def get(self, request):
-        qs = Admission.objects.using(request.hospital_db).filter(
+        qs = Admission.objects.using(request.hospital_db).select_related("patient").filter(
             bed__isnull=True, status__in=[Admission.STATUS_REQUESTED, Admission.STATUS_ADMITTED],
         ).order_by("created_at")
-        return success(data=AdmissionSerializer(qs, many=True).data)
+        return success(data=page_payload(request, qs, lambda rows: AdmissionSerializer(_with_patients(rows), many=True).data) or AdmissionSerializer(_with_patients(qs), many=True).data)
 
 
 class AdmissionMovementsView(APIView):
@@ -759,13 +774,13 @@ class MyReferralsListView(APIView):
 
     def get(self, request):
         db = request.hospital_db
-        qs = AdmissionReferral.objects.using(db).filter(
+        qs = AdmissionReferral.objects.using(db).select_related("patient").filter(
             Q(recommended_by_id=request.user.id) | Q(accepted_by_id=request.user.id)
         )
         status_filter = request.query_params.get("status")
         if status_filter:
             qs = qs.filter(status=status_filter)
-        return success(data=AdmissionReferralSerializer(qs, many=True).data)
+        return success(data=page_payload(request, qs, lambda rows: AdmissionReferralSerializer(_with_patients(rows), many=True).data) or AdmissionReferralSerializer(_with_patients(qs), many=True).data)
 
 
 class MyAdmittedPatientsView(APIView):
@@ -774,7 +789,7 @@ class MyAdmittedPatientsView(APIView):
 
     def get(self, request):
         db = request.hospital_db
-        qs = Admission.objects.using(db).filter(ordering_doctor_id=request.user.id)
+        qs = Admission.objects.using(db).select_related("patient").filter(ordering_doctor_id=request.user.id)
         if request.query_params.get("include_discharged") != "1":
             qs = qs.filter(status__in=[Admission.STATUS_REQUESTED, Admission.STATUS_ADMITTED, Admission.STATUS_ACTIVE])
-        return success(data=AdmissionSerializer(qs, many=True).data)
+        return success(data=page_payload(request, qs, lambda rows: AdmissionSerializer(_with_patients(rows), many=True).data) or AdmissionSerializer(_with_patients(qs), many=True).data)

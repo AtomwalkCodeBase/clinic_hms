@@ -243,10 +243,9 @@ class Command(BaseCommand):
                     body={"full_name": f"Walk In {tag}", "mobile": wm, "branch_id": branch_id, "dpdp_consent": True, "gender": "M",
                           "date_of_birth": str(date.today() - timedelta(days=3650)), "share_with_network": True, "hie_consent": True})
         wid = (wi or {}).get("uuid")
-        wawp = (wi or {}).get("awpid")
         if wid:
             r.call("Appointments", "front_desk", "Book a walk-in appointment", "post", "/api/v1/opd/appointments/", token=fd,
-                   body={"patient_id": wid, "patient_awpid": wawp, "doctor_user_id": appt.get("doctor_user_id"), "doctor_name": appt.get("doctor_name"),
+                   body={"patient_id": wid, "doctor_id": appt.get("doctor_id"),
                          "scheduled_date": today, "chief_complaint": "Stomach ache", "appointment_type": atype})
         if not aid:
             return
@@ -260,7 +259,7 @@ class Command(BaseCommand):
         # doctor
         r.call("Doctor", "doctor", "Start the consultation", "post", f"/api/v1/opd/appointments/{aid}/status/", token=dr, body={"status": "in_progress"})
         enc = r.call("Doctor", "doctor", "Write an encounter (SOAP, diagnosis)", "post", "/api/v1/opd/encounters/", token=dr,
-                     body={"appointment_id": aid, "patient_id": appt.get("patient_id"), "doctor_user_id": appt.get("doctor_user_id"),
+                     body={"appointment_id": aid, "patient_id": appt.get("patient_id"),
                            "subjective": "Fever and cough", "objective": "Chest clear", "assessment": "Viral URTI", "plan": "Supportive care",
                            "advice_to_patient": "Fluids and rest", "follow_up_in_days": 5,
                            "diagnoses": [{"code": "J06.9", "description": "Acute upper respiratory infection"}]})
@@ -379,8 +378,13 @@ class Command(BaseCommand):
             rid2 = (rf or {}).get("id")
             rtypes = r.call("Admission", "hospital admin", "Room types", "get", "/api/v1/billing/room-types/", token=adm)
             bedtype = next((x.get("value") for x in ((rtypes if isinstance(rtypes, list) else (rtypes or {}).get("results")) or []) if x.get("is_bed_based")), None)
+            fls = r.call("Admission", "hospital admin", "Floors at the branch", "get", "/api/v1/org/floors/", token=adm, query={"branch_id": branch_id})
+            flrows = fls if isinstance(fls, list) else (fls or {}).get("results", [])
+            floor_id = flrows[0]["id"] if flrows else (r.call(
+                "Admission", "hospital admin", "Create a floor", "post", "/api/v1/org/floors/", token=adm,
+                body={"branch": branch_id, "name": "Ground"}, expect=(200, 201)) or {}).get("id")
             room = r.call("Admission", "hospital admin", "Create a ward room", "post", "/api/v1/org/rooms/", token=adm,
-                          body={"branch": branch_id, "name": "Ward 1", "room_type": bedtype or "general_ward", "capacity": 4}, expect=(200, 201))
+                          body={"branch": branch_id, "floor_obj": floor_id, "name": "Ward 1", "room_type": bedtype or "general_ward", "capacity": 4}, expect=(200, 201))
             bed = r.call("Admission", "hospital admin", "Create a bed", "post", "/api/v1/org/beds/", token=adm,
                          body={"room": (room or {}).get("id"), "bed_number": "1"}, expect=(200, 201))
             if rid2:

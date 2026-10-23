@@ -11,15 +11,20 @@ from django.db import transaction
 from core.api.permissions import IsHospitalAdmin, IsHospitalStaff, IsFrontDesk
 from core.api.response import success, created, error, not_found
 
-from apps.hospital_setup.models import Branch, Department, Floor, Room, Bed
-from apps.hospital_setup.models import StaffUser, RoomAssignment, DoctorSchedule
+from django.db.models import Q
+
+from apps.hospital_setup.models import Branch, BranchDepartment, Department, Floor, Room, Bed
+from apps.hospital_setup.models import StaffUser, DoctorSchedule
+from apps.hospital_setup import room_utils
+from apps.hospital_setup.branch_utils import ensure_default_place
+from apps.hospital_setup.rbac import acts_as_q
 
 logger = logging.getLogger(__name__)
 
 
 from apps.hospital_setup.staff_services import seed_next_numbers
 
-from apps.hospital_setup.facility_serializers import BranchSerializer, DepartmentSerializer, FloorSerializer, RoomSerializer, BedSerializer
+from apps.hospital_setup.facility_serializers import BranchSerializer, BranchDepartmentSerializer, DepartmentSerializer, FloorSerializer, RoomSerializer, BedSerializer
 
 # Rough cap on the base64 photo payload — keeps us comfortably under DRF's
 _MAX_PHOTO_BASE64_CHARS = 1_900_000
@@ -59,6 +64,8 @@ class BranchListCreateView(APIView):
 
         # Seed NNTM rows so UHID / invoice / lab / Rx / queue numbers work immediately
         seed_next_numbers(branch.id, request.hospital_db)
+        # A branch always offers at least one department, so staff and visits can be placed there before any department is added
+        ensure_default_place(request.hospital_db, branch)
 
         return created(data=BranchSerializer(branch).data, message="Branch created.")
 
@@ -103,37 +110,68 @@ class BranchDetailView(APIView):
 # ── Departments ───────────────────────────────────────────────────────────────
 
 class DepartmentListCreateView(APIView):
-    """GET  /api/v1/org/departments/?branch_id=1  — list departments"""
+    """GET  /api/v1/org/departments/                — the hospital's departments, each with the branches that offer it
+    GET  /api/v1/org/departments/?branch_id=1     — the departments that branch offers (`id` is the department id)
+    POST /api/v1/org/departments/                 — {branch, name, floor?}: offer a department at a branch, creating the department if it is new"""
     def get_permissions(self):
         if self.request.method == "GET":
             return [IsAuthenticated(), IsHospitalStaff()]
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        qs = Department.objects.using(request.hospital_db).filter(is_active=True)
+        db = request.hospital_db
         branch_id = request.query_params.get("branch_id")
         if branch_id:
-            qs = qs.filter(branch_id=branch_id)
+            places = (BranchDepartment.objects.using(db).filter(branch_id=branch_id, is_active=True, department__is_active=True)
+                      .select_related("branch", "department", "floor"))
+            return success(data=BranchDepartmentSerializer(places, many=True).data)
+        qs = Department.objects.using(db).filter(is_active=True)
         return success(data=DepartmentSerializer(qs, many=True).data)
 
     def post(self, request):
-        s = DepartmentSerializer(data=request.data)
-        if not s.is_valid():
-            return error("Validation error.", errors=s.errors)
-        # Verify branch belongs to this hospital
-        branch_id = s.validated_data["branch"].id
+        db = request.hospital_db
+        name = (request.data.get("name") or "").strip()
+        if not name:
+            return error("Validation error.", errors={"name": "Enter a name."})
         try:
-            branch = Branch.objects.using(request.hospital_db).get(pk=branch_id, is_active=True)
-        except Branch.DoesNotExist:
+            branch = Branch.objects.using(db).get(pk=request.data.get("branch"), is_active=True)
+        except (Branch.DoesNotExist, ValueError, TypeError):
             return error("Branch not found.", errors={"branch": "Invalid branch."})
+        floor = None
+        if request.data.get("floor"):
+            floor = Floor.objects.using(db).filter(pk=request.data["floor"], branch=branch, is_active=True).first()
+            if floor is None:
+                return error("Floor not found at this branch.", errors={"floor": "Invalid floor."})
 
-        dept = Department(branch=branch, name=s.validated_data["name"])
-        dept.save(using=request.hospital_db)
-        return created(data=DepartmentSerializer(dept).data, message="Department created.")
+        with transaction.atomic(using=db):
+            department = Department.objects.using(db).filter(name__iexact=name).first()
+            if department is None:
+                department = Department(name=name)
+                department.save(using=db)
+            elif not department.is_active:
+                department.is_active = True
+                department.save(using=db, update_fields=["is_active", "updated_at"])
+            place = BranchDepartment.objects.using(db).filter(branch=branch, department=department).first()
+            if place is not None and place.is_active:
+                return error("This branch already offers that department.", errors={"name": "Already offered."})
+            if place is None:
+                # every department sits on a floor; default to the branch's own, creating one if it has none yet
+                if floor is None:
+                    floor = (Floor.objects.using(db).filter(branch=branch).order_by("level", "id").first()
+                             or Floor.objects.using(db).create(branch=branch, name="Ground"))
+                place = BranchDepartment(branch=branch, department=department, floor=floor)
+            else:
+                place.is_active = True
+                if floor is not None:
+                    place.floor = floor
+            place.save(using=db)
+        place = BranchDepartment.objects.using(db).select_related("branch", "department", "floor").get(pk=place.pk)
+        return created(data=BranchDepartmentSerializer(place).data, message="Department created.")
 
 
 class DepartmentDetailView(APIView):
-    """PATCH /api/v1/org/departments/{id}/ — rename or deactivate."""
+    """PATCH  /api/v1/org/departments/{id}/                — rename the department for every branch, or deactivate it
+    DELETE /api/v1/org/departments/{id}/?branch_id=   — stop one branch offering it; without branch_id, deactivate it everywhere"""
     permission_classes = [IsAuthenticated, IsHospitalAdmin]
 
     def _get(self, request, pk):
@@ -155,12 +193,44 @@ class DepartmentDetailView(APIView):
         return success(data=DepartmentSerializer(dept).data, message="Department updated.")
 
     def delete(self, request, pk):
+        db = request.hospital_db
         dept = self._get(request, pk)
         if not dept:
             return not_found("Department not found.")
-        dept.is_active = False
-        dept.save(using=request.hospital_db, update_fields=["is_active"])
+        branch_id = request.query_params.get("branch_id")
+        places = BranchDepartment.objects.using(db).filter(department=dept, is_active=True).select_related("branch")
+        if branch_id:
+            places = places.filter(branch_id=branch_id)
+        # A branch must keep at least one department: staff and visits are placed in one
+        for place in places:
+            if not BranchDepartment.objects.using(db).filter(branch_id=place.branch_id, is_active=True).exclude(pk=place.pk).exists():
+                return error(f"{place.branch.name} would be left with no department. Add another one there first.")
+        BranchDepartment.objects.using(db).filter(pk__in=[p.pk for p in places]).update(is_active=False)
+        if not branch_id:
+            dept.is_active = False
+            dept.save(using=db, update_fields=["is_active", "updated_at"])
         return success(message="Department deactivated.")
+
+
+class BranchDepartmentDetailView(APIView):
+    """PATCH /api/v1/org/branch-departments/{id}/ — {floor}: put a department on a floor of its branch (null for no floor)"""
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    def patch(self, request, pk):
+        db = request.hospital_db
+        place = BranchDepartment.objects.using(db).select_related("branch", "department", "floor").filter(pk=pk).first()
+        if place is None:
+            return not_found("Department at this branch not found.")
+        if "floor" not in request.data:
+            return error("Validation error.", errors={"floor": "Required (use null for no floor)."})
+        floor = None
+        if request.data["floor"] is not None:
+            floor = Floor.objects.using(db).filter(pk=request.data["floor"], branch_id=place.branch_id, is_active=True).first()
+            if floor is None:
+                return error("Floor not found at this branch.", errors={"floor": "Invalid floor."})
+        place.floor = floor
+        place.save(using=db, update_fields=["floor", "updated_at"])
+        return success(data=BranchDepartmentSerializer(place).data, message="Department updated.")
 
 
 # ── Floors ───────────────────────────────────────────────────────────────
@@ -241,6 +311,16 @@ def _room_type_option(db, value):
     ).first()
 
 
+def _place_of_department(db, branch_id, department):
+    """The branch_department of a department at a branch, or an error message when that branch does not offer it."""
+    if department is None:
+        return None, None
+    place = BranchDepartment.objects.using(db).filter(branch_id=branch_id, department_id=department.id, is_active=True).first()
+    if place is None:
+        return None, f"{department.name} is not offered at this branch."
+    return place, None
+
+
 class RoomListCreateView(APIView):
     """GET  /api/v1/org/rooms/?branch_id=1  — list rooms (any staff, read-only)."""
     def get_permissions(self):
@@ -249,30 +329,31 @@ class RoomListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        qs = Room.objects.using(request.hospital_db).filter(is_active=True).select_related("branch", "department", "floor_obj")
+        qs = (Room.objects.using(request.hospital_db).filter(is_active=True)
+              .select_related("floor__branch", "branch_department__department"))
         branch_id = request.query_params.get("branch_id")
         if branch_id:
-            qs = qs.filter(branch_id=branch_id)
+            qs = qs.filter(floor__branch_id=branch_id)
         return success(data=RoomSerializer(qs, many=True).data)
 
     def post(self, request):
+        db = request.hospital_db
         s = RoomSerializer(data=request.data)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
-        branch_id = s.validated_data["branch"].id
+        floor = s.validated_data["floor"]
         try:
-            branch = Branch.objects.using(request.hospital_db).get(pk=branch_id, is_active=True)
-        except Branch.DoesNotExist:
-            return error("Branch not found.", errors={"branch": "Invalid branch."})
+            floor = Floor.objects.using(db).select_related("branch").get(pk=floor.id, is_active=True, branch__is_active=True)
+        except Floor.DoesNotExist:
+            return error("Floor not found.", errors={"floor_obj": "Invalid floor."})
+        if request.data.get("branch") not in (None, "", floor.branch_id) and str(request.data.get("branch")) != str(floor.branch_id):
+            return error("That floor belongs to a different branch.", errors={"floor_obj": "Not a floor of this branch."})
 
-        if Room.objects.using(request.hospital_db).filter(
-            branch=branch, name__iexact=s.validated_data["name"], is_active=True
-        ).exists():
-            return error("A room with this name already exists at this branch.",
-                         errors={"name": "Already in use."})
+        if Room.objects.using(db).filter(floor=floor, name__iexact=s.validated_data["name"], is_active=True).exists():
+            return error("A room with this name already exists on this floor.", errors={"name": "Already in use."})
 
         room_type = s.validated_data.get("room_type", "consultation")
-        type_option = _room_type_option(request.hospital_db, room_type)
+        type_option = _room_type_option(db, room_type)
         if not type_option:
             return error("Not a configured room type for this hospital.", errors={"room_type": "Invalid choice."})
 
@@ -285,11 +366,13 @@ class RoomListCreateView(APIView):
         else:
             capacity = None
 
-        floor_obj = s.validated_data.get("floor_obj")
-        room = Room(branch=branch, floor_obj=floor_obj,
-                    department=s.validated_data.get("department"),
+        place, problem = _place_of_department(db, floor.branch_id, s.validated_data.get("department"))
+        if problem:
+            return error(problem, errors={"department": "Not offered at this branch."})
+        room = Room(floor=floor, branch_department=place,
                     name=s.validated_data["name"], room_type=room_type, capacity=capacity)
-        room.save(using=request.hospital_db)
+        room.save(using=db)
+        room = Room.objects.using(db).select_related("floor__branch", "branch_department__department").get(pk=room.pk)
         return created(data=RoomSerializer(room).data, message="Room created.")
 
 
@@ -299,39 +382,51 @@ class RoomDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return Room.objects.using(request.hospital_db).get(pk=pk)
+            return (Room.objects.using(request.hospital_db).select_related("floor__branch", "branch_department__department").get(pk=pk))
         except Room.DoesNotExist:
             return None
 
     def patch(self, request, pk):
+        db = request.hospital_db
         room = self._get(request, pk)
         if not room:
             return not_found("Room not found.")
         s = RoomSerializer(room, data=request.data, partial=True)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
-        effective_room_type = s.validated_data.get("room_type", room.room_type)
-        if "room_type" in s.validated_data:
-            if not _room_type_option(request.hospital_db, s.validated_data["room_type"]):
+        data = dict(s.validated_data)
+        effective_room_type = data.get("room_type", room.room_type)
+        if "room_type" in data:
+            if not _room_type_option(db, data["room_type"]):
                 return error("Not a configured room type for this hospital.", errors={"room_type": "Invalid choice."})
-        if "capacity" in s.validated_data:
-            new_capacity = s.validated_data["capacity"]
-            type_option = _room_type_option(request.hospital_db, effective_room_type)
+        if "capacity" in data:
+            new_capacity = data["capacity"]
+            type_option = _room_type_option(db, effective_room_type)
             if type_option and type_option.is_bed_based:
                 if new_capacity is None or new_capacity < 1:
                     return error("Bed capacity is required for this room type.",
                                  errors={"capacity": "Enter the number of beds this room can hold."})
-                current_beds = room.beds.filter(is_active=True).count()
+                current_beds = room.r_beds.filter(is_active=True).count()
                 if new_capacity < current_beds:
                     return error(
                         f"Capacity can't be set below {current_beds} — this room already has {current_beds} bed{'s' if current_beds != 1 else ''}. Remove a bed first.",
                         errors={"capacity": "Below current bed count."},
                     )
             else:
-                s.validated_data["capacity"] = None
-        for attr, val in s.validated_data.items():
+                data["capacity"] = None
+        floor = data.get("floor", room.floor)
+        if "floor" in data and floor.branch_id != room.floor.branch_id and room.r_beds.filter(is_active=True).exists():
+            return error("Move the beds out first: a room with beds cannot change branch.", errors={"floor_obj": "Has beds."})
+        if "department" in data or "floor" in data:
+            department = data["department"] if "department" in data else (room.branch_department.department if room.branch_department_id else None)
+            place, problem = _place_of_department(db, floor.branch_id, department)
+            if problem:
+                return error(problem, errors={"department": "Not offered at this branch."})
+            room.branch_department = place
+        data.pop("department", None)
+        for attr, val in data.items():
             setattr(room, attr, val)
-        room.save(using=request.hospital_db)
+        room.save(using=db)
         return success(data=RoomSerializer(room).data, message="Room updated.")
 
     def delete(self, request, pk):
@@ -341,7 +436,7 @@ class RoomDetailView(APIView):
         room.is_active = False
         room.save(using=request.hospital_db, update_fields=["is_active"])
         # Assignments for a deactivated room are pointless to keep active —
-        RoomAssignment.objects.using(request.hospital_db).filter(room=room, is_active=True).update(is_active=False)
+        room_utils.deactivate_room_blocks(request.hospital_db, room.id)
         return success(message="Room deactivated.")
 
 
@@ -355,13 +450,13 @@ class BedListCreateView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        qs = Bed.objects.using(request.hospital_db).filter(is_active=True).select_related("room", "room__branch")
+        qs = Bed.objects.using(request.hospital_db).filter(is_active=True).select_related("room__floor")
         room_id = request.query_params.get("room_id")
         if room_id:
             qs = qs.filter(room_id=room_id)
         branch_id = request.query_params.get("branch_id")
         if branch_id:
-            qs = qs.filter(room__branch_id=branch_id)
+            qs = qs.filter(room__floor__branch_id=branch_id)
         status_filter = request.query_params.get("status")
         if status_filter:
             qs = qs.filter(status=status_filter)
@@ -527,26 +622,25 @@ class BedBoardView(APIView):
         }
         rooms = (
             Room.objects.using(db)
-            .filter(branch_id=branch_id, is_active=True, room_type__in=bed_based_types)
-            .select_related("floor_obj", "department")
-            .prefetch_related("beds")
-            .order_by("floor_obj__level", "name")
+            .filter(floor__branch_id=branch_id, is_active=True, room_type__in=bed_based_types)
+            .select_related("floor", "branch_department__department")
+            .prefetch_related("r_beds")
+            .order_by("floor__level", "name")
         )
 
         floors = {}
         for room in rooms:
-            floor_key = room.floor_obj_id or 0
-            floor_bucket = floors.setdefault(floor_key, {
-                "floor_id": room.floor_obj_id,
-                "floor_name": room.floor_obj.name if room.floor_obj else "Unassigned",
+            floor_bucket = floors.setdefault(room.floor_id, {
+                "floor_id": room.floor_id,
+                "floor_name": room.floor.name,
                 "rooms": [],
             })
-            beds = [b for b in room.beds.all() if b.is_active]
+            beds = [b for b in room.r_beds.all() if b.is_active]
             floor_bucket["rooms"].append({
                 "room_id": room.id,
                 "room_name": room.name,
                 "room_type": room.room_type,
-                "department_name": room.department.name if room.department else None,
+                "department_name": room.department.name if room.branch_department_id else None,
                 "capacity": room.capacity,
                 "beds": BedSerializer(beds, many=True).data,
             })
@@ -573,37 +667,33 @@ class DepartmentAvailabilityView(APIView):
 
         now_time = timezone.localtime().time() if target_date == _date.today() else None
 
-        departments = Department.objects.using(db).filter(is_active=True)
+        places = (BranchDepartment.objects.using(db).filter(is_active=True, department__is_active=True)
+                  .select_related("department"))
         if branch_id:
-            departments = departments.filter(branch_id=branch_id)
+            places = places.filter(branch_id=branch_id)
 
         results = []
-        for dept in departments:
-            doctors = StaffUser.objects.using(db).filter(
-                department=dept, role="doctor", is_active=True,
-            )
+        for place in places:
+            dept = place.department
+            doctor_ids = StaffUser.objects.using(db).filter(
+                acts_as_q("doctor"), is_active=True, u_branch_departments__branch_department=place,
+            ).values_list("id", flat=True)
+            schedules = DoctorSchedule.objects.using(db).filter(
+                staff_branch_department__branch_department=place, staff_branch_department__staff_id__in=list(doctor_ids))
             doctors_free_today = 0
             best_slot = None
 
-            for doc in doctors:
-                schedule = (
-                    DoctorSchedule.objects.using(db)
-                    .filter(doctor=doc)
-                    .prefetch_related("days")
-                    .first()
-                )
-                if not schedule:
-                    continue
-                slots_by_day = {d.day_of_week: d for d in schedule.days.all()}
+            for schedule in schedules:
+                slots_by_day = {row["day_of_week"]: row for row in room_utils.hours_of(schedule)}
 
                 found = None
                 for offset in range(8):  # today + next 7 days
                     check_date = target_date + _timedelta(days=offset)
                     day_row = slots_by_day.get(check_date.weekday())
-                    if not day_row or not day_row.is_available:
+                    if not day_row or not day_row["is_available"]:
                         continue
-                    start_time = day_row.start_time
-                    if offset == 0 and now_time and now_time > day_row.end_time:
+                    start_time = day_row["start_time"]
+                    if offset == 0 and now_time and now_time > day_row["end_time"]:
                         continue  # today's window already over
                     if offset == 0 and now_time and now_time > start_time:
                         start_time = now_time  # window already open — "free" starts now
@@ -619,6 +709,7 @@ class DepartmentAvailabilityView(APIView):
 
             results.append({
                 "department_id": dept.id,
+                "branch_department_id": place.id,
                 "department_name": dept.name,
                 "doctors_free_today": doctors_free_today,
                 "is_available_today": best_slot is not None and best_slot[0] == target_date,
