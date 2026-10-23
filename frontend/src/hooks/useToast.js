@@ -25,9 +25,14 @@ const toastApi = {
   toastInfo: (message, options = {}) =>
     toast.info(message, { ...DEFAULTS, ...options }),
 
-  /** Use for API errors — reads message from normalised error object */
-  toastApiError: (err, fallback = "Something went wrong.") =>
-    toast.error(err?.message || fallback, { ...DEFAULTS }),
+  /** Use for API errors — reads message from normalised error object. Several
+   * components often fetch in parallel and hit the same failure (e.g. an
+   * expired/invalid session), so this is deduplicated by message: a toast
+   * already showing the same text is reused instead of stacking another. */
+  toastApiError: (err, fallback = "Something went wrong.") => {
+    const message = err?.message || fallback;
+    return toast.error(message, { ...DEFAULTS, toastId: message });
+  },
 };
 
 export function useToast() {

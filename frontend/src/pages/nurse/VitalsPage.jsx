@@ -8,7 +8,7 @@ import { useToast }   from "../../hooks/useToast";
 import { useApi }     from "../../hooks/useApi";
 import apiClient      from "../../services/api.client";
 import API_ENDPOINTS  from "../../config/api.config";
-import { CheckCircle2, Stethoscope, Baby } from "lucide-react";
+import { CheckCircle2, Stethoscope, Baby, ChevronDown, ChevronRight } from "lucide-react";
 import { todayLocal } from "../../utils/dates";
 
 const MILESTONE_STATUS_STYLE = {
@@ -20,6 +20,7 @@ const MILESTONE_STATUS_STYLE = {
 
 // Read-only Birth History (nurses can view, per IsHospitalStaff on
 function PediatricPanel({ patientPk }) {
+  const [open, setOpen] = useState(false);
   const { toastSuccess, toastApiError } = useToast();
   const { data: bh, isLoading: bhLoading } = useApi(
     patientPk ? API_ENDPOINTS.PATIENTS.BIRTH_HISTORY(patientPk) : null, { skip: !patientPk }
@@ -61,10 +62,19 @@ function PediatricPanel({ patientPk }) {
 
   return (
     <div className="card" style={{ padding: 20, marginBottom: 16 }}>
-      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+      <button
+        type="button" onClick={() => setOpen(o => !o)}
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 6, background: "none", border: "none",
+          padding: 0, cursor: "pointer", fontWeight: 700, fontSize: 14, color: "var(--color-text)",
+          marginBottom: open ? 12 : 0,
+        }}
+      >
+        {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         <Baby size={15} /> Pediatric
-      </div>
+      </button>
 
+      {open && (<>
       <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--color-text-muted)", marginBottom: 6 }}>
         Birth History
       </div>
@@ -153,6 +163,7 @@ function PediatricPanel({ patientPk }) {
           })}
         </div>
       )}
+      </>)}
     </div>
   );
 }
