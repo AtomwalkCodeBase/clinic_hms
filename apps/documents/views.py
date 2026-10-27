@@ -56,7 +56,7 @@ class UploadView(APIView):
         serializer = UploadSerializer(data={"files": request.FILES.getlist("files")})
         if not serializer.is_valid():
             return error("Upload rejected — nothing was saved.", errors=serializer.errors)
-        files = serializer.validated_data["files"]
+        files, skipped = serializer.validated_data["files"], serializer.skipped
         mode = (request.data.get("mode") or ("instant" if len(files) == 1 else "bulk")).strip().lower()
         if mode not in ("instant", "bulk"):
             return error("Upload rejected - mode must be instant or bulk.")
@@ -74,6 +74,7 @@ class UploadView(APIView):
         return success(data={
             "batch_id": batch.id, "mode": mode,
             "documents": [{"id": d.id, "file_name": records.display_name(d), "processing_status": d.status} for d in docs],
+            "skipped": skipped,
         }, status=202)
 
 

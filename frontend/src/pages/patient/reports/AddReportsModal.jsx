@@ -4,12 +4,12 @@ import { Camera, CheckSquare, FileText, FolderUp, HelpCircle, Plus, Upload, X } 
 import { useToast } from "../../../hooks/useToast";
 import apiClient from "../../../services/api.client";
 import API_ENDPOINTS from "../../../config/api.config";
-import { chunkBySize } from "../../../utils/files";
+import { chunkBySize, sizeText, LIMITS_LINE, MAX_FILE_BYTES, MAX_FILES, MAX_TOTAL_BYTES } from "../../../utils/files";
 import { backdrop, h3, iconBtn, sheet, sub } from "./reportStyles";
 
-const MAX_FILE_BYTES = 250 * 1024 * 1024;
-const CHUNK_BYTES = 250 * 1024 * 1024;
-const CHUNK_FILES = 50;
+const CHUNK_BYTES = MAX_TOTAL_BYTES;
+const CHUNK_FILES = MAX_FILES;
+const LIMIT_HINT = { fontSize: 12, color: "var(--color-text-muted)", marginTop: 8 };
 const HARD_PICK_LIMIT = 1500;
 const OK_EXT = /\.(pdf|jpe?g|png)$/i;
 
@@ -55,7 +55,7 @@ export default function AddReportsModal({ onClose, onDone, onUploaded, patientAw
   const [phase, setPhase] = useState(mob ? "pick" : "choose");
   const [items, setItems] = useState([]);            // {file, name, size, skip}
   const [prog, setProg] = useState({ done: 0, total: 0, name: "" });
-  const [result, setResult] = useState({ sent: 0, skipped: 0, error: "" });
+  const [result, setResult] = useState({ sent: 0, skipped: 0, skippedFiles: [], error: "" });
   const [dragOver, setDragOver] = useState(false);
   const filesRef = useRef(null);
   const folderRef = useRef(null);
@@ -85,13 +85,13 @@ export default function AddReportsModal({ onClose, onDone, onUploaded, patientAw
       return {
         file: f, name: f.name || "photo.jpg", size: f.size,
         skip: badType || tooBig || empty,
-        reason: badType ? "not a PDF/image" : empty ? "empty file" : tooBig ? "over 250 MB" : "",
+        reason: badType ? "not a PDF or image" : empty ? "empty file" : tooBig ? `over the ${sizeText(MAX_FILE_BYTES)} limit` : "",
       };
     });
 
     const newKept = arr.filter(a => !a.skip);
     if (!newKept.length) {
-      toastError("None of those are usable — they must be PDFs or images, not empty, under 250 MB.");
+      toastError(`None of those can be uploaded — they must be PDFs or images, not empty, and up to ${sizeText(MAX_FILE_BYTES)} each.`);
       return;
     }
 
@@ -110,6 +110,8 @@ export default function AddReportsModal({ onClose, onDone, onUploaded, patientAw
 
     let sent = 0;
     let result_error = "";
+    // Every file left out, with why: the ones set aside while choosing, then any the server itself refused.
+    const leftOut = items.filter(i => i.skip).map(i => ({ name: i.name, reason: i.reason }));
     try {
       for (const chunk of chunks) {
         const form = new FormData();
@@ -121,14 +123,18 @@ export default function AddReportsModal({ onClose, onDone, onUploaded, patientAw
           timeout: 0,
           onUploadProgress: (e) => setProg({ done: sent + (e.total ? Math.round((e.loaded / e.total) * chunk.length) : 0), total: ready.length, name: "" }),
         });
-        sent += ((res.data?.data || res.data)?.documents || []).length;
+        const body = res.data?.data || res.data;
+        sent += (body?.documents || []).length;
+        leftOut.push(...(body?.skipped || []));
       }
-      setResult({ sent, skipped: items.length - ready.length, error: "" });
+      setResult({ sent, skipped: leftOut.length, skippedFiles: leftOut, error: "" });
     } catch (e) {
       const errs = e?.response?.data?.errors?.files;
-      const msg = (Array.isArray(errs) ? errs.join(" ") : "") || e?.response?.data?.message || "Upload failed — try again.";
+      // The web server in front of the API turns away a request that is too big with a plain page, before the API sees it.
+      const tooLarge = e?.response?.status === 413 ? "That upload was too large for the server to accept. Try fewer or smaller files at once." : "";
+      const msg = (Array.isArray(errs) ? errs.join(" ") : "") || e?.response?.data?.message || tooLarge || "Upload failed — try again.";
       result_error = msg;
-      setResult({ sent, skipped: items.length - ready.length, error: msg });
+      setResult({ sent, skipped: leftOut.length, skippedFiles: leftOut, error: msg });
     }
     setPhase("done");
     onUploaded?.({ sent, error: alive.current ? "" : (result_error || ""), background: !alive.current });
@@ -148,6 +154,7 @@ export default function AddReportsModal({ onClose, onDone, onUploaded, patientAw
           <>
             <h3 style={h3}>Add to My Reports</h3>
             <p style={sub}>We read each page and file it for you.</p>
+            <p style={LIMIT_HINT}>{LIMITS_LINE}.</p>
             {mob && (
               <div style={{ marginTop: 6 }}>
                 <Method Icon={Camera} title="Take photo" desc="Capture a printed document" onClick={() => camRef.current?.click()} />
@@ -165,6 +172,7 @@ export default function AddReportsModal({ onClose, onDone, onUploaded, patientAw
           <>
             <h3 style={h3}>Upload to My Reports</h3>
             <p style={sub}>Select the files or folders you want to upload — we keep the reports and skip the rest.</p>
+            <p style={LIMIT_HINT}>{LIMITS_LINE}. A file over the limit is skipped and marked in the list; the others still upload.</p>
             <div
               onDragOver={e => { e.preventDefault(); setDragOver(true); }}
               onDragLeave={() => setDragOver(false)}
@@ -198,16 +206,16 @@ export default function AddReportsModal({ onClose, onDone, onUploaded, patientAw
         {phase === "stage" && (
           <>
             <h3 style={h3}>Review {ready.length} file{ready.length !== 1 ? "s" : ""}</h3>
-            <p style={sub}>{ready.length} ready to upload{skipped ? ` · ${skipped} will be skipped (not a PDF or image, empty, or over 250 MB — see the list below)` : ""}.
+            <p style={sub}>{ready.length} ready to upload{skipped ? ` · ${skipped} will be skipped (not a PDF or image, empty, or over ${sizeText(MAX_FILE_BYTES)} — each is marked in the list below)` : ""}.
               Files that are already in your reports are recognised after upload and left out, and you can still keep them.</p>
             <div style={{ maxHeight: 300, overflowY: "auto", border: "1px solid var(--color-border)", borderRadius: 8, padding: 4, margin: "10px 0" }}>
               {items.map((it, idx) => (
                 <div key={idx} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 8px", fontSize: 12.5, opacity: it.skip ? 0.5 : 1 }}>
                   <FileText size={15} style={{ color: "var(--color-text-muted)" }} />
                   <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: it.skip ? "line-through" : "none" }}>{it.name}</span>
-                  <span style={{ color: "var(--color-text-muted)", fontSize: 11 }}>{(it.size / 1024 / 1024).toFixed(1)} MB</span>
+                  <span style={{ color: "var(--color-text-muted)", fontSize: 11 }}>{sizeText(it.size)}</span>
                   {it.skip
-                    ? <span style={{ fontSize: 10, color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>{it.reason ? it.reason.toUpperCase() : "SKIPPED"}</span>
+                    ? <span style={{ fontSize: 11, fontWeight: 600, color: "var(--color-error)", whiteSpace: "nowrap" }}>{it.reason ? `Skipped: ${it.reason}` : "Skipped"}</span>
                     : <button onClick={() => setItems(p => p.filter((_, i) => i !== idx))} style={iconBtn}><X size={14} /></button>}
                 </div>
               ))}
@@ -248,7 +256,11 @@ export default function AddReportsModal({ onClose, onDone, onUploaded, patientAw
               </p>
             )}
             {result.sent > 0 && <SumRow label="Files uploaded" n={result.sent} ok />}
-            {result.skipped > 0 && <SumRow label="Skipped (not a PDF or image, empty, or over 250 MB)" n={result.skipped} />}
+            {result.skipped > 0 && <SumRow label="Not uploaded" n={result.skipped} />}
+            {result.skippedFiles.slice(0, 8).map((f, i) => (
+              <p key={i} style={{ ...sub, margin: "2px 0 0" }}><b>{f.name}</b> — {f.reason}</p>
+            ))}
+            {result.skippedFiles.length > 8 && <p style={{ ...sub, margin: "2px 0 0" }}>…and {result.skippedFiles.length - 8} more</p>}
             {result.sent > 0 && (
               <p style={sub}>
                 We’re reading each file now — you’ll see its type in your list in a few seconds. Anything we can’t read,

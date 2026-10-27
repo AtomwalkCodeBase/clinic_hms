@@ -12,7 +12,7 @@ from datetime import date, datetime
 
 from apps.documents import ocr
 from apps.documents.models import CHOOSABLE_TYPES, CLASSIFIER_HOSPITAL, CLASSIFIER_RULES, DOCUMENT_TYPES, DocumentBatch, DocumentClassification, DocumentExtraction, HUMAN_CLASSIFIED, ISSUED, MedicalDocument, NOT_CLASSIFIED, REVIEW_REQUIRED, RULE_CLASSIFIED
-from apps.documents.serializers import MAX_FILE_BYTES
+from apps.documents.serializers import MAX_FILE_BYTES, size_text
 from apps.opd.models import HospitalPatient
 from apps.patients.models import Patient
 from core import storage
@@ -442,7 +442,7 @@ def extract_document(document_id):
             if not raw:
                 raise ValueError("The file is empty.")
             if len(raw) > MAX_FILE_BYTES:
-                raise ValueError("The file is over 250 MB.")
+                raise ValueError(f"The file is over {size_text(MAX_FILE_BYTES)}.")
             mime = validate_bytes(raw)
             if mime.startswith("image/"):
                 size = ocr.image_size(raw)

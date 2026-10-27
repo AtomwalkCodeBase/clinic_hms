@@ -685,7 +685,7 @@ class ExtractDocumentTests(TestCase):
         doc = make_doc(status=S.QUEUED)
         with mock.patch("apps.documents.lib_documents.MAX_FILE_BYTES", 10):
             extract_document_task(doc.id)
-        self.assertEqual((row(doc).status, row(doc).error_message), (S.FAILED, "The file is over 250 MB."))
+        self.assertEqual((row(doc).status, row(doc).error_message), (S.FAILED, "The file is over 10 bytes."))
         delay.assert_not_called()
 
     @mock.patch("apps.documents.tasks.classify_document_task.apply_async")
@@ -976,17 +976,45 @@ class UploadViewTests(TestCase):
         self.post([SimpleUploadedFile("evil.html", b"<html>", content_type="text/html")])
         self.assertTrue(MedicalDocument.objects.get().file_name.name.endswith(".bin"))
 
-    def test_one_oversize_file_rejects_everything_before_s3(self, put, storage, start, _resolve):
+    def test_the_per_file_limit_is_5_mb(self, put, storage, start, _resolve):
+        from apps.documents.serializers import MAX_FILE_BYTES, MAX_TOTAL_BYTES
+        self.assertEqual((MAX_FILE_BYTES, MAX_TOTAL_BYTES), (5 * 1024 * 1024, 250 * 1024 * 1024))
+
+    def test_one_oversize_file_is_left_out_and_the_rest_go_through(self, put, storage, start, _resolve):
         with mock.patch("apps.documents.serializers.MAX_FILE_BYTES", 150):
-            resp = self.post([pdf("ok.pdf"), pdf("big.pdf", size=200)])
+            resp = self.post([pdf("ok.pdf"), pdf("big.pdf", size=200), pdf("ok2.pdf")])
+
+        self.assertEqual(resp.status_code, 202)
+        self.assertEqual(sorted(d.document_ref_name for d in MedicalDocument.objects.all()), ["ok.pdf", "ok2.pdf"])
+        data = resp.data["data"]
+        self.assertEqual(len(data["documents"]), 2)
+        self.assertEqual([s["name"] for s in data["skipped"]], ["big.pdf"])
+        self.assertIn("limit is 150 bytes per file", data["skipped"][0]["reason"])
+        start.assert_called_once()
+
+    def test_an_empty_file_is_left_out_and_the_rest_go_through(self, put, storage, start, _resolve):
+        resp = self.post([pdf("ok.pdf"), SimpleUploadedFile("empty.pdf", b"", content_type="application/pdf")])
+        self.assertEqual(resp.status_code, 202)
+        self.assertEqual([d.document_ref_name for d in MedicalDocument.objects.all()], ["ok.pdf"])
+        self.assertEqual(resp.data["data"]["skipped"], [{"name": "empty.pdf", "reason": "The file is empty (0 KB)."}])
+
+    def test_a_clean_upload_has_nothing_skipped(self, put, storage, start, _resolve):
+        resp = self.post([pdf("a.pdf")])
+        self.assertEqual(resp.data["data"]["skipped"], [])
+
+    def test_when_every_file_is_over_the_limit_nothing_is_saved_and_each_reason_is_given(self, put, storage, start, _resolve):
+        with mock.patch("apps.documents.serializers.MAX_FILE_BYTES", 150):
+            resp = self.post([pdf("big.pdf", size=200), pdf("bigger.pdf", size=300)])
 
         self.assertEqual(resp.status_code, 400)
+        self.assertIn("big.pdf", str(resp.data))
+        self.assertIn("bigger.pdf", str(resp.data))
         put.assert_not_called()
         start.assert_not_called()
         self.assertEqual(MedicalDocument.objects.count(), 0)
 
-    def test_an_empty_file_rejects_everything_before_s3(self, put, storage, start, _resolve):
-        resp = self.post([pdf("ok.pdf"), SimpleUploadedFile("empty.pdf", b"", content_type="application/pdf")])
+    def test_when_every_file_is_empty_nothing_is_saved(self, put, storage, start, _resolve):
+        resp = self.post([SimpleUploadedFile("empty.pdf", b"", content_type="application/pdf")])
         self.assertEqual(resp.status_code, 400)
         self.assertIn("empty", str(resp.data))
         put.assert_not_called()

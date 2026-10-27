@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { addDays, formatDateTime, timeAgo } from "./dates";
 import { calcAge, formatAge } from "./age";
 import { vaxBucket } from "./vaccination";
-import { chunkBySize } from "./files";
+import { chunkBySize, sizeText, MAX_FILE_BYTES, MAX_TOTAL_BYTES, LIMITS_LINE } from "./files";
 import {
   NEEDS_ATTENTION, chipsFor, fileKind, formatSize, matchesSearch, sortReports, stateOf, statusLine, typeLabel,
 } from "./reports";
@@ -55,6 +55,19 @@ test("toLocalISODate / todayLocal use the local calendar day, not the UTC day", 
   assert.equal(toLocalISODate(new Date(2026, 11, 31, 23, 59)), "2026-12-31");
   assert.match(todayLocal(), /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(todayLocal(), toLocalISODate(new Date()));
+});
+
+test("the upload limits are 5 MB a file and 250 MB in all, and the hint says so", () => {
+  assert.equal(MAX_FILE_BYTES, 5 * 1024 * 1024);
+  assert.equal(MAX_TOTAL_BYTES, 250 * 1024 * 1024);
+  assert.equal(LIMITS_LINE, "PDF, JPG or PNG · up to 5 MB per file · up to 50 files (250 MB) at a time");
+});
+
+test("sizeText reads a size the way the server does", () => {
+  assert.equal(sizeText(5 * 1024 * 1024), "5 MB");
+  assert.equal(sizeText(7.24 * 1024 * 1024), "7.2 MB");
+  assert.equal(sizeText(300 * 1024), "300 KB");
+  assert.equal(sizeText(150), "150 bytes");
 });
 
 test("chunkBySize keeps order and splits by file count and by total size", () => {
