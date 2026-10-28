@@ -13,6 +13,7 @@ from datetime import date, datetime
 from apps.documents import ocr
 from apps.documents.models import CHOOSABLE_TYPES, CLASSIFIER_HOSPITAL, CLASSIFIER_RULES, DOCUMENT_TYPES, DocumentBatch, DocumentClassification, DocumentExtraction, HUMAN_CLASSIFIED, ISSUED, MedicalDocument, NOT_CLASSIFIED, REVIEW_REQUIRED, RULE_CLASSIFIED
 from apps.documents.serializers import MAX_FILE_BYTES, size_text
+from apps.documents.services import text_clean
 from apps.opd.models import HospitalPatient
 from apps.patients.models import Patient
 from core import storage
@@ -55,6 +56,29 @@ def parse_date(value, field, label, *, allow_future=False):
 
 # ── scoring ──────────────────────────────────────────────────────────────
 WEIGHTS = {"strong": 10, "medium": 3, "weak": 1}
+# Some words (invoice, total amount, GST) are on every bill there is. A bill counts as a medical bill only when the page also has something
+# of health care on it, so a restaurant bill or an electricity bill is left for the patient to file.
+DOMAIN_CUES = {
+    "medical_bill": ["hospital", "clinic", "patient", "doctor", "dr", "pharmacy", "pharma", "medical", "medicine", "medicines", "chemist", "drug", "drugs",
+                     "lab", "laboratory", "diagnostic", "diagnostics", "health", "healthcare", "consultation", "opd", "ipd", "uhid", "nursing",
+                     "ward", "admission", "discharge", "surgery", "tablet", "tab", "capsule", "syrup", "injection"],
+}
+HEADING_CHARS = 350   # the top of the page: where a document says what it is
+# What a document calls itself in its heading. One of these in the first HEADING_CHARS counts like a strong keyword for that type,
+# so the title wins over a body that merely talks about something else ("Discharge Summary ... vaccines given at birth").
+HEADING_TITLES = {
+    "prescription": ["prescription", "e-prescription", "out patient record", "opd prescription"],
+    "lab_report": ["laboratory report", "lab report", "pathology report", "investigation report", "test report"],
+    "imaging_report": ["radiology report", "imaging report", "x-ray report", "ultrasound report", "usg report", "ct scan report", "mri report",
+                       "echocardiography report", "sonography report"],
+    "discharge_summary": ["discharge summary", "discharge card", "discharge sheet", "summary of hospital stay"],
+    "consultation_note": ["consultation note", "opd note", "progress note", "clinical notes", "consultation summary", "consultation report"],
+    "medical_bill": ["tax invoice", "invoice", "bill cum receipt", "patient bill", "final bill", "pharmacy bill", "cash receipt", "cash bill", "money receipt"],
+    "vaccination_record": ["vaccination record", "vaccination card", "vaccination certificate", "immunisation record", "immunization record",
+                           "immunisation card", "immunization card", "immunisation visit", "immunization visit"],
+    "referral_letter": ["referral letter", "referral note"],
+    "medical_certificate": ["medical certificate", "fitness certificate", "sick leave certificate"],
+}
 MIN_MARGIN = 5      # the winner must lead the runner-up by this many points
 DOCUMENT_RULES = {
     "prescription": {
@@ -76,8 +100,8 @@ DOCUMENT_RULES = {
     },
     "imaging_report": {
         "strong": ["radiology report", "imaging report", "x-ray", "xray", "mri", "ct scan", "ncct", "ultrasound", "usg", "sonography", "echocardiography",
-                   "mammography", "doppler", "radiologist", "radiodiagnosis", "clinical information", "accession", "modality", "bi-rads"],
-        "medium": ["impression", "findings", "contrast", "lesion", "scan", "technique", "comparison", "radiograph", "effusion", "standard protocol", "echo"],
+                   "mammography", "doppler", "radiologist", "radiodiagnosis", "clinical information", "modality", "bi-rads"],
+        "medium": ["impression", "findings", "contrast", "lesion", "scan", "technique", "comparison", "radiograph", "effusion", "standard protocol", "echo", "accession"],
         "weak": ["normal", "view", "study"],
     },
     "discharge_summary": {
@@ -145,6 +169,10 @@ def normalize_text(text):
 # A measurement unit such as mg/dL is not a dose, and a "Ref. Doctor" line is not a prescriber: neither should push a
 _UNIT_RE = re.compile(r"(?<![a-z])(?:mg|ml|mcg|ug|ng|pg|g|u|iu|miu|uiu|mmol|meq)\s*/\s*(?:dl|l|ml|min|hr|cumm|kg|hpf)(?![a-z])")
 _REF_DOCTOR_RE = re.compile(r"(?<![a-z])ref(?:erred|\.)?\s*(?:by|doctor)\b[^\n]*")
+def _scrub(text):
+    """The "Ref. Doctor" lines and the units taken out of the text as it was read, before any joins are cut: "mg/dL" must not become "mg/d L"."""
+    text = re.sub(_REF_DOCTOR_RE.pattern, " ", text or "", flags=re.I)
+    return re.sub(_UNIT_RE.pattern, " xunitx ", text, flags=re.I)
 def prepare_text(text):
     """What the rules read: lower-cased, units and "Ref. Doctor" lines taken out, whitespace collapsed."""
     t = (text or "").lower()
@@ -161,29 +189,43 @@ def _pattern(keyword):
             body += "s?"
         _PATTERNS[keyword] = re.compile(r"(?<![a-z])" + body + r"(?![a-z])")
     return _PATTERNS[keyword]
-def _squash(s):
-    return re.sub(r"[^a-z0-9]", "", s)
-def _found(keyword, text, squashed):
-    """Whole-word match; for a phrase, also tolerate OCR dropping the spaces ("ReferenceRange")."""
-    if _pattern(keyword).search(text):
+def _found(keyword, views, squashed, words):
+    """Whole-word match in the text as it was read or with its joins cut; a long keyword is also found with its neighbours glued on
+    ("PATIENTBILLCUMRECEIPT" has "receipt"), and a phrase when the OCR dropped its spaces ("ReferenceRange")."""
+    pattern = _pattern(keyword)
+    if any(pattern.search(v) for v in views):
         return True
-    return " " in keyword and len(_squash(keyword)) > 5 and _squash(keyword) in squashed
+    if text_clean.glued_in(keyword, words, squashed):
+        return True
+    return " " in keyword and len(text_clean.squash(keyword)) > 5 and text_clean.squash(keyword) in squashed
 def calculate_document_scores(text):
     """{type: {"score": int, "matched_rules": [{"keyword", "weight", "level"}]}} for every type that has """
-    text = prepare_text(text)
-    squashed = _squash(text)
+    views = [prepare_text(v) for v in text_clean.views(_scrub(text))]       # as read, and with the joins the OCR made cut
+    squashed = text_clean.squash(views[0])
+    words = text_clean.tokens(views[0])
+    head_views = [v[:HEADING_CHARS] for v in views]
+    head_squashed = text_clean.squash(head_views[0])
+    head_words = text_clean.tokens(head_views[0])
     scores = {}
     for document_type, type_rules in DOCUMENT_RULES.items():
         score, matched = 0, []
         for level in ("strong", "medium", "weak"):
             for keyword in type_rules.get(level, []):
-                if _found(keyword, text, squashed):
+                if _found(keyword, views, squashed, words):
                     score += WEIGHTS[level]
                     matched.append({"keyword": keyword, "weight": WEIGHTS[level], "level": level})
+        for title in HEADING_TITLES.get(document_type, []):
+            if _found(title, head_views, head_squashed, head_words):
+                score += WEIGHTS["strong"]
+                matched.append({"keyword": title, "weight": WEIGHTS["strong"], "level": "heading"})
+                break
         for level, name, regex in PATTERN_RULES.get(document_type, []):
-            if regex.search(text):
+            if regex.search(views[0]):
                 score += WEIGHTS[level]
                 matched.append({"keyword": name, "weight": WEIGHTS[level], "level": level})
+        cues = DOMAIN_CUES.get(document_type)
+        if cues and not any(_found(cue, views, squashed, words) for cue in cues):
+            score, matched = 0, []
         scores[document_type] = {"score": score, "matched_rules": matched}
     return scores
 def classify_document_by_rules(text):

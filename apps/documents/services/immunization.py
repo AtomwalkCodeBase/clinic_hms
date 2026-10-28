@@ -12,25 +12,28 @@ from typing import List, Optional
 
 from .clinical_rules import format_age
 from .config import load_config
+from .text_clean import glued_in, squash, tokens, views
 
 UPCOMING_WINDOW_DAYS = 60
 EARLY_TOLERANCE_DAYS = 4  # IAP allows a short grace before the minimum age
 
 
 def resolve_vaccines(text: str, cfg=None) -> List[str]:
-    """'Pentavalent-2' -> ['DTwP/DTaP', 'Hib', 'Hepatitis B']"""
+    """'Pentavalent-2' -> ['DTwP/DTaP', 'Hib', 'Hepatitis B']. The name is also found when the OCR ran it into its neighbours
+    ('Hexaximdose2', 'DTPbooster 1'): see text_clean."""
     cfg = cfg or load_config()
     sched = cfg["immunization_schedule"]
-    name = (text or "").lower()
+    texts = views(text)
+    squashed, words = squash(text), tokens(text)
     found = set()
     for combo, parts in sched.get("combination_vaccines", {}).items():
         if combo.startswith("_"):
             continue
-        if re.search(rf"\b{re.escape(combo)}\b", name):
+        if any(re.search(rf"\b{re.escape(combo)}\b", v) for v in texts) or glued_in(combo, words, squashed):
             found.update(parts)
     for vaccine, aliases in sched["vaccine_aliases"].items():
         for alias in aliases:
-            if re.search(rf"(^|[^a-z]){re.escape(alias)}([^a-z]|$)", name):
+            if any(re.search(rf"(^|[^a-z]){re.escape(alias)}([^a-z]|$)", v) for v in texts) or glued_in(alias, words, squashed):
                 found.add(vaccine)
                 break
     return sorted(found)

@@ -135,8 +135,8 @@ class EngineTests(SimpleTestCase):
 
     def test_a_phrase_the_ocr_ran_together_still_matches(self):
         glued = classification_rules.calculate_document_scores("ReferenceRange")["lab_report"]
-        self.assertEqual([m["keyword"] for m in glued["matched_rules"]], ["reference range"])
-        self.assertEqual(glued["score"], 10)
+        self.assertEqual([m["keyword"] for m in glued["matched_rules"]], ["reference range", "range"])    # the joined word is also cut, so the weak word "range" counts too
+        self.assertEqual(glued["score"], 11)
         # a single word is never found inside a longer one, even when the text is squashed
         self.assertEqual(classification_rules.calculate_document_scores("abnormality")["lab_report"]["score"], 0)
 
@@ -168,7 +168,7 @@ class EngineTests(SimpleTestCase):
     def test_a_tie_needs_a_person(self):
         result = classification_rules.classify_document_by_rules("discharge summary and invoice")
         self.assertEqual((result["document_type"], result["status"]), (NOT_CLASSIFIED, REVIEW_REQUIRED))
-        self.assertEqual((result["score"], result["score_margin"]), (13, 3))           # discharge summary 10 + discharge 3, against invoice 10
+        self.assertEqual((result["score"], result["score_margin"]), (23, 3))           # discharge summary 10 + discharge 3 + its heading 10, against invoice 10 + its heading 10
         self.assertEqual(result["best_guess"], "discharge_summary")          # what it came closest to, for the reviewer
 
     def test_weak_words_alone_never_classify(self):
@@ -176,9 +176,9 @@ class EngineTests(SimpleTestCase):
         self.assertEqual((result["document_type"], result["status"]), (NOT_CLASSIFIED, REVIEW_REQUIRED))
 
     def test_a_winner_must_lead_by_the_margin(self):
-        # prescription 26 (rx, prescription, tablet, syrup) against medical_bill 23 (invoice, tax invoice, gst):
+        # prescription 36 (rx, prescription, tablet, syrup, and "prescription" in the heading) against medical_bill 33 (invoice, tax invoice, gst, and "invoice" in the heading):
         result = classification_rules.classify_document_by_rules("rx prescription tablet syrup invoice tax invoice gst")
-        self.assertEqual((result["score"], result["second_best_score"], result["score_margin"]), (26, 23, 3))
+        self.assertEqual((result["score"], result["second_best_score"], result["score_margin"]), (36, 33, 3))
         self.assertLess(result["score_margin"], classification_rules.MIN_MARGIN)
         self.assertEqual((result["document_type"], result["best_guess"]), (NOT_CLASSIFIED, "prescription"))
         # a strong and two medium words more on the bill's side and it leads by 13: classified ("subtotal" also matches the phrase "sub total")

@@ -1277,7 +1277,7 @@ def _my_documents_qs(awpid, review="confirmed"):
           .filter(patient__awpid=awpid)
           .exclude(id__in=linked_hw_ids)
           .select_related("d_classification")
-          .order_by("-created_at"))
+          .order_by("-created_at", "-id"))        # files uploaded together share a created_at: the id keeps their order, and so the pages, the same on every request
     if review == "pending":
         qs = qs.filter(records.awaiting_review_q())
     elif review != "all":

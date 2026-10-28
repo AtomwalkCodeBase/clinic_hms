@@ -78,7 +78,8 @@ def build_timeline(*, dob: date, sex: str, p_from: date, p_to: date,
             imm_items.append({**r, "date": d.isoformat(), "status_label": lbl(r["status"])})
     if imm_items:
         lanes.append({"id": "immunization", "type": "immunization", "label": "Vaccines",
-                      "items": imm_items, "summary": immunization.get("summary")})
+                      "items": imm_items, "summary": immunization.get("summary"),
+                      "unresolved": immunization.get("unresolved", [])})       # shots on a card whose vaccine could not be recognised: the app can say so
 
     # 4. conditions - chronic first, then acute groups (recurrent ones first)
     doctor = audience == "doctor"
