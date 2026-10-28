@@ -14,7 +14,7 @@ export default function BranchSwitcher({ branches, activeBranchId, onChange, sty
       title="Switch branch"
     >
       {branches.map(b => (
-        <option key={b.id} value={b.id}>{b.name}{b.is_primary ? " (primary)" : ""}</option>
+        <option key={b.branch_id} value={b.branch_id}>{b.name}{b.is_primary ? " (primary)" : ""}</option>
       ))}
     </select>
   );

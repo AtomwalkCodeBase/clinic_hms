@@ -33,7 +33,6 @@ export default function EmergencyQRPage() {
   const [targetAwpid, setTargetAwpid] = useState("");
   const [generating, setGenerating] = useState(false);
   const [result, setResult] = useState(null); // { token, view_url, qr_image, expires_at, ttl_minutes }
-  const [consentPrompt, setConsentPrompt] = useState(null); // { share_categories, message } from the 428
 
   const secondsLeft = useCountdown(result?.expires_at);
   const expired = result && secondsLeft === 0;
@@ -42,36 +41,25 @@ export default function EmergencyQRPage() {
     ? (familyMembers.find(m => m.awpid === targetAwpid)?.full_name || "this family member")
     : "yourself";
 
-  const requestToken = useCallback(async (consentConfirmed) => {
+  const requestToken = useCallback(async () => {
     setGenerating(true);
     try {
       const { data: res } = await apiClient.post(API_ENDPOINTS.PORTAL.EMERGENCY_TOKEN, {
         patient_awpid: targetAwpid || undefined,
-        consent_confirmed: consentConfirmed,
       });
       setResult(res.data);
-      setConsentPrompt(null);
     } catch (err) {
-      if (err.status === 428 && err.data?.consent_required) {
-        setConsentPrompt({
-          share_categories: err.data.share_categories || [],
-          message: err.data.message || "",
-        });
-      } else {
-        toastApiError(err, "Could not generate an emergency QR code.");
-      }
+      toastApiError(err, "Could not generate an emergency QR code.");
     } finally {
       setGenerating(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetAwpid]);
 
-  // "Generate" always starts by asking what would be shared — the actual
-  const startGenerate = useCallback(() => requestToken(false), [requestToken]);
-  const confirmAndGenerate = useCallback(() => requestToken(true), [requestToken]);
+  const startGenerate = requestToken;
 
   // Switching who the QR is for invalidates whatever was on screen — don't
-  useEffect(() => { setResult(null); setConsentPrompt(null); }, [targetAwpid]);
+  useEffect(() => { setResult(null); }, [targetAwpid]);
 
   function copyLink() {
     if (!result?.view_url) return;
@@ -111,41 +99,7 @@ export default function EmergencyQRPage() {
             ))}
           </select>
 
-          {consentPrompt ? (
-            <div style={{
-              border: "1px solid var(--color-warning, #d97706)", background: "color-mix(in srgb, var(--color-warning, #d97706) 8%, transparent)",
-              borderRadius: 10, padding: 14,
-            }}>
-              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Confirm what you're sharing</div>
-              <div style={{ fontSize: 12.5, marginBottom: 10 }}>{consentPrompt.message}</div>
-              <div style={{ display: "grid", gap: 4, marginBottom: 14 }}>
-                {consentPrompt.share_categories.map((c, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 6, fontSize: 12.5 }}>
-                    <Check size={13} style={{ marginTop: 2, flexShrink: 0, color: "var(--color-primary)" }} />
-                    <span>{c}</span>
-                  </div>
-                ))}
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  className="btn-primary"
-                  onClick={confirmAndGenerate}
-                  disabled={generating}
-                  style={{ fontSize: 12.5, padding: "7px 16px" }}
-                >
-                  {generating ? "Generating…" : "Yes, share and generate"}
-                </button>
-                <button
-                  className="btn-secondary"
-                  onClick={() => setConsentPrompt(null)}
-                  disabled={generating}
-                  style={{ fontSize: 12.5, padding: "7px 16px" }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : !result || expired ? (
+          {!result || expired ? (
             <button
               className="btn-primary"
               onClick={startGenerate}
@@ -193,7 +147,7 @@ export default function EmergencyQRPage() {
             </div>
           )}
 
-          {expired && !consentPrompt && (
+          {expired && (
             <div style={{ marginTop: 12, fontSize: 12, color: "var(--color-danger, #b91c1c)" }}>
               This code has expired. Generate a new one to show it again.
             </div>

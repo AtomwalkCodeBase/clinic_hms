@@ -27,7 +27,6 @@ const QUICK_LINKS = [
   { label: "My Appointments",   icon: Calendar,      chip: "icon-chip--blue",  to: ROUTES.PATIENT.APPOINTMENTS,  desc: "Upcoming and past visits" },
   { label: "My Health Journey", icon: ClipboardList, chip: "icon-chip--gold",  to: ROUTES.PATIENT.RECORDS,       desc: "Diagnoses, allergies, vitals" },
   { label: "Prescriptions",     icon: Pill,          chip: "icon-chip--rose",  to: ROUTES.PATIENT.PRESCRIPTIONS, desc: "Medicines prescribed to you" },
-  { label: "Lab Reports",       icon: FlaskConical,  chip: "icon-chip--blue",  to: ROUTES.PATIENT.LAB_REPORTS,   desc: "Test results and reports" },
 ];
 
 function HospitalResultCard({ h, onClick }) {
@@ -346,9 +345,9 @@ export default function PatientDashboardPage() {
                     </div>
                     <div style={{ display: "grid", gap: 14 }}>
                       {results.doctors.map(d => (
-                        <DoctorCard key={`${d.hospital_id}-${d.id}`} d={d}
-                          onBook={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.hospital_id, d.id))}
-                          onViewProfile={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.hospital_id, d.id))} />
+                        <DoctorCard key={`${d.hospital_id}-${d.staff_user_id}`} d={d}
+                          onBook={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.hospital_id, d.staff_user_id))}
+                          onViewProfile={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.hospital_id, d.staff_user_id))} />
                       ))}
                     </div>
                   </div>
@@ -417,7 +416,7 @@ export default function PatientDashboardPage() {
                   {bookings.map((b) => {
                     const statusStyle = STATUS_COLORS[b.status] || { bg: "#F8F8F6", border: "var(--color-border)" };
                     return (
-                      <div key={b.id} style={{
+                      <div key={b.patient_booking_id} style={{
                         borderRadius: 14, overflow: "hidden",
                         border: `1.5px solid ${statusStyle.border}`,
                       }}>

@@ -30,34 +30,22 @@ function Modal({ title, children, onClose }) {
   );
 }
 
-// Which system-role identities a custom role can claim — see
-const ACTS_AS_OPTIONS = [
+const ROLE_OPTIONS = [
   { key: "doctor",         label: "Doctor" },
   { key: "nurse",          label: "Nurse" },
   { key: "front_desk",     label: "Front Desk" },
-  { key: "lab_tech",       label: "Lab Technician" },
-  { key: "pharmacist",     label: "Pharmacist" },
-  { key: "hospital_admin", label: "Hospital Admin" },
+  { key: "hospital_admin", label: "All (single user, every module)" },
 ];
 
 function RoleForm({ initial, permissions, onSave, onCancel, saving }) {
   const [name, setName] = useState(initial?.name || "");
-  const [description, setDescription] = useState(initial?.description || "");
+  const [role, setRole] = useState(initial?.role || "doctor");
   const [codes, setCodes] = useState(new Set(initial?.permission_codes || []));
-  const [actsAs, setActsAs] = useState(new Set(initial?.acts_as || []));
 
   function toggle(code) {
     setCodes(prev => {
       const next = new Set(prev);
       next.has(code) ? next.delete(code) : next.add(code);
-      return next;
-    });
-  }
-
-  function toggleActsAs(key) {
-    setActsAs(prev => {
-      const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
       return next;
     });
   }
@@ -71,45 +59,22 @@ function RoleForm({ initial, permissions, onSave, onCancel, saving }) {
   const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 5 };
 
   return (
-    <form onSubmit={e => { e.preventDefault(); onSave({ name, description, permission_codes: Array.from(codes), acts_as: Array.from(actsAs) }); }}>
+    <form onSubmit={e => { e.preventDefault(); onSave({ name, role, modules: Array.from(codes) }); }}>
       <div style={{ display: "grid", gap: 14, marginBottom: 16 }}>
         <div>
-          <label style={labelStyle}>Role Name *</label>
+          <label style={labelStyle}>Group Name *</label>
           <input style={inputStyle} value={name} onChange={e => setName(e.target.value)}
-            placeholder="e.g. Senior Nurse" required />
+            placeholder="e.g. Ward Nurses" required />
         </div>
         <div>
-          <label style={labelStyle}>Description</label>
-          <input style={inputStyle} value={description} onChange={e => setDescription(e.target.value)}
-            placeholder="What this role is for" />
+          <label style={labelStyle}>Role *</label>
+          <select style={inputStyle} value={role} onChange={e => setRole(e.target.value)}>
+            {ROLE_OPTIONS.map(opt => <option key={opt.key} value={opt.key}>{opt.label}</option>)}
+          </select>
         </div>
       </div>
 
-      <label style={labelStyle}>Acts as</label>
-      <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 8 }}>
-        Staff invited under this role also show up wherever the app looks for these
-        roles specifically — e.g. checking "Doctor" gets them booking-dropdown/working-hours
-        treatment like a real doctor, on top of whatever permissions you grant below.
-      </div>
-      <div style={{
-        display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20,
-      }}>
-        {ACTS_AS_OPTIONS.map(opt => (
-          <label key={opt.key} style={{
-            display: "flex", alignItems: "center", gap: 6, cursor: "pointer",
-            padding: "6px 12px", borderRadius: 20, fontSize: 13,
-            border: `1.5px solid ${actsAs.has(opt.key) ? "var(--color-primary)" : "var(--color-border)"}`,
-            background: actsAs.has(opt.key) ? "var(--color-primary-light, var(--color-bg))" : "transparent",
-            fontWeight: actsAs.has(opt.key) ? 700 : 500,
-          }}>
-            <input type="checkbox" checked={actsAs.has(opt.key)} onChange={() => toggleActsAs(opt.key)}
-              style={{ margin: 0 }} />
-            {opt.label}
-          </label>
-        ))}
-      </div>
-
-      <label style={labelStyle}>Permissions</label>
+      <label style={labelStyle}>Modules</label>
       <div style={{
         border: "1.5px solid var(--color-border)", borderRadius: 8, padding: "10px 14px",
         maxHeight: 260, overflowY: "auto", display: "grid", gap: 8,
@@ -131,7 +96,7 @@ function RoleForm({ initial, permissions, onSave, onCancel, saving }) {
           Cancel
         </button>
         <button type="submit" disabled={saving} className="btn-primary" style={{ flex: 2 }}>
-          {saving ? "Saving…" : (initial ? "Save Changes" : "Create Role")}
+          {saving ? "Saving…" : (initial ? "Save Changes" : "Create User Group")}
         </button>
       </div>
     </form>
@@ -170,46 +135,45 @@ export default function RolesPage() {
     setSaving(true);
     try {
       await api.post(API_ENDPOINTS.ORG.ROLES, form);
-      toastSuccess(`Role "${form.name}" created.`);
+      toastSuccess(`User group "${form.name}" created.`);
       setModal(null); fetchData();
-    } catch (err) { toastApiError(err, "Failed to create role."); }
+    } catch (err) { toastApiError(err, "Failed to create the user group."); }
     finally { setSaving(false); }
   }
 
   async function handleUpdate(form) {
     setSaving(true);
     try {
-      await api.patch(API_ENDPOINTS.ORG.ROLE(editing.id), form);
-      toastSuccess("Role updated.");
+      await api.patch(API_ENDPOINTS.ORG.ROLE(editing.user_group_id), form);
+      toastSuccess("User group updated.");
       setModal(null); setEditing(null); fetchData();
-    } catch (err) { toastApiError(err, "Failed to update role."); }
+    } catch (err) { toastApiError(err, "Failed to update the user group."); }
     finally { setSaving(false); }
   }
 
   async function handleDelete(role) {
-    if (!confirm(`Delete role "${role.name}"? Anyone holding it loses this extra permission set (their primary role is unaffected).`)) return;
+    if (!confirm(`Delete user group "${role.name}"?`)) return;
     try {
-      await api.delete(API_ENDPOINTS.ORG.ROLE(role.id));
-      toastSuccess("Role deleted.");
+      await api.delete(API_ENDPOINTS.ORG.ROLE(role.user_group_id));
+      toastSuccess("User group deleted.");
       fetchData();
-    } catch (err) { toastApiError(err, "Failed to delete role."); }
+    } catch (err) { toastApiError(err, "Failed to delete the user group."); }
   }
 
-  const systemRoles = roles.filter(r => r.is_system_role);
-  const customRoles = roles.filter(r => !r.is_system_role);
+  const roleLabel = key => ROLE_OPTIONS.find(o => o.key === key)?.label || key;
 
   return (
     <AppShell>
-      <PageShell title="Roles & Permissions">
+      <PageShell title="User Groups">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, gap: 12, flexWrap: "wrap" }}>
           <div style={{ fontSize: 13, color: "var(--color-text-muted)", maxWidth: 520 }}>
-            Every hospital gets the 6 default roles below. On the enterprise plan you can also
-            define custom roles with your own permission mix.
+            Every hospital starts with one user group per role. On the enterprise plan you can add more groups,
+            each with a role and the modules it may use.
           </div>
           <button className="btn-primary" onClick={() => setModal("create")} disabled={!canCustomRoles}
-            title={!canCustomRoles ? "Custom roles require the enterprise plan. Upgrade to add one." : undefined}
+            title={!canCustomRoles ? "Extra user groups require the enterprise plan. Upgrade to add one." : undefined}
             style={!canCustomRoles ? { opacity: 0.5, cursor: "not-allowed" } : undefined}>
-            + Add Custom Role
+            + Add User Group
           </button>
         </div>
 
@@ -218,7 +182,7 @@ export default function RolesPage() {
             display: "flex", alignItems: "center", gap: 10, padding: "12px 18px", borderRadius: 12,
             background: "var(--color-warning-light)", color: "var(--color-warning)", marginBottom: 20, fontSize: 13.5, fontWeight: 600,
           }}>
-            Custom roles aren't included on your current plan. Upgrade to enterprise to define roles beyond the 6 defaults.
+            Extra user groups aren't included on your current plan. Upgrade to enterprise to add groups beyond the defaults.
           </div>
         )}
 
@@ -226,21 +190,31 @@ export default function RolesPage() {
           <div style={{ textAlign: "center", padding: 60, color: "var(--color-text-muted)" }}>Loading…</div>
         ) : (
           <>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 10 }}>
-              System Roles
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 28 }}>
-              {systemRoles.map(role => (
-                <div key={role.id} className="card" style={{ padding: "16px 20px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                    <div style={{ fontWeight: 700, fontSize: 15 }}>{role.name}</div>
-                    <span style={{
-                      fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 12,
-                      background: "var(--color-bg)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)",
-                    }}>SYSTEM — READ ONLY</span>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {roles.map(role => (
+                <div key={role.user_group_id} className="card" style={{ padding: "16px 20px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 15 }}>{role.name}</div>
+                      <div style={{ fontSize: 12, color: "var(--color-primary)", fontWeight: 600, marginTop: 4 }}>
+                        Role: {roleLabel(role.role)}{role.is_active ? "" : " · switched off"}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                      <button onClick={() => { setEditing(role); setModal("edit"); }} disabled={!canCustomRoles}
+                        style={{ padding: "6px 14px", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "none", cursor: canCustomRoles ? "pointer" : "not-allowed", opacity: canCustomRoles ? 1 : 0.5, fontSize: 13, fontWeight: 600 }}>
+                        Edit
+                      </button>
+                      <button onClick={() => handleDelete(role)} disabled={!canCustomRoles}
+                        style={{ padding: "6px 14px", borderRadius: 8, border: "1.5px solid var(--color-error)", background: "none", cursor: canCustomRoles ? "pointer" : "not-allowed", opacity: canCustomRoles ? 1 : 0.5, fontSize: 13, fontWeight: 600, color: "var(--color-error)" }}>
+                        Delete
+                      </button>
+                    </div>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {role.permission_codes.map(code => (
+                    {role.permission_codes.length === 0 ? (
+                      <span style={{ fontSize: 12, color: "var(--color-text-muted)", fontStyle: "italic" }}>Uses the default modules of its role.</span>
+                    ) : role.permission_codes.map(code => (
                       <span key={code} style={{
                         padding: "3px 10px", borderRadius: 20, fontSize: 12,
                         background: "var(--color-bg)", border: "1px solid var(--color-border)",
@@ -250,60 +224,11 @@ export default function RolesPage() {
                 </div>
               ))}
             </div>
-
-            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 10 }}>
-              Custom Roles
-            </div>
-            {customRoles.length === 0 ? (
-              <div className="card" style={{ textAlign: "center", padding: 40 }}>
-                <div style={{ color: "var(--color-text-muted)" }}>
-                  {canCustomRoles ? "No custom roles yet." : "Custom roles require the enterprise plan."}
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {customRoles.map(role => (
-                  <div key={role.id} className="card" style={{ padding: "16px 20px" }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: 15 }}>{role.name}</div>
-                        {role.description && <div style={{ fontSize: 12.5, color: "var(--color-text-muted)" }}>{role.description}</div>}
-                        {role.acts_as?.length > 0 && (
-                          <div style={{ fontSize: 12, color: "var(--color-primary)", fontWeight: 600, marginTop: 4 }}>
-                            Acts as: {role.acts_as.map(k => ACTS_AS_OPTIONS.find(o => o.key === k)?.label || k).join(", ")}
-                          </div>
-                        )}
-                      </div>
-                      <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-                        <button onClick={() => { setEditing(role); setModal("edit"); }}
-                          style={{ padding: "6px 14px", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "none", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
-                          Edit
-                        </button>
-                        <button onClick={() => handleDelete(role)}
-                          style={{ padding: "6px 14px", borderRadius: 8, border: "1.5px solid var(--color-error)", background: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "var(--color-error)" }}>
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                      {role.permission_codes.length === 0 ? (
-                        <span style={{ fontSize: 12, color: "var(--color-text-muted)", fontStyle: "italic" }}>No permissions granted yet.</span>
-                      ) : role.permission_codes.map(code => (
-                        <span key={code} style={{
-                          padding: "3px 10px", borderRadius: 20, fontSize: 12,
-                          background: "var(--color-bg)", border: "1px solid var(--color-border)",
-                        }}>{code}</span>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
           </>
         )}
 
         {modal === "create" && (
-          <Modal title="Add Custom Role" onClose={() => setModal(null)}>
+          <Modal title="Add User Group" onClose={() => setModal(null)}>
             <RoleForm permissions={catalog} onSave={handleCreate} onCancel={() => setModal(null)} saving={saving} />
           </Modal>
         )}

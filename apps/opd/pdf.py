@@ -41,7 +41,7 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
             c.drawString(left, y, f"Phone: {branch.phone}")
             y -= 5 * mm
 
-    rx_label = prescription.rx_number or str(prescription.id)[:8]
+    rx_label = prescription.rx_number or str(prescription.pk)[:8]
     when = visit_date or prescription.created_at
 
     # ── QR: "scan to save in My Reports" ────────────────────────────────
@@ -50,7 +50,7 @@ def generate_prescription_pdf(prescription, items, doctor_name, patient, branch,
         awpid = getattr(patient, "awpid", "") if patient else ""
         if prescription.rx_number and awpid:
             import qrcode
-            from core.utils.qr_token import issue_url as _qr_issue_url
+            from core.utils import issue_qr_url as _qr_issue_url
             _tok = _qr_issue_url(doc_type="prescription",
                                   public_document_id=prescription.rx_number, awpid=awpid)
             _qr = qrcode.QRCode(box_size=4, border=1)

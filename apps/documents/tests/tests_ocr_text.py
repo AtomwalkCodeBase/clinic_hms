@@ -146,7 +146,7 @@ class PagingTests(TestCase):
 
     def test_the_list_is_ordered_by_upload_time_then_id(self):
         qs, _ = _my_documents_qs("AWP-T1", "all")
-        self.assertEqual(tuple(qs.query.order_by), ("-created_at", "-id"))
+        self.assertEqual(tuple(qs.query.order_by), ("-created_at", "-pk"))
 
     def test_files_uploaded_together_are_paged_without_repeats_or_gaps(self):
         same = at(2026, 10, 27)
@@ -156,12 +156,12 @@ class PagingTests(TestCase):
             for page in (1, 2, 3):
                 response = call(PortalDocumentListCreateView, data={"page": page, "page_size": 7})
                 self.assertEqual(response.status_code, 200)
-                seen += [r["id"] for r in response.data["results"]]
-        self.assertEqual(seen, sorted((d.id for d in docs), reverse=True))
+                seen += [r["medical_document_id"] for r in response.data["results"]]
+        self.assertEqual(seen, sorted((d.pk for d in docs), reverse=True))
 
     def test_newest_upload_comes_first_across_different_times(self):
         old = uploaded(at(2026, 10, 1))
         new_a, new_b = uploaded(at(2026, 10, 27)), uploaded(at(2026, 10, 27))
         with RESOLVE_PORTAL:
-            ids = [r["id"] for r in call(PortalDocumentListCreateView, data={"page_size": 10}).data["results"]]
-        self.assertEqual(ids, [new_b.id, new_a.id, old.id])
+            ids = [r["medical_document_id"] for r in call(PortalDocumentListCreateView, data={"page_size": 10}).data["results"]]
+        self.assertEqual(ids, [new_b.pk, new_a.pk, old.pk])

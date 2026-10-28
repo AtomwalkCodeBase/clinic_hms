@@ -2,8 +2,8 @@
 from datetime import date
 
 from . import integration as ig
-from .lib_documents import awaiting_review_q, display_name
-from .models import ClinicalEvent, DocumentExtraction, GrowthMeasurement, ImmunizationRecord, LabResult, MedicalDocument, SharedPrescriptionItem, BirthHistory
+from .lib_documents import awaiting_review_q, confirmed_q, display_name
+from .models import ClinicalEvent, DocumentExtraction, GrowthMeasurement, ImmunizationRecord, LabResult, MedicalDocument, BirthHistory
 from .services.clinical_rules import evaluate_lab
 from .services.config import load_config
 
@@ -33,7 +33,7 @@ def _lab_rows(patient, hospital_id, cfg):
     dob, _ = ig.patient_dob_sex(patient)
     own = {"source_hospital_id": hospital_id} if hospital_id is not None else {}
     rows, seen = [], set()
-    for lab in LabResult.objects.filter(patient=patient, collected_on__isnull=False, value__isnull=False, **own).order_by("collected_on", "id"):
+    for lab in LabResult.objects.filter(confirmed_q(), patient=patient, collected_on__isnull=False, value__isnull=False, **own).order_by("collected_on", "pk"):
         if (lab.analyte, lab.collected_on, lab.value) in seen:
             continue                      # a discharge summary quotes the labs of its own lab report: one result is listed once
         seen.add((lab.analyte, lab.collected_on, lab.value))
@@ -67,15 +67,6 @@ def lab_trends(patient, hospital_id=None):
     return out
 
 
-def medication_history(patient, hospital_id=None, limit=100):
-    """Medicines a hospital prescribed to the patient, newest first (documents a parent uploaded do not list medicines for the rules to read)."""
-    own = {"document__source_hospital_id": hospital_id} if hospital_id is not None else {}
-    items = (SharedPrescriptionItem.objects.filter(document__patient=patient, **own).select_related("document")
-             .order_by("-document__document_date", "-document__created_at", "id")[:limit])
-    return [{"date": (i.document.document_date or i.document.created_at.date()).isoformat(), "drug_name": i.drug_name, "dose": i.dose, "unit": i.unit,
-             "frequency": i.frequency, "route": i.route, "duration_days": i.duration_days, "document_id": i.document_id} for i in items]
-
-
 def data_gaps(patient, hospital_id=None):
     """What the timeline does not know: reports that could not be read, unconfirmed diagnoses, missing measurements."""
     dob, _ = ig.patient_dob_sex(patient)
@@ -83,13 +74,13 @@ def data_gaps(patient, hospital_id=None):
     docs = MedicalDocument.objects.filter(patient=patient, **own_doc)
     Status = DocumentExtraction.Status
     counts = {s: DocumentExtraction.objects.filter(document__in=docs, status=getattr(Status, s)).count() for s in ("DONE", "PENDING", "FAILED", "SKIPPED")}
-    failed = [{"document_id": d.id, "name": display_name(d)} for d in docs.filter(d_extraction__status=Status.FAILED)[:10]]
+    failed = [{"document_id": d.pk, "name": display_name(d)} for d in docs.filter(d_extraction__status=Status.FAILED)[:10]]
     awaiting = docs.filter(awaiting_review_q()).count()
-    events = ClinicalEvent.objects.filter(patient=patient).exclude(verification_status="rejected")
+    events = ClinicalEvent.objects.filter(confirmed_q(), patient=patient).exclude(verification_status="rejected")
     unconfirmed = events.filter(is_provisional=True).exclude(verification_status="verified").count()
     undated = events.filter(event_date__isnull=True).count()
     unread_vaccines = ImmunizationRecord.objects.filter(patient=patient, vaccines=[]).count()
-    last = GrowthMeasurement.objects.filter(patient=patient, is_rejected=False).order_by("-measured_on").values_list("measured_on", flat=True).first()
+    last = GrowthMeasurement.objects.filter(confirmed_q(), patient=patient, is_rejected=False).order_by("-measured_on").values_list("measured_on", flat=True).first()
     months_since = ((date.today() - last).days // 30) if last else None
     items = []
     if counts["FAILED"]:

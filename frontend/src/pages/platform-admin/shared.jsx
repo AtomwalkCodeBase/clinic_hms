@@ -110,17 +110,17 @@ export function HospitalDetailDrawer({ hospital, onClose, onChanged }) {
   const { toastSuccess, toastApiError } = useToast();
 
   useEffect(() => {
-    fetchAuditLog(hospital.id).then(setAuditLog).catch(() => setAuditLog([]));
+    fetchAuditLog(hospital.hospital_id).then(setAuditLog).catch(() => setAuditLog([]));
      
-  }, [hospital.id]);
+  }, [hospital.hospital_id]);
 
   async function applyTier() {
     if (tierPick === hospital.subscription?.license_tier) return;
     setSavingTier(true);
     try {
-      await apiClient.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { tier: tierPick });
+      await apiClient.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.hospital_id), { tier: tierPick });
       toastSuccess(`Tier changed to ${TIER_LABEL[tierPick]?.label || tierPick}.`);
-      fetchAuditLog(hospital.id).then(setAuditLog);
+      fetchAuditLog(hospital.hospital_id).then(setAuditLog);
       onChanged();
     } catch (err) {
       toastApiError(err, "Failed to change tier.");
@@ -133,9 +133,9 @@ export function HospitalDetailDrawer({ hospital, onClose, onChanged }) {
     if (statusPick === hospital.subscription?.status) return;
     setSavingStatus(true);
     try {
-      await apiClient.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { status: statusPick });
+      await apiClient.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.hospital_id), { status: statusPick });
       toastSuccess(`Status changed to ${SUB_STATUS_META[statusPick]?.label || statusPick}.`);
-      fetchAuditLog(hospital.id).then(setAuditLog);
+      fetchAuditLog(hospital.hospital_id).then(setAuditLog);
       onChanged();
     } catch (err) {
       toastApiError(err, "Failed to change status.");
@@ -225,7 +225,7 @@ export function AuditLogTrail({ entries }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 220, overflowY: "auto" }}>
       {entries.map(e => (
-        <div key={e.id} style={{ fontSize: 12.5, display: "flex", gap: 8, alignItems: "baseline" }}>
+        <div key={e.hospital_audit_log_id} style={{ fontSize: 12.5, display: "flex", gap: 8, alignItems: "baseline" }}>
           <span style={{ color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>
             {new Date(e.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
           </span>

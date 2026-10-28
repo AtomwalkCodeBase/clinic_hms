@@ -1,5 +1,4 @@
 from django.db import models
-from django.utils import timezone
 from apps.patients.models import Patient
 from apps.hospital_master.models import Hospital
 from django.contrib.auth.models import User
@@ -41,13 +40,6 @@ CLASSIFICATION_STATUS_CHOICES = [
 SEVERITY_CHOICES = [("NORMAL", "Normal"), ("MILD", "Mild"), ("ABNORMAL", "Abnormal"), ("CRITICAL", "Critical")]
 CATEGORY_CHOICES = [("CHRONIC", "Chronic"), ("ACUTE", "Acute")]
 SOURCE_CHOICES = [("HOSPITAL", "Written by a hospital"), ("EXTRACTED", "Read from a document"), ("MANUAL", "Entered by staff")]
-DOMAIN_CHOICES = [
-    ("gross_motor", "Gross Motor"),
-    ("fine_motor", "Fine Motor"),
-    ("language", "Language / Communication"),
-    ("cognitive", "Cognitive"),
-    ("social_emotional", "Social / Emotional"),
-]
 
 
 class DocumentBatch(models.Model):
@@ -68,7 +60,7 @@ class DocumentBatch(models.Model):
         db_table = "document_batch"
 
     def __str__(self):
-        return f"Batch {self.id} for Patient {self.patient.awpid} - Status: {self.status}"
+        return f"Batch {self.pk} for Patient {self.patient.awpid} - Status: {self.status}"
     
     def refresh(self):
         """
@@ -115,12 +107,13 @@ class MedicalDocument(models.Model):
     batch = models.ForeignKey(DocumentBatch, null=True, blank=True, on_delete=models.SET_NULL, related_name="b_documents")
     file_name = models.FileField(upload_to=get_patient_file_path, blank=True, null=True)
     document_date = models.DateField(null=True, blank=True)
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.QUEUED, db_index=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.QUEUED)
     error_message = models.CharField(max_length=200, blank=True)
     doc_classification = models.CharField(max_length=30, choices=DOCUMENT_TYPE_CHOICES, default=NOT_CLASSIFIED)
     source_type = models.CharField(max_length=30, choices=Source.choices, default=Source.UPLOAD)
     source_id = models.UUIDField(null=True, blank=True)
     source_hospital = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_documents")
+    hospital_document_id = models.BigIntegerField(null=True, blank=True)
     document_ref_name = models.CharField(max_length=50, blank=True)
     # The doctor named on the document, without "Dr." — read from its text when it is processed, or typed by the patient.
     doctor_name = models.CharField(max_length=60, blank=True, default="")
@@ -133,7 +126,7 @@ class MedicalDocument(models.Model):
         db_table = "medical_documents"
 
     def __str__(self):
-        return f"Document {self.id} for Patient {self.patient.awpid} - Status: {self.status}"
+        return f"Document {self.pk} for Patient {self.patient.awpid} - Status: {self.status}"
     
     @property
     def processing_status(self):
@@ -163,7 +156,7 @@ class DocumentExtraction(models.Model):
     document = models.OneToOneField(MedicalDocument, on_delete=models.CASCADE, related_name="d_extraction")
     extracted_text = models.TextField(blank=True)
     engine = models.CharField(max_length=10, choices=Engine.choices, default=Engine.PDF_TEXT)
-    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING, db_index=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     normalised = models.JSONField(default=dict, blank=True)
     warnings = models.JSONField(default=list, blank=True)
     error = models.TextField(blank=True)
@@ -173,7 +166,7 @@ class DocumentExtraction(models.Model):
         db_table = "document_extraction"
 
     def __str__(self):
-        return f"Extraction for Document {self.document.id} - Status: {self.status}"
+        return f"Extraction for Document {self.document.pk} - Status: {self.status}"
 
 
 class DocumentClassification(models.Model):
@@ -190,7 +183,7 @@ class DocumentClassification(models.Model):
         db_table = "document_classification"
 
     def __str__(self):
-        return f"Classification for Document {self.document.id} - Status: {self.status}"
+        return f"Classification for Document {self.document.pk} - Status: {self.status}"
 
 
 class BirthHistory(models.Model):
@@ -230,30 +223,6 @@ class BirthHistory(models.Model):
         return f"Birth History for Patient {self.patient.awpid}"
 
 
-class HealthEpisode(models.Model):
-    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_health_episodes")
-    key = models.CharField(max_length=80)
-    condition_group = models.CharField(max_length=40, db_index=True)
-    label = models.CharField(max_length=255)
-    category = models.CharField(max_length=10, choices=CATEGORY_CHOICES)
-    start_date = models.DateField()
-    end_date = models.DateField(null=True, blank=True)
-    last_seen = models.DateField()
-    peak_severity = models.CharField(max_length=10, choices=SEVERITY_CHOICES, default="NORMAL")
-    event_count = models.PositiveIntegerField(default=0)
-    is_provisional = models.BooleanField(default=False)
-    known_group = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = "health_episode"
-        indexes = [models.Index(fields=["patient", "start_date"])]
-
-    def __str__(self):
-        return f"{self.label} ({self.start_date}) for patient {self.patient_id}"
-
-
 class ClinicalEvent(models.Model):
     TYPES = [("DIAGNOSIS", "Diagnosis"), ("ADMISSION", "Admission"), ("PROCEDURE", "Procedure")]
     STATUS_CHOICES = [("active", "Active"), ("resolved", "Resolved")]
@@ -274,7 +243,6 @@ class ClinicalEvent(models.Model):
     is_provisional = models.BooleanField(default=False)
     evidence = models.CharField(max_length=255, blank=True)
     source = models.CharField(max_length=10, choices=SOURCE_CHOICES, default="EXTRACTED")
-    episode = models.ForeignKey(HealthEpisode, null=True, blank=True, on_delete=models.SET_NULL, related_name="e_clinical_events")
     remarks = models.CharField(max_length=255, blank=True)
     verification_status = models.CharField(max_length=10, choices=VERIFICATION_CHOICES, default=VERIFICATION_PENDING)
     verified_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="u_verified_events")
@@ -282,10 +250,9 @@ class ClinicalEvent(models.Model):
 
     class Meta:
         db_table = "clinical_event"
-        indexes = [models.Index(fields=["patient", "event_date"])]
 
     def __str__(self):
-        return f"Clinical Event {self.id} for patient {self.patient_id} - Type: {self.event_type}"
+        return f"Clinical Event {self.pk} for patient {self.patient_id} - Type: {self.event_type}"
 
     @property
     def is_verified(self):
@@ -304,7 +271,7 @@ class GrowthMeasurement(models.Model):
     source_hospital = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_growth_measurements")
     source = models.CharField(max_length=10, choices=SOURCE_GROWTH_CHOICES, default="clinic")
     source_id = models.UUIDField(null=True, blank=True)
-    measured_on = models.DateField(db_index=True)
+    measured_on = models.DateField()
     age_months = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     weight_kg = models.DecimalField(max_digits=6, decimal_places=3, null=True, blank=True)
     height_cm = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
@@ -325,7 +292,7 @@ class GrowthMeasurement(models.Model):
         db_table = "growth_measurement"
     
     def __str__(self):
-        return f"Growth Measurement {self.id} for Patient {self.patient.awpid} - Measured on: {self.measured_on}"
+        return f"Growth Measurement {self.pk} for Patient {self.patient.awpid} - Measured on: {self.measured_on}"
 
 
 class ImmunizationRecord(models.Model):
@@ -376,7 +343,7 @@ class ImmunizationRecord(models.Model):
         ordering  = ["administered_date"]
 
     def __str__(self):
-        return f"Immunization Record {self.id} for Patient {self.patient.awpid} - Vaccine: {self.vaccine_name}"
+        return f"Immunization Record {self.pk} for Patient {self.patient.awpid} - Vaccine: {self.vaccine_name}"
 
 
 class LabResult(models.Model):
@@ -384,7 +351,7 @@ class LabResult(models.Model):
     document = models.ForeignKey(MedicalDocument, null=True, blank=True, on_delete=models.SET_NULL, related_name="d_lab_results")
     source_hospital = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_lab_results")
     test_name = models.CharField(max_length=200, blank=True)
-    analyte = models.CharField(max_length=40, blank=True, db_index=True)
+    analyte = models.CharField(max_length=40, blank=True)
     value = models.FloatField(null=True, blank=True)
     unit_raw = models.CharField(max_length=30, blank=True)
     collected_on = models.DateField(null=True, blank=True)
@@ -400,7 +367,7 @@ class LabResult(models.Model):
         db_table = "lab_result"
 
     def __str__(self):
-        return f"Lab Result {self.id} for Patient {self.patient.awpid} - Test: {self.test_name}"
+        return f"Lab Result {self.pk} for Patient {self.patient.awpid} - Test: {self.test_name}"
 
 
 class Admission(models.Model):
@@ -419,133 +386,4 @@ class Admission(models.Model):
         db_table = "patient_admission"
 
     def __str__(self):
-        return f"Admission {self.id} for patient {self.patient_id} on {self.admitted_on}"
-
-
-# Not Reviewed
-class MilestoneRecord(models.Model):
-    STATUS_ACHIEVED = "achieved"
-    STATUS_NOT_YET  = "not_yet"
-    STATUS_CONCERN  = "concern"
-    STATUS_CHOICES = [
-        (STATUS_ACHIEVED, "Achieved"),
-        (STATUS_NOT_YET,  "Not Yet"),
-        (STATUS_CONCERN,  "Concern Flagged"),
-    ]
-
-    patient          = models.ForeignKey("patients.Patient", on_delete=models.CASCADE, related_name="p_milestone_records")
-    domain           = models.CharField(max_length=20, choices=DOMAIN_CHOICES)
-    milestone        = models.CharField(max_length=200)
-    scheduled_label  = models.CharField(max_length=50, blank=True)
-    status           = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_ACHIEVED)
-    achieved_date    = models.DateField(null=True, blank=True)
-    assessed_date    = models.DateField(null=True, blank=True)
-    notes            = models.TextField(blank=True)
-
-    recorded_by_name = models.CharField(max_length=200, blank=True)
-    source_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL, related_name="h_milestone_records")
-
-    created_at       = models.DateTimeField(auto_now_add=True)
-    updated_at       = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table  = "milestone_records"
-        indexes = [models.Index(fields=["patient", "domain"])]
-        ordering  = ["assessed_date"]
-
-# Not Reviewed
-class SharedAllergy(models.Model):
-    patient           = models.ForeignKey("patients.Patient", on_delete=models.CASCADE, related_name="p_shared_allergies")
-    substance         = models.CharField(max_length=200)
-    reaction          = models.TextField(blank=True)
-    severity          = models.CharField(max_length=20, choices=[("mild", "Mild"), ("moderate", "Moderate"), ("severe", "Severe")], blank=True)
-    is_active         = models.BooleanField(default=True)
-    source_hospital  = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL, related_name="h_shared_allergies")
-    recorded_at       = models.DateTimeField()
-    created_at        = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table  = "shared_allergy"
-
-    def __str__(self):
-        return f"{self.substance} for patient {self.patient_id}"
-
-# Not Reviewed
-class SharedPrescriptionItem(models.Model):
-    document = models.ForeignKey("documents.MedicalDocument", on_delete=models.CASCADE, related_name="d_drug_items")
-    drug_name = models.CharField(max_length=200)
-    dose = models.CharField(max_length=50, blank=True)
-    unit = models.CharField(max_length=20, blank=True)
-    frequency = models.CharField(max_length=50, blank=True)
-    route = models.CharField(max_length=50, blank=True)
-    duration_days = models.PositiveSmallIntegerField(null=True, blank=True)
-
-    class Meta:
-        db_table = "shared_prescription_item"
-
-# Not Reviewed
-class Vitals(models.Model):
-    patient = models.ForeignKey("patients.Patient", on_delete=models.CASCADE, related_name="p_vitals")
-    appointment_id = models.UUIDField(null=True, blank=True)
-    source_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.SET_NULL, related_name="h_vitals")
-    source = models.CharField(max_length=20, choices=[("clinic", "Clinic"), ("self_reported", "Self reported"), ("manual", "Entered by staff")], default="clinic")
-    recorded_at = models.DateTimeField(default=timezone.now, db_index=True)
-    recorded_by_user_id = models.UUIDField(null=True, blank=True)
-    systolic_bp = models.PositiveSmallIntegerField(null=True, blank=True)
-    diastolic_bp = models.PositiveSmallIntegerField(null=True, blank=True)
-    pulse_rate = models.PositiveSmallIntegerField(null=True, blank=True)
-    temperature = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
-    spo2 = models.PositiveSmallIntegerField(null=True, blank=True)
-    respiratory_rate = models.PositiveSmallIntegerField(null=True, blank=True)
-    weight_kg = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
-    height_cm = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
-    blood_sugar_rbs = models.PositiveSmallIntegerField(null=True, blank=True)
-    nurse_notes = models.TextField(blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = "vitals"
-        constraints = [models.UniqueConstraint(fields=["appointment_id"], condition=models.Q(appointment_id__isnull=False),
-                                               name="uniq_vitals_per_appointment")]
-
-    def __str__(self):
-        return f"Vitals {self.id} for patient {self.patient_id} at {self.recorded_at:%Y-%m-%d %H:%M}"
-
-# Not Reviewed
-class ScheduleRule(models.Model):
-
-    schedule         = models.ForeignKey("documents.Schedule", on_delete=models.CASCADE, related_name="s_rules")
-    item             = models.CharField(max_length=200)
-    dose_number      = models.PositiveSmallIntegerField(default=1)
-    domain           = models.CharField(max_length=20, blank=True, choices=DOMAIN_CHOICES)
-    scheduled_label  = models.CharField(max_length=50)
-    min_age_days     = models.PositiveIntegerField()
-    max_age_days     = models.PositiveIntegerField(null=True, blank=True)
-    mandatory        = models.BooleanField(default=True)
-    sort_order       = models.PositiveIntegerField(default=0)
-
-    class Meta:
-        db_table  = "immunization_schedule_rules"
-        ordering  = ["sort_order"]
-
-# Not Reviewed
-class Schedule(models.Model):
-    KIND_VACCINATION = "vaccination"
-    KIND_MILESTONE   = "milestone"
-    KIND_CHOICES = [(KIND_VACCINATION, "Vaccination"), (KIND_MILESTONE, "Milestone")]
-
-    kind            = models.CharField(max_length=15, choices=KIND_CHOICES)
-    name            = models.CharField(max_length=200)
-    description     = models.TextField(blank=True)
-    owner_hospital = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.CASCADE, related_name="h_schedules")
-    is_template     = models.BooleanField(default=False)
-    active          = models.BooleanField(default=True)
-    created_at      = models.DateTimeField(auto_now_add=True)
-    updated_at      = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table  = "immunization_schedules"
-
-    def __str__(self):
-        return f"{self.name} ({self.kind})"
+        return f"Admission {self.pk} for patient {self.patient_id} on {self.admitted_on}"

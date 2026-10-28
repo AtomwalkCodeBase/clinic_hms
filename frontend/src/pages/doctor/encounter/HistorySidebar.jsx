@@ -26,9 +26,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   const { data: birthHistoryData, isLoading: birthHistoryLoading, refetch: refetchBirthHistory } = useApi(
     patientPk ? API_ENDPOINTS.PATIENTS.BIRTH_HISTORY(patientPk) : null, { skip: !patientPk }
   );
-  const { data: milestoneData, isLoading: milestoneLoading, refetch: refetchMilestones } = useApi(
-    patientPk ? API_ENDPOINTS.PATIENTS.MILESTONES(patientPk) : null, { skip: !patientPk }
-  );
   const { toastSuccess, toastApiError } = useToast();
 
   // Ad-hoc "Order Vaccine" inline form — matches this file's existing
@@ -168,7 +165,7 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
   const [bhFormOpen, setBhFormOpen] = useState(false);
   const [bhForm, setBhForm] = useState(null); // populated on open, from birthHistoryData or blank
   const [bhSaving, setBhSaving] = useState(false);
-  const bhExists = !!birthHistoryData?.id;
+  const bhExists = !!birthHistoryData?.birth_history_id;
 
   function openBhForm() {
     setBhForm({
@@ -209,45 +206,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
       setBhSaving(false);
     }
   }
-
-  // ── Developmental Milestones (pediatric-only) ───────────────────────────
-  const [assessingKey, setAssessingKey] = useState(null); // which roadmap row's mini-form is open
-  const [assessForm, setAssessForm] = useState({ status: "achieved", notes: "" });
-  const [assessSaving, setAssessSaving] = useState(false);
-
-  function openAssess(item) {
-    const key = item.record_id ?? `${item.domain}:${item.milestone}`;
-    setAssessingKey(k => (k === key ? null : key));
-    setAssessForm({ status: "achieved", notes: "" });
-  }
-
-  async function submitAssessment(item) {
-    if (!patientPk) return;
-    setAssessSaving(true);
-    try {
-      await encounterApi.addMilestone(patientPk, {
-        domain: item.domain,
-        milestone: item.milestone,
-        scheduled_label: item.scheduled_label,
-        status: assessForm.status,
-        notes: assessForm.notes || undefined,
-      });
-      toastSuccess("Milestone assessment recorded.");
-      setAssessingKey(null);
-      refetchMilestones?.();
-    } catch (err) {
-      toastApiError(err, "Could not record the milestone assessment.");
-    } finally {
-      setAssessSaving(false);
-    }
-  }
-
-  const MILESTONE_STATUS_STYLE = {
-    achieved:   { bg: "#ECFDF5", color: "#047857", label: "Achieved" },
-    not_yet:    { bg: "#F3F4F6", color: "#6B7280", label: "Not Yet" },
-    concern:    { bg: "#FEF2F2", color: "#B91C1C", label: "Concern" },
-    unassessed: { bg: "var(--color-bg)", color: "var(--color-text-muted)", label: "Not Assessed" },
-  };
 
   // Status values from build_roadmap() (apps/hospital_patients/pediatrics/vaccine_schedule.py):
   const VAX_STATUS_STYLE = {
@@ -339,15 +297,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
         <div style={{ padding: 20, fontSize: 12, color: "var(--color-text-muted)" }}>
           Patient record unavailable.
         </div>
-      ) : history && history.consent_given === false ? (
-        <div style={{ padding: 20, fontSize: 12, color: "var(--color-text-secondary)", lineHeight: 1.6 }}>
-          <div style={{ fontWeight: 700, marginBottom: 6, color: "var(--color-text)" }}>
-            No cross-hospital history on file
-          </div>
-          This patient hasn't consented to sharing records from other hospitals with this one, so
-          only what's recorded here is visible. Anything documented at this hospital going forward
-          will still show up normally.
-        </div>
       ) : (
         // Ordered by clinical priority, not alphabetically: what could hurt
         <div>
@@ -436,11 +385,11 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
                         const subtitle = l.result_summary || (clickable ? "Report attached" : "Awaiting report");
                         return (
                           <Wrapper
-                            key={l.id ?? i}
+                            key={l.lab_result_id ?? i}
                             onClick={clickable ? () => onOpenDocument?.({
-                              id: l.id, title: l.test_name, doc_type: "lab_report",
+                              id: l.lab_result_id, title: l.test_name, doc_type: "lab_report",
                               created_at: l.delivered_at,
-                              fetchUrl: API_ENDPOINTS.PATIENTS.LAB_RESULT(l.id),
+                              fetchUrl: API_ENDPOINTS.PATIENTS.LAB_RESULT(l.lab_result_id),
                             }) : undefined}
                             style={{
                               display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", fontSize: 12,
@@ -516,11 +465,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
                   </div>
                   );
                 })}
-                {growthData.consent_given === false && (
-                  <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
-                    Only this hospital's own records — patient hasn't consented to cross-hospital sharing.
-                  </div>
-                )}
               </div>
             )}
           </HistorySection>
@@ -910,79 +854,13 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
           </HistorySection>
           )}
 
-          {growthData?.is_minor === true && (
-          <HistorySection title="Developmental milestones" icon={<Baby size={13} />} count={milestoneData?.roadmap?.length}>
-            {milestoneLoading ? <EmptyNote>Loading milestone roadmap…</EmptyNote> : !milestoneData?.roadmap?.length ? (
-              <EmptyNote>No milestone schedule available.</EmptyNote>
-            ) : (
-              <div style={{ display: "grid", gap: 6 }}>
-                {milestoneData.roadmap.map((m, i) => {
-                  const st = MILESTONE_STATUS_STYLE[m.status] || MILESTONE_STATUS_STYLE.unassessed;
-                  const key = m.record_id ?? `${m.domain}:${m.milestone}`;
-                  const isOpen = assessingKey === key;
-                  return (
-                    <div key={i} style={{
-                      borderRadius: 8, border: "1px solid var(--color-border)", padding: "8px 10px",
-                      background: "var(--color-bg)",
-                    }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text)" }}>{m.milestone}</span>
-                        <span style={{
-                          fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10,
-                          background: st.bg, color: st.color, whiteSpace: "nowrap",
-                        }}>{st.label}</span>
-                      </div>
-                      <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 3, textTransform: "capitalize" }}>
-                        {m.domain?.replace("_", " ")} · {m.scheduled_label}
-                        {m.assessed_date && ` · assessed ${new Date(m.assessed_date).toLocaleDateString("en-IN")}`}
-                        {m.status === "unassessed" && m.timing === "due_now" && " · recommended now"}
-                        {m.status === "unassessed" && m.timing === "past_window" && " · past the usual window"}
-                      </div>
-                      <button
-                        type="button" onClick={() => openAssess(m)}
-                        style={{
-                          marginTop: 6, fontSize: 10, fontWeight: 700, padding: "4px 8px", borderRadius: 6,
-                          border: "1px solid var(--color-primary)", background: isOpen ? "var(--color-primary-light)" : "var(--color-bg)",
-                          color: "var(--color-primary)", cursor: "pointer",
-                        }}
-                      >
-                        {isOpen ? "− Cancel" : "Assess"}
-                      </button>
-                      {isOpen && (
-                        <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
-                          <select className="form-input" value={assessForm.status}
-                            onChange={e => setAssessForm(f => ({ ...f, status: e.target.value }))}
-                            style={{ fontSize: 12 }}>
-                            <option value="achieved">Achieved</option>
-                            <option value="not_yet">Not Yet</option>
-                            <option value="concern">Concern — flag for follow-up</option>
-                          </select>
-                          <input className="form-input" placeholder="Notes (optional)" value={assessForm.notes}
-                            onChange={e => setAssessForm(f => ({ ...f, notes: e.target.value }))}
-                            style={{ fontSize: 12 }} />
-                          <button
-                            type="button" onClick={() => submitAssessment(m)} disabled={assessSaving}
-                            className="btn-primary" style={{ fontSize: 11, padding: "5px 8px" }}
-                          >
-                            {assessSaving ? "Saving…" : "Save Assessment"}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </HistorySection>
-          )}
-
           <HistorySection title="Previous visits" icon={<Clock size={13} />} count={timeline.length}>
             {timelineLoading ? <EmptyNote>Loading visit timeline…</EmptyNote> : timeline.length === 0 ? (
               <EmptyNote>No prior visits at this hospital.</EmptyNote>
             ) : (
               <div style={{ display: "grid", gap: 0, position: "relative" }}>
                 {timeline.map((v, i) => (
-                  <div key={v.id || i} style={{
+                  <div key={v.opd_encounter_id || i} style={{
                     display: "flex", gap: 10, paddingBottom: i === timeline.length - 1 ? 0 : 12,
                   }}>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
@@ -1015,8 +893,8 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
               <div>
                 {(showAllDocs ? documents : documents.slice(0, 5)).map((d, i) => (
                   <button
-                    key={d.id}
-                    onClick={() => onOpenDocument?.({ ...d, fetchUrl: API_ENDPOINTS.PATIENTS.DOCUMENT(d.id) })}
+                    key={d.medical_document_id}
+                    onClick={() => onOpenDocument?.({ ...d, fetchUrl: API_ENDPOINTS.PATIENTS.DOCUMENT(d.medical_document_id) })}
                     style={{
                       display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left",
                       padding: "8px 0", border: "none", borderTop: i ? "1px solid var(--color-border)" : "none",

@@ -1,8 +1,9 @@
 """apps/hospital_setup/compliance_serializers.py"""
 
 from rest_framework import serializers
+from core.api.serializers import PkModelSerializer
 
-from apps.hospital_setup.models import RecordAmendment, ConsentRecord
+from apps.hospital_setup.models import RecordAmendment
 
 
 class AuditLogSerializer(serializers.Serializer):
@@ -14,13 +15,13 @@ class AuditLogSerializer(serializers.Serializer):
     action         = serializers.CharField()
     resource_type  = serializers.CharField()
     resource_id    = serializers.CharField()
-    patient_id     = serializers.UUIDField(allow_null=True)
+    patient_id     = serializers.IntegerField(allow_null=True)
     ip_address     = serializers.IPAddressField(allow_null=True)
     metadata       = serializers.JSONField()
     created_at     = serializers.DateTimeField()
 
 
-class RecordAmendmentSerializer(serializers.ModelSerializer):
+class RecordAmendmentSerializer(PkModelSerializer):
     patient_name      = serializers.CharField(source="patient.get_patient_details.full_name", read_only=True)
     patient_uhid      = serializers.CharField(source="patient.uhid", read_only=True)
     reviewed_by_name  = serializers.SerializerMethodField()
@@ -29,14 +30,14 @@ class RecordAmendmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = RecordAmendment
         fields = [
-            "id", "patient", "patient_name", "patient_uhid",
+            "record_amendment_id", "patient", "patient_name", "patient_uhid",
             "resource_type", "resource_id", "field_name",
             "current_value", "requested_value", "reason",
             "status", "status_display", "reviewed_by", "reviewed_by_name",
             "review_notes", "requested_at", "resolved_at",
         ]
         read_only_fields = [
-            "id", "patient", "patient_name", "patient_uhid", "reviewed_by",
+            "record_amendment_id", "patient", "patient_name", "patient_uhid", "reviewed_by",
             "reviewed_by_name", "status_display", "requested_at", "resolved_at",
         ]
 
@@ -63,24 +64,3 @@ class RecordAmendmentResolveSerializer(serializers.Serializer):
     review_notes = serializers.CharField(max_length=2000, required=False, allow_blank=True)
 
 
-class ConsentRecordSerializer(serializers.ModelSerializer):
-    patient_name         = serializers.CharField(source="patient.get_patient_details.full_name", read_only=True)
-    patient_uhid         = serializers.CharField(source="patient.uhid", read_only=True)
-    consent_type_display = serializers.CharField(source="get_consent_type_display", read_only=True)
-    source_display       = serializers.CharField(source="get_source_display", read_only=True)
-    recorded_by_name     = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ConsentRecord
-        fields = [
-            "id", "patient", "patient_name", "patient_uhid",
-            "consent_type", "consent_type_display", "granted", "source", "source_display",
-            "recorded_by", "recorded_by_name", "ip_address", "policy_version",
-            "notes", "created_at",
-        ]
-        read_only_fields = fields
-
-    def get_recorded_by_name(self, obj):
-        if not obj.recorded_by_id:
-            return None
-        return obj.recorded_by.get_full_name() or obj.recorded_by.email or obj.recorded_by.phone

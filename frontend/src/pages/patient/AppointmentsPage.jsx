@@ -239,7 +239,7 @@ function RescheduleModal({ booking, onClose, onDone }) {
     if (!selectedSlot) return;
     setSaving(true);
     try {
-      await apiClient.post(API_ENDPOINTS.PORTAL.RESCHEDULE_BOOKING(booking.id), {
+      await apiClient.post(API_ENDPOINTS.PORTAL.RESCHEDULE_BOOKING(booking.patient_booking_id), {
         scheduled_date: date, scheduled_time: selectedSlot,
       });
       toastSuccess("Appointment rescheduled.");
@@ -400,7 +400,7 @@ function HeroAppointment({ b, ownAwpid, onCancel, onReschedule }) {
               </div>
             )}
             <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", lineHeight: 1.8 }}>
-              <div>Booking ID<br /><strong style={{ color: "var(--color-text-secondary)" }}>{b.id != null ? `#${b.id}` : "—"}</strong></div>
+              <div>Booking ID<br /><strong style={{ color: "var(--color-text-secondary)" }}>{b.patient_booking_id != null ? `#${b.patient_booking_id}` : "—"}</strong></div>
               {formatBookedOn(b.booked_at) && <div style={{ marginTop: 4 }}>Booked on<br />{formatBookedOn(b.booked_at)}</div>}
             </div>
           </div>
@@ -704,7 +704,7 @@ function BillRow({ inv }) {
     const win = window.open("", "_blank");
     setDownloading(true);
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PORTAL.INVOICE_RECEIPT(inv.hospital_db, inv.id));
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.INVOICE_RECEIPT(inv.hospital_db, inv.invoice_id));
       const data = res.data?.data || res.data;
       if (data?.file_data) {
         openDataUrlInNewTab(win, data.file_data);
@@ -801,7 +801,7 @@ function BillsSection() {
         <div style={{ fontSize: 12, color: "var(--color-text-muted)", fontStyle: "italic" }}>No bills on file.</div>
       ) : (
       <div style={{ display: "grid", gap: 10 }}>
-        {billPaging.pageItems.map(inv => <BillRow key={`${inv.hospital_db}-${inv.id}`} inv={inv} />)}
+        {billPaging.pageItems.map(inv => <BillRow key={`${inv.hospital_db}-${inv.invoice_id}`} inv={inv} />)}
         <PaginationControls pagination={billPaging.pagination} page={billPaging.page} pageSize={billPaging.pageSize}
           onPageChange={billPaging.setPage} onPageSizeChange={billPaging.setPageSize} pageSizeOptions={[5, 10, 20]} />
       </div>
@@ -892,7 +892,7 @@ export default function PatientAppointmentsPage() {
     const when = `${relativeDate(b.date)}${b.time ? ` at ${formatTime12h(b.time)}` : ""}`;
     if (!window.confirm(`Cancel your appointment with ${formatDoctorName(b.doctor)} on ${when}? This cannot be undone.`)) return;
     try {
-      await apiClient.post(API_ENDPOINTS.PORTAL.CANCEL_BOOKING(b.id));
+      await apiClient.post(API_ENDPOINTS.PORTAL.CANCEL_BOOKING(b.patient_booking_id));
       toastSuccess("Appointment cancelled.");
       refetch();
     } catch (err) {
@@ -1097,7 +1097,7 @@ export default function PatientAppointmentsPage() {
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {apptPaging.pageItems.map(b => (
                   <AppointmentRow
-                    key={b.id} b={b} ownAwpid={ownAwpid}
+                    key={b.patient_booking_id} b={b} ownAwpid={ownAwpid}
                     onCancel={handleCancel}
                     onReschedule={setRescheduleTarget}
                     onOpenPrescriptions={() => navigate(ROUTES.PATIENT.PRESCRIPTIONS)}

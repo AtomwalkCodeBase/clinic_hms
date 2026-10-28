@@ -7,49 +7,42 @@ logger = logging.getLogger(__name__)
 CURRENT_POLICY_VERSION = "v1"
 
 
-_CONSENT_FLAGS = {
-    "hie_data_sharing": ("hie_consent_given", "hie_consent_at"),
-    "dpdp_data_processing": ("dpdp_consent_captured", "dpdp_consent_at"),
-}
 
 
-def record_consent(db, patient, consent_type, source, request=None,
-                    recorded_by=None, granted=True, notes=""):
-    """Write one ConsentRecord row and set the matching flag on the patient in the same transaction."""
+def log_action(request, db, action, resource_type="", resource_id="", patient_id=None, metadata=None):
+    """Write one AuditLog row to the given hospital db. `request` is used to pull the actor and address; `patient_id` is the HospitalPatient, its id or its uhid."""
     try:
-        from apps.hospital_setup.models import ConsentRecord
+        from apps.hospital_setup.models import AuditLog
 
+        actor_user_id = None
+        actor_email = ""
+        actor_role = ""
         ip_address = None
-        user_agent = ""
+
         if request is not None:
+            user = getattr(request, "user", None)
+            if user is not None and getattr(user, "is_authenticated", False):
+                actor_user_id = getattr(user, "id", None)
+                actor_email = getattr(user, "email", "") or ""
+                actor_role = getattr(user, "role", "") or ""
             xff = request.META.get("HTTP_X_FORWARDED_FOR")
             ip_address = xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR")
-            user_agent = request.META.get("HTTP_USER_AGENT", "")[:1000]
 
-        from django.db import transaction
-        from django.utils import timezone
+        patient_pk = getattr(patient_id, "pk", patient_id)            # a HospitalPatient, its id, or its uhid
+        if isinstance(patient_pk, str):
+            from apps.hospital_patients.models import HospitalPatient
+            patient_pk = HospitalPatient.objects.using(db).filter(uhid=patient_pk).values_list("pk", flat=True).first()
 
-        with transaction.atomic(using=db):
-            ConsentRecord.objects.using(db).create(
-                patient=patient,
-                consent_type=consent_type,
-                granted=granted,
-                source=source,
-                recorded_by=recorded_by,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                policy_version=CURRENT_POLICY_VERSION,
-                notes=notes,
-            )
-            flags = _CONSENT_FLAGS.get(consent_type)
-            if flags:
-                now = timezone.now()
-                values = {flags[0]: granted, flags[1]: now}
-                type(patient).objects.using(db).filter(pk=patient.pk).update(**values)
-                for name, value in values.items():
-                    setattr(patient, name, value)
-    except Exception as exc:
-        logger.error(
-            "Consent record write failed for patient=%s type=%s source=%s: %s",
-            getattr(patient, "pk", patient), consent_type, source, exc,
+        AuditLog.objects.using(db).create(
+            actor_user_id=actor_user_id,
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action=action,
+            resource_type=resource_type,
+            resource_id=str(resource_id) if resource_id else "",
+            patient_id=patient_pk,
+            ip_address=ip_address,
+            metadata=metadata or {},
         )
+    except Exception as exc:
+        logger.error("Audit log write failed for action=%s: %s", action, exc)

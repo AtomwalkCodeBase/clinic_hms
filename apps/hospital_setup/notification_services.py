@@ -42,7 +42,7 @@ def generate_appointment_reminders(db, lookahead_days=1):
         when = appt.scheduled_time.strftime("%I:%M %p").lstrip("0") if appt.scheduled_time else "your scheduled slot"
         doctor = f" with {appt.doctor.get_full_name()}" if appt.doctor.get_full_name() else ""
         body = f"Reminder: you have an appointment{doctor} on {target_date.strftime('%d %b %Y')} at {when}."
-        if _log_in_app(db, patient, f"appt_reminder:{appt.id}", body):
+        if _log_in_app(db, patient, f"appt_reminder:{appt.pk}", body):
             created += 1
     return created
 
@@ -65,7 +65,7 @@ def generate_followup_reminders(db):
             continue
         patient = enc.appointment.patient
         body = "Reminder: your doctor recommended a follow-up visit around now. Please book an appointment when convenient."
-        if _log_in_app(db, patient, f"followup:{enc.id}", body):
+        if _log_in_app(db, patient, f"followup:{enc.pk}", body):
             created += 1
     return created
 

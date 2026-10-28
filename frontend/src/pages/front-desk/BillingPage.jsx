@@ -58,7 +58,7 @@ function BillModal({ appointment, services, onClose, onCreated }) {
     setItems(list => list.map((it, idx) => idx === i ? { ...it, ...patch } : it));
   }
   function pickService(i, serviceId) {
-    const svc = services.find(s => String(s.id) === String(serviceId));
+    const svc = services.find(s => String(s.billing_item_id) === String(serviceId));
     updateItem(i, {
       service: serviceId,
       description: svc?.name || "",
@@ -90,7 +90,7 @@ function BillModal({ appointment, services, onClose, onCreated }) {
     setSaving(true);
     try {
       await apiClient.post(API_ENDPOINTS.BILLING.INVOICES, {
-        appointment_id: appointment.id,
+        appointment_id: appointment.appointment_id,
         items: validItems.map(it => ({
           service: it.service || null,
           description: it.description,
@@ -120,7 +120,7 @@ function BillModal({ appointment, services, onClose, onCreated }) {
           Token #{appointment.token_number} · {appointment.doctor_name}
         </div>
 
-        <PatientBalanceSummary appointmentId={appointment.id} />
+        <PatientBalanceSummary appointmentId={appointment.appointment_id} />
 
         <form onSubmit={handleSubmit}>
           <div style={{ display: "grid", gap: 12 }}>
@@ -134,7 +134,7 @@ function BillModal({ appointment, services, onClose, onCreated }) {
                   <select style={inputStyle} value={it.service}
                     onChange={e => e.target.value ? pickService(i, e.target.value) : updateItem(i, { service: "" })}>
                     <option value="">Custom item</option>
-                    {services.map(s => <option key={s.id} value={s.id}>{s.name} (₹{s.unit_price})</option>)}
+                    {services.map(s => <option key={s.billing_item_id} value={s.billing_item_id}>{s.name} (₹{s.unit_price})</option>)}
                   </select>
                   {!it.service && (
                     <input style={{ ...inputStyle, marginTop: 6 }} placeholder="Description"
@@ -210,7 +210,7 @@ function PaymentModal({ invoice, onClose, onRecorded }) {
     setSaving(true);
     try {
       await billingApi.recordPayment({
-        invoice: invoice.id,
+        invoice: invoice.invoice_id,
         amount: Number(amount),
         payment_mode: mode,
         transaction_ref: ref,
@@ -242,7 +242,7 @@ function PaymentModal({ invoice, onClose, onRecorded }) {
             </div>
             <div><label style={labelStyle}>Payment Mode</label>
               <select style={inputStyle} value={mode} onChange={e => setMode(e.target.value)}>
-                {modes.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+                {modes.map(m => <option key={m.option_list_id} value={m.name}>{m.name}</option>)}
               </select>
             </div>
             <div><label style={labelStyle}>Transaction Ref (optional)</label>
@@ -302,7 +302,7 @@ function InvoiceDetailModal({ invoiceId, onClose, onChanged }) {
   }
 
   function pickService(serviceId) {
-    const svc = services.find(s => String(s.id) === String(serviceId));
+    const svc = services.find(s => String(s.billing_item_id) === String(serviceId));
     setNewItem({
       service: serviceId,
       description: svc?.name || "",
@@ -380,8 +380,8 @@ function InvoiceDetailModal({ invoiceId, onClose, onChanged }) {
 
             <div style={{ marginTop: 18, marginBottom: 6, fontSize: 12, fontWeight: 700, color: "var(--color-text-muted)" }}>ITEMS</div>
             <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
-              {(invoice.items || []).map(it => (
-                <div key={it.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0", borderBottom: "1px solid var(--color-border)" }}>
+              {(invoice.items || []).map((it, idx) => (
+                <div key={idx} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "6px 0", borderBottom: "1px solid var(--color-border)" }}>
                   <span>{it.description} {it.quantity > 1 && `× ${it.quantity}`}</span>
                   <span>₹{it.total}{Number(it.tax_rate) > 0 && ` (+${it.tax_rate}% tax)`}</span>
                 </div>
@@ -394,7 +394,7 @@ function InvoiceDetailModal({ invoiceId, onClose, onChanged }) {
                 <div>
                   <select style={inputStyle} value={newItem.service} onChange={e => e.target.value ? pickService(e.target.value) : setNewItem(f => ({ ...f, service: "" }))}>
                     <option value="">Custom item</option>
-                    {services.map(s => <option key={s.id} value={s.id}>{s.name} (₹{s.unit_price})</option>)}
+                    {services.map(s => <option key={s.billing_item_id} value={s.billing_item_id}>{s.name} (₹{s.unit_price})</option>)}
                   </select>
                   {!newItem.service && (
                     <input style={{ ...inputStyle, marginTop: 6 }} placeholder="Description" value={newItem.description}
@@ -441,7 +441,7 @@ function InvoiceDetailModal({ invoiceId, onClose, onChanged }) {
                 <div style={{ marginBottom: 6, fontSize: 12, fontWeight: 700, color: "var(--color-text-muted)" }}>PAYMENTS</div>
                 <div style={{ display: "grid", gap: 4, marginBottom: 14 }}>
                   {invoice.payments.map(p => (
-                    <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
+                    <div key={p.payment_id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
                       <span>{p.payment_mode}{p.transaction_ref && ` · ${p.transaction_ref}`}</span>
                       <span>₹{p.amount}</span>
                     </div>
@@ -591,7 +591,7 @@ export default function BillingPage() {
             ) : (
               <div>
                 {needsBilling.map(a => (
-                  <div key={a.id} style={{
+                  <div key={a.appointment_id} style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between",
                     padding: "12px 20px", borderBottom: "1px solid var(--color-border)",
                   }}>
@@ -662,12 +662,12 @@ export default function BillingPage() {
                 {filteredInvoices.map(inv => {
                   const outstanding = Number(inv.total_amount) - Number(inv.paid_amount);
                   return (
-                    <div key={inv.id} style={{
+                    <div key={inv.invoice_id} style={{
                       display: "flex", alignItems: "center", justifyContent: "space-between",
                       padding: "12px 20px", borderBottom: "1px solid var(--color-border)",
                     }}>
                       <div>
-                        <button onClick={() => setDetailModalId(inv.id)}
+                        <button onClick={() => setDetailModalId(inv.invoice_id)}
                           style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontWeight: 600, fontSize: 13, color: "var(--color-primary)", textDecoration: "underline" }}>
                           {inv.invoice_number}
                         </button>

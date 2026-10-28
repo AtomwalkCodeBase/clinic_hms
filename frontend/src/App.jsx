@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-route
 import { useAuth } from "./hooks/useAuth";
 import { ROUTES }  from "./config/routes.config";
 import { ROLES, ACTS_AS_PRIORITY } from "./constants/roles";
+import { moduleAllows } from "./constants/modules";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import { PatientProvider } from "./context/PatientContext";
 
@@ -27,7 +28,6 @@ const PlatformHospitalDetail = lazy(() => import("./pages/platform-admin/Hospita
 const PlatformSubscriptions = lazy(() => import("./pages/platform-admin/SubscriptionsPage"));
 const PlatformUsers      = lazy(() => import("./pages/platform-admin/UsersPage"));
 const PlatformVaccinationTemplates = lazy(() => import("./pages/platform-admin/VaccinationTemplatesPage"));
-const PlatformMilestoneTemplates = lazy(() => import("./pages/platform-admin/MilestoneTemplatesPage"));
 const PlatformClassificationRules = lazy(() => import("./pages/platform-admin/ClassificationRulesPage"));
 
 // Hospital Admin
@@ -40,7 +40,6 @@ const AdminBillingReports = lazy(() => import("./pages/hospital-admin/BillingRep
 const AdminCompliance = lazy(() => import("./pages/hospital-admin/CompliancePage"));
 const AdminRoles     = lazy(() => import("./pages/hospital-admin/RolesPage"));
 const AdminVaccinationSchedule = lazy(() => import("./pages/hospital-admin/VaccinationSchedulePage"));
-const AdminMilestoneSchedule = lazy(() => import("./pages/hospital-admin/MilestoneSchedulePage"));
 const AdminSettings  = lazy(() => import("./pages/hospital-admin/SettingsPage"));
 
 // Doctor
@@ -49,8 +48,6 @@ const DoctorQueue     = lazy(() => import("./pages/doctor/QueuePage"));
 const DoctorEncounter = lazy(() => import("./pages/doctor/EncounterPage"));
 const DoctorPatients  = lazy(() => import("./pages/doctor/PatientsPage"));
 const DoctorHistory   = lazy(() => import("./pages/doctor/HistoryPage"));
-const DoctorIpdReferrals = lazy(() => import("./pages/doctor/IpdReferralsPage"));
-const DoctorIpdPatients  = lazy(() => import("./pages/doctor/IpdPatientsPage"));
 const DoctorMyProfile = lazy(() => import("./pages/doctor/MyProfilePage"));
 
 // Nurse
@@ -62,33 +59,13 @@ const NurseHistory   = lazy(() => import("./pages/nurse/HistoryPage"));
 
 // Front Desk
 const FrontDeskDashboard      = lazy(() => import("./pages/front-desk/DashboardPage"));
-const FrontDeskIntake         = lazy(() => import("./pages/front-desk/PatientIntakePage"));
 const FrontDeskTriage         = lazy(() => import("./pages/front-desk/TriagePage"));
 const FrontDeskRegisterPatient= lazy(() => import("./pages/front-desk/RegisterPatientPage"));
-const FrontDeskRegisterEmergency = lazy(() => import("./pages/front-desk/EmergencyRegisterPage"));
 const FrontDeskPatients       = lazy(() => import("./pages/front-desk/PatientsPage"));
 const FrontDeskAppointments   = lazy(() => import("./pages/front-desk/AppointmentsPage"));
 const FrontDeskQueue          = lazy(() => import("./pages/front-desk/QueuePage"));
 const FrontDeskBilling        = lazy(() => import("./pages/front-desk/BillingPage"));
 const FrontDeskHistory        = lazy(() => import("./pages/front-desk/HistoryPage"));
-const FrontDeskAdmissions     = lazy(() => import("./pages/front-desk/AdmissionsPage"));  // IPD admissions + bed assignment
-const FrontDeskAdmissionDetail = lazy(() => import("./pages/front-desk/AdmissionDetailPage"));  // single admission: edit, discharge, billing
-const FrontDeskBedBoard       = lazy(() => import("./pages/front-desk/BedBoardPage"));
-const FrontDeskIpdPatients    = lazy(() => import("./pages/front-desk/IpdPatientsPage"));
-
-// Lab
-const LabDashboard = lazy(() => import("./pages/lab/DashboardPage"));
-const LabRequests  = lazy(() => import("./pages/lab/RequestsPage"));
-const LabReports   = lazy(() => import("./pages/lab/ReportsPage"));
-const LabCatalog   = lazy(() => import("./pages/lab/CatalogPage"));
-const LabSampleTypeSetup = lazy(() => import("./pages/lab/SampleTypeSetupPage"));
-
-// Pharmacist
-const PharmacistDashboard     = lazy(() => import("./pages/pharmacist/DashboardPage"));
-const PharmacistPrescriptions = lazy(() => import("./pages/pharmacist/PrescriptionsPage"));
-const PharmacistStock         = lazy(() => import("./pages/pharmacist/StockPage"));
-const PharmacistCatalog       = lazy(() => import("./pages/pharmacist/CatalogPage"));
-const PharmacistDrugFormSetup = lazy(() => import("./pages/pharmacist/DrugFormSetupPage"));
 
 // Shared — generic self-service "My Profile" (photo upload) for any
 const SharedMyProfile = lazy(() => import("./pages/shared/MyProfilePage"));
@@ -101,7 +78,6 @@ const PatientHospitalDoctors = lazy(() => import("./pages/patient/HospitalDoctor
 const PatientDoctorProfile   = lazy(() => import("./pages/patient/DoctorProfilePage"));
 const PatientRecords       = lazy(() => import("./pages/patient/RecordsPage"));
 const PatientPrescriptions = lazy(() => import("./pages/patient/PrescriptionsPage"));
-const PatientLabReports    = lazy(() => import("./pages/patient/LabReportsPage"));
 const PatientMyReports     = lazy(() => import("./pages/patient/MyReportsPage"));
 const PatientSharedRecordsPrivacy = lazy(() => import("./pages/patient/SharedRecordsPrivacyPage"));
 const PatientNotifications = lazy(() => import("./pages/patient/NotificationsPage"));
@@ -116,7 +92,7 @@ function ProtectedRoute({ children, roles = [] }) {
 
   if (isLoading) return <PageLoader />;
   if (!user) return <Navigate to={ROUTES.LOGIN} replace />;
-  if (roles.length > 0 && !roleAllowed(user, roles)) {
+  if (roles.length > 0 && !roleAllowed(user, roles, location.pathname)) {
     return <Navigate to={getDefaultRoute(user)} replace />;
   }
   // key=pathname resets the boundary's error state on navigation — without
@@ -124,8 +100,9 @@ function ProtectedRoute({ children, roles = [] }) {
 }
 
 /** True if `user` is allowed onto a route guarded by `roles`. Handles */
-function roleAllowed(user, roles) {
+function roleAllowed(user, roles, pathname) {
   if (roles.includes(user.role)) return true;
+  if (moduleAllows(user, roles, pathname)) return true;
   if (user.role !== "custom") return false;
   return (user.acts_as || []).some(r => roles.includes(r));
 }
@@ -138,8 +115,6 @@ function getDefaultRoute(user) {
     [ROLES.DOCTOR]:          ROUTES.DOCTOR.DASHBOARD,
     [ROLES.NURSE]:           ROUTES.NURSE.DASHBOARD,
     [ROLES.FRONT_DESK]:      ROUTES.FRONT_DESK.DASHBOARD,
-    [ROLES.LAB_TECH]:        ROUTES.LAB.DASHBOARD,
-    [ROLES.PHARMACIST]:      ROUTES.PHARMACIST.DASHBOARD,
     [ROLES.PATIENT]:         ROUTES.PATIENT.DASHBOARD,
   };
   if (user.role === "custom") {
@@ -211,8 +186,6 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformUsers /></ProtectedRoute>} />
           <Route path={ROUTES.PLATFORM.VACCINATION_TEMPLATES}
             element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformVaccinationTemplates /></ProtectedRoute>} />
-          <Route path={ROUTES.PLATFORM.MILESTONE_TEMPLATES}
-            element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformMilestoneTemplates /></ProtectedRoute>} />
           <Route path={ROUTES.PLATFORM.CLASSIFICATION_RULES}
             element={<ProtectedRoute roles={[ROLES.PLATFORM_ADMIN]}><PlatformClassificationRules /></ProtectedRoute>} />
 
@@ -235,8 +208,6 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminRoles /></ProtectedRoute>} />
           <Route path={ROUTES.ADMIN.VACCINATION_SCHEDULE}
             element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminVaccinationSchedule /></ProtectedRoute>} />
-          <Route path={ROUTES.ADMIN.MILESTONE_SCHEDULE}
-            element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminMilestoneSchedule /></ProtectedRoute>} />
           <Route path={ROUTES.ADMIN.SETTINGS}
             element={<ProtectedRoute roles={[ROLES.HOSPITAL_ADMIN]}><AdminSettings /></ProtectedRoute>} />
           <Route path={ROUTES.ADMIN.MY_PROFILE}
@@ -253,10 +224,6 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorPatients /></ProtectedRoute>} />
           <Route path={ROUTES.DOCTOR.HISTORY}
             element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorHistory /></ProtectedRoute>} />
-          <Route path={ROUTES.DOCTOR.IPD_REFERRALS}
-            element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorIpdReferrals /></ProtectedRoute>} />
-          <Route path={ROUTES.DOCTOR.IPD_PATIENTS}
-            element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorIpdPatients /></ProtectedRoute>} />
           <Route path={ROUTES.DOCTOR.MY_PROFILE}
             element={<ProtectedRoute roles={[ROLES.DOCTOR]}><DoctorMyProfile /></ProtectedRoute>} />
 
@@ -275,26 +242,11 @@ export default function App() {
           {/* Front Desk — also accessible to hospital admin for oversight */}
           <Route path={ROUTES.FRONT_DESK.DASHBOARD}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskDashboard /></ProtectedRoute>} />
-          {/* Patient Intake hub — one page, five tabs (each the exact same */}
-          <Route path={ROUTES.FRONT_DESK.INTAKE}
-            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><Navigate to={ROUTES.FRONT_DESK.INTAKE_REGISTER} replace /></ProtectedRoute>} />
-          <Route path={ROUTES.FRONT_DESK.INTAKE_REGISTER}
-            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIntake /></ProtectedRoute>} />
-          <Route path={ROUTES.FRONT_DESK.INTAKE_TRIAGE}
-            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIntake /></ProtectedRoute>} />
-          <Route path={ROUTES.FRONT_DESK.INTAKE_EMERGENCY}
-            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIntake /></ProtectedRoute>} />
-          <Route path={ROUTES.FRONT_DESK.INTAKE_OPD}
-            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIntake /></ProtectedRoute>} />
-          <Route path={ROUTES.FRONT_DESK.INTAKE_REFERRALS}
-            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIntake /></ProtectedRoute>} />
           {/* Kept mounted for backward compatibility / deep links — no longer */}
           <Route path={ROUTES.FRONT_DESK.TRIAGE}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskTriage /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.REGISTER_PATIENT}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskRegisterPatient /></ProtectedRoute>} />
-          <Route path={ROUTES.FRONT_DESK.REGISTER_EMERGENCY}
-            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskRegisterEmergency /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.PATIENTS}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskPatients /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.APPOINTMENTS}
@@ -305,44 +257,8 @@ export default function App() {
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskBilling /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.HISTORY}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskHistory /></ProtectedRoute>} />
-          <Route path={ROUTES.FRONT_DESK.ADMISSIONS}
-            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskAdmissions /></ProtectedRoute>} />
-          <Route path={ROUTES.FRONT_DESK.ADMISSION_DETAIL(":id")}
-            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskAdmissionDetail /></ProtectedRoute>} />
-          <Route path={ROUTES.FRONT_DESK.BED_BOARD}
-            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskBedBoard /></ProtectedRoute>} />
-          <Route path={ROUTES.FRONT_DESK.IPD_PATIENTS}
-            element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><FrontDeskIpdPatients /></ProtectedRoute>} />
           <Route path={ROUTES.FRONT_DESK.MY_PROFILE}
             element={<ProtectedRoute roles={[ROLES.FRONT_DESK, ROLES.HOSPITAL_ADMIN]}><SharedMyProfile /></ProtectedRoute>} />
-
-          {/* Lab — also accessible to hospital admin */}
-          <Route path={ROUTES.LAB.DASHBOARD}
-            element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><LabDashboard /></ProtectedRoute>} />
-          <Route path={ROUTES.LAB.REQUESTS}
-            element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><LabRequests /></ProtectedRoute>} />
-          <Route path={ROUTES.LAB.REPORTS}
-            element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><LabReports /></ProtectedRoute>} />
-          <Route path={ROUTES.LAB.CATALOG}
-            element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><LabCatalog /></ProtectedRoute>} />
-          <Route path={ROUTES.LAB.SAMPLE_TYPE_SETUP}
-            element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><LabSampleTypeSetup /></ProtectedRoute>} />
-          <Route path={ROUTES.LAB.MY_PROFILE}
-            element={<ProtectedRoute roles={[ROLES.LAB_TECH, ROLES.HOSPITAL_ADMIN]}><SharedMyProfile /></ProtectedRoute>} />
-
-          {/* Pharmacist — also accessible to hospital admin */}
-          <Route path={ROUTES.PHARMACIST.DASHBOARD}
-            element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><PharmacistDashboard /></ProtectedRoute>} />
-          <Route path={ROUTES.PHARMACIST.PRESCRIPTIONS}
-            element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><PharmacistPrescriptions /></ProtectedRoute>} />
-          <Route path={ROUTES.PHARMACIST.STOCK}
-            element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><PharmacistStock /></ProtectedRoute>} />
-          <Route path={ROUTES.PHARMACIST.CATALOG}
-            element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><PharmacistCatalog /></ProtectedRoute>} />
-          <Route path={ROUTES.PHARMACIST.DRUG_FORM_SETUP}
-            element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><PharmacistDrugFormSetup /></ProtectedRoute>} />
-          <Route path={ROUTES.PHARMACIST.MY_PROFILE}
-            element={<ProtectedRoute roles={[ROLES.PHARMACIST, ROLES.HOSPITAL_ADMIN]}><SharedMyProfile /></ProtectedRoute>} />
 
           {/* Patient Portal — wrapped in PatientProvider so "which family */}
           <Route path={ROUTES.PATIENT.DASHBOARD}
@@ -359,8 +275,6 @@ export default function App() {
             element={<PatientRoute><PatientRecords /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.PRESCRIPTIONS}
             element={<PatientRoute><PatientPrescriptions /></PatientRoute>} />
-          <Route path={ROUTES.PATIENT.LAB_REPORTS}
-            element={<PatientRoute><PatientLabReports /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.MY_REPORTS}
             element={<PatientRoute><PatientMyReports /></PatientRoute>} />
           <Route path={ROUTES.PATIENT.SHARED_RECORDS_PRIVACY}

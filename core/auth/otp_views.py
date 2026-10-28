@@ -9,41 +9,40 @@ from rest_framework.permissions import AllowAny
 from rest_framework.throttling import ScopedRateThrottle
 
 from core.api.response import success, error
-from core.messaging.otp import (
+from core.auth.otp import (
     create_otp, verify_otp, make_action_token, decode_action_token,
-    mask_identifier, OTPError,
+    mask_identifier, OTPError, Purpose,
 )
-from core.messaging.email import send_otp_email
-from core.messaging.sms import send_otp_sms
-from apps.patients.models import OTPCode
+from core.messaging import send_otp_email
+from core.messaging import send_otp_sms
 from apps.patients.models import Patient
 from apps.patients.services import accounts, accounts_with_mobile, set_password
 
 logger = logging.getLogger(__name__)
 
 PURPOSE_LABELS = {
-    OTPCode.PURPOSE_PASSWORD_RESET_STAFF:   "password reset",
-    OTPCode.PURPOSE_PASSWORD_RESET_PATIENT: "password reset",
-    OTPCode.PURPOSE_REGISTRATION_PATIENT:   "account verification",
-    OTPCode.PURPOSE_LOGIN_PATIENT:          "sign in",
-    OTPCode.PURPOSE_CONTACT_CHANGE_PATIENT: "mobile number change",
+    Purpose.PASSWORD_RESET_STAFF:   "password reset",
+    Purpose.PASSWORD_RESET_PATIENT: "password reset",
+    Purpose.REGISTRATION_PATIENT:   "account verification",
+    Purpose.LOGIN_PATIENT:          "sign in",
+    Purpose.CONTACT_CHANGE_PATIENT: "mobile number change",
 }
 
 # Purposes OTPRequestView resolves itself — contact_change_patient's
 _HANDLED_PURPOSES = {
-    OTPCode.PURPOSE_PASSWORD_RESET_STAFF,
-    OTPCode.PURPOSE_PASSWORD_RESET_PATIENT,
-    OTPCode.PURPOSE_REGISTRATION_PATIENT,
-    OTPCode.PURPOSE_LOGIN_PATIENT,
+    Purpose.PASSWORD_RESET_STAFF,
+    Purpose.PASSWORD_RESET_PATIENT,
+    Purpose.REGISTRATION_PATIENT,
+    Purpose.LOGIN_PATIENT,
 }
 
 # OTPVerifyView additionally accepts contact_change_patient — verifying a
-_VERIFIABLE_PURPOSES = _HANDLED_PURPOSES | {OTPCode.PURPOSE_CONTACT_CHANGE_PATIENT}
+_VERIFIABLE_PURPOSES = _HANDLED_PURPOSES | {Purpose.CONTACT_CHANGE_PATIENT}
 
 
 def _resolve_staff_target(identifier):
     """Mobile or email, matching StaffLoginView's own identifier resolution. Returns (staff_id, db_name) or None."""
-    from apps.patients.models import StaffMobileIndex
+    from apps.hospital_master.models import GlobalStaffUserIndexCatalog as StaffMobileIndex
     from apps.hospital_setup.models import StaffUser
 
     try:
@@ -62,7 +61,7 @@ def _resolve_staff_target(identifier):
         )
     except StaffUser.DoesNotExist:
         return None
-    return staff.id, index.hospital.db_name
+    return staff.pk, index.hospital.db_name
 
 
 def _resolve_patient_target(identifier):
@@ -104,47 +103,47 @@ class OTPRequestView(APIView):
 
         target_type, target_id, target_db = "", None, ""
 
-        if purpose == OTPCode.PURPOSE_PASSWORD_RESET_STAFF:
+        if purpose == Purpose.PASSWORD_RESET_STAFF:
             resolved = _resolve_staff_target(identifier)
             if not resolved:
                 return error("We couldn't find a staff account with those details.")
             target_type, (target_id, target_db) = "staff", resolved
 
-        elif purpose == OTPCode.PURPOSE_PASSWORD_RESET_PATIENT:
+        elif purpose == Purpose.PASSWORD_RESET_PATIENT:
             acct = _resolve_patient_target(identifier)
             if not acct:
                 return error("We couldn't find an account with those details.")
-            target_type, target_id = "patient", acct.id
+            target_type, target_id = "patient", acct.pk
             # Send to whichever channel the caller actually typed — but if they typed the AWPID (not itself a
             if identifier.upper().startswith("AWPID-"):
                 if not acct.email:
                     return error("There is no email on this account. Enter your mobile number instead.")
                 identifier = acct.email.lower()
 
-        elif purpose == OTPCode.PURPOSE_LOGIN_PATIENT:
+        elif purpose == Purpose.LOGIN_PATIENT:
             acct = _resolve_patient_target(identifier)
             if not acct:
                 return error("We couldn't find an account with those details.")
-            target_type, target_id = "patient", acct.id
+            target_type, target_id = "patient", acct.pk
             if identifier.upper().startswith("AWPID-"):
                 if not acct.email:
                     return error("There is no email on this account. Enter your mobile number instead.")
                 identifier = acct.email.lower()
 
-        elif purpose == OTPCode.PURPOSE_REGISTRATION_PATIENT:
+        elif purpose == Purpose.REGISTRATION_PATIENT:
             # Email-based for now — verifying via mobile requires a paid SMS
             if "@" not in identifier:
                 return error("Enter a valid email address.", errors={"identifier": "Invalid format."})
             if accounts().filter(email__iexact=identifier).exists():
                 return error("An account with this email already exists. Please log in.")
-            from core.utils.realworld_validation import validate_email_domain
+            from core.validation import validate_email_domain
             is_valid, reason = validate_email_domain(identifier)
             if not is_valid:
                 return error(reason, errors={"identifier": reason})
             # target_type/target_id stay blank — no user exists yet.
 
         try:
-            otp, code, channel = create_otp(purpose, identifier, target_type, target_id, target_db)
+            code, channel = create_otp(purpose, identifier, target_type, target_id, target_db)
         except OTPError as exc:
             return error(str(exc))
 
@@ -175,7 +174,7 @@ class OTPVerifyView(APIView):
             identifier = identifier.lower()
 
         # Registration's identifier is the raw mobile; the others may have
-        if purpose in (OTPCode.PURPOSE_PASSWORD_RESET_PATIENT, OTPCode.PURPOSE_LOGIN_PATIENT) \
+        if purpose in (Purpose.PASSWORD_RESET_PATIENT, Purpose.LOGIN_PATIENT) \
                 and identifier.upper().startswith("AWPID-"):
             acct = _resolve_patient_target(identifier)
             if acct and acct.email:
@@ -186,7 +185,7 @@ class OTPVerifyView(APIView):
         except OTPError as exc:
             return error(str(exc))
 
-        token = make_action_token(purpose, identifier, otp.target_type, otp.target_id, (otp.hospital.db_name if otp.hospital_id else ""))
+        token = make_action_token(purpose, identifier, otp.target_type, otp.target_id, otp.target_db)
         return success(data={"action_token": token}, message="Verified.")
 
 
@@ -204,7 +203,7 @@ class StaffForgotPasswordResetView(APIView):
             return error("New password must be at least 8 characters.", errors={"new_password": "Too short."})
 
         try:
-            payload = decode_action_token(token, OTPCode.PURPOSE_PASSWORD_RESET_STAFF)
+            payload = decode_action_token(token, Purpose.PASSWORD_RESET_STAFF)
         except OTPError as exc:
             return error(str(exc))
 
@@ -217,13 +216,14 @@ class StaffForgotPasswordResetView(APIView):
         except StaffUser.DoesNotExist:
             return error("Staff account not found.")
 
-        staff.set_password(new_password)
+        from apps.hospital_setup.staff_services import set_login_password
+        set_login_password(staff, new_password)
         staff.must_change_password = False
-        staff.save(using=db_name, update_fields=["password", "must_change_password"])
+        staff.save(using=db_name, update_fields=["must_change_password", "updated_at"])
 
-        from core.utils.audit import log_action
+        from apps.hospital_setup.compliance_services import log_action
         log_action(None, db_name, action="auth.password_reset_via_otp",
-                   resource_type="StaffUser", resource_id=str(staff.id))
+                   resource_type="StaffUser", resource_id=str(staff.pk))
 
         return success(message="Password reset successfully. You can now log in.")
 
@@ -242,7 +242,7 @@ class PatientForgotPasswordResetView(APIView):
             return error("New password must be at least 8 characters.", errors={"new_password": "Too short."})
 
         try:
-            payload = decode_action_token(token, OTPCode.PURPOSE_PASSWORD_RESET_PATIENT)
+            payload = decode_action_token(token, Purpose.PASSWORD_RESET_PATIENT)
         except OTPError as exc:
             return error(str(exc))
 
@@ -255,7 +255,7 @@ class PatientForgotPasswordResetView(APIView):
         acct.save(using="default", update_fields=["password"])
 
         # Atomwalk-level (cross-hospital) security event — logged, not written
-        logger.info("Patient password reset via OTP: account_id=%s awpid=%s", acct.id, acct.awpid)
+        logger.info("Patient password reset via OTP: account_id=%s awpid=%s", acct.pk, acct.awpid)
 
         return success(message="Password reset successfully. You can now log in.")
 
@@ -267,7 +267,7 @@ class PatientOTPLoginView(APIView):
     def post(self, request):
         token = request.data.get("action_token") or ""
         try:
-            payload = decode_action_token(token, OTPCode.PURPOSE_LOGIN_PATIENT)
+            payload = decode_action_token(token, Purpose.LOGIN_PATIENT)
         except OTPError as exc:
             return error(str(exc))
 
@@ -282,7 +282,7 @@ class PatientOTPLoginView(APIView):
 
         from core.auth.views import _make_tokens
         jwt_payload = {
-            "user_id":     acct.id,
+            "user_id":     acct.pk,
             "email":       acct.email,
             "full_name":   acct.full_name,
             "awpid":       acct.awpid,
@@ -291,5 +291,5 @@ class PatientOTPLoginView(APIView):
             "hospital_id":   None,
             "is_platform": False,
         }
-        logger.info("Patient OTP login: account_id=%s awpid=%s", acct.id, acct.awpid)
+        logger.info("Patient OTP login: account_id=%s awpid=%s", acct.pk, acct.awpid)
         return success(data=_make_tokens(jwt_payload), message="Signed in successfully.")

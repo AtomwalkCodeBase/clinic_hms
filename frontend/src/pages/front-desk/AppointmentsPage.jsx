@@ -129,7 +129,7 @@ export function AppointmentsPageContent({ embedded = false }) {
   const [quickRegisterFor, setQuickRegisterFor] = useState(null);
   const { data: branchesData } = useApi(API_ENDPOINTS.ORG.BRANCHES);
   const branches = branchesData?.data || branchesData || [];
-  const defaultBranchId = user?.branch_id || branches?.[0]?.id || "";
+  const defaultBranchId = user?.branch_id || branches?.[0]?.branch_id || "";
 
   function handleRegistered(created) {
     setQuickRegisterFor(null);
@@ -297,7 +297,7 @@ export function AppointmentsPageContent({ embedded = false }) {
     setBooking(true);
     try {
       const { data: res } = await apiClient.post(API_ENDPOINTS.OPD.APPOINTMENTS, {
-        patient_id:      patient.id,
+        patient_id:      patient.patient_id,
         doctor_id:       doctorId,
         appointment_type: appointmentType,
         scheduled_date:  date,
@@ -401,7 +401,7 @@ export function AppointmentsPageContent({ embedded = false }) {
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, padding: 16 }}>
               {todayPatients.map(p => (
-                <div key={p.id} style={{
+                <div key={p.patient_id} style={{
                   display: "flex", alignItems: "center", gap: 10,
                   border: "1px solid var(--color-border)", borderRadius: 10,
                   padding: "8px 10px 8px 8px", background: "var(--color-surface)",
@@ -502,7 +502,7 @@ export function AppointmentsPageContent({ embedded = false }) {
                         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
                           <button type="button" className="btn-outline" style={{ fontSize: 11.5, padding: "5px 10px" }}
                             disabled={attachingNetworkPatient}
-                            onClick={networkMatch ? useNetworkPatient : () => { setSearchOpen(false); navigate(ROUTES.FRONT_DESK.INTAKE_REGISTER, { state: { mobile: patientQuery } }); }}>
+                            onClick={networkMatch ? useNetworkPatient : () => { setSearchOpen(false); navigate(ROUTES.FRONT_DESK.REGISTER_PATIENT, { state: { mobile: patientQuery } }); }}>
                             <UserPlus size={12} style={{ marginRight: 4, verticalAlign: -2 }} />
                             {networkMatch ? (attachingNetworkPatient ? "Opening patient…" : "Use this patient") : "Full registration"}
                           </button>
@@ -515,7 +515,7 @@ export function AppointmentsPageContent({ embedded = false }) {
                       )}
                     </div>
                   ) : patientOpts.map(p => (
-                    <button key={p.id}
+                    <button key={p.patient_id}
                       onClick={() => { setPatient(p); setSearchOpen(false); setPatientQuery(""); }}
                       style={{
                         display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left",
@@ -637,9 +637,9 @@ export function AppointmentsPageContent({ embedded = false }) {
                   const name = `${d.first_name || ""} ${d.last_name || ""}`.trim() || d.full_name || d.email;
                   const prof = d.doctor_profile || {};
                   const photo = d.photo;
-                  const selected = String(doctorId) === String(d.id);
+                  const selected = String(doctorId) === String(d.staff_user_id);
                   return (
-                    <button key={d.id} type="button" onClick={() => setDoctorId(d.id)}
+                    <button key={d.staff_user_id} type="button" onClick={() => setDoctorId(d.staff_user_id)}
                       style={{
                         display: "flex", alignItems: "center", gap: 10, textAlign: "left",
                         padding: "10px 12px", borderRadius: 10, cursor: "pointer",
@@ -741,7 +741,7 @@ export function AppointmentsPageContent({ embedded = false }) {
               </thead>
               <tbody>
                 {appointments.map(a => (
-                  <tr key={a.id}>
+                  <tr key={a.appointment_id}>
                     <td style={{ fontWeight: 800, color: "var(--color-primary)" }}>{a.token_number}</td>
                     <td style={{ fontWeight: 600 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>

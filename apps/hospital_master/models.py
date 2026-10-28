@@ -1,6 +1,4 @@
-import os
-import uuid
-
+from django.contrib.auth.models import User
 from django.db import models
 
 
@@ -48,7 +46,7 @@ class HospitalParameters(models.Model):
     class Meta:
         db_table  = "hospital_parameters"
 
-
+# not reviewed
 class Subscription(models.Model):
     TIER_CHOICES = [
         ("starter",    "Starter"),
@@ -72,13 +70,6 @@ class Subscription(models.Model):
                                         default="starter")
     status           = models.CharField(max_length=20, choices=STATUS_CHOICES,
                                         default="trial")
-    trial_ends_on    = models.DateField(null=True, blank=True)
-    current_period_start = models.DateField(null=True, blank=True)
-    current_period_end   = models.DateField(null=True, blank=True)
-    payment_lapse_since  = models.DateField(null=True, blank=True)
-
-    feat_lab          = models.BooleanField(default=False)
-    feat_pharmacy     = models.BooleanField(default=False)
     feat_whatsapp     = models.BooleanField(default=False)
     feat_multi_branch = models.BooleanField(default=False)
     feat_ai_voice     = models.BooleanField(default=False)
@@ -99,7 +90,7 @@ class Subscription(models.Model):
     class Meta:
         db_table  = "subscription"
 
-
+# not reviewed
 class HospitalAuditLog(models.Model):
     ACTION_CHOICES = [
         ("created",          "Hospital Created"),
@@ -114,8 +105,63 @@ class HospitalAuditLog(models.Model):
     actor_email  = models.CharField(max_length=255, blank=True)
     before_value = models.CharField(max_length=100, blank=True)
     after_value  = models.CharField(max_length=100, blank=True)
-    created_at   = models.DateTimeField(auto_now_add=True, db_index=True)
+    created_at   = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table  = "hospital_audit_log"
         ordering  = ["-created_at"]
+
+
+class GlobalStaffUserIndexCatalog(models.Model):
+    mobile         = models.CharField(max_length=15, unique=True)
+    email          = models.EmailField(max_length=254, unique=True, null=True, blank=True)
+    hospital       = models.ForeignKey(Hospital, on_delete=models.CASCADE, related_name="h_staff_index")
+    user           = models.ForeignKey(User, on_delete=models.CASCADE, related_name="staff_index_entries")
+    is_doctor      = models.BooleanField(default=False)
+    doctor_details = models.JSONField(default=dict, blank=True)
+    created_at     = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "global_staff_user_index_catalog"
+        constraints = [models.UniqueConstraint(fields=["user"], name="uniq_global_staff_user")]
+
+    def __str__(self):
+        return f"{self.mobile} -> {self.hospital_id}"
+
+
+class Schedule(models.Model):
+    KIND_VACCINATION = "vaccination"
+    KIND_CHOICES = [(KIND_VACCINATION, "Vaccination")]
+
+    kind           = models.CharField(max_length=15, choices=KIND_CHOICES)
+    name           = models.CharField(max_length=200)
+    description    = models.TextField(blank=True)
+    owner_hospital = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.CASCADE, related_name="h_schedules")
+    is_template    = models.BooleanField(default=False)
+    active         = models.BooleanField(default=True)
+    created_at     = models.DateTimeField(auto_now_add=True)
+    updated_at     = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "immunization_schedules"
+
+    def __str__(self):
+        return f"{self.name} ({self.kind})"
+
+
+class ScheduleRule(models.Model):
+    schedule        = models.ForeignKey(Schedule, on_delete=models.CASCADE, related_name="s_rules")
+    item            = models.CharField(max_length=200)
+    dose_number     = models.PositiveSmallIntegerField(default=1)
+    scheduled_label = models.CharField(max_length=50)
+    min_age_days    = models.PositiveIntegerField()
+    max_age_days    = models.PositiveIntegerField(null=True, blank=True)
+    mandatory       = models.BooleanField(default=True)
+    sort_order      = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = "immunization_schedule_rules"
+        ordering = ["sort_order"]
+
+    def __str__(self):
+        return f"{self.item} dose {self.dose_number} ({self.scheduled_label})"

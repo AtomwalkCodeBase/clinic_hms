@@ -119,29 +119,29 @@ class ReadingTheNameTests(TestCase):
     @mock.patch("apps.documents.lib_documents.extract_text", return_value=("Prescribed by Dr. Anita Rao MBBS\nTab Paracetamol", "ocr"))
     def test_the_doctor_named_in_the_text_is_saved(self, _extract, _delay, _get):
         doc = make_doc(status=S.QUEUED)
-        extract_document_task(doc.id)
+        extract_document_task(doc.pk)
         self.assertEqual(row(doc).doctor_name, "Anita Rao")
 
     @mock.patch("apps.documents.tasks.classify_document_task.apply_async")
     @mock.patch("apps.documents.lib_documents.extract_text", return_value=("Dr. Anita Rao", "ocr"))
     def test_a_name_the_patient_already_set_is_kept(self, _extract, _delay, _get):
         doc = make_doc(status=S.QUEUED)
-        MedicalDocument.objects.filter(pk=doc.id).update(doctor_name="Sunil Kumar")
-        extract_document_task(doc.id)
+        MedicalDocument.objects.filter(pk=doc.pk).update(doctor_name="Sunil Kumar")
+        extract_document_task(doc.pk)
         self.assertEqual(row(doc).doctor_name, "Sunil Kumar")
 
     @mock.patch("apps.documents.tasks.classify_document_task.apply_async")
     @mock.patch("apps.documents.lib_documents.extract_text", return_value=("hemoglobin glucose", "ocr"))
     def test_no_doctor_in_the_text_leaves_the_name_empty(self, _extract, _delay, _get):
         doc = make_doc(status=S.QUEUED)
-        extract_document_task(doc.id)
+        extract_document_task(doc.pk)
         self.assertEqual(row(doc).doctor_name, "")
 
     @mock.patch("apps.documents.tasks.classify_document_task.apply_async")
     @mock.patch("apps.documents.lib_documents.extract_text", return_value=("Dr. Anita Rao", "ocr"))
     def test_a_hospital_issued_file_is_not_given_a_name_from_its_text(self, _extract, _delay, _get):
         doc = make_doc(status=S.QUEUED, created_by_type="H", source_hospital_id=7)
-        extract_document_task(doc.id)
+        extract_document_task(doc.pk)
         self.assertEqual(row(doc).doctor_name, "")
 
 
@@ -155,7 +155,7 @@ class DoctorNameEndpointTests(TestCase):
         identity("AWP-T1")
 
     def patch(self, doc, **body):
-        return call(PortalDocumentDetailView, "patch", body, doc_id=doc.id)
+        return call(PortalDocumentDetailView, "patch", body, doc_id=doc.pk)
 
     def mine(self):
         return make_doc("AWP-T1", status="completed", document_type="lab_report", by="human")
@@ -198,7 +198,7 @@ class DoctorNameEndpointTests(TestCase):
         self.patch(doc, doctor_name="Anita Rao")
         first = call(PortalDocumentListCreateView).data["results"][0]
         self.assertEqual(first["doctor_name"], "Anita Rao")
-        detail = call(PortalDocumentDetailView, doc_id=doc.id).data["data"]
+        detail = call(PortalDocumentDetailView, doc_id=doc.pk).data["data"]
         self.assertEqual(detail["doctor_name"], "Anita Rao")
 
     def test_a_document_with_no_name_says_so_with_an_empty_string(self, _r):
@@ -216,32 +216,32 @@ class DeletableTests(TestCase):
         identity("AWP-T1")
 
     def listed(self):
-        return {r["id"]: r["deletable"] for r in call(PortalDocumentListCreateView, data={"review": "all"}).data["results"]}
+        return {r["medical_document_id"]: r["deletable"] for r in call(PortalDocumentListCreateView, data={"review": "all"}).data["results"]}
 
     def test_a_failed_upload_can_be_deleted(self, _r):
         doc = make_doc("AWP-T1", status="failed")
-        self.assertTrue(self.listed()[doc.id])
-        self.assertTrue(call(PortalDocumentDetailView, doc_id=doc.id).data["data"]["deletable"])
+        self.assertTrue(self.listed()[doc.pk])
+        self.assertTrue(call(PortalDocumentDetailView, doc_id=doc.pk).data["data"]["deletable"])
 
     def test_a_confirmed_upload_cannot_be_deleted(self, _r):
         doc = make_doc("AWP-T1", status="completed", document_type="lab_report", by="human")
-        self.assertFalse(self.listed()[doc.id])
+        self.assertFalse(self.listed()[doc.pk])
 
     def test_a_hospital_issued_document_is_never_deletable(self, _r):
         doc = hospital_issued()
         failed = make_doc("AWP-T1", status="failed", created_by_type="H", source_hospital_id=7)
         listed = self.listed()
-        self.assertFalse(listed[doc.id])
-        self.assertFalse(listed[failed.id])
+        self.assertFalse(listed[doc.pk])
+        self.assertFalse(listed[failed.pk])
 
     def test_a_file_still_being_read_is_not_deletable(self, _r):
         doc = make_doc("AWP-T1", status="queued")
-        self.assertFalse(self.listed()[doc.id])
+        self.assertFalse(self.listed()[doc.pk])
 
     @override_settings(RECORDS_REVIEW_FROM="2000-01-01T00:00:00+00:00")
     def test_a_read_upload_waiting_for_confirmation_is_deletable(self, _r):
         waiting = make_doc("AWP-T1", status="completed", document_type="lab_report", by="rules")
-        self.assertTrue(self.listed()[waiting.id])
+        self.assertTrue(self.listed()[waiting.pk])
 
     @override_settings(RECORDS_REVIEW_FROM="2000-01-01T00:00:00+00:00")
     def test_the_flag_always_agrees_with_the_rule_the_delete_call_uses(self, _r):
@@ -254,7 +254,7 @@ class DeletableTests(TestCase):
         ]
         listed = self.listed()
         for doc in docs:
-            self.assertEqual(listed[doc.id], records.is_patient_upload(doc) and records.can_discard(doc), doc.id)
+            self.assertEqual(listed[doc.pk], records.is_patient_upload(doc) and records.can_discard(doc), doc.pk)
 
 
 # ── the By-date view and the uploaded_on filter ───────────────────────────────────────────────────────────────
@@ -339,19 +339,19 @@ class UploadedOnTests(TestCase):
 
     def listing(self, **params):
         response = call(PortalDocumentListCreateView, data=params)
-        return response, [r["id"] for r in response.data.get("results", [])]
+        return response, [r["medical_document_id"] for r in response.data.get("results", [])]
 
     def test_only_that_days_files_come_back(self, _r):
         a = uploaded(at(2026, 5, 12))
         uploaded(at(2026, 5, 13))
         _resp, ids = self.listing(uploaded_on="2026-05-12")
-        self.assertEqual(ids, [a.id])
+        self.assertEqual(ids, [a.pk])
 
     def test_it_combines_with_the_type_filter(self, _r):
         a = uploaded(at(2026, 5, 12), "lab_report")
         uploaded(at(2026, 5, 12), "prescription")
         _resp, ids = self.listing(uploaded_on="2026-05-12", doc_type="lab_report")
-        self.assertEqual(ids, [a.id])
+        self.assertEqual(ids, [a.pk])
 
     def test_a_bad_date_is_refused(self, _r):
         response, _ids = self.listing(uploaded_on="12-05-2026")

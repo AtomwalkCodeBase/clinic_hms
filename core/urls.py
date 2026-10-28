@@ -27,16 +27,12 @@ urlpatterns = [
     path("api/v1/auth/",         include("core.auth.urls")),
     path("api/v1/platform/",     include("apps.hospital_master.platform_urls")),
     path("api/v1/opd/",          include("apps.opd.urls")),
-    path("api/v1/ipd/",          include("apps.ipd.urls")),  # Phase 1 — admission intake only
-    path("api/v1/patients/",     include("apps.opd.patient_urls")),
+    path("api/v1/patients/",     include("apps.hospital_patients.urls")),
     # portal/, emergency/, consult-pad/ and records-share/ (several of them deliberately public) are set up in apps/patients/urls.py;
     path("api/v1/",              include("apps.patients.urls")),
     path("api/v1/",              include("apps.documents.urls")),
     # apps.clinical's Encounter/Vital/Diagnosis/FollowUp/ClinicalDocument were
-    path("api/v1/prescriptions/",include("apps.pharmacy.drug_urls")),
-    path("api/v1/lab/",          include("apps.lab.urls")),
     path("api/v1/billing/",      include("apps.billing.urls")),
-    path("api/v1/pharmacy/",     include("apps.pharmacy.urls")),
     path("api/v1/org/",          include("apps.hospital_setup.urls")),
     # apps.tasks (Task/TaskAssignment) was retired (v7 table-count
     path("api/v1/compliance/",   include("apps.hospital_setup.compliance_urls")),

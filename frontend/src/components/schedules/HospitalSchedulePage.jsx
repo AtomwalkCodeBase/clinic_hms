@@ -13,20 +13,20 @@ function ScheduleEditor({ kind, schedule, isActive, onSaved, canActivate, onActi
   const [name, setName] = useState(schedule.name);
   const [description, setDescription] = useState(schedule.description || "");
   const [saving, setSaving] = useState(false);
-  const list = useRules(kind, schedule.rules, schedule.id);
+  const list = useRules(kind, schedule.rules, schedule.immunization_schedule_id);
 
   useEffect(() => {
     setName(schedule.name);
     setDescription(schedule.description || "");
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-seed only when a different schedule is opened
-  }, [schedule.id]);
+  }, [schedule.immunization_schedule_id]);
 
   async function handleSave() {
     const problem = list.error();
     if (problem) { toastError(problem); return; }
     setSaving(true);
     try {
-      const { data: res } = await apiClient.patch(kind.endpoints.schedule(schedule.id), { name, description, rules: list.payload() });
+      const { data: res } = await apiClient.patch(kind.endpoints.schedule(schedule.immunization_schedule_id), { name, description, rules: list.payload() });
       toastSuccess(res.message || "Schedule updated.");
       onSaved(res.data);
     } catch (err) {
@@ -41,7 +41,7 @@ function ScheduleEditor({ kind, schedule, isActive, onSaved, canActivate, onActi
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
         {isActive ? <Badge tone="primary">ACTIVE FOR THIS HOSPITAL</Badge> : <Badge tone="muted">NOT ACTIVE</Badge>}
         {!isActive && canActivate && (
-          <button type="button" onClick={() => onActivate(schedule.id)} disabled={activating}
+          <button type="button" onClick={() => onActivate(schedule.immunization_schedule_id)} disabled={activating}
             style={{ padding: "5px 12px", borderRadius: 8, border: "1.5px solid var(--color-primary)", background: "none", color: "var(--color-primary)", cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>
             {activating ? "Activating…" : "Activate this schedule"}
           </button>
@@ -109,7 +109,7 @@ export default function HospitalSchedulePage({ kind }) {
       setOwnSchedules(own);
       setTemplates(res.data?.templates || []);
       setActiveScheduleId(activeId);
-      setSelectedId(own.length > 0 ? (own.find(s => s.id === activeId)?.id || own[0].id) : null);
+      setSelectedId(own.length > 0 ? (own.find(s => s.immunization_schedule_id === activeId)?.immunization_schedule_id || own[0].immunization_schedule_id) : null);
     } catch (err) {
       toastApiError(err, kind.text.loadSchedules);
       setOwnSchedules([]); setTemplates([]);
@@ -137,12 +137,12 @@ export default function HospitalSchedulePage({ kind }) {
   useEffect(() => { fetchDetail(selectedId); }, [selectedId, fetchDetail]);
 
   async function handleClone(template) {
-    setCloningId(template.id);
+    setCloningId(template.immunization_schedule_id);
     try {
-      const { data: res } = await api.post(kind.endpoints.schedules, { template_id: template.id });
+      const { data: res } = await api.post(kind.endpoints.schedules, { template_id: template.immunization_schedule_id });
       toastSuccess(res.message || `Cloned '${template.name}'.`);
       await fetchList();
-      setSelectedId(res.data?.id || null);
+      setSelectedId(res.data?.immunization_schedule_id || null);
     } catch (err) {
       toastApiError(err, "Failed to clone template.");
     } finally {
@@ -192,7 +192,7 @@ export default function HospitalSchedulePage({ kind }) {
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
                 {templates.map(t => (
-                  <TemplateCard key={t.id} kind={kind} template={t} onClone={handleClone} cloning={cloningId === t.id} />
+                  <TemplateCard key={t.immunization_schedule_id} kind={kind} template={t} onClone={handleClone} cloning={cloningId === t.immunization_schedule_id} />
                 ))}
               </div>
             )}
@@ -202,14 +202,14 @@ export default function HospitalSchedulePage({ kind }) {
             {ownSchedules.length > 1 && (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {ownSchedules.map(s => (
-                  <div key={s.id} className="card"
-                    onClick={() => setSelectedId(s.id)}
+                  <div key={s.immunization_schedule_id} className="card"
+                    onClick={() => setSelectedId(s.immunization_schedule_id)}
                     style={{
                       padding: "12px 14px", cursor: "pointer",
-                      border: s.id === selectedId ? "1.5px solid var(--color-primary)" : "1.5px solid var(--color-border)",
+                      border: s.immunization_schedule_id === selectedId ? "1.5px solid var(--color-primary)" : "1.5px solid var(--color-border)",
                     }}>
                     <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 4 }}>{s.name}</div>
-                    {s.id === activeScheduleId ? <Badge tone="primary">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}
+                    {s.immunization_schedule_id === activeScheduleId ? <Badge tone="primary">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}
                   </div>
                 ))}
               </div>
@@ -219,11 +219,11 @@ export default function HospitalSchedulePage({ kind }) {
                 <ScheduleEditor
                   kind={kind}
                   schedule={selectedSchedule}
-                  isActive={selectedSchedule.id === activeScheduleId}
+                  isActive={selectedSchedule.immunization_schedule_id === activeScheduleId}
                   onSaved={handleSaved}
                   canActivate={ownSchedules.length > 1}
                   onActivate={handleActivate}
-                  activating={activatingId === selectedSchedule.id}
+                  activating={activatingId === selectedSchedule.immunization_schedule_id}
                 />
               )}
             </div>

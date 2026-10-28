@@ -14,7 +14,7 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.documents import tasks, views_timeline as views
 from apps.documents.models import (
-    Admission, BirthHistory, ClinicalEvent, DocumentExtraction, GrowthMeasurement, HealthEpisode, ImmunizationRecord, LabResult, MedicalDocument,
+    Admission, BirthHistory, ClinicalEvent, DocumentExtraction, GrowthMeasurement, ImmunizationRecord, LabResult, MedicalDocument,
 )
 from apps.patients.models import RecurrenceFlag
 from apps.patients.models import Patient, PatientRelationship
@@ -142,9 +142,9 @@ class RulesTests(SimpleTestCase):
     def test_a_combined_vaccine_fills_several_rows_and_an_unreadable_entry_is_listed_not_guessed(self):
         self.assertEqual(immunization.resolve_vaccines("OPV dose 1 and BCG"), ["BCG", "OPV"])
         dob = date(2026, 1, 1)
-        status = immunization.immunization_status(dob, [{"vaccine_text": "BCG", "given_on": dob}, {"vaccine_text": "??", "given_on": dob, "id": 9}], date(2026, 6, 1))
+        status = immunization.immunization_status(dob, [{"vaccine_text": "BCG", "given_on": dob}, {"vaccine_text": "??", "given_on": dob, "immunization_record_id": 9}], date(2026, 6, 1))
         self.assertEqual({r["code"]: r["status"] for r in status["rows"]}, {"BCG": "GIVEN", "OPV1": "OVERDUE"})
-        self.assertEqual([u["id"] for u in status["unresolved"]], [9])
+        self.assertEqual([u["immunization_record_id"] for u in status["unresolved"]], [9])
 
 
 FACTS = dict(
@@ -286,11 +286,9 @@ class RebuildAndPayloadTests(TestCase):
     def test_the_rebuild_makes_episodes_links_the_events_and_flags_the_recurrence(self):
         result = lib_processing.rebuild_patient(self.kid.pk)
         self.assertEqual((result["episodes"], result["recurrent"]), (4, ["EAR_INFECTION"]))
-        self.assertEqual(HealthEpisode.objects.filter(patient=self.kid, category="ACUTE").count(), 3)
-        self.assertTrue(all(e.episode_id for e in ClinicalEvent.objects.filter(patient=self.kid)))
         self.assertEqual(RecurrenceFlag.objects.get(patient=self.kid).clinical_hint, "Consider an ENT review")
         lib_processing.rebuild_patient(self.kid.pk)                                                      # again: the same, not doubled
-        self.assertEqual((HealthEpisode.objects.filter(patient=self.kid).count(), RecurrenceFlag.objects.filter(patient=self.kid).count()), (4, 1))
+        self.assertEqual((lib_processing.rebuild_patient(self.kid.pk)["episodes"], RecurrenceFlag.objects.filter(patient=self.kid).count()), (4, 1))
 
     def test_a_rejected_event_leaves_the_episodes(self):
         ClinicalEvent.objects.filter(patient=self.kid, icd10="H66.9", event_date=date(2026, 5, 1)).update(verification_status="rejected")
@@ -306,9 +304,9 @@ class RebuildAndPayloadTests(TestCase):
         self.assertIn("chronic:ASTHMA", lanes(doctor))
         ears = next(lane for lane in parent["lanes"] if lane["id"] == "acute:EAR_INFECTION")
         self.assertEqual((ears["is_recurrent"], ears["category_label"], len(ears["episodes"])), (True, "Happens often", 3))
-        self.assertEqual(ears["recurrence"]["id"], RecurrenceFlag.objects.get(patient=self.kid).pk)
+        self.assertEqual(ears["recurrence"]["recurrence_flag_id"], RecurrenceFlag.objects.get(patient=self.kid).pk)
         ears_doctor = next(lane for lane in doctor["lanes"] if lane["id"] == "acute:EAR_INFECTION")      # the event ids are for doctors only
-        shown = [event["id"] for episode in ears_doctor["episodes"] for event in episode["events"]]
+        shown = [event["clinical_event_id"] for episode in ears_doctor["episodes"] for event in episode["events"]]
         self.assertEqual(sorted(shown), sorted(ClinicalEvent.objects.filter(patient=self.kid, icd10="H66.9").values_list("pk", flat=True)))
         self.assertEqual(parent["summary"]["recurrent_conditions"], 1)
 
@@ -316,7 +314,7 @@ class RebuildAndPayloadTests(TestCase):
         from core.tests.testing import ensure_hospital
         mine = ensure_hospital(1)
         ClinicalEvent.objects.filter(patient=self.kid, icd10="H66.9", event_date=date(2026, 1, 1)).update(source_hospital=mine)
-        payload = lib_processing.build_timeline_payload(self.kid, self.kid.date_of_birth, date.today(), "doctor", hospital_id=mine.id)
+        payload = lib_processing.build_timeline_payload(self.kid, self.kid.date_of_birth, date.today(), "doctor", hospital_id=mine.pk)
         ears = next(lane for lane in payload["lanes"] if lane["id"] == "acute:EAR_INFECTION")
         self.assertEqual(len(ears["episodes"]), 1)
 
@@ -446,14 +444,6 @@ class ApiTests(TestCase):
         rebuild.assert_called_once_with(self.kid.pk)
 
 
-
-class CleanWardTests(SimpleTestCase):
-    def test_a_phrase_from_the_model_becomes_one_short_code(self):
-        for raw, code in (("Paediatric ward, Bed 22", "WARD"), ("PICU (22/01 - 24/01), then ward", "PICU"), ("neonatal ICU", "ICU"), ("NICU Cot 6", "NICU"), (None, "WARD"), ("", "WARD")):
-            self.assertEqual(lib_processing.clean_ward(raw), code, raw)
-            self.assertLessEqual(len(lib_processing.clean_ward(raw)), 10)
-
-
 @with_config
 class ReadOnlyAfterConfirmationTests(TestCase):
     """A patient's upload is read for the timeline only once the patient has confirmed it."""
@@ -480,3 +470,48 @@ class ReadOnlyAfterConfirmationTests(TestCase):
             lib_documents.correct_document(self.doc, "prescription")
         queue.assert_called_once()
         self.assertEqual(queue.call_args.kwargs["args"], [self.doc.pk])
+
+
+class RowLabelTests(SimpleTestCase):
+    def test_a_long_diagnosis_gets_a_short_row_label(self):
+        from apps.documents.services.timeline import short_label
+        cfg = load_config()
+        cases = {
+            "Faltering growth (failure to thrive) - R62.51 with inadequate breast milk intake": "Faltering growth",
+            "Small for gestational age, late preterm (P05.1) with neonatal hypoglycaemia": "Small for gestational age",
+            "Severe acute malnutrition - marasmus": "Severe acute malnutrition",
+            "Severe acute malnutrition with pneumonia": "Severe acute malnutrition",
+            "Nutritional rickets (vitamin D deficiency)": "Nutritional rickets",
+            "Iron deficiency anaemia": "Iron deficiency anaemia",
+            "iron deficiency anaemia": "Iron deficiency anaemia",
+            "Moderate protein-energy malnutrition (recovering after severe acute malnutrition)": "Moderate protein-energy…",
+        }
+        for text, expected in cases.items():
+            self.assertEqual(short_label(text, cfg), expected, text)
+
+    def test_the_label_is_never_empty(self):
+        from apps.documents.services.timeline import short_label
+        self.assertEqual(short_label("(unspecified)", load_config()), "(unspecified)")
+        self.assertEqual(short_label("", load_config()), "")
+
+
+@override_settings(RECORDS_REVIEW_FROM="2000-01-01T00:00:00+00:00")
+class UnconfirmedUploadsStayOffTheTimelineTests(TestCase):
+    """A fact read from an upload goes into the patient's health journey only once the patient has confirmed that upload's type."""
+
+    def test_facts_from_a_waiting_upload_are_held_back_until_it_is_confirmed(self):
+        from apps.documents.lib_documents import confirmed_q
+        from apps.documents.tests.tests import identity, make_doc
+        patient = identity("AW-CONF")
+        waiting = make_doc("AW-CONF", status="completed", document_type="lab_report", by="rules")
+        confirmed = make_doc("AW-CONF", status="completed", document_type="lab_report", by="human")
+
+        def growth(document=None):
+            return GrowthMeasurement.objects.create(patient=patient, document=document, measured_on=date(2026, 1, 1), weight_kg=Decimal("5"))
+
+        by_hand, from_waiting, from_confirmed = growth(), growth(waiting), growth(confirmed)
+        shown = lambda: set(GrowthMeasurement.objects.filter(confirmed_q()).values_list("pk", flat=True))
+        self.assertEqual(shown(), {by_hand.pk, from_confirmed.pk})
+        from apps.documents.models import DocumentClassification
+        DocumentClassification.objects.filter(document=waiting).update(status="human_classified")
+        self.assertEqual(shown(), {by_hand.pk, from_waiting.pk, from_confirmed.pk})

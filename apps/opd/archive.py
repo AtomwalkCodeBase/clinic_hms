@@ -36,7 +36,7 @@ def store_prescription_document(rx, db, hospital_id):
 
     existing = MedicalDocument.objects.using("default").filter(**source).first()
     if existing is not None:
-        _write_drug_items(existing, items)
+        _log_document(db, patient.pk, "prescription", rx.created_at, existing)
         return existing
 
     pdf_bytes = generate_prescription_pdf(
@@ -44,7 +44,7 @@ def store_prescription_document(rx, db, hospital_id):
         branch=branch, hospital_name=hospital_name, visit_date=visit_date,
     )
     pdf_uri = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
-    title = f"Prescription {rx.rx_number or str(rx.id)[:8]}" + (f" — {visit_date}" if visit_date else "")
+    title = f"Prescription {rx.rx_number or str(rx.pk)[:8]}" + (f" — {visit_date}" if visit_date else "")
     file_path = blob_storage.upload_data_uri(
         pdf_uri, prefix=f"patients/{patient.awpid}/prescriptions", mime_type="application/pdf",
         category="prescription",
@@ -54,18 +54,14 @@ def store_prescription_document(rx, db, hospital_id):
         source_hospital_id=hospital_id, **source, public_document_id=rx.rx_number or "",
         document_date=visit_date,
     )
-    _write_drug_items(doc, items)
+    _log_document(db, patient.pk, "prescription", rx.created_at, doc)
     return doc
 
 
-def _write_drug_items(doc, items):
-    """The drugs on the prescription, kept with its document so other hospitals can see what was prescribed."""
-    from apps.documents.models import SharedPrescriptionItem
-    rows = SharedPrescriptionItem.objects.using("default")
-    rows.filter(document=doc).delete()
-    rows.bulk_create(SharedPrescriptionItem(
-        document=doc, drug_name=i.drug_name, dose=i.dosage, frequency=i.frequency, route=i.route, duration_days=i.duration_days)
-        for i in items)
+def _log_document(db, patient_id, event_type, at, shared):
+    """The hospital's own record of a document it issued: a document of the event written at `at`, pointing at the patient's copy."""
+    from apps.hospital_patients.hospital_log import event_for, record_document
+    record_document(db, event_for(db, patient_id, event_type, at), shared.file_name.name)
 
 
 def build_consultation_summary(enc, db, hospital_id):
@@ -77,7 +73,7 @@ def build_consultation_summary(enc, db, hospital_id):
     appointment = (Appointment.objects.using(db).select_related("patient", "doctor", "branch_department__branch").filter(pk=enc.appointment_id).first())
     patient = appointment.patient
     doctor_name = appointment.doctor.get_full_name()
-    rx = Prescription.objects.using(db).filter(encounter_id=enc.id).first()
+    rx = Prescription.objects.using(db).filter(encounter_id=enc.pk).first()
     rx_items = list(rx.rx_items.using(db).all()) if rx else []
     branch = appointment.branch_department.branch if appointment else None
     hospital = Hospital.objects.using("default").filter(pk=hospital_id).first()
@@ -95,9 +91,10 @@ def store_consultation_note_document(enc, db, hospital_id):
 
     if not any((getattr(enc, f) or "").strip() for f in ("subjective", "objective", "assessment", "plan")) and not enc.diagnoses:
         return None
-    ref = {"source_type": MedicalDocument.Source.ENCOUNTER, "source_id": source_uuid(f"{enc.id}:consultation-note")}
+    ref = {"source_type": MedicalDocument.Source.ENCOUNTER, "source_id": source_uuid(f"{enc.pk}:consultation-note")}
     existing = MedicalDocument.objects.using("default").filter(**ref).first()
     if existing is not None:
+        _log_document(db, enc.appointment.patient_id, "consultation", enc.signed_at, existing)
         return existing
     pdf_bytes, patient, visit_date = build_consultation_summary(enc, db, hospital_id)
     if not patient or not getattr(patient, "awpid", ""):
@@ -106,6 +103,8 @@ def store_consultation_note_document(enc, db, hospital_id):
     title = "Consultation Note" + (f" — {visit_date}" if visit_date else "")
     file_path = blob_storage.upload_data_uri(
         pdf_uri, prefix=f"patients/{patient.awpid}/consult-notes", mime_type="application/pdf", category="consult-note")
-    return create_issued_document(
+    doc = create_issued_document(
         awpid=patient.awpid, file_path=file_path, name=f"{title}.pdf", doc_type="consultation_note", source_hospital_id=hospital_id,
         source_type=ref["source_type"], source_id=ref["source_id"], document_date=visit_date, read_facts=False)
+    _log_document(db, patient.pk, "consultation", enc.signed_at, doc)
+    return doc

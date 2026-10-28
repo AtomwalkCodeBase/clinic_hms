@@ -21,14 +21,6 @@ export default function ImmunizationCard({ api, patientId, canAdd = true, onOpen
   const paging = useClientPaging(groups, 6);
 
   if (!data) return <section className="dhj-card"><div className="dhj-skeleton" style={{ height: 240 }} /></section>;
-  if (data.sharing_limited) {
-    return (
-      <section className="dhj-card" role="note">
-        <h3 className="dhj-h3">No cross-hospital history on file</h3>
-        <p className="dhj-muted">This patient hasn't consented to sharing records from other hospitals with this one, so vaccines given elsewhere are not shown, and nothing is marked overdue. Vaccines given at this hospital will show up normally.</p>
-      </section>
-    );
-  }
   const s = data.summary;
 
   const submit = async (e) => {

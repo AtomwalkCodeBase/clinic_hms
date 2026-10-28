@@ -14,8 +14,6 @@ from apps.hospital_master.platform_views import (
 from apps.documents.views import (
     VaccinationTemplateListCreateView,
     VaccinationTemplateDetailView,
-    MilestoneTemplateListCreateView,
-    MilestoneTemplateDetailView,
 )
 from apps.hospital_master.classification_rule_views import DocumentReportView, DocumentCorrectView, ReclassifyView
 
@@ -41,6 +39,4 @@ urlpatterns = [
     path("vaccination-templates/<int:pk>/", VaccinationTemplateDetailView.as_view(), name="platform-vaccination-template-detail"),
 
     # System-level developmental-milestone schedule templates — same
-    path("milestone-templates/", MilestoneTemplateListCreateView.as_view(), name="platform-milestone-template-list-create"),
-    path("milestone-templates/<int:pk>/", MilestoneTemplateDetailView.as_view(), name="platform-milestone-template-detail"),
 ]

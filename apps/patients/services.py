@@ -14,7 +14,7 @@ from django.conf import settings
 
 def resolve_target_awpid_and_dob(request):
     """Shared helper — resolves which patient (self or a linked family member)"""
-    acct = accounts().get(pk=request.user.id)
+    acct = accounts().get(pk=request.user.pk)
     target_awpid = (request.query_params.get("patient_awpid") or request.data.get("patient_awpid") or "").strip() or acct.awpid
 
     if target_awpid == acct.awpid:
@@ -44,7 +44,7 @@ def sync_patient_booking(appointment, db_name):
             return
 
         # Already synced? (e.g. this Appointment was actually created via the
-        if PatientBooking.objects.using("default").filter(appointment_id=appointment.id).exists():
+        if PatientBooking.objects.using("default").filter(appointment_id=appointment.pk).exists():
             return
 
         acct = accounts().filter(awpid=patient_awpid).first()
@@ -66,7 +66,7 @@ def sync_patient_booking(appointment, db_name):
         PatientBooking.objects.using("default").create(
             booked_by=acct,
             hospital=hospital,
-            appointment_id=appointment.id,
+            appointment_id=appointment.pk,
             doctor_name=appointment.doctor.get_full_name(),
             scheduled_date=appointment.scheduled_date,
             chief_complaint=appointment.chief_complaint or "",
@@ -74,8 +74,8 @@ def sync_patient_booking(appointment, db_name):
             patient=Patient.objects.using("default").filter(awpid=patient_awpid).first(),
         )
     except Exception:
-        # Same graceful-degradation pattern as core.utils.audit.log_action — a
-        logger.warning("sync_patient_booking failed for appointment_id=%s db=%s", appointment.id, db_name, exc_info=True)
+        # Same graceful-degradation pattern as apps.hospital_setup.compliance_services.log_action — a
+        logger.warning("sync_patient_booking failed for appointment_id=%s db=%s", appointment.pk, db_name, exc_info=True)
 
 
 logger = logging.getLogger(__name__)
@@ -862,7 +862,7 @@ from apps.patients.models import RecordsPrivacy
 
 
 def mobile_of(raw):
-    from core.utils.hashing import stored_mobile
+    from core.validation import stored_mobile
     return stored_mobile(raw)
 
 
@@ -938,29 +938,21 @@ def seconds_left(grant):
 def load_patient_details(patients):
     """HospitalPatient.get_patient_details() for a whole list in a few queries: the shared records, the family links and the hospital's side
     tables are each read once however long the list is, so showing a page of patients does not ask once per row. Returns the same list."""
-    from django.forms.models import model_to_dict
-    from apps.opd.models import PatientEmergencyIntake, PatientPayer
     from apps.patients.models import PatientRelationship
     patients = [p for p in patients if p is not None and "_patient_details" not in p.__dict__]
     if not patients:
         return patients
-    db, awpids, ids = patients[0]._state.db or "default", [p.awpid for p in patients], [p.pk for p in patients]
+    awpids = [p.awpid for p in patients]
     people = {i.awpid: i for i in Patient.objects.using("default").filter(awpid__in=awpids)}
     links = {l.dependent.awpid: l for l in PatientRelationship.objects.using("default").select_related("dependent", "guardian")
-             .filter(dependent__awpid__in=awpids).order_by("-id")}                      # the oldest link is read last, so it is the one kept
-    tables = [(m, {r.patient_id: r for r in m.objects.using(db).filter(patient_id__in=ids)})
-              for m in (PatientPayer, PatientEmergencyIntake)]
+             .filter(dependent__awpid__in=awpids).order_by("-pk")}                      # the oldest link is read last, so it is the one kept
     shared = ("full_name", "gender", "blood_group", "email", "mobile", "preferred_language", "guardian_mobile",
               "emergency_contact_name", "emergency_contact_phone", "emergency_contact_relation",
               "alternate_mobile", "address_line1", "city", "state", "pincode", "marital_status", "nationality", "occupation")
     for p in patients:
         person, link = people.get(p.awpid), links.get(p.awpid)
         d = {}
-        for model, rows in tables:                      # a missing row reads as the model's own defaults (self pay, Indian...)
-            d.update(model_to_dict(rows.get(p.pk) or model(), exclude=("id", "patient")))
-        if p.pk not in tables[1][1]:
-            d["identity_status"] = PatientEmergencyIntake.IDENTITY_CONFIRMED
-        for f in shared:                                # the shared record first; the number noted at emergency intake only as a fallback
+        for f in shared:                                
             d[f] = getattr(person, f, None) or d.get(f, "")
         d.update(
             record=person, date_of_birth=getattr(person, "date_of_birth", None), is_dependent=bool(getattr(person, "is_dependent", False)),

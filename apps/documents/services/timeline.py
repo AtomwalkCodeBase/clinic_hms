@@ -2,12 +2,27 @@
 Assembles the timeline API payload from already-computed pieces.
 Pure function - views.py fetches rows, converts them, and calls build_timeline().
 """
+import re
 from datetime import date
 from typing import List, Optional
 
 from .clinical_rules import age_in_days, format_age
 from .config import load_config
 from .episodes import Episode
+
+
+def short_label(text, cfg):
+    """A row label for a condition: the diagnosis cut at the first configured separator (so "Faltering growth (failure to thrive) - R62.51 with
+    inadequate breast milk intake" reads "Faltering growth"), stray ICD codes dropped, and capped at the configured length."""
+    rules = cfg.get("timeline_labels", {})
+    s = (text or "").strip()
+    cut = min((i for i in (s.lower().find(w) for w in rules.get("cut_at", [])) if i > 0), default=len(s))
+    short = re.sub(r"\b[A-Z]\d{2}(?:\.\d+)?\b", "", s[:cut]).strip(" -–—,;:")
+    limit = rules.get("max_length", 34)
+    if len(short) > limit:
+        short = short[:max(short.rfind(" ", 0, limit), limit // 2)].rstrip(" -–—,;:") + "…"
+    short = short or s
+    return short[:1].upper() + short[1:]
 
 
 def _overlaps(start: date, end: Optional[date], p_from: date, p_to: date) -> bool:
@@ -94,12 +109,21 @@ def build_timeline(*, dob: date, sex: str, p_from: date, p_to: date,
                       "text": e.get("condition_text"), "verified": e.get("is_verified", False),
                       **_age_fields(dob, e["date"])}
                 if doctor:
-                    ev.update(id=eid, icd10=e.get("icd10") or None, evidence=e.get("evidence") or None,
+                    ev.update(clinical_event_id=eid, icd10=e.get("icd10") or None, evidence=e.get("evidence") or None,
                               is_provisional=bool(e.get("is_provisional")))
                 evs.append(ev)
         return evs
 
-    chronic_lanes, acute_by_group = [], {}
+    def codes_of(ep):
+        return sorted({events_by_id[i].get("icd10") for i in ep.event_ids if i in events_by_id and events_by_id[i].get("icd10")})
+
+    def hover(episodes):
+        """The full names and codes behind a (shortened, possibly merged) row label."""
+        names = list(dict.fromkeys(e["_full"] for e in episodes))
+        codes = sorted({c for e in episodes for c in e["_codes"]})
+        return {"full_label": " / ".join(names), "codes": codes}
+
+    chronic_by_label, acute_by_label = {}, {}
     for ep in episodes:
         if ep.is_provisional and audience == "guardian":
             continue
@@ -109,24 +133,32 @@ def build_timeline(*, dob: date, sex: str, p_from: date, p_to: date,
                 "onset_age": format_age(age_in_days(dob, ep.start)),
                 "peak_severity_label": lbl(ep.peak_severity)}
         if doctor:
-            item["icd10_codes"] = sorted({events_by_id[i].get("icd10") for i in ep.event_ids
-                                          if i in events_by_id and events_by_id[i].get("icd10")})
-        if ep.category == "CHRONIC":
-            chronic_lanes.append({"id": f"chronic:{ep.group}", "type": "chronic", "label": ep.label,
-                                  "category_label": lbl("CHRONIC"), "episode": item})
-        else:
-            acute_by_group.setdefault(ep.group, {"label": ep.label, "episodes": []})["episodes"].append(item)
+            item["icd10_codes"] = codes_of(ep)
+        short = short_label(ep.label, cfg)
+        lane = (chronic_by_label if ep.category == "CHRONIC" else acute_by_label).setdefault(
+            short.lower(), {"label": short, "group": ep.group, "episodes": [], "recurrence": recurrent_groups.get(ep.group, {})})
+        lane["episodes"].append({**item, "_full": ep.label, "_codes": codes_of(ep)})
+        if recurrent_groups.get(ep.group, {}).get("is_recurrent"):
+            lane["recurrence"] = recurrent_groups[ep.group]
 
+    def clean(episodes):
+        return [{k: v for k, v in e.items() if not k.startswith("_")} for e in episodes]
+
+    chronic_lanes = []
+    for key, data in chronic_by_label.items():
+        episodes_here = sorted(data["episodes"], key=lambda e: e["start"])
+        chronic_lanes.append({"id": f"chronic:{data['group']}", "type": "chronic", "label": data["label"], **hover(episodes_here),
+                              "category_label": lbl("CHRONIC"), "episode": clean(episodes_here)[0], "episodes": clean(episodes_here)})
     lanes.extend(chronic_lanes)
     acute_lanes = []
-    for group, data in acute_by_group.items():
-        rec = recurrent_groups.get(group, {})
+    for key, data in acute_by_label.items():
+        rec = data["recurrence"]
         acute_lanes.append({
-            "id": f"acute:{group}", "type": "acute", "label": data["label"],
+            "id": f"acute:{data['group']}", "type": "acute", "label": data["label"], **hover(data["episodes"]),
             "is_recurrent": rec.get("is_recurrent", False),
             "recurrence": rec or None,
             "category_label": lbl("RECURRENT") if rec.get("is_recurrent") else lbl("ACUTE"),
-            "episodes": data["episodes"],
+            "episodes": clean(data["episodes"]),
         })
     acute_lanes.sort(key=lambda l: (not l["is_recurrent"], -len(l["episodes"]), l["label"]))
     lanes.extend(acute_lanes)

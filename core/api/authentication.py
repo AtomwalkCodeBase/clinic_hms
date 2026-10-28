@@ -15,8 +15,7 @@ class MockUser:
     is_authenticated = True
 
     def __init__(self, payload: dict):
-        self.id          = payload.get("user_id")
-        self.pk          = self.id  # DRF's throttle classes read .pk, not .id
+        self.pk          = payload.get("user_id")
         self.email       = payload.get("email", "")
         # Login tokens carry the display name; several views record it as "who did this"
         self.full_name   = payload.get("full_name", "")
@@ -64,8 +63,8 @@ class JWTHospitalAuthentication(BaseAuthentication):
         # Revocation check — makes logout actually invalidate a still-unexpired
         jti = payload.get("jti")
         if jti:
-            from apps.patients.models import BlacklistedToken
-            if BlacklistedToken.objects.using("default").filter(jti=jti).exists():
+            from core.auth.otp import is_revoked
+            if is_revoked(jti):
                 raise AuthenticationFailed("Token has been revoked. Please log in again.")
 
         user = MockUser(payload)
@@ -91,7 +90,7 @@ class JWTHospitalAuthentication(BaseAuthentication):
             # ── Live is_active check ──────────────────────────────────────
             from apps.hospital_setup.models import StaffUser
             still_active = StaffUser.objects.using(user.db_name).filter(
-                pk=user.id
+                pk=user.pk
             ).values_list("is_active", flat=True).first()
             if not still_active:
                 raise PermissionDenied(
@@ -102,7 +101,7 @@ class JWTHospitalAuthentication(BaseAuthentication):
         if user.role == "patient":
             from apps.patients.services import accounts
             current_awpid = accounts().filter(
-                pk=user.id, is_active=True
+                pk=user.pk, is_active=True
             ).values_list("awpid", flat=True).first()
             if not current_awpid or current_awpid != user.awpid:
                 raise AuthenticationFailed(

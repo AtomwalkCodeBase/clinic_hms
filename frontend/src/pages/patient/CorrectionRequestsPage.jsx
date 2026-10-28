@@ -149,7 +149,7 @@ export default function CorrectionRequestsPage() {
           ) : (
             <div style={{ display: "grid" }}>
               {requests.map(r => (
-                <div key={`${r.hospital}-${r.id}`} style={{ padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
+                <div key={`${r.hospital}-${r.record_amendment_id}`} style={{ padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
                     <div>
                       <div style={{ fontSize: 13, fontWeight: 700 }}>{r.field_name}</div>

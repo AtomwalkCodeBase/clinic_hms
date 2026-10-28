@@ -6,6 +6,9 @@ from pathlib import Path
 from datetime import timedelta
 from decouple import config
 
+HOSPITAL_DB_PREFIX = config("HOSPITAL_DB_PREFIX", default="cp_")
+S3_KEY_PREFIX = config("S3_KEY_PREFIX", default="media-prod")
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 ENVIRONMENT = config("ENVIRONMENT", default="development")
@@ -51,17 +54,15 @@ LOCAL_APPS = [
     "apps.documents",
     "apps.hospital_master",
     "apps.hospital_setup",
-    "apps.ipd",
+    "apps.hospital_patients",
     "apps.opd",
     "apps.billing",
-    "apps.lab",
-    "apps.pharmacy",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
-    "core.utils.logging_context.RequestIdMiddleware",
+    "core.api.middleware.RequestIdMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -169,7 +170,7 @@ if LOCAL_OR_AWS_S3_MEDIA == "S3":
     AWS_STORAGE_BUCKET_NAME = config("AWS_S3_BUCKET", default="")
     AWS_S3_FILE_OVERWRITE = False
     AWS_DEFAULT_ACL = None
-    DEFAULT_FILE_STORAGE = 'core.storage_backend.mediaStorage'
+    DEFAULT_FILE_STORAGE = 'core.storage.mediaStorage'
     AWS_S3_REGION_NAME = config("AWS_S3_REGION", default="ap-south-1")
     AWS_S3_SIGNATURE_VERSION = "s3v4"
     AWS_S3_URL_EXPIRY = config("AWS_S3_URL_EXPIRY", default=3600, cast=int)
@@ -295,6 +296,8 @@ CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
 RECORDS_REVIEW_FROM = config("RECORDS_REVIEW_FROM", default="")
 
+REDIS_URL = config("REDIS_URL", default="redis://localhost:6379/3")      # one-time codes and signed-out tokens (core/auth/otp.py)
+
 CACHES = {
     "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
 }
@@ -330,7 +333,7 @@ if PRODUCTION:
     LOGGING = {
         "version": 1,
         "disable_existing_loggers": False,
-        "filters": {"request_context": {"()": "core.utils.logging_context.RequestContextFilter"}},
+        "filters": {"request_context": {"()": "core.api.middleware.RequestContextFilter"}},
         "formatters": {
             "json": {
                 "()": "pythonjsonlogger.jsonlogger.JsonFormatter",

@@ -320,7 +320,7 @@ function DocRow({ d, token, onChanged }) {
   async function onView() {
     setBusy("view");
     try {
-      const r = unwrap(await shareGet(token, API_ENDPOINTS.RECORDS_SHARE.DOC_VIEW(token, d.id)));
+      const r = unwrap(await shareGet(token, API_ENDPOINTS.RECORDS_SHARE.DOC_VIEW(token, d.medical_document_id)));
       if (r.pages) {
         setViewer({ kind: "pdf", pages: r.pages, page: 0 });
       } else if (r.file_url) {
@@ -339,7 +339,7 @@ function DocRow({ d, token, onChanged }) {
   async function onDownload() {
     setBusy("dl");
     try {
-      const r = unwrap(await sharePost(token, API_ENDPOINTS.RECORDS_SHARE.DOWNLOADS(token), { doc_id: d.id }));
+      const r = unwrap(await sharePost(token, API_ENDPOINTS.RECORDS_SHARE.DOWNLOADS(token), { doc_id: d.medical_document_id }));
       if (r.state === "unlocked" && r.file_url) window.open(r.file_url, "_blank", "noopener");
       onChanged();
     } catch { /* keep calm */ }
@@ -835,7 +835,7 @@ function RecordsView({ token }) {
                     <div style={{ fontFamily: "monospace", fontSize: 10.5, fontWeight: 600, letterSpacing: ".12em", textTransform: "uppercase", color: ui.faint, margin: "12px 0 4px", display: "flex", gap: 8, alignItems: "baseline" }}>
                       {g.label}<span style={{ opacity: 0.7 }}>{g.list.length}</span>
                     </div>
-                    {g.list.map((d) => <DocRow key={`${g.key}:${d.id}`} d={d} token={token} onChanged={load} />)}
+                    {g.list.map((d) => <DocRow key={`${g.key}:${d.medical_document_id}`} d={d} token={token} onChanged={load} />)}
                   </div>
                 ))}
 

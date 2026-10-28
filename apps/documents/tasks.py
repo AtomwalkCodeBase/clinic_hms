@@ -84,6 +84,6 @@ def backfill_task(queue=records.BULK_QUEUE, limit=None):
     """Queues process_document_task for every document that has text and has not been processed, oldest first, so episodes"""
     done = DocumentExtraction.objects.filter(status__in=[DocumentExtraction.Status.DONE, DocumentExtraction.Status.SKIPPED])
     ids = (MedicalDocument.objects.filter(d_extraction__isnull=False).exclude(d_extraction__in=done)
-           .order_by("created_at").values_list("id", flat=True))
+           .order_by("created_at").values_list("pk", flat=True))
     for document_id in ids[:limit] if limit else ids:
         process_document_task.apply_async(args=[document_id, queue], queue=queue)

@@ -6,13 +6,13 @@ from django.db import transaction
 from django.utils import timezone
 
 from . import integration as ig
+from .lib_documents import confirmed_q
 from .models import (
     Admission,
     BirthHistory,
     ClinicalEvent,
     DocumentExtraction,
     GrowthMeasurement,
-    HealthEpisode,
     ImmunizationRecord,
     LabResult,
 )
@@ -179,23 +179,13 @@ def rebuild_patient(patient_id):
     if dob is None:
         return {"episodes": 0, "recurrent": [], "growth_points": 0}
 
-    rows = list(ClinicalEvent.objects.filter(patient=patient, event_type="DIAGNOSIS", event_date__isnull=False).exclude(verification_status="rejected"))
+    rows = list(ClinicalEvent.objects.filter(confirmed_q(), patient=patient, event_type="DIAGNOSIS", event_date__isnull=False).exclude(verification_status="rejected"))
     for row in rows:
         cls = classify_condition(row.icd10, cfg)
         row.condition_group, row.category = cls["group"], cls["category"]
     episodes = build_episodes([_event_in(r) for r in rows], cfg)
 
-    HealthEpisode.objects.filter(patient=patient).delete()
-    episode_of = {}
-    for ep in episodes:
-        saved = HealthEpisode.objects.create(
-            patient=patient, key=ep.key, condition_group=ep.group, label=ep.label[:255], category=ep.category, start_date=ep.start,
-            end_date=ep.end, last_seen=ep.last_seen, peak_severity=ep.peak_severity, event_count=ep.event_count,
-            is_provisional=ep.is_provisional, known_group=ep.known_group)
-        episode_of.update({event_id: saved for event_id in ep.event_ids})
-    for row in rows:
-        row.episode = episode_of.get(row.pk)
-    ClinicalEvent.objects.bulk_update(rows, ["episode", "condition_group", "category", "is_provisional"])
+    ClinicalEvent.objects.bulk_update(rows, ["condition_group", "category"])
 
     recurrent = {r["group"]: r for r in detect_recurrence(episodes, dob, date.today(), cfg) if r["is_recurrent"]}
     RecurrenceFlag.objects.filter(patient=patient).exclude(condition_group__in=recurrent).delete()
@@ -231,7 +221,7 @@ def build_timeline_payload(patient, p_from, p_to, audience="guardian", hospital_
     own = {"source_hospital_id": hospital_id} if hospital_id is not None else {}
     own_admission = {"document__source_hospital_id": hospital_id} if hospital_id is not None else {}
 
-    event_rows = list(ClinicalEvent.objects.filter(patient=patient, event_type="DIAGNOSIS", event_date__isnull=False, **own).exclude(verification_status="rejected"))
+    event_rows = list(ClinicalEvent.objects.filter(confirmed_q(), patient=patient, event_type="DIAGNOSIS", event_date__isnull=False, **own).exclude(verification_status="rejected"))
     episodes = build_episodes([_event_in(r) for r in event_rows], cfg)
     events_by_id = {r.pk: {"date": r.event_date, "severity": r.severity, "document_id": r.document_id,
                            "condition_text": r.condition_text, "is_verified": r.is_verified, "icd10": r.icd10,
@@ -239,7 +229,7 @@ def build_timeline_payload(patient, p_from, p_to, audience="guardian", hospital_
     recurrence = detect_recurrence(episodes, dob, min(p_to, date.today()), cfg)
     flag_ids = dict(RecurrenceFlag.objects.filter(patient=patient).values_list("condition_group", "pk"))
     for r in recurrence:
-        r["id"] = flag_ids.get(r["group"])
+        r["recurrence_flag_id"] = flag_ids.get(r["group"])
     if audience == "doctor":                       # the stored flag (id, acknowledgement) and the age limit of its rule
         flags = {f.condition_group: f for f in RecurrenceFlag.objects.filter(patient=patient)}
         for r in recurrence:
@@ -248,11 +238,11 @@ def build_timeline_payload(patient, p_from, p_to, audience="guardian", hospital_
             r["acknowledged_at"] = f.acknowledged_at.isoformat() if f and f.acknowledged_at else None
             r["age_max_days"] = cfg["recurrence_rules"].get(r["group"], {}).get("age_max_days")
 
-    birth_row = BirthHistory.objects.filter(patient=patient).first()
+    birth_row = BirthHistory.objects.filter(confirmed_q(), patient=patient).first()
     corrected = growth_dob(dob, birth_row)
     growth_points = []
     seen_readings = set()
-    for g in GrowthMeasurement.objects.filter(patient=patient, is_rejected=False, **own).order_by("measured_on", "id"):
+    for g in GrowthMeasurement.objects.filter(confirmed_q(), patient=patient, is_rejected=False, **own).order_by("measured_on", "pk"):
         if (g.measured_on, g.weight_kg, g.height_cm, g.head_circumference_cm) in seen_readings:
             continue                  # the same reading quoted by two reports is one point
         seen_readings.add((g.measured_on, g.weight_kg, g.height_cm, g.head_circumference_cm))
@@ -260,15 +250,15 @@ def build_timeline_payload(patient, p_from, p_to, audience="guardian", hospital_
         scored.update(measured_on=g.measured_on, document_id=g.document_id)
         growth_points.append(scored)
 
-    given = [{"vaccine_text": v.vaccine_name, "given_on": v.administered_date, "document_id": v.document_id, "id": v.pk}
-            for v in ImmunizationRecord.objects.filter(patient=patient, verification_status__in=SHOWN_VACCINES,
+    given = [{"vaccine_text": v.vaccine_name, "given_on": v.administered_date, "document_id": v.document_id, "immunization_record_id": v.pk}
+            for v in ImmunizationRecord.objects.filter(confirmed_q(), patient=patient, verification_status__in=SHOWN_VACCINES,
                                                        administered_date__isnull=False, **own)]
     admissions = [{"admitted_on": a.admitted_on, "discharged_on": a.discharged_on, "ward": a.ward, "is_critical": a.is_critical,
                    "reason": a.reason, "document_id": a.document_id}
-                  for a in Admission.objects.filter(patient=patient, **own_admission)]
+                  for a in Admission.objects.filter(confirmed_q(), patient=patient, **own_admission)]
     critical_labs = [{"date": lab.collected_on, "analyte": lab.analyte, "value": lab.value, "direction": lab.direction,
                       "severity": lab.severity, "document_id": lab.document_id}
-                     for lab in LabResult.objects.filter(patient=patient, severity="CRITICAL", collected_on__isnull=False, **own)]
+                     for lab in LabResult.objects.filter(confirmed_q(), patient=patient, severity="CRITICAL", collected_on__isnull=False, **own)]
     birth = None
     if birth_row:
         weeks = birth_row.gestational_age_weeks

@@ -1,52 +1,55 @@
-from apps.hospital_setup.compliance_services import record_consent
-from apps.hospital_setup.models import ConsentRecord, Floor, NextNumber, Permission, Role, Room
-from apps.hospital_setup.rbac import PERMISSION_CATALOG, SYSTEM_ROLE_PERMISSIONS, sync_roles_and_permissions
+from apps.hospital_setup.models import INITIAL_PASSWORD, MODULE_HEADERS, ROLE_CHOICES, Floor, NextNumber, Room, UserGroup, UserPermission
+from apps.hospital_setup.rbac import get_effective_modules, sync_roles_and_permissions
 from apps.hospital_setup.staff_services import next_employee_id
-from apps.opd.models import HospitalPatient
-from core.tests.testing import HospitalDBTestCase, make_branch, make_patient
+from apps.hospital_patients.models import HospitalPatient
+from core.tests.testing import HospitalDBTestCase, make_branch, make_patient, make_staff
 
 
-class SystemRolesFollowTheCodeTests(HospitalDBTestCase):
-    def test_a_missing_permission_and_a_stray_grant_are_put_right(self):
-        Permission.objects.using(self.hospital_alias).filter(code="milestone.record").delete()
-        doctor = Role.objects.using(self.hospital_alias).get(system_role_key="doctor")
-        extra = Permission.objects.using(self.hospital_alias).get(code="staff.manage")
-        doctor.permissions.add(extra)
-        sync_roles_and_permissions(self.hospital_alias)
-        self.assertEqual(Permission.objects.using(self.hospital_alias).count(), len(PERMISSION_CATALOG))
-        granted = set(doctor.permissions.using(self.hospital_alias).values_list("code", flat=True))
-        self.assertEqual(granted, set(SYSTEM_ROLE_PERMISSIONS["doctor"]))
-
-    def test_every_system_role_exists_once(self):
+class UserGroupTests(HospitalDBTestCase):
+    def test_every_role_has_one_default_group_and_syncing_twice_adds_nothing(self):
         sync_roles_and_permissions(self.hospital_alias)
         sync_roles_and_permissions(self.hospital_alias)
-        self.assertEqual(Role.objects.using(self.hospital_alias).filter(is_system_role=True).count(), 6)
+        self.assertEqual(UserGroup.objects.using(self.hospital_alias).count(), len(ROLE_CHOICES))
+        self.assertEqual(set(UserGroup.objects.using(self.hospital_alias).values_list("role", flat=True)), {r for r, _ in ROLE_CHOICES})
 
+    def test_a_role_gets_its_modules_and_a_group_permission_adds_more(self):
+        branch, place = make_branch(self.hospital_alias)
+        nurse = make_staff(self.hospital_alias, "nurse", phone="9000000042", place=place)
+        self.assertEqual(get_effective_modules(nurse, self.hospital_alias), {"patients", "opd"})
+        UserPermission.objects.using(self.hospital_alias).create(user_group=nurse.user_group, branch_department=place, modules=UserPermission.pack(["billing"]))
+        self.assertIn("billing", get_effective_modules(nurse, self.hospital_alias))
+        admin = make_staff(self.hospital_alias, "hospital_admin", phone="9000000043")
+        self.assertEqual(get_effective_modules(admin, self.hospital_alias), set(MODULE_HEADERS))
 
-class ConsentTests(HospitalDBTestCase):
-    def setUp(self):
-        super().setUp()
-        branch, _place = make_branch(self.hospital_alias)
-        self.patient = make_patient(self.hospital_alias, "AWP-C1", uhid="U-1", branch=branch, full_name="C One", hie_consent_given=False)
+    def test_a_staff_member_gets_a_login_with_the_initial_password(self):
+        from django.contrib.auth.models import User
+        staff = make_staff(self.hospital_alias, "doctor", phone="9000000044", first_name="Ann", last_name="Lee")
+        login = User.objects.using("default").get(username=str(staff.user_id))
+        self.assertEqual((login.first_name, login.last_name), ("Ann", "Lee"))
+        self.assertTrue(login.check_password(INITIAL_PASSWORD))
+        self.assertTrue(staff.must_change_password)
 
-    def row(self):
-        return HospitalPatient.objects.using(self.hospital_alias).get(pk=self.patient.pk)
+    def test_the_catalog_and_the_login_follow_the_staff_row(self):
+        from django.contrib.auth.models import User
+        from apps.hospital_master.models import GlobalStaffUserIndexCatalog, Hospital
+        from apps.hospital_setup.staff_services import sync_catalog
+        hospital = Hospital.objects.using("default").create(name="Sync H", hospital_code="sync-h", db_name=self.hospital_alias)
+        doctor = make_staff(self.hospital_alias, "doctor", phone="9000000046", first_name="Ann", last_name="Lee", specialisation="Paediatrics")
+        sync_catalog(doctor, hospital.pk)
+        doctor.first_name, doctor.specialisation = "Anna", "Cardiology"
+        doctor.save(using=self.hospital_alias)
+        sync_catalog(doctor, hospital.pk)
+        row = GlobalStaffUserIndexCatalog.objects.using("default").get(user__username=str(doctor.user_id))
+        self.assertEqual((row.mobile, row.is_doctor, row.doctor_details["specialisation"]), ("9000000046", True, "Cardiology"))
+        self.assertEqual(User.objects.using("default").get(username=str(doctor.user_id)).first_name, "Anna")
 
-    def test_granting_and_withdrawing_move_the_flag_with_the_record(self):
-        record_consent(self.hospital_alias, self.patient, ConsentRecord.CONSENT_HIE_SHARING, ConsentRecord.SOURCE_PORTAL)
-        self.assertTrue(self.row().hie_consent_given)
-        record_consent(self.hospital_alias, self.patient, ConsentRecord.CONSENT_HIE_SHARING, ConsentRecord.SOURCE_PORTAL, granted=False)
-        self.assertFalse(self.row().hie_consent_given)
-        self.assertEqual(ConsentRecord.objects.using(self.hospital_alias).filter(patient=self.patient).count(), 2)
-
-    def test_a_consent_record_cannot_be_edited_or_deleted(self):
-        record_consent(self.hospital_alias, self.patient, ConsentRecord.CONSENT_HIE_SHARING, ConsentRecord.SOURCE_PORTAL)
-        record = ConsentRecord.objects.using(self.hospital_alias).get()
-        record.notes = "changed"
-        with self.assertRaises(ValueError):
-            record.save(using=self.hospital_alias)
-        with self.assertRaises(ValueError):
-            record.delete(using=self.hospital_alias)
+    def test_no_login_is_left_behind_when_the_staff_row_cannot_be_saved(self):
+        from django.contrib.auth.models import User
+        make_staff(self.hospital_alias, "doctor", phone="9000000045")
+        before = User.objects.using("default").count()
+        with self.assertRaises(Exception):
+            make_staff(self.hospital_alias, "nurse", phone="9000000045")
+        self.assertEqual(User.objects.using("default").count(), before)
 
 
 class CounterAndFloorTests(HospitalDBTestCase):
@@ -60,8 +63,7 @@ class CounterAndFloorTests(HospitalDBTestCase):
         branch, _place = make_branch(self.hospital_alias)
         floor = Floor.objects.using(self.hospital_alias).create(branch=branch, name="2nd Floor")
         room = Room.objects.using(self.hospital_alias).create(floor=floor, name="R1")
-        self.assertEqual((room.floor.name, room.branch), ("2nd Floor", branch))      # a room's branch is its floor's branch
-        self.assertEqual(room.branch_id, branch.id)
+        self.assertEqual((room.floor.name, room.floor.branch), ("2nd Floor", branch))      # a room's branch is its floor's branch
         floor.name = "Second"
         floor.save(using=self.hospital_alias)
         self.assertEqual(Room.objects.using(self.hospital_alias).get(pk=room.pk).floor.name, "Second")

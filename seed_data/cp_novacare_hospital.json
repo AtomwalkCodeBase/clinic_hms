@@ -1,0 +1,1174 @@
+[
+{
+ "model": "hospital_setup.branch",
+ "pk": 1,
+ "fields": {
+  "name": "NovaCare Hospitals - Brookefield",
+  "branch_code": null,
+  "address": "AECS Layout",
+  "city": "Bengaluru",
+  "state": "Karnataka",
+  "pincode": "560037",
+  "phone": "6363464340",
+  "lat": null,
+  "lng": null,
+  "is_active": true,
+  "created_at": "2026-10-28T10:22:27.822Z",
+  "updated_at": "2026-10-28T10:22:27.822Z"
+ }
+},
+{
+ "model": "hospital_setup.nextnumber",
+ "pk": 1,
+ "fields": {
+  "branch": null,
+  "entity": "employee_id",
+  "prefix": "EMP-",
+  "last_number": 5,
+  "pad_length": 6,
+  "updated_at": "2026-10-28T10:20:50.861Z"
+ }
+},
+{
+ "model": "hospital_setup.nextnumber",
+ "pk": 2,
+ "fields": {
+  "branch": 1,
+  "entity": "uhid",
+  "prefix": "UHID-",
+  "last_number": 2,
+  "pad_length": 6,
+  "updated_at": "2026-10-28T10:22:27.839Z"
+ }
+},
+{
+ "model": "hospital_setup.nextnumber",
+ "pk": 3,
+ "fields": {
+  "branch": 1,
+  "entity": "invoice",
+  "prefix": "INV-",
+  "last_number": 1,
+  "pad_length": 6,
+  "updated_at": "2026-10-28T10:22:27.839Z"
+ }
+},
+{
+ "model": "hospital_setup.nextnumber",
+ "pk": 4,
+ "fields": {
+  "branch": 1,
+  "entity": "prescription",
+  "prefix": "RX-",
+  "last_number": 1,
+  "pad_length": 6,
+  "updated_at": "2026-10-28T10:22:27.853Z"
+ }
+},
+{
+ "model": "hospital_setup.nextnumber",
+ "pk": 5,
+ "fields": {
+  "branch": 1,
+  "entity": "queue",
+  "prefix": "Q-",
+  "last_number": 0,
+  "pad_length": 4,
+  "updated_at": "2026-10-28T10:22:27.856Z"
+ }
+},
+{
+ "model": "hospital_setup.floor",
+ "pk": 1,
+ "fields": {
+  "branch": 1,
+  "name": "Ground",
+  "level": 0,
+  "is_active": true,
+  "created_at": "2026-10-28T10:22:27.883Z",
+  "updated_at": "2026-10-28T10:22:27.883Z"
+ }
+},
+{
+ "model": "hospital_setup.department",
+ "pk": 1,
+ "fields": {
+  "name": "General",
+  "department_code": null,
+  "is_active": true,
+  "created_at": "2026-10-28T10:22:27.875Z",
+  "updated_at": "2026-10-28T10:22:27.875Z"
+ }
+},
+{
+ "model": "hospital_setup.department",
+ "pk": 2,
+ "fields": {
+  "name": "Pediatrics",
+  "department_code": null,
+  "is_active": true,
+  "created_at": "2026-10-28T10:24:25.687Z",
+  "updated_at": "2026-10-28T10:24:25.687Z"
+ }
+},
+{
+ "model": "hospital_setup.branchdepartment",
+ "pk": 1,
+ "fields": {
+  "branch": 1,
+  "department": 1,
+  "floor": 1,
+  "is_active": true,
+  "created_at": "2026-10-28T10:22:27.888Z",
+  "updated_at": "2026-10-28T10:22:27.888Z"
+ }
+},
+{
+ "model": "hospital_setup.branchdepartment",
+ "pk": 2,
+ "fields": {
+  "branch": 1,
+  "department": 2,
+  "floor": 1,
+  "is_active": true,
+  "created_at": "2026-10-28T10:24:25.703Z",
+  "updated_at": "2026-10-28T10:24:25.703Z"
+ }
+},
+{
+ "model": "hospital_setup.usergroup",
+ "pk": 1,
+ "fields": {
+  "name": "Doctor",
+  "role": "d",
+  "is_active": true
+ }
+},
+{
+ "model": "hospital_setup.usergroup",
+ "pk": 2,
+ "fields": {
+  "name": "Nurse",
+  "role": "n",
+  "is_active": true
+ }
+},
+{
+ "model": "hospital_setup.usergroup",
+ "pk": 3,
+ "fields": {
+  "name": "Front Desk",
+  "role": "f",
+  "is_active": true
+ }
+},
+{
+ "model": "hospital_setup.usergroup",
+ "pk": 4,
+ "fields": {
+  "name": "Admin (hospital admin)",
+  "role": "a",
+  "is_active": true
+ }
+},
+{
+ "model": "hospital_setup.usergroup",
+ "pk": 5,
+ "fields": {
+  "name": "All (single user, every permission)",
+  "role": "l",
+  "is_active": true
+ }
+},
+{
+ "model": "hospital_setup.staffuser",
+ "pk": 1,
+ "fields": {
+  "user_id": "3f4f4572-50be-409c-9633-5d587143d9e2",
+  "user_group": 4,
+  "department": 1,
+  "phone": "6363464340",
+  "employee_id": "EMP-000001",
+  "date_of_birth": null,
+  "gender": "",
+  "photo": "",
+  "is_active": true,
+  "must_change_password": false,
+  "date_joined": "2026-10-28T10:20:51.530Z",
+  "registration_no": "",
+  "council_name": "",
+  "registration_expiry": null,
+  "qualification": "",
+  "experience_years": null,
+  "bio": "",
+  "languages": "",
+  "specialisation": "",
+  "consultation_fee": null,
+  "followup_fee": null,
+  "digital_signature": "",
+  "known_for": "",
+  "prescription_favourites": {},
+  "updated_at": "2026-10-28T11:24:28.588Z"
+ }
+},
+{
+ "model": "hospital_setup.staffuser",
+ "pk": 2,
+ "fields": {
+  "user_id": "e8a4098d-8647-4b55-92a9-e7f5b56efcdb",
+  "user_group": 1,
+  "department": 1,
+  "phone": "9000020000",
+  "employee_id": "EMP-000002",
+  "date_of_birth": null,
+  "gender": "",
+  "photo": "",
+  "is_active": true,
+  "must_change_password": false,
+  "date_joined": "2026-10-28T10:25:34.534Z",
+  "registration_no": "",
+  "council_name": "",
+  "registration_expiry": null,
+  "qualification": "MBBS, MD (Pediatrics)",
+  "experience_years": 10,
+  "bio": "",
+  "languages": "",
+  "specialisation": "Pediatrician",
+  "consultation_fee": "500.00",
+  "followup_fee": "200.00",
+  "digital_signature": "",
+  "known_for": "",
+  "prescription_favourites": {},
+  "updated_at": "2026-10-28T11:29:21.824Z"
+ }
+},
+{
+ "model": "hospital_setup.staffuser",
+ "pk": 3,
+ "fields": {
+  "user_id": "495ca1f9-bc56-4585-a324-c62f3522d7cd",
+  "user_group": 1,
+  "department": 1,
+  "phone": "9000010000",
+  "employee_id": "EMP-000003",
+  "date_of_birth": null,
+  "gender": "",
+  "photo": "",
+  "is_active": true,
+  "must_change_password": false,
+  "date_joined": "2026-10-28T10:26:49.333Z",
+  "registration_no": "",
+  "council_name": "",
+  "registration_expiry": null,
+  "qualification": "",
+  "experience_years": 12,
+  "bio": "",
+  "languages": "",
+  "specialisation": "General Physician",
+  "consultation_fee": "600.00",
+  "followup_fee": "250.00",
+  "digital_signature": "",
+  "known_for": "",
+  "prescription_favourites": {},
+  "updated_at": "2026-10-28T11:29:21.802Z"
+ }
+},
+{
+ "model": "hospital_setup.staffuser",
+ "pk": 4,
+ "fields": {
+  "user_id": "a27b8fd3-0d3a-4fd1-b250-045c9348674d",
+  "user_group": 2,
+  "department": 1,
+  "phone": "9000040000",
+  "employee_id": "EMP-000004",
+  "date_of_birth": null,
+  "gender": "",
+  "photo": "",
+  "is_active": true,
+  "must_change_password": false,
+  "date_joined": "2026-10-28T10:27:30.649Z",
+  "registration_no": "",
+  "council_name": "",
+  "registration_expiry": null,
+  "qualification": "BSc Nursing",
+  "experience_years": 5,
+  "bio": "",
+  "languages": "",
+  "specialisation": "",
+  "consultation_fee": null,
+  "followup_fee": null,
+  "digital_signature": "",
+  "known_for": "",
+  "prescription_favourites": {},
+  "updated_at": "2026-10-28T11:24:39.636Z"
+ }
+},
+{
+ "model": "hospital_setup.staffuser",
+ "pk": 5,
+ "fields": {
+  "user_id": "2902278d-33b4-42e0-94b0-9548eb165270",
+  "user_group": 3,
+  "department": 1,
+  "phone": "9000050000",
+  "employee_id": "EMP-000005",
+  "date_of_birth": null,
+  "gender": "",
+  "photo": "",
+  "is_active": true,
+  "must_change_password": false,
+  "date_joined": "2026-10-28T10:28:32.470Z",
+  "registration_no": "",
+  "council_name": "",
+  "registration_expiry": null,
+  "qualification": "BBA",
+  "experience_years": 5,
+  "bio": "",
+  "languages": "",
+  "specialisation": "",
+  "consultation_fee": null,
+  "followup_fee": null,
+  "digital_signature": "",
+  "known_for": "",
+  "prescription_favourites": {},
+  "updated_at": "2026-10-28T11:24:46.854Z"
+ }
+},
+{
+ "model": "hospital_setup.staffbranchassignment",
+ "pk": 3,
+ "fields": {
+  "staff": 4,
+  "branch": 1,
+  "is_primary": true,
+  "slot_duration_minutes": 15,
+  "weekly_hours": [],
+  "created_at": "2026-10-28T10:27:30.672Z",
+  "updated_at": "2026-10-28T10:27:30.672Z"
+ }
+},
+{
+ "model": "hospital_setup.staffbranchassignment",
+ "pk": 4,
+ "fields": {
+  "staff": 5,
+  "branch": 1,
+  "is_primary": true,
+  "slot_duration_minutes": 15,
+  "weekly_hours": [],
+  "created_at": "2026-10-28T10:28:32.483Z",
+  "updated_at": "2026-10-28T10:28:32.483Z"
+ }
+},
+{
+ "model": "hospital_setup.staffbranchassignment",
+ "pk": 5,
+ "fields": {
+  "staff": 2,
+  "branch": 1,
+  "is_primary": true,
+  "slot_duration_minutes": 15,
+  "weekly_hours": [],
+  "created_at": "2026-10-28T11:24:15.769Z",
+  "updated_at": "2026-10-28T11:24:15.769Z"
+ }
+},
+{
+ "model": "hospital_setup.staffbranchassignment",
+ "pk": 6,
+ "fields": {
+  "staff": 1,
+  "branch": 1,
+  "is_primary": true,
+  "slot_duration_minutes": 15,
+  "weekly_hours": [],
+  "created_at": "2026-10-28T11:24:28.573Z",
+  "updated_at": "2026-10-28T11:24:28.573Z"
+ }
+},
+{
+ "model": "hospital_setup.staffbranchassignment",
+ "pk": 7,
+ "fields": {
+  "staff": 3,
+  "branch": 1,
+  "is_primary": true,
+  "slot_duration_minutes": 15,
+  "weekly_hours": [],
+  "created_at": "2026-10-28T11:24:33.232Z",
+  "updated_at": "2026-10-28T11:24:33.232Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 1,
+ "fields": {
+  "list_type": "service_category",
+  "value": "Consultation",
+  "label": "Consultation",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 0,
+  "created_at": "2026-10-28T10:20:50.697Z",
+  "updated_at": "2026-10-28T10:20:50.697Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 2,
+ "fields": {
+  "list_type": "service_category",
+  "value": "Procedure",
+  "label": "Procedure",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 1,
+  "created_at": "2026-10-28T10:20:50.702Z",
+  "updated_at": "2026-10-28T10:20:50.702Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 3,
+ "fields": {
+  "list_type": "service_category",
+  "value": "Other",
+  "label": "Other",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 2,
+  "created_at": "2026-10-28T10:20:50.705Z",
+  "updated_at": "2026-10-28T10:20:50.705Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 4,
+ "fields": {
+  "list_type": "payment_mode",
+  "value": "Cash",
+  "label": "Cash",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 3,
+  "created_at": "2026-10-28T10:20:50.709Z",
+  "updated_at": "2026-10-28T10:20:50.709Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 5,
+ "fields": {
+  "list_type": "payment_mode",
+  "value": "Card",
+  "label": "Card",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 4,
+  "created_at": "2026-10-28T10:20:50.712Z",
+  "updated_at": "2026-10-28T10:20:50.712Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 6,
+ "fields": {
+  "list_type": "payment_mode",
+  "value": "UPI",
+  "label": "UPI",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 5,
+  "created_at": "2026-10-28T10:20:50.716Z",
+  "updated_at": "2026-10-28T10:20:50.716Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 7,
+ "fields": {
+  "list_type": "payment_mode",
+  "value": "Online",
+  "label": "Online",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 6,
+  "created_at": "2026-10-28T10:20:50.719Z",
+  "updated_at": "2026-10-28T10:20:50.719Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 8,
+ "fields": {
+  "list_type": "payment_mode",
+  "value": "Credit",
+  "label": "Credit",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 7,
+  "created_at": "2026-10-28T10:20:50.722Z",
+  "updated_at": "2026-10-28T10:20:50.722Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 9,
+ "fields": {
+  "list_type": "invoice_status",
+  "value": "draft",
+  "label": "Draft",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 8,
+  "created_at": "2026-10-28T10:20:50.725Z",
+  "updated_at": "2026-10-28T10:20:50.725Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 10,
+ "fields": {
+  "list_type": "invoice_status",
+  "value": "issued",
+  "label": "Issued",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 9,
+  "created_at": "2026-10-28T10:20:50.728Z",
+  "updated_at": "2026-10-28T10:20:50.728Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 11,
+ "fields": {
+  "list_type": "invoice_status",
+  "value": "paid",
+  "label": "Paid",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 10,
+  "created_at": "2026-10-28T10:20:50.731Z",
+  "updated_at": "2026-10-28T10:20:50.731Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 12,
+ "fields": {
+  "list_type": "invoice_status",
+  "value": "partially_paid",
+  "label": "Partially Paid",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 11,
+  "created_at": "2026-10-28T10:20:50.734Z",
+  "updated_at": "2026-10-28T10:20:50.734Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 13,
+ "fields": {
+  "list_type": "invoice_status",
+  "value": "cancelled",
+  "label": "Cancelled",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 12,
+  "created_at": "2026-10-28T10:20:50.737Z",
+  "updated_at": "2026-10-28T10:20:50.737Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 14,
+ "fields": {
+  "list_type": "room_type",
+  "value": "consultation",
+  "label": "Consultation",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 13,
+  "created_at": "2026-10-28T10:20:50.740Z",
+  "updated_at": "2026-10-28T10:20:50.740Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 15,
+ "fields": {
+  "list_type": "room_type",
+  "value": "procedure",
+  "label": "Procedure",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 14,
+  "created_at": "2026-10-28T10:20:50.743Z",
+  "updated_at": "2026-10-28T10:20:50.743Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 16,
+ "fields": {
+  "list_type": "room_type",
+  "value": "other",
+  "label": "Other",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 15,
+  "created_at": "2026-10-28T10:20:50.746Z",
+  "updated_at": "2026-10-28T10:20:50.746Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 17,
+ "fields": {
+  "list_type": "appointment_type",
+  "value": "opd",
+  "label": "OPD",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 16,
+  "created_at": "2026-10-28T10:20:50.749Z",
+  "updated_at": "2026-10-28T10:20:50.749Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 18,
+ "fields": {
+  "list_type": "appointment_type",
+  "value": "followup",
+  "label": "Follow-up",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 17,
+  "created_at": "2026-10-28T10:20:50.752Z",
+  "updated_at": "2026-10-28T10:20:50.752Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 19,
+ "fields": {
+  "list_type": "appointment_type",
+  "value": "emergency",
+  "label": "Emergency",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 18,
+  "created_at": "2026-10-28T10:20:50.755Z",
+  "updated_at": "2026-10-28T10:20:50.755Z"
+ }
+},
+{
+ "model": "hospital_setup.auditlog",
+ "pk": 1,
+ "fields": {
+  "actor_user_id": null,
+  "actor_email": "anjali.mehta@gmail.com",
+  "actor_role": "front_desk",
+  "action": "patient.register",
+  "resource_type": "Patient",
+  "resource_id": "1",
+  "patient": 1,
+  "ip_address": "127.0.0.1",
+  "metadata": {},
+  "created_at": "2026-10-28T10:48:47.954Z"
+ }
+},
+{
+ "model": "hospital_setup.auditlog",
+ "pk": 2,
+ "fields": {
+  "actor_user_id": null,
+  "actor_email": "priya.sharma@test.com",
+  "actor_role": "doctor",
+  "action": "patient.history.view",
+  "resource_type": "Patient",
+  "resource_id": "1",
+  "patient": 1,
+  "ip_address": "127.0.0.1",
+  "metadata": {},
+  "created_at": "2026-10-28T10:53:07.363Z"
+ }
+},
+{
+ "model": "hospital_setup.auditlog",
+ "pk": 3,
+ "fields": {
+  "actor_user_id": null,
+  "actor_email": "priya.sharma@test.com",
+  "actor_role": "doctor",
+  "action": "encounter.sign",
+  "resource_type": "OPDEncounter",
+  "resource_id": "b6c2f2cd-19c5-4e56-b5c0-19f801abb7d7",
+  "patient": 1,
+  "ip_address": "127.0.0.1",
+  "metadata": {},
+  "created_at": "2026-10-28T10:56:06.251Z"
+ }
+},
+{
+ "model": "hospital_setup.auditlog",
+ "pk": 4,
+ "fields": {
+  "actor_user_id": null,
+  "actor_email": "",
+  "actor_role": "doctor",
+  "action": "patient.history.view",
+  "resource_type": "Patient",
+  "resource_id": "1",
+  "patient": 1,
+  "ip_address": "127.0.0.1",
+  "metadata": {},
+  "created_at": "2026-10-28T10:57:44.579Z"
+ }
+},
+{
+ "model": "hospital_setup.auditlog",
+ "pk": 5,
+ "fields": {
+  "actor_user_id": null,
+  "actor_email": "priya.sharma@test.com",
+  "actor_role": "doctor",
+  "action": "patient.history.view",
+  "resource_type": "Patient",
+  "resource_id": "1",
+  "patient": 1,
+  "ip_address": "127.0.0.1",
+  "metadata": {},
+  "created_at": "2026-10-28T11:00:41.162Z"
+ }
+},
+{
+ "model": "hospital_setup.auditlog",
+ "pk": 6,
+ "fields": {
+  "actor_user_id": null,
+  "actor_email": "priya.sharma@test.com",
+  "actor_role": "doctor",
+  "action": "patient.history.view",
+  "resource_type": "Patient",
+  "resource_id": "1",
+  "patient": 1,
+  "ip_address": "127.0.0.1",
+  "metadata": {},
+  "created_at": "2026-10-28T11:03:48.771Z"
+ }
+},
+{
+ "model": "hospital_setup.auditlog",
+ "pk": 7,
+ "fields": {
+  "actor_user_id": null,
+  "actor_email": "priya.sharma@test.com",
+  "actor_role": "doctor",
+  "action": "patient.history.view",
+  "resource_type": "Patient",
+  "resource_id": "2",
+  "patient": 2,
+  "ip_address": "127.0.0.1",
+  "metadata": {},
+  "created_at": "2026-10-28T11:21:05.142Z"
+ }
+},
+{
+ "model": "hospital_patients.hospitalpatient",
+ "pk": 1,
+ "fields": {
+  "uhid": "UHID-000001",
+  "awpid": "AWPID-20261028-NA39Q71W",
+  "is_active": true,
+  "created_by": null,
+  "updated_by": null,
+  "registered_at": "2026-10-28T10:48:47.933Z",
+  "updated_at": "2026-10-28T10:48:47.933Z"
+ }
+},
+{
+ "model": "hospital_patients.hospitalpatient",
+ "pk": 2,
+ "fields": {
+  "uhid": "UHID-000002",
+  "awpid": "AWPID-20261028-GTUBYTBM",
+  "is_active": true,
+  "created_by": null,
+  "updated_by": null,
+  "registered_at": "2026-10-28T11:19:54.564Z",
+  "updated_at": "2026-10-28T11:19:54.564Z"
+ }
+},
+{
+ "model": "hospital_patients.vitals",
+ "pk": 1,
+ "fields": {
+  "appointment": "1051f39d-0452-40b8-bd10-5e2bf0235adc",
+  "recorded_by": 4,
+  "recorded_at": "2026-10-28T10:52:43.544Z",
+  "systolic_bp": 120,
+  "diastolic_bp": 80,
+  "pulse_rate": 94,
+  "temperature": "102.2",
+  "spo2": 98,
+  "respiratory_rate": null,
+  "blood_sugar_rbs": null,
+  "weight_kg": "70.0",
+  "height_cm": "170.0",
+  "head_circumference_cm": null,
+  "nurse_notes": "",
+  "updated_at": "2026-10-28T10:52:43.544Z"
+ }
+},
+{
+ "model": "hospital_patients.vitals",
+ "pk": 2,
+ "fields": {
+  "appointment": "3edbbfa8-ff23-4bee-b822-1b76c3e74eb3",
+  "recorded_by": 4,
+  "recorded_at": "2026-10-28T11:20:49.490Z",
+  "systolic_bp": 120,
+  "diastolic_bp": 80,
+  "pulse_rate": 94,
+  "temperature": "102.2",
+  "spo2": 98,
+  "respiratory_rate": null,
+  "blood_sugar_rbs": null,
+  "weight_kg": "70.0",
+  "height_cm": "170.0",
+  "head_circumference_cm": null,
+  "nurse_notes": "",
+  "updated_at": "2026-10-28T11:20:49.490Z"
+ }
+},
+{
+ "model": "hospital_patients.hospitalevent",
+ "pk": 1,
+ "fields": {
+  "patient": 1,
+  "event_type": "registration",
+  "is_active": true,
+  "branch_department": null,
+  "created_by": null,
+  "created_at": "2026-10-28T10:48:47.937Z"
+ }
+},
+{
+ "model": "hospital_patients.hospitalevent",
+ "pk": 2,
+ "fields": {
+  "patient": 1,
+  "event_type": "appointment",
+  "is_active": true,
+  "branch_department": 1,
+  "created_by": null,
+  "created_at": "2026-10-28T10:51:17.985Z"
+ }
+},
+{
+ "model": "hospital_patients.hospitalevent",
+ "pk": 3,
+ "fields": {
+  "patient": 1,
+  "event_type": "vitals",
+  "is_active": true,
+  "branch_department": 1,
+  "created_by": 4,
+  "created_at": "2026-10-28T10:52:43.557Z"
+ }
+},
+{
+ "model": "hospital_patients.hospitalevent",
+ "pk": 4,
+ "fields": {
+  "patient": 1,
+  "event_type": "prescription",
+  "is_active": true,
+  "branch_department": 1,
+  "created_by": 3,
+  "created_at": "2026-10-28T10:54:41.623Z"
+ }
+},
+{
+ "model": "hospital_patients.hospitalevent",
+ "pk": 5,
+ "fields": {
+  "patient": 1,
+  "event_type": "consultation",
+  "is_active": true,
+  "branch_department": 1,
+  "created_by": 3,
+  "created_at": "2026-10-28T10:55:59.777Z"
+ }
+},
+{
+ "model": "hospital_patients.hospitalevent",
+ "pk": 6,
+ "fields": {
+  "patient": 1,
+  "event_type": "billing",
+  "is_active": true,
+  "branch_department": null,
+  "created_by": 3,
+  "created_at": "2026-10-28T10:55:59.825Z"
+ }
+},
+{
+ "model": "hospital_patients.hospitalevent",
+ "pk": 7,
+ "fields": {
+  "patient": 2,
+  "event_type": "registration",
+  "is_active": true,
+  "branch_department": null,
+  "created_by": null,
+  "created_at": "2026-10-28T11:19:54.566Z"
+ }
+},
+{
+ "model": "hospital_patients.hospitalevent",
+ "pk": 8,
+ "fields": {
+  "patient": 2,
+  "event_type": "appointment",
+  "is_active": true,
+  "branch_department": 1,
+  "created_by": null,
+  "created_at": "2026-10-28T11:19:54.606Z"
+ }
+},
+{
+ "model": "hospital_patients.hospitalevent",
+ "pk": 9,
+ "fields": {
+  "patient": 2,
+  "event_type": "vitals",
+  "is_active": true,
+  "branch_department": 1,
+  "created_by": 4,
+  "created_at": "2026-10-28T11:20:49.492Z"
+ }
+},
+{
+ "model": "hospital_patients.hospitaldocument",
+ "pk": 1,
+ "fields": {
+  "event": 4,
+  "file": "patients/AWPID-20261028-NA39Q71W/prescriptions/prescription-842ecacc781e4196.pdf",
+  "created_at": "2026-10-28T10:56:06.101Z"
+ }
+},
+{
+ "model": "hospital_patients.hospitaldocument",
+ "pk": 2,
+ "fields": {
+  "event": 5,
+  "file": "patients/AWPID-20261028-NA39Q71W/consult-notes/consult-note-ac4e76fa4ebb400e.pdf",
+  "created_at": "2026-10-28T10:56:06.248Z"
+ }
+},
+{
+ "model": "opd.appointment",
+ "pk": "1051f39d-0452-40b8-bd10-5e2bf0235adc",
+ "fields": {
+  "patient": 1,
+  "doctor": 3,
+  "branch_department": 1,
+  "appointment_type": "opd",
+  "status": "done",
+  "scheduled_date": "2026-10-28",
+  "scheduled_time": "16:30:00",
+  "token_number": 1,
+  "room": null,
+  "started_at": "2026-10-28T10:53:05.560Z",
+  "completed_at": "2026-10-28T10:55:59.761Z",
+  "chief_complaint": "High Fever and Nausea",
+  "notes": "",
+  "payment_preference": "pay_at_desk",
+  "created_at": "2026-10-28T10:51:17.982Z",
+  "updated_at": "2026-10-28T10:51:17.982Z"
+ }
+},
+{
+ "model": "opd.appointment",
+ "pk": "3edbbfa8-ff23-4bee-b822-1b76c3e74eb3",
+ "fields": {
+  "patient": 2,
+  "doctor": 3,
+  "branch_department": 1,
+  "appointment_type": "opd",
+  "status": "in_progress",
+  "scheduled_date": "2026-10-28",
+  "scheduled_time": "17:00:00",
+  "token_number": 2,
+  "room": null,
+  "started_at": "2026-10-28T11:21:04.074Z",
+  "completed_at": null,
+  "chief_complaint": "Fever since 2 days",
+  "notes": "",
+  "payment_preference": "pay_at_desk",
+  "created_at": "2026-10-28T11:19:54.604Z",
+  "updated_at": "2026-10-28T11:19:54.604Z"
+ }
+},
+{
+ "model": "opd.opdencounter",
+ "pk": "5f0c6f14-af5a-4e94-ba2b-73340c5e7ace",
+ "fields": {
+  "appointment": "3edbbfa8-ff23-4bee-b822-1b76c3e74eb3",
+  "status": "draft",
+  "subjective": "",
+  "objective": "",
+  "assessment": "",
+  "plan": "",
+  "diagnoses": [],
+  "investigations": "",
+  "advice_to_patient": "",
+  "follow_up_in_days": null,
+  "followup_ask_nurse": false,
+  "followup_nurse_note": "",
+  "followup_nurse_requested_at": null,
+  "followup_nurse_booked": false,
+  "followup_nurse_booked_at": null,
+  "referred_to": "",
+  "referral_notes": "",
+  "signed_at": null,
+  "created_at": "2026-10-28T11:21:04.069Z",
+  "updated_at": "2026-10-28T11:21:04.069Z"
+ }
+},
+{
+ "model": "opd.opdencounter",
+ "pk": "b6c2f2cd-19c5-4e56-b5c0-19f801abb7d7",
+ "fields": {
+  "appointment": "1051f39d-0452-40b8-bd10-5e2bf0235adc",
+  "status": "signed",
+  "subjective": "Patient presents with high fever and nausea. Duration of fever, onset, associated symptoms, medication history, allergies, and relevant medical history are not yet documented.",
+  "objective": "Vitals recorded by nurse:\n- Blood Pressure: 120/80 mmHg\n- Pulse: 94 bpm\n- SpO₂: 98%\n- Temperature: 102.2°F\n- Weight: 70.0 kg\n\nPhysical examination findings and hydration status pending clinical assessment.",
+  "assessment": "Acute febrile illness with nausea. Etiology undetermined. Further clinical evaluation required to establish the cause.",
+  "plan": "1. Perform clinical assessment, including hydration status and associated symptoms.\n2. Review fever duration, exposure history, current medications, and allergies.\n3. Consider investigations based on clinical findings and local epidemiology.\n4. Assess need for symptomatic treatment after reviewing contraindications and patient history.\n5. Arrange timely reassessment and provide return precautions for worsening symptoms, persistent vomiting, confusion, breathing difficulty, or inability to maintain hydration.",
+  "diagnoses": [
+   {
+    "code": "R50.9",
+    "is_primary": true,
+    "description": "Fever, unspecified",
+    "clinical_status": "active"
+   },
+   {
+    "code": "R11.2",
+    "is_primary": false,
+    "description": "Nausea with vomiting, unspecified",
+    "clinical_status": "active"
+   }
+  ],
+  "investigations": "",
+  "advice_to_patient": "Review in 48 hours if fever persists.",
+  "follow_up_in_days": 2,
+  "followup_ask_nurse": false,
+  "followup_nurse_note": "",
+  "followup_nurse_requested_at": null,
+  "followup_nurse_booked": false,
+  "followup_nurse_booked_at": null,
+  "referred_to": "",
+  "referral_notes": "",
+  "signed_at": "2026-10-28T10:55:59.761Z",
+  "created_at": "2026-10-28T10:53:05.552Z",
+  "updated_at": "2026-10-28T10:55:59.777Z"
+ }
+},
+{
+ "model": "opd.prescription",
+ "pk": "fdbdc631-cb7a-4bfe-b623-50100050ca1a",
+ "fields": {
+  "encounter": "b6c2f2cd-19c5-4e56-b5c0-19f801abb7d7",
+  "status": "active",
+  "notes": "",
+  "rx_number": "RX-000001",
+  "created_at": "2026-10-28T10:54:41.620Z",
+  "updated_at": "2026-10-28T10:54:41.620Z"
+ }
+},
+{
+ "model": "opd.prescriptionitem",
+ "pk": "38ff4959-48cf-4e57-8b07-0f5f259e77f9",
+ "fields": {
+  "prescription": "fdbdc631-cb7a-4bfe-b623-50100050ca1a",
+  "drug_name": "Paracetamol",
+  "generic_name": "",
+  "dosage": "500 mg",
+  "frequency": "od",
+  "route": "oral",
+  "duration_days": 3,
+  "quantity": null,
+  "instructions": "Take after food"
+ }
+},
+{
+ "model": "opd.prescriptionitem",
+ "pk": "b8b036e6-e66a-45db-a263-a73574fb3111",
+ "fields": {
+  "prescription": "fdbdc631-cb7a-4bfe-b623-50100050ca1a",
+  "drug_name": "Ondansetron",
+  "generic_name": "",
+  "dosage": "4 mg",
+  "frequency": "od",
+  "route": "oral",
+  "duration_days": 2,
+  "quantity": null,
+  "instructions": "For nausea"
+ }
+},
+{
+ "model": "opd.prescriptionitem",
+ "pk": "f3dae999-3a80-4839-be0a-fd16a19b9dc9",
+ "fields": {
+  "prescription": "fdbdc631-cb7a-4bfe-b623-50100050ca1a",
+  "drug_name": "ORS",
+  "generic_name": "",
+  "dosage": "As directed",
+  "frequency": "od",
+  "route": "oral",
+  "duration_days": 2,
+  "quantity": null,
+  "instructions": "Sip frequently to maintain hydration"
+ }
+},
+{
+ "model": "billing.invoice",
+ "pk": 1,
+ "fields": {
+  "invoice_number": "INV-000001",
+  "patient": 1,
+  "branch": 1,
+  "status": "draft",
+  "subtotal": "0.00",
+  "tax_amount": "0.00",
+  "discount_amount": "0.00",
+  "total_amount": "0.00",
+  "paid_amount": "0.00",
+  "lines": [
+   {
+    "total": "0",
+    "item_id": null,
+    "quantity": 1,
+    "tax_rate": "0",
+    "unit_price": "0",
+    "description": "OPD Consultation",
+    "tax_inclusive": false
+   }
+  ],
+  "payments": [],
+  "notes": "Auto-generated for OPD encounter b6c2f2cd-19c5-4e56-b5c0-19f801abb7d7",
+  "created_by": 3,
+  "issued_at": null,
+  "created_at": "2026-10-28T10:55:59.809Z",
+  "updated_at": "2026-10-28T10:55:59.825Z",
+  "tax_inclusive": false
+ }
+}
+]

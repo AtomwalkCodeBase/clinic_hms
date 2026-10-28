@@ -50,7 +50,7 @@ function RescheduleModal({ appt, onClose, onDone }) {
   async function confirm() {
     setSaving(true);
     try {
-      await apiClient.post(API_ENDPOINTS.OPD.APPT_RESCHEDULE(appt.id), {
+      await apiClient.post(API_ENDPOINTS.OPD.APPT_RESCHEDULE(appt.appointment_id), {
         scheduled_date: date, ...(slot ? { scheduled_time: slot } : {}),
       });
       toastSuccess("Appointment rescheduled.");
@@ -206,7 +206,7 @@ export default function FrontDeskQueuePage() {
             <div className="fdc-title">OPD Queue</div>
             <div className="fdc-subtitle">Live queue showing patients for today's OPD consultations.</div>
           </div>
-          <button className="btn-primary" style={{ fontSize: 12 }} onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_REGISTER)}>
+          <button className="btn-primary" style={{ fontSize: 12 }} onClick={() => navigate(ROUTES.FRONT_DESK.REGISTER_PATIENT)}>
             + Register Walk-in
           </button>
         </div>
@@ -264,7 +264,7 @@ export default function FrontDeskQueuePage() {
                   <option value="">Any doctor</option>
                   {doctorOptions.map(d => {
                     const name = `${d.first_name || ""} ${d.last_name || ""}`.trim() || d.full_name || d.email;
-                    return <option key={d.id} value={d.id}>{name}</option>;
+                    return <option key={d.staff_user_id} value={d.staff_user_id}>{name}</option>;
                   })}
                 </select>
               </div>
@@ -272,7 +272,7 @@ export default function FrontDeskQueuePage() {
                 <label className="stat-label" style={{ display: "block", marginBottom: 5 }}>Room</label>
                 <select className="form-input" style={{ appearance: "auto" }} value={roomFilter} onChange={e => setRoomFilter(e.target.value)}>
                   <option value="">Any room</option>
-                  {roomOptions.map(r => <option key={r.id} value={r.id}>{r.name}{r.floor ? ` (Fl ${r.floor})` : ""}</option>)}
+                  {roomOptions.map(r => <option key={r.room_id} value={r.room_id}>{r.name}{r.floor ? ` (Fl ${r.floor})` : ""}</option>)}
                 </select>
               </div>
               {hasActiveFilters && (
@@ -326,7 +326,7 @@ export default function FrontDeskQueuePage() {
               </thead>
               <tbody>
                 {appointments.map(a => (
-                  <tr key={a.id}>
+                  <tr key={a.appointment_id}>
                     <td>
                       <span style={{
                         display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -367,17 +367,17 @@ export default function FrontDeskQueuePage() {
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         {a.status === "scheduled" && (
                           <button className="btn-primary" style={{ fontSize: 11, padding: "5px 12px" }}
-                            disabled={busy === a.id}
+                            disabled={busy === a.appointment_id}
                             onClick={() => {
                               if (!window.confirm(`Check in ${a.patient_name || "this patient"} (Token ${a.token_number})?`)) return;
-                              moveStatus(a.id, "waiting");
+                              moveStatus(a.appointment_id, "waiting");
                             }}>
                             Check In
                           </button>
                         )}
                         {["scheduled", "waiting"].includes(a.status) && (
                           <button className="btn-outline" style={{ fontSize: 11, padding: "5px 12px" }}
-                            disabled={busy === a.id}
+                            disabled={busy === a.appointment_id}
                             onClick={() => setRescheduleTarget(a)}>
                             Reschedule
                           </button>
@@ -387,10 +387,10 @@ export default function FrontDeskQueuePage() {
                             fontSize: 11, padding: "5px 12px",
                             color: "var(--color-error)", borderColor: "var(--color-error)",
                           }}
-                            disabled={busy === a.id}
+                            disabled={busy === a.appointment_id}
                             onClick={() => {
                               if (!window.confirm(`Cancel the appointment for ${a.patient_name || "this patient"} (Token ${a.token_number})? This cannot be undone.`)) return;
-                              moveStatus(a.id, "cancelled");
+                              moveStatus(a.appointment_id, "cancelled");
                             }}>
                             Cancel
                           </button>
@@ -459,7 +459,7 @@ export default function FrontDeskQueuePage() {
                   </thead>
                   <tbody>
                     {items.map(a => (
-                      <tr key={a.id}>
+                      <tr key={a.appointment_id}>
                         <td style={{ fontSize: 12, fontWeight: 700 }}>{a.scheduled_time ? a.scheduled_time.slice(0, 5) : "—"}</td>
                         <td style={{ fontSize: 12, fontWeight: 700, color: "var(--color-primary)" }}>{a.token_number}</td>
                         <td>
@@ -486,7 +486,7 @@ export default function FrontDeskQueuePage() {
                               <button className="btn-outline" style={{ fontSize: 11, padding: "5px 10px", color: "var(--color-error)", borderColor: "var(--color-error)" }}
                                 onClick={() => {
                                   if (!window.confirm(`Cancel the appointment for ${a.patient_name || "this patient"} (Token ${a.token_number})? This cannot be undone.`)) return;
-                                  moveStatus(a.id, "cancelled");
+                                  moveStatus(a.appointment_id, "cancelled");
                                 }}>
                                 Cancel
                               </button>

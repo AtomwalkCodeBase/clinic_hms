@@ -135,7 +135,7 @@ export default function ClinicalPanel({ api, payload, onChanged, onOpenDocument 
               {dxPaging.pageItems.map((e, i, list) => {
                 const sameDay = i > 0 && list[i - 1].date === e.date;      // one visit, several diagnoses: the date is written once
                 return (
-                <tr key={e.id} className={e.is_provisional ? 'dhj-row-prov' : ''} style={sameDay ? { borderTopColor: 'transparent' } : undefined}>
+                <tr key={e.clinical_event_id} className={e.is_provisional ? 'dhj-row-prov' : ''} style={sameDay ? { borderTopColor: 'transparent' } : undefined}>
                   <td className="dhj-mono">{sameDay ? '' : fmtDate(e.date)}</td>
                   <td className="dhj-mono">{sameDay ? '' : e.age_label}</td>
                   <td><span className={`dhj-badge ${KIND_TONE[e.kind]}`}>{e.kind}</span></td>

@@ -44,7 +44,7 @@ class FrontendApiContractTests(SimpleTestCase):
         cfg = (FRONTEND_SRC / "config" / "api.config.js").read_text(encoding="utf8")
         entry = re.compile(r"^\s+[A-Z_0-9]+:\s*(?:\(.*?\)\s*=>\s*)?`\$\{API_V1\}(/[^`]*)`", re.M)
         configured = {re.sub(r"\$\{[^}]+\}", "{}", m.group(1)).split("?")[0] for m in entry.finditer(cfg)}
-        self.assertGreater(len(configured), 200)  # guards against the regex silently matching nothing
+        self.assertGreater(len(configured), 150)  # guards against the regex silently matching nothing
         unrouted = configured - _backend_routes()
         self.assertEqual(sorted(unrouted), [])
 
@@ -65,7 +65,7 @@ class FrontendApiContractTests(SimpleTestCase):
             m = re.match(r"^\s{4}([A-Z_0-9]+):", line)
             if m and group:
                 defined.add(f"{group}.{m.group(1)}")
-        self.assertGreater(len(defined), 200)
+        self.assertGreater(len(defined), 150)
         used = set()
         for path in FRONTEND_SRC.rglob("*.js*"):
             if path.name == "api.config.js":

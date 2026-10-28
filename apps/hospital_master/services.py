@@ -4,7 +4,7 @@ import logging
 import threading
 from django.db import connections
 from django.conf import settings
-from apps.hospital_setup.models import StaffUser
+from apps.hospital_setup.models import ROLE_DOCTOR, StaffUser
 from apps.hospital_setup.models import Branch
 
 
@@ -22,7 +22,7 @@ def parameters_of(hospital):
 def build_hospital_db_name(slug: str) -> str:
     """Convert slug to a safe PostgreSQL DB name."""
     safe = re.sub(r"[^a-z0-9_]", "_", slug.lower())
-    return f"aw_hospital_{safe}"
+    return f"{settings.HOSPITAL_DB_PREFIX}hospital_{safe}"
 def _make_db_config(name: str) -> dict:
     """Build a fully-normalised database config dict."""
     t = settings.HOSPITAL_DB_CONFIG_TEMPLATE
@@ -59,7 +59,7 @@ def resolve_source_hospital_id(db_alias) -> int:
         return explicit
     if not db_alias:
         return 0
-    return Hospital.objects.using("default").filter(db_name=db_alias).values_list("id", flat=True).first() or 0
+    return Hospital.objects.using("default").filter(db_name=db_alias).values_list("pk", flat=True).first() or 0
 def create_hospital_database(db_name: str):
     """Create a new PostgreSQL database for a hospital."""
     sys_db_config = _make_db_config("postgres")
@@ -141,8 +141,6 @@ def run_hospital_migrations(db_name: str):
 
 
 logger = logging.getLogger(__name__)
-# Roles counted against max_staff. Doctors are deliberately excluded here —
-_NON_DOCTOR_ROLES = ["hospital_admin", "nurse", "front_desk", "lab_tech", "pharmacist"]
 LIMIT_LABELS = {
     "doctors":  "doctor",
     "branches": "branch",
@@ -150,12 +148,10 @@ LIMIT_LABELS = {
 }
 def get_usage_counts(db_name):
     """Live counts from one hospital's own database: {doctors, branches, staff}."""
-    from apps.hospital_setup.rbac import acts_as_q
-    # A hospital-defined role (see apps.hospital_setup.rbac) counts as what it acts as; one that acts as a doctor counts once, as a doctor
     active = StaffUser.objects.using(db_name).filter(is_active=True)
-    doctors = active.filter(acts_as_q("doctor")).count()
+    doctors = active.filter(user_group__role=ROLE_DOCTOR).count()
     branches = Branch.objects.using(db_name).filter(is_active=True).count()
-    staff = active.filter(acts_as_q(*_NON_DOCTOR_ROLES)).exclude(acts_as_q("doctor")).count()
+    staff = active.exclude(user_group__role=ROLE_DOCTOR).count()
 
     return {"doctors": doctors, "branches": branches, "staff": staff}
 class LimitCheckFailed(Exception):
@@ -171,7 +167,7 @@ def check_limit(hospital, db_name, resource, increment=1):
     try:
         sub = Subscription.objects.using("default").get(hospital=hospital)
     except Subscription.DoesNotExist:
-        logger.error("check_limit: no Subscription for hospital_id=%s", hospital.id)
+        logger.error("check_limit: no Subscription for hospital_id=%s", hospital.pk)
         raise LimitCheckFailed(
             "Unable to verify your plan limits right now. Please try again shortly.",
             status=503,
@@ -204,28 +200,28 @@ def check_limit(hospital, db_name, resource, increment=1):
 
 TIER_FEATURE_DEFAULTS = {
     "starter": {
-        "feat_lab": False, "feat_pharmacy": False, "feat_whatsapp": False,
+        "feat_whatsapp": False,
         "feat_multi_branch": False, "feat_ai_voice": False, "feat_patient_app": False,
         "feat_analytics": False, "feat_video": False, "feat_face_recog": False,
         "feat_custom_roles": False,
         "max_doctors": 3, "max_branches": 1, "max_staff": 5,
     },
     "growth": {
-        "feat_lab": True, "feat_pharmacy": True, "feat_whatsapp": True,
+        "feat_whatsapp": True,
         "feat_multi_branch": False, "feat_ai_voice": False, "feat_patient_app": False,
         "feat_analytics": False, "feat_video": False, "feat_face_recog": False,
         "feat_custom_roles": False,
         "max_doctors": 10, "max_branches": 1, "max_staff": 15,
     },
     "pro": {
-        "feat_lab": True, "feat_pharmacy": True, "feat_whatsapp": True,
+        "feat_whatsapp": True,
         "feat_multi_branch": True, "feat_ai_voice": True, "feat_patient_app": True,
         "feat_analytics": True, "feat_video": False, "feat_face_recog": False,
         "feat_custom_roles": False,
         "max_doctors": 50, "max_branches": 5, "max_staff": 75,
     },
     "enterprise": {
-        "feat_lab": True, "feat_pharmacy": True, "feat_whatsapp": True,
+        "feat_whatsapp": True,
         "feat_multi_branch": True, "feat_ai_voice": True, "feat_patient_app": True,
         "feat_analytics": True, "feat_video": True, "feat_face_recog": True,
         "feat_custom_roles": True,

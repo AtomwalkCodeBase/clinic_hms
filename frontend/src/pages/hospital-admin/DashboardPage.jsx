@@ -269,7 +269,7 @@ export default function DashboardPage() {
               number={2} done={orgStats.staff > 0 || orgStats.doctors > 0}
               disabled={orgStats.branches === 0}
               title="Invite staff members"
-              description="Add doctors, nurses, front desk, lab techs, and pharmacists."
+              description="Add doctors, nurses and front desk staff."
               onClick={() => navigate(ROUTES.ADMIN.STAFF)}
             />
           </div>

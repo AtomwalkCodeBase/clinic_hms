@@ -93,7 +93,7 @@ function LabTrends({ labs, onOpenDocument }) {
   );
 }
 
-function Medicines({ rows, onOpenDocument }) {
+function Medicines({ rows = [], onOpenDocument }) {
   const paging = useClientPaging(rows, 10);
   if (!rows.length) return <p className="dhj-muted">No prescriptions from a hospital on file. Medicines on reports a parent uploaded are not listed here.</p>;
   return (

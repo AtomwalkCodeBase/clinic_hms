@@ -2,7 +2,7 @@
 
 import logging
 
-from apps.billing.services import recompute_invoice_totals, hospital_default_tax_rate
+from apps.billing.services import line_from_request, recompute_invoice_totals, hospital_default_tax_rate
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +23,9 @@ def resolve_doctor_consultation_fee(db, doctor_id, appointment_type=None):
 def auto_generate_invoice(encounter, db, user, patient=None, hospital_id=None):
     """Create a draft invoice after encounter sign-off. Never blocks sign-off."""
     from decimal import Decimal
-    from apps.billing.models import Invoice, InvoiceItem
+    from apps.billing.models import Invoice
     from apps.opd.models import Appointment
-    from core.utils.nntm import get_next_number
+    from apps.hospital_setup.models import NextNumber
 
     try:
         appointment = encounter.appointment
@@ -43,25 +43,18 @@ def auto_generate_invoice(encounter, db, user, patient=None, hospital_id=None):
             else "OPD Consultation"
         )
 
-        invoice_number, _ = get_next_number(branch_id=branch.id, entity="invoice", using=db)
+        invoice_number, _ = NextNumber.next(branch.pk, "invoice", db)
         invoice = Invoice.objects.using(db).create(
             patient=patient,
             branch=branch,
             invoice_number=invoice_number,
             status="draft",
-            created_by_id=user.id,
-            notes=f"Auto-generated for OPD encounter {encounter.id}",
-        )
-        InvoiceItem.objects.using(db).create(
-            invoice=invoice,
-            description=description,
-            quantity=1,
-            unit_price=fee,
-            tax_rate=tax_rate,
-            total=fee,
+            created_by_id=user.pk,
+            notes=f"Auto-generated for OPD encounter {encounter.pk}",
+            lines=[line_from_request({"description": description, "quantity": 1, "unit_price": fee, "tax_rate": tax_rate})],
         )
         recompute_invoice_totals(invoice, db)
         logger.info("Auto-generated invoice %s for encounter %s (type=%s, fee=%s, tax_rate=%s%%)",
-                    invoice.invoice_number, encounter.id, appointment_type, fee, tax_rate)
+                    invoice.invoice_number, encounter.pk, appointment_type, fee, tax_rate)
     except Exception as e:
         logger.warning("Could not auto-generate invoice: %s", e)

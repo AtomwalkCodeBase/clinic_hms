@@ -9,13 +9,12 @@ from core.api.response import success, error, created, not_found
 from core.api.pagination import paginate_queryset, paginate_list
 from core.api.permissions import IsHospitalAdmin, IsHospitalStaff, IsPatient
 
-from apps.hospital_setup.models import RecordAmendment, ConsentRecord
+from apps.hospital_setup.models import RecordAmendment
 from apps.hospital_setup.compliance_serializers import (
     AuditLogSerializer,
     RecordAmendmentSerializer,
     RecordAmendmentCreateSerializer,
     RecordAmendmentResolveSerializer,
-    ConsentRecordSerializer,
 )
 from apps.patients.services import accounts
 
@@ -99,35 +98,11 @@ class RecordAmendmentResolveView(APIView):
         d = serializer.validated_data
         amendment.status = d["status"]
         amendment.review_notes = d.get("review_notes", "")
-        amendment.reviewed_by_id = request.user.id
+        amendment.reviewed_by_id = request.user.pk
         amendment.resolved_at = timezone.now()
         amendment.save(using=db, update_fields=["status", "review_notes", "reviewed_by", "resolved_at"])
 
         return success(data=RecordAmendmentSerializer(amendment).data, message="Request resolved.")
-
-
-# ── Hospital staff: consent history ─────────────────────────────────────────
-
-class ConsentRecordListView(APIView):
-    """GET /api/v1/compliance/consents/?patient_id="""
-    permission_classes = [IsAuthenticated, IsHospitalStaff]
-
-    def get(self, request):
-        db = request.hospital_db
-        qs = ConsentRecord.objects.using(db).select_related("patient", "recorded_by").all()
-
-        patient_id = request.query_params.get("patient_id")
-        if patient_id:
-            qs = qs.filter(patient_id=patient_id)
-
-        page_items, meta = paginate_queryset(request, qs)
-        patients = [c.patient for c in page_items]
-        for p in patients[:1]:
-            p.get_patient_details(batch=patients)
-        return success(data={
-            "results": ConsentRecordSerializer(page_items, many=True).data,
-            "pagination": meta,
-        })
 
 
 # ── Patient portal: request a correction ────────────────────────────────────
@@ -138,10 +113,10 @@ class PortalRecordAmendmentView(APIView):
 
     def get(self, request):
         from apps.hospital_master.models import Hospital
-        from apps.opd.models import HospitalPatient
+        from apps.hospital_patients.models import HospitalPatient
         from apps.patients.models import PatientRelationship
 
-        acct = accounts().get(pk=request.user.id)
+        acct = accounts().get(pk=request.user.pk)
         target_awpid = (request.query_params.get("patient_awpid") or "").strip() or acct.awpid
         if target_awpid != acct.awpid:
             is_family = PatientRelationship.objects.using("default").filter(
@@ -164,7 +139,7 @@ class PortalRecordAmendmentView(APIView):
                 for row in rows:
                     data = RecordAmendmentSerializer(row).data
                     data["hospital"] = hospital.name
-                    data["hospital_id"] = hospital.id
+                    data["hospital_id"] = hospital.pk
                     results.append(data)
             except Exception as exc:
                 logger.warning("portal amendments: skipped %s (%s)", db, exc)
@@ -176,7 +151,7 @@ class PortalRecordAmendmentView(APIView):
     def post(self, request):
         from apps.hospital_master.models import Hospital
         from apps.hospital_master.services import ensure_hospital_db
-        from apps.opd.models import HospitalPatient
+        from apps.hospital_patients.models import HospitalPatient
         from apps.patients.models import PatientRelationship
 
         d = request.data
@@ -189,7 +164,7 @@ class PortalRecordAmendmentView(APIView):
         except Hospital.DoesNotExist:
             return error("Hospital not found.")
 
-        acct = accounts().get(pk=request.user.id)
+        acct = accounts().get(pk=request.user.pk)
         target_awpid = (d.get("patient_awpid") or "").strip() or acct.awpid
         if target_awpid != acct.awpid:
             is_family = PatientRelationship.objects.using("default").filter(
@@ -212,5 +187,5 @@ class PortalRecordAmendmentView(APIView):
         row = RecordAmendment.objects.using(db).create(patient=patient, **serializer.validated_data)
         data = RecordAmendmentSerializer(row).data
         data["hospital"] = hospital.name
-        data["hospital_id"] = hospital.id
+        data["hospital_id"] = hospital.pk
         return created(data=data, message="Correction request submitted.")

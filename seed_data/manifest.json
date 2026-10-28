@@ -1,0 +1,14 @@
+{
+ "hospitals": [
+  {
+   "pk": 1,
+   "name": "NovaCare Hospital",
+   "db_name": "cp_novacare_hospital"
+  },
+  {
+   "pk": 2,
+   "name": "MahaNandi Hospitals",
+   "db_name": "cp_mahanandi_hospitals"
+  }
+ ]
+}

@@ -7,6 +7,3 @@ class OpdConfig(AppConfig):
     label = "opd"
     verbose_name = "OPD"
     database = "hospital"
-
-    def ready(self):
-        import apps.opd.patient_signals  # noqa: F401 — registers signal handlers

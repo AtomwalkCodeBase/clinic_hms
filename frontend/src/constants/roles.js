@@ -6,8 +6,6 @@ export const ROLES = {
   DOCTOR:           "doctor",
   NURSE:            "nurse",
   FRONT_DESK:       "front_desk",
-  LAB_TECH:         "lab_tech",
-  PHARMACIST:       "pharmacist",
   PATIENT:          "patient",
 };
 
@@ -18,8 +16,6 @@ export const ROLE_LABELS = {
   [ROLES.DOCTOR]:         "Doctor",
   [ROLES.NURSE]:          "Nurse",
   [ROLES.FRONT_DESK]:     "Front Desk",
-  [ROLES.LAB_TECH]:       "Lab Technician",
-  [ROLES.PHARMACIST]:     "Pharmacist",
   [ROLES.PATIENT]:        "Patient",
 };
 
@@ -29,8 +25,6 @@ export const STAFF_ROLES = [
   ROLES.DOCTOR,
   ROLES.NURSE,
   ROLES.FRONT_DESK,
-  ROLES.LAB_TECH,
-  ROLES.PHARMACIST,
 ];
 
 /** Priority order used to derive a single "primary" identity for a */
@@ -39,8 +33,6 @@ export const ACTS_AS_PRIORITY = [
   ROLES.DOCTOR,
   ROLES.NURSE,
   ROLES.FRONT_DESK,
-  ROLES.LAB_TECH,
-  ROLES.PHARMACIST,
 ];
 
 export default ROLES;

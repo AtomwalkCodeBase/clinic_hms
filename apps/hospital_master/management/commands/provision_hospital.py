@@ -1,5 +1,6 @@
 """Management command: provision_hospital"""
 
+from django.conf import settings
 import secrets
 import string
 from django.core.management.base import BaseCommand, CommandError
@@ -47,7 +48,7 @@ class Command(BaseCommand):
 
         # Derive db_name from hospital_code
         db_name = hospital_code.replace("-", "_").replace(" ", "_").lower()
-        db_name = f"aw_{db_name}"
+        db_name = f"{settings.HOSPITAL_DB_PREFIX}{db_name}"
 
         self.stdout.write(f"\n{'='*60}")
         self.stdout.write(f"  Provisioning: {name}")
@@ -73,7 +74,7 @@ class Command(BaseCommand):
             gstin=gstin,
             is_active=True,
         )
-        self.stdout.write(self.style.SUCCESS(f"    Hospital created (id={hospital.id})"))
+        self.stdout.write(self.style.SUCCESS(f"    Hospital created (id={hospital.pk})"))
 
         parameters_of(hospital)
 
@@ -109,30 +110,13 @@ class Command(BaseCommand):
         self.stdout.write("[ 5/5 ] Creating hospital admin user...")
         temp_password = _gen_password()
         try:
-            from apps.hospital_setup.models import StaffUser
-            from apps.hospital_setup.staff_services import next_employee_id
-            from apps.hospital_setup.rbac import system_role
-            admin = StaffUser(
-                phone=admin_mobile,
-                email=admin_email,
-                employee_id=next_employee_id(db_name),
-                first_name="Hospital",
-                last_name="Admin",
-                group=system_role(db_name, "hospital_admin"),
-                must_change_password=True,
+            from apps.hospital_setup.staff_services import create_staff, next_employee_id, set_login_password
+            admin = create_staff(
+                db_name, hospital.pk, "hospital_admin",
+                phone=admin_mobile, email=admin_email or None, employee_id=next_employee_id(db_name),
+                first_name="Hospital", last_name="Admin",
             )
-            admin.set_password(temp_password)
-            admin.save(using=db_name)
-
-            # Write to atomwalk mobile index (enables login without hospital_code)
-            from apps.patients.models import StaffMobileIndex
-            StaffMobileIndex.objects.using("default").update_or_create(
-                mobile=admin_mobile,
-                defaults={
-                    "hospital_id": hospital.id,
-                    "email": admin_email or None,
-                },
-            )
+            set_login_password(admin, temp_password)
             self.stdout.write(self.style.SUCCESS(f"    Admin user created: {admin_mobile}"))
         except Exception as e:
             self.stdout.write(self.style.WARNING(f"    StaffUser creation failed: {e}"))

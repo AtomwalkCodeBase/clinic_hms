@@ -51,19 +51,13 @@ export function TriagePageContent({ embedded = false } = {}) {
                   {d.is_available_today ? (
                     <button
                       className="primary-btn"
-                      onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_OPD, { state: { departmentHint: d.department_name } })}
+                      onClick={() => navigate(ROUTES.FRONT_DESK.APPOINTMENTS, { state: { departmentHint: d.department_name } })}
                     >
                       Book OPD →
                     </button>
                   ) : (
                     <button className="secondary-btn" disabled>Book OPD →</button>
                   )}
-                  <button
-                    className={d.is_available_today ? "secondary-btn" : "critical-btn"}
-                    onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_EMERGENCY, { state: { departmentHint: d.department_name } })}
-                  >
-                    {d.is_available_today ? "Route to Emergency" : "Route to Emergency →"}
-                  </button>
                 </div>
               </div>
             ))}
@@ -71,18 +65,6 @@ export function TriagePageContent({ embedded = false } = {}) {
             {!isLoading && list.length === 0 && (
               <div className="fine">No departments configured for this branch yet.</div>
             )}
-
-            <div className="avail-row none">
-              <div>
-                <div className="avail-dept">Unconscious, unidentified, or a clear emergency</div>
-                <div className="avail-meta">Skip department selection — identity and registration never wait on which department the patient turns out to need.</div>
-              </div>
-              <div className="avail-actions">
-                <button className="critical-btn" onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_EMERGENCY)}>
-                  Register Emergency Patient →
-                </button>
-              </div>
-            </div>
           </div>
         </div>
 

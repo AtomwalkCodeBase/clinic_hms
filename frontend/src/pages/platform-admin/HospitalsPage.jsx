@@ -150,7 +150,7 @@ export default function HospitalsPage() {
                 </thead>
                 <tbody>
                   {sorted.map(t => (
-                    <tr key={t.id} onClick={() => navigate(ROUTES.PLATFORM.HOSPITAL(t.id))}
+                    <tr key={t.hospital_id} onClick={() => navigate(ROUTES.PLATFORM.HOSPITAL(t.hospital_id))}
                       style={{ cursor: "pointer" }}
                       onMouseEnter={e => e.currentTarget.style.background = "var(--color-surface-secondary, #f6f4ee)"}
                       onMouseLeave={e => e.currentTarget.style.background = "transparent"}>

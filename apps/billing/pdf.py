@@ -1,5 +1,7 @@
 """apps/billing/pdf.py"""
 from decimal import Decimal
+
+from django.utils.dateparse import parse_datetime
 from io import BytesIO
 
 from reportlab.lib.pagesizes import A4
@@ -121,11 +123,11 @@ def generate_invoice_pdf(invoice, items, payments, patient, branch, hospital_nam
             y = height - 20 * mm
             c.setFont("Helvetica", 9)
             table_header()
-        c.drawString(col_desc + 2 * mm, y, (item.description or "—")[:60])
-        c.drawCentredString(col_qty, y, str(item.quantity))
-        c.drawRightString(col_price + 12 * mm, y, _money(item.unit_price))
+        c.drawString(col_desc + 2 * mm, y, (item['description'] or "—")[:60])
+        c.drawCentredString(col_qty, y, str(item['quantity']))
+        c.drawRightString(col_price + 12 * mm, y, _money(item['unit_price']))
         c.drawCentredString(col_tax, y, f"{item.tax_rate}%")
-        c.drawRightString(col_total, y, _money(item.total))
+        c.drawRightString(col_total, y, _money(item['total']))
         y -= 7 * mm
 
     y -= 4 * mm
@@ -163,9 +165,9 @@ def generate_invoice_pdf(invoice, items, payments, patient, branch, hospital_nam
                 c.showPage()
                 y = height - 20 * mm
                 c.setFont("Helvetica", 9)
-            when = p.paid_at.strftime("%d %b %Y, %I:%M %p") if p.paid_at else "—"
-            ref = f" (ref: {p.transaction_ref})" if p.transaction_ref else ""
-            c.drawString(left, y, f"{when} — {_money(p.amount)} via {p.payment_mode}{ref}")
+            when = parse_datetime(p["paid_at"]).strftime("%d %b %Y, %I:%M %p") if p.get("paid_at") else "—"
+            ref = f" (ref: {p['transaction_ref']})" if p["transaction_ref"] else ""
+            c.drawString(left, y, f"{when} — {_money(p['amount'])} via {p['payment_mode']}{ref}")
             y -= 6 * mm
 
     # ── Footer ──────────────────────────────────────────────────────────

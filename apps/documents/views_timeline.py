@@ -9,12 +9,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.hospital_master.models import Hospital
-from apps.opd.models import HospitalPatient
+from apps.hospital_patients.models import HospitalPatient
 from apps.patients.models import Patient, RecurrenceFlag
 
 from . import integration as ig
+from .lib_documents import confirmed_q
 from .lib_processing import SHOWN_VACCINES, build_timeline_payload, growth_dob, rebuild_patient
-from .models import BirthHistory, ClinicalEvent, GrowthMeasurement, ImmunizationRecord
+from .models import BirthHistory, ClinicalEvent, GrowthMeasurement, ImmunizationRecord, MedicalDocument
 from .services.clinical_rules import age_in_months, classify_condition
 from .services.config import load_config
 from .services.config import GROWTH_REFERENCE_DIR
@@ -38,13 +39,7 @@ def _clinician_or_403(request):
     return None
 
 
-def _own_hospital_only(request, patient):
-    """A hospital whose patient has not agreed to cross-hospital sharing sees only what it wrote or read itself (the same rule as the history view)."""
-    if getattr(request.user, "role", "") == "patient":
-        return None
-    hospital = Hospital.objects.filter(pk=request.user.hospital_id).first()
-    holder = HospitalPatient.objects.using(hospital.db_name).filter(awpid=patient.awpid).first() if hospital else None
-    return None if holder and holder.hie_consent_given else request.user.hospital_id
+
 
 
 def _first_of_each_reading(rows, column):
@@ -69,7 +64,7 @@ def _reference_note(indicator, sex):
 
 
 def _staff_id(request):
-    return request.user.id if isinstance(request.user.id, int) else None
+    return request.user.pk if isinstance(request.user.pk, int) else None
 
 
 def _parse_period(request, dob):
@@ -99,12 +94,33 @@ class PatientHealthTimelineView(APIView):
             return Response({"detail": "Invalid period"}, status=status.HTTP_400_BAD_REQUEST)
         audience = "doctor" if (request.query_params.get("view") == "doctor"
                                 and ig.is_clinician(request.user)) else "guardian"
-        return Response(build_timeline_payload(patient, p_from, p_to, audience, hospital_id=_own_hospital_only(request, patient)))
+        return Response(build_timeline_payload(patient, p_from, p_to, audience, hospital_id=None))
+
+
+def _medications_prescribed_here(request, patient):
+    """The medicines the signed-in doctor's hospital prescribed to this patient, newest visit first. Each row opens the prescription document when
+    one was filed for the visit."""
+    from apps.opd.models import PrescriptionItem
+    db = getattr(request, "hospital_db", None)
+    if not db or db == "default":
+        return []
+    items = list(PrescriptionItem.objects.using(db)
+                 .filter(prescription__encounter__appointment__patient__awpid=patient.awpid)
+                 .select_related("prescription__encounter__appointment")
+                 .order_by("-prescription__encounter__appointment__scheduled_date", "-prescription__created_at"))
+    encounter_ids = {str(i.prescription.encounter_id) for i in items}
+    documents = dict(MedicalDocument.objects.using("default")
+                     .filter(patient=patient, source_type=MedicalDocument.Source.ENCOUNTER, source_id__in=encounter_ids,
+                             doc_classification="prescription")
+                     .values_list("source_id", "pk"))
+    return [{"date": i.prescription.encounter.appointment.scheduled_date, "drug_name": i.drug_name, "dose": i.dosage, "unit": "",
+             "frequency": i.frequency, "route": i.route, "duration_days": i.duration_days,
+             "document_id": documents.get(i.prescription.encounter_id)} for i in items]
 
 
 # ------------------------------------------------- doctor detail
 class PatientClinicalSummaryView(APIView):
-    """Doctors only: lab trends with reference ranges, the medicines a hospital prescribed, and what the timeline does not know."""
+    """Doctors only: lab trends with reference ranges, the medicines this hospital prescribed, and what the timeline does not know."""
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, awpid):
@@ -114,8 +130,8 @@ class PatientClinicalSummaryView(APIView):
         err = _clinician_or_403(request)
         if err:
             return err
-        hospital_id = _own_hospital_only(request, patient)
-        return Response({"labs": lib_clinical.lab_trends(patient, hospital_id), "medications": lib_clinical.medication_history(patient, hospital_id),
+        hospital_id = None
+        return Response({"labs": lib_clinical.lab_trends(patient, hospital_id), "medications": _medications_prescribed_here(request, patient),
                          "gaps": lib_clinical.data_gaps(patient, hospital_id)})
 
 
@@ -150,9 +166,9 @@ class PatientGrowthView(APIView):
         if indicator not in INDICATORS:
             return Response({"detail": f"indicator must be one of {list(INDICATORS)}"}, status=400)
         dob, sex = ig.patient_dob_sex(patient)
-        hospital_id = _own_hospital_only(request, patient)          # no consent to share between hospitals: only this hospital's own readings
+        hospital_id = None
         own = {"source_hospital_id": hospital_id} if hospital_id is not None else {}
-        bh = BirthHistory.objects.filter(patient=patient).first()
+        bh = BirthHistory.objects.filter(confirmed_q(), patient=patient).first()
         corrected = growth_dob(dob, bh)
         age_now = age_in_months(dob, date.today())
         column = {"head_circ_cm": "head_circumference_cm"}.get(indicator, indicator)
@@ -163,8 +179,8 @@ class PatientGrowthView(APIView):
                    "value": float(getattr(g, column)), "z": getattr(g, z_field),
                    "percentile": getattr(g, pct_field), "flag": g.flags.get(column),
                    "document_id": g.document_id, "source": g.source}
-                  for g in _first_of_each_reading(GrowthMeasurement.objects.filter(patient_id=patient.pk, is_rejected=False, **own)
-                                                  .exclude(**{f"{column}__isnull": True}).order_by("measured_on", "id"), column)]
+                  for g in _first_of_each_reading(GrowthMeasurement.objects.filter(confirmed_q(), patient_id=patient.pk, is_rejected=False, **own)
+                                                  .exclude(**{f"{column}__isnull": True}).order_by("measured_on", "pk"), column)]
         max_m = max([age_now + 3] + [p["age_months"] + 3 for p in points])
         max_m = min(max_m, 60 if indicator == "head_circ_cm" else 216)
         return Response({
@@ -213,14 +229,9 @@ class PatientImmunizationView(APIView):
         if err:
             return err
         dob, _ = ig.patient_dob_sex(patient)
-        if _own_hospital_only(request, patient) is not None:
-            # no consent to share between hospitals: another hospital's vaccines are not shown, and nothing is called overdue on a record we cannot see
-            return Response({"rows": [], "extra_doses": [], "unresolved": [], "next_due": None, "sharing_limited": True,
-                             "source": load_config()["immunization_schedule"].get("source", ""),
-                             "summary": {"given": 0, "overdue": 0, "due": 0, "upcoming": 0, "coverage_pct": None}})
         given = [{"vaccine_text": v.vaccine_name, "given_on": v.administered_date, "document_id": v.document_id,
-                  "id": v.pk, "source": v.source}
-                 for v in ImmunizationRecord.objects.filter(patient_id=patient.pk, verification_status__in=SHOWN_VACCINES,
+                  "immunization_record_id": v.pk, "source": v.source}
+                 for v in ImmunizationRecord.objects.filter(confirmed_q(), patient_id=patient.pk, verification_status__in=SHOWN_VACCINES,
                                                             administered_date__isnull=False)]
         st = immunization_status(dob, given, date.today())
         labels = load_config().get("patient_labels", {})

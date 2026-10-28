@@ -5,6 +5,7 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth }   from "../../hooks/useAuth";
 import { useToast }  from "../../hooks/useToast";
 import { ROLES, ROLE_LABELS, ACTS_AS_PRIORITY } from "../../constants/roles";
+import { MODULE_ADMIN_PAGES } from "../../constants/modules";
 import { ROUTES }    from "../../config/routes.config";
 import APP_CONFIG    from "../../config/app.config";
 import { PatientContext } from "../../context/PatientContext";
@@ -169,9 +170,6 @@ const NAV_BY_ROLE = {
     { type: "link",    label: "Patients",     iconKey: "patient",   to: ROUTES.DOCTOR.PATIENTS },
     { type: "link",    label: "History",      iconKey: "history",   to: ROUTES.DOCTOR.HISTORY },
     // NOTE: no separate "Laboratory" or "Prescriptions" links here — both
-    { type: "section", label: "IPD" },
-    { type: "link",    label: "IPD Referrals", iconKey: "admission", to: ROUTES.DOCTOR.IPD_REFERRALS },
-    { type: "link",    label: "My Inpatients", iconKey: "vitals",    to: ROUTES.DOCTOR.IPD_PATIENTS },
     { type: "section", label: "Account" },
     { type: "link",    label: "My Profile",    iconKey: "settings",     to: ROUTES.DOCTOR.MY_PROFILE },
   ],
@@ -191,16 +189,10 @@ const NAV_BY_ROLE = {
     { type: "section", label: "Patients" },
     { type: "link",    label: "Search Patients",       iconKey: "fd_search",            to: ROUTES.FRONT_DESK.PATIENTS },
     { type: "link",    label: "Register Patient",      iconKey: "fd_register",          to: ROUTES.FRONT_DESK.REGISTER_PATIENT },
-    { type: "link",    label: "Emergency Registration",iconKey: "fd_emergency",         to: ROUTES.FRONT_DESK.REGISTER_EMERGENCY },
 
     { type: "section", label: "OPD" },
     { type: "link",    label: "Appointments & Booking",iconKey: "fd_appointments",      to: ROUTES.FRONT_DESK.APPOINTMENTS },
     { type: "link",    label: "OPD Queue",             iconKey: "fd_opd_queue",         to: ROUTES.FRONT_DESK.QUEUE },
-
-    { type: "section", label: "IPD" },
-    { type: "link",    label: "Admission Requests",    iconKey: "fd_admission_requests",to: ROUTES.FRONT_DESK.ADMISSIONS },
-    { type: "link",    label: "Current Patients",      iconKey: "fd_ipd_patients",      to: ROUTES.FRONT_DESK.IPD_PATIENTS },
-    { type: "link",    label: "Bed Board",             iconKey: "fd_bed_board",         to: ROUTES.FRONT_DESK.BED_BOARD },
 
     { type: "section", label: "Records & Finance" },
     { type: "link",    label: "Visit History",         iconKey: "fd_visit_history",     to: ROUTES.FRONT_DESK.HISTORY },
@@ -209,30 +201,7 @@ const NAV_BY_ROLE = {
     { type: "link",    label: "My Profile",            iconKey: "fd_my_profile",        to: ROUTES.FRONT_DESK.MY_PROFILE },
   ],
 
-  [ROLES.LAB_TECH]: [
-    { type: "link",    label: "Dashboard",  iconKey: "dashboard", to: ROUTES.LAB.DASHBOARD },
-    { type: "section", label: "Work" },
-    { type: "link",    label: "Requests",   iconKey: "lab",       to: ROUTES.LAB.REQUESTS },
-    { type: "link",    label: "Reports",    iconKey: "reports",   to: ROUTES.LAB.REPORTS },
-    { type: "section", label: "Catalogue" },
-    { type: "link",    label: "Test Catalog", iconKey: "tasks",   to: ROUTES.LAB.CATALOG },
-    { type: "link",    label: "Sample Type Setup", iconKey: "settings", to: ROUTES.LAB.SAMPLE_TYPE_SETUP },
-    { type: "section", label: "Account" },
-    { type: "link",    label: "My Profile",   iconKey: "settings", to: ROUTES.LAB.MY_PROFILE },
-  ],
 
-  [ROLES.PHARMACIST]: [
-    { type: "link",    label: "Dashboard",     iconKey: "dashboard",    to: ROUTES.PHARMACIST.DASHBOARD },
-    { type: "section", label: "Dispensary" },
-    { type: "link",    label: "Prescriptions", iconKey: "prescription", to: ROUTES.PHARMACIST.PRESCRIPTIONS },
-    { type: "section", label: "Inventory" },
-    { type: "link",    label: "Stock",         iconKey: "stock",        to: ROUTES.PHARMACIST.STOCK },
-    { type: "section", label: "Catalogue" },
-    { type: "link",    label: "Drug Catalog Setup", iconKey: "tasks",   to: ROUTES.PHARMACIST.CATALOG },
-    { type: "link",    label: "Drug Form Setup", iconKey: "tasks",      to: ROUTES.PHARMACIST.DRUG_FORM_SETUP },
-    { type: "section", label: "Account" },
-    { type: "link",    label: "My Profile",    iconKey: "settings",     to: ROUTES.PHARMACIST.MY_PROFILE },
-  ],
 
   [ROLES.PATIENT]: [
     { type: "section", label: "My Health" },
@@ -240,7 +209,6 @@ const NAV_BY_ROLE = {
     { type: "link",  label: "Appointments",  iconKey: "appointments", to: ROUTES.PATIENT.APPOINTMENTS },
     { type: "link",  label: "My Health Journey", iconKey: "records",  to: ROUTES.PATIENT.RECORDS },
     { type: "link",  label: "Prescriptions", iconKey: "prescription", to: ROUTES.PATIENT.PRESCRIPTIONS },
-    { type: "link",  label: "Lab Reports",   iconKey: "lab",          to: ROUTES.PATIENT.LAB_REPORTS },
     { type: "link",  label: "My Reports",    iconKey: "billing",      to: ROUTES.PATIENT.MY_REPORTS },
     { type: "link",  label: "Notifications", iconKey: "bell",         to: ROUTES.PATIENT.NOTIFICATIONS },
     { type: "link",  label: "Emergency QR",  iconKey: "qrcode",       to: ROUTES.PATIENT.EMERGENCY_QR },
@@ -293,6 +261,30 @@ function buildCustomNav(actsAs) {
     });
   });
 
+  return items;
+}
+
+/** The extra menu a staff member gets from the modules their user group was granted: another role's workspace, or some admin pages. */
+function buildModuleNav(granted, baseNav) {
+  const have = new Set();
+  baseNav.forEach(item => {
+    if (item.type === "link") have.add(item.to);
+    if (item.type === "group") item.children.forEach(c => have.add(c.to));
+  });
+  const fresh = to => !have.has(to) && have.add(to);
+  const items = [];
+  const adminLinks = [];
+
+  (granted || []).forEach(module => {
+    const pages = MODULE_ADMIN_PAGES[module] || [];
+    (NAV_BY_ROLE[ROLES.HOSPITAL_ADMIN] || []).forEach(item => {
+      const entries = item.type === "group" ? item.children : item.type === "link" ? [item] : [];
+      entries.forEach(entry => {
+        if (pages.some(p => entry.to.startsWith(p)) && fresh(entry.to)) adminLinks.push({ type: "link", ...entry });
+      });
+    });
+  });
+  if (adminLinks.length) items.push({ type: "section", label: "Administration" }, ...adminLinks);
   return items;
 }
 
@@ -484,9 +476,10 @@ export function AppShell({ children }) {
   const topSearchRef = useRef(null);
 
   // role="custom" staff (a hospital-defined Role — see apps/org/rbac.py)
-  const navItems = user?.role === "custom"
+  const baseNav = user?.role === "custom"
     ? buildCustomNav(user?.acts_as)
     : (NAV_BY_ROLE[user?.role] || []);
+  const navItems = [...baseNav, ...buildModuleNav(user?.granted_modules, baseNav)];
 
   function handleLogout() {
     logout();

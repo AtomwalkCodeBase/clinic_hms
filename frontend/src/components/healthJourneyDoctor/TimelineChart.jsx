@@ -55,15 +55,17 @@ function buildItems(payload, axisMode) {
         break;
       }
       case 'chronic': {
-        const ep = lane.episode;
-        const end = ep.end || payload.period.to;
-        items.push({
-          value: [x(ep.start), axisMode === 'age' ? (Math.min(toMs(end), periodEnd) - dobMs) / DAY_MS
-            : Math.min(toMs(end), periodEnd), i, 'bar', 'chronic'],
-          meta: { kind: 'chronic', label: lane.label, ...ep },
-        });
-        ep.events.forEach((e) => push(i, e.date, null, 'tick',
-          SEVERITY_STYLE[e.severity]?.token || 'text-primary', { kind: 'visit', label: lane.label, ...e }));
+        function addChronic(ep) {
+          const end = ep.end || payload.period.to;
+          items.push({
+            value: [x(ep.start), axisMode === 'age' ? (Math.min(toMs(end), periodEnd) - dobMs) / DAY_MS
+              : Math.min(toMs(end), periodEnd), i, 'bar', 'chronic'],
+            meta: { kind: 'chronic', label: lane.label, ...ep },
+          });
+          ep.events.forEach((e) => push(i, e.date, null, 'tick',
+            SEVERITY_STYLE[e.severity]?.token || 'text-primary', { kind: 'visit', label: lane.label, ...e }));
+        }
+        (lane.episodes || [lane.episode]).forEach(addChronic);
         break;
       }
       case 'acute':
@@ -172,6 +174,13 @@ export default function TimelineChart({ payload, axisMode = 'age', onOpenDocumen
   const option = useMemo(() => {
     const items = buildItems(payload, axisMode);
     const lanes = payload.lanes.map((l) => (l.is_recurrent ? `${l.label}  ↻` : l.label));
+    const laneKey = (l) => (l.is_recurrent ? `${l.label}  ↻` : l.label);
+    const laneTips = Object.fromEntries(payload.lanes.map((l) => [laneKey(l), l]));
+    const esc = (v) => String(v ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    const axisTip = (p) => {
+      const l = laneTips[p.name];
+      return l && l.full_label ? `<b>${esc(l.full_label)}</b>${l.codes?.length ? `<br/>${esc(l.codes.join(', '))}` : ''}` : esc(p.name);
+    };
     const dobMs = toMs(payload.patient.dob);
     const xFmt = axisMode === 'age' ? (v) => (v < 1 ? 'Birth' : formatAgeDays(v))
       : (v) => new Date(v).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
@@ -202,8 +211,9 @@ export default function TimelineChart({ payload, axisMode = 'age', onOpenDocumen
       },
       yAxis: {
         type: 'category', data: lanes, inverse: true,
+        triggerEvent: true, tooltip: { show: true, confine: true, formatter: axisTip },
         axisTick: { show: false }, axisLine: { show: false },
-        axisLabel: { color: t['text-secondary'], fontSize: narrow ? 11 : 12, width: narrow ? 96 : 200, overflow: 'break' },
+        axisLabel: { color: t['text-secondary'], fontSize: narrow ? 11 : 12, width: narrow ? 96 : 200, overflow: 'truncate' },
         splitLine: { show: true, lineStyle: { color: t.grid, width: 1 } },
       },
       series: [{

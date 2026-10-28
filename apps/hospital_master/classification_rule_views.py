@@ -12,7 +12,7 @@ from apps.documents.models import CHOOSABLE_TYPES, HUMAN_CLASSIFIED, ISSUED, REV
 
 
 def _doc_row(d):
-    return {"id": d.id, "title": records.display_name(d), "doc_type": d.doc_classification, "method": classification.method_of(d),
+    return {"medical_document_id": d.pk, "title": records.display_name(d), "doc_type": d.doc_classification, "method": classification.method_of(d),
             "score": classification.score_of(d), "best_guess": classification.best_guess_of(d), "processing_status": d.status,
             "awpid": d.patient.awpid, "created_at": d.created_at}
 

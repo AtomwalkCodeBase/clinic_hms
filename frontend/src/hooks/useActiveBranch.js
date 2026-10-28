@@ -17,10 +17,10 @@ export function useActiveBranch() {
         const list = r.data?.data || [];
         setBranches(list);
         const stored = localStorage.getItem(STORAGE_KEY);
-        const stillValid = list.some(b => String(b.id) === String(stored));
+        const stillValid = list.some(b => String(b.branch_id) === String(stored));
         if (!stillValid) {
           const primary = list.find(b => b.is_primary) || list[0] || null;
-          const nextId = primary ? String(primary.id) : "";
+          const nextId = primary ? String(primary.branch_id) : "";
           if (nextId) localStorage.setItem(STORAGE_KEY, nextId);
           setActiveBranchIdState(nextId);
         }

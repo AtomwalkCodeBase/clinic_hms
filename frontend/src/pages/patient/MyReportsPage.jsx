@@ -71,7 +71,7 @@ export default function MyReportsPage() {
     setSubmitting(true);
     try {
       const res = await apiClient.post(API_ENDPOINTS.RECORDS.SUBMIT,
-        { decisions: pending.map(d => ({ document_id: d.id, document_type: d.doc_type })) }, { params: awpidParam });
+        { decisions: pending.map(d => ({ document_id: d.medical_document_id, document_type: d.doc_type })) }, { params: awpidParam });
       const out = res?.data?.data ?? res?.data ?? {};
       const bad = (out.rejected || []).length;
       toastSuccess(`${(out.submitted || []).length} report${(out.submitted || []).length === 1 ? "" : "s"} submitted and locked.${bad ? ` ${bad} could not be submitted.` : ""}`);
@@ -83,7 +83,7 @@ export default function MyReportsPage() {
   // One place for every action on a report (try again, keep a duplicate).
   async function actOn(doc, payload, message) {
     try {
-      await apiClient.patch(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), payload, { params: awpidParam });
+      await apiClient.patch(API_ENDPOINTS.PORTAL.DOCUMENT(doc.medical_document_id), payload, { params: awpidParam });
       toastSuccess(message);
       refetch();
     } catch (err) { toastApiError(err, "That didn’t work — please try again."); }
@@ -91,7 +91,7 @@ export default function MyReportsPage() {
   // A file that failed can be removed for good (the server refuses to delete anything else).
   async function dismiss(doc) {
     try {
-      await apiClient.delete(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { params: awpidParam });
+      await apiClient.delete(API_ENDPOINTS.PORTAL.DOCUMENT(doc.medical_document_id), { params: awpidParam });
       toastSuccess("File removed.");
       setOpenId(null);
       refetch();
@@ -121,7 +121,7 @@ export default function MyReportsPage() {
       const res = await apiClient.get(API_ENDPOINTS.PORTAL.RECORDS_PRIVACY);
       const d = res?.data?.data ?? res?.data ?? {};
       const map = new Map();
-      (d.documents || []).forEach((x) => map.set(x.id, x));
+      (d.documents || []).forEach((x) => map.set(x.medical_document_id, x));
       setPrivMap(map);
       setPrivSession(d.active_session || null);
     } catch { /* privacy is non-blocking on this screen */ }
@@ -147,34 +147,34 @@ export default function MyReportsPage() {
     } catch (err) { toastApiError(err, "Could not update."); }
   }
   function onLock(doc) {
-    const p = privMap.get(doc.id) || {};
+    const p = privMap.get(doc.medical_document_id) || {};
     const name = doc.title;
     if (p.revealed_for_visit) {
       setLockDlg({ title: "Hide this again now?", message: `${name} would hide by itself when the visit ends.`,
-        actions: [{ label: "Cancel" }, { label: "Hide now", primary: true, onClick: () => privReveal(doc.id, "conceal") }] });
+        actions: [{ label: "Cancel" }, { label: "Hide now", primary: true, onClick: () => privReveal(doc.medical_document_id, "conceal") }] });
     } else if (p.private_by_rule) {
       setLockDlg({ title: "Hidden by a rule",
         message: `${name} is hidden by a category, kind or "hide everything" rule. Change those in Shared records privacy.`,
         actions: [
-          ...(privSession ? [{ label: "Just this visit", sub: "Reveal only for the doctor viewing now", primary: true, onClick: () => privReveal(doc.id, "visit") }] : []),
+          ...(privSession ? [{ label: "Just this visit", sub: "Reveal only for the doctor viewing now", primary: true, onClick: () => privReveal(doc.medical_document_id, "visit") }] : []),
           { label: "Close" },
         ] });
     } else if (!p.private) {
       setLockDlg({ title: "Make this private?",
         message: `${name} won't be shown to doctors when you share your records. You'll still see it here.`,
-        actions: [{ label: "Cancel" }, { label: "Make private", primary: true, onClick: () => privToggle(doc.id, true) }] });
+        actions: [{ label: "Cancel" }, { label: "Make private", primary: true, onClick: () => privToggle(doc.medical_document_id, true) }] });
     } else if (privSession) {
       setLockDlg({ title: "A doctor is viewing now",
         message: `Show ${name} to ${privSession.requester_label || "the doctor"} —`,
         actions: [
-          { label: "Just this visit", sub: "Hides again when the visit ends", primary: true, onClick: () => privReveal(doc.id, "visit") },
-          { label: "Always", sub: "Stays visible for future visits too", onClick: () => privToggle(doc.id, false) },
+          { label: "Just this visit", sub: "Hides again when the visit ends", primary: true, onClick: () => privReveal(doc.medical_document_id, "visit") },
+          { label: "Always", sub: "Stays visible for future visits too", onClick: () => privToggle(doc.medical_document_id, false) },
           { label: "Cancel" },
         ] });
     } else {
       setLockDlg({ title: "Show this to doctors again?",
         message: `Doctors you share with will be able to see ${name}.`,
-        actions: [{ label: "Cancel" }, { label: "Show", primary: true, onClick: () => privToggle(doc.id, false) }] });
+        actions: [{ label: "Cancel" }, { label: "Show", primary: true, onClick: () => privToggle(doc.medical_document_id, false) }] });
     }
   }
 
@@ -202,12 +202,12 @@ export default function MyReportsPage() {
   const shown = useMemo(() => sortReports(docs.filter(d =>
     (activeTab === "all" || (activeTab === ATTENTION ? NEEDS_ATTENTION.has(stateOf(d)) : stateOf(d) === "ready" && d.doc_type === activeTab))
     && matchesSearch(d, q)), sort), [docs, activeTab, q, sort]);
-  const byId = useMemo(() => new Map(docs.map(d => [d.id, d])), [docs]);
+  const byId = useMemo(() => new Map(docs.map(d => [d.medical_document_id, d])), [docs]);
   const paging = useClientPaging(shown, 10);
   const openDoc = openId ? byId.get(openId) || null : null;           // always the freshest copy from the list
 
   const toggleSel = (id) => setSel(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const allShownSelected = shown.length > 0 && shown.every(d => sel.has(d.id));
+  const allShownSelected = shown.length > 0 && shown.every(d => sel.has(d.medical_document_id));
   const stopSelecting = () => { setSelectMode(false); setSel(new Set()); };
 
   async function downloadSelected() {
@@ -225,7 +225,7 @@ export default function MyReportsPage() {
 
   const panel = openDoc && (
     <ReportPanel doc={openDoc} original={openDoc.duplicate_of ? byId.get(openDoc.duplicate_of) : null} patientAwpid={patientAwpid}
-      priv={privEnabled ? privMap.get(openDoc.id) : undefined} onLock={privEnabled ? onLock : undefined}
+      priv={privEnabled ? privMap.get(openDoc.medical_document_id) : undefined} onLock={privEnabled ? onLock : undefined}
       onClose={() => setOpenId(null)} onAct={actOn} onDismiss={askDismiss} onChanged={refetch} />
   );
 
@@ -284,19 +284,6 @@ export default function MyReportsPage() {
           ))}
         </div>
 
-        {pending.length > 0 && (
-          <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", padding: "12px 16px", marginBottom: 14,
-                        border: "1px solid var(--color-border)", borderRadius: 12, background: "var(--color-surface, #fff)" }}>
-            <div style={{ fontSize: 13 }}>
-              <strong>{pending.length} new report{pending.length === 1 ? "" : "s"} to confirm.</strong>{" "}
-              Check the type shown on each one (open it to change it), then submit. Submitted reports are locked and appear in your health journey.
-            </div>
-            <button className="btn btn-primary" disabled={submitting} onClick={submitPending}>
-              {submitting ? "Submitting…" : `Submit ${pending.length} report${pending.length === 1 ? "" : "s"}`}
-            </button>
-          </div>
-        )}
-
         {/* search, sort, select */}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
           <div style={{ flex: 1, minWidth: 220, display: "flex", alignItems: "center", gap: 8, border: "1px solid var(--color-border)", borderRadius: 10, padding: "9px 12px", background: "var(--color-surface, #fff)" }}>
@@ -314,7 +301,7 @@ export default function MyReportsPage() {
           <div className="card" style={{ padding: "10px 14px", marginBottom: 12, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
             <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
               <input type="checkbox" checked={allShownSelected}
-                onChange={() => setSel(allShownSelected ? new Set() : new Set(shown.map(d => d.id)))} />
+                onChange={() => setSel(allShownSelected ? new Set() : new Set(shown.map(d => d.medical_document_id)))} />
               Select all {shown.length}
             </label>
             <span style={{ fontSize: 13, color: "var(--color-text-muted)", flex: 1 }}>{sel.size} selected</span>
@@ -335,9 +322,9 @@ export default function MyReportsPage() {
             ) : (
               <>
                 {paging.pageItems.map(d => (
-                  <ReportRow key={d.id} doc={d} active={d.id === openId} selectMode={selectMode} selected={sel.has(d.id)}
-                    priv={privEnabled ? privMap.get(d.id) : undefined} onLock={privEnabled ? onLock : undefined}
-                    onClick={() => (selectMode ? toggleSel(d.id) : setOpenId(d.id))} onOpen={() => setOpenId(d.id)}
+                  <ReportRow key={d.medical_document_id} doc={d} active={d.medical_document_id === openId} selectMode={selectMode} selected={sel.has(d.medical_document_id)}
+                    priv={privEnabled ? privMap.get(d.medical_document_id) : undefined} onLock={privEnabled ? onLock : undefined}
+                    onClick={() => (selectMode ? toggleSel(d.medical_document_id) : setOpenId(d.medical_document_id))} onOpen={() => setOpenId(d.medical_document_id)}
                     onAct={actOn} onDismiss={askDismiss} />
                 ))}
                 <PaginationControls pagination={paging.pagination} page={paging.page} pageSize={paging.pageSize}
@@ -348,6 +335,19 @@ export default function MyReportsPage() {
           </div>
           {wide && openDoc && <aside style={{ position: "sticky", top: 12 }}>{panel}</aside>}
         </div>
+
+        {pending.length > 0 && (
+          <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", padding: "12px 16px", marginTop: 16,
+                        border: "1px solid var(--color-border)", borderRadius: 12, background: "var(--color-surface, #fff)" }}>
+            <div style={{ fontSize: 13 }}>
+              <strong>{pending.length} new report{pending.length === 1 ? "" : "s"} to confirm.</strong>{" "}
+              Check the type shown on each one (open it to change it), then submit. Submitted reports are locked and appear in your health journey.
+            </div>
+            <button className="btn btn-primary" disabled={submitting} onClick={submitPending}>
+              {submitting ? "Submitting…" : `Submit ${pending.length} report${pending.length === 1 ? "" : "s"}`}
+            </button>
+          </div>
+        )}
       </PageShell>
 
       {!wide && openDoc && (

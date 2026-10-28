@@ -1,24 +1,23 @@
 import re
 
 from rest_framework import serializers
+from core.api.serializers import PkModelSerializer
 from core import storage as blob_storage
 from apps.hospital_setup.models import (
     Room,
     StaffUser,
-    Permission,
-    Role,
-    DoctorSchedule,
-    NurseDoctorAssignment,
+    StaffBranchAssignment,
 )
-from apps.hospital_setup.rbac import resolve_acts_as
+from apps.hospital_setup.rbac import api_role, resolve_acts_as
 from apps.hospital_setup.branch_utils import get_staff_places, primary_branch_id, primary_department_id, primary_place
+from apps.hospital_setup.staff_services import last_logins
 
 
 class RoomAssignmentSerializer(serializers.Serializer):
     """Input for a room block (a doctor in a room on a weekday between two times); the output is room_utils.block_json."""
     room        = serializers.PrimaryKeyRelatedField(queryset=Room.objects.all())
     doctor      = serializers.PrimaryKeyRelatedField(queryset=StaffUser.objects.all())
-    day_of_week = serializers.ChoiceField(choices=DoctorSchedule.DAY_CHOICES)
+    day_of_week = serializers.ChoiceField(choices=StaffBranchAssignment.DAY_CHOICES)
     start_time  = serializers.TimeField()
     end_time    = serializers.TimeField()
     is_active   = serializers.BooleanField(required=False)
@@ -31,7 +30,7 @@ class RoomAssignmentSerializer(serializers.Serializer):
         return data
 
 
-class DoctorProfileSerializer(serializers.ModelSerializer):
+class DoctorProfileSerializer(PkModelSerializer):
     class Meta:
         model  = StaffUser
         fields = ["registration_no", "specialisation", "qualification",
@@ -39,7 +38,7 @@ class DoctorProfileSerializer(serializers.ModelSerializer):
                   "bio", "languages", "known_for"]
 
 
-class DoctorSelfProfileSerializer(serializers.ModelSerializer):
+class DoctorSelfProfileSerializer(PkModelSerializer):
     """Self-service view/edit for the logged-in doctor's own profile."""
     # digital_signature stores an S3 object key (see core/storage.py), not a
     digital_signature = serializers.SerializerMethodField()
@@ -66,7 +65,7 @@ class DoctorSelfProfileSerializer(serializers.ModelSerializer):
 # ── Doctor schedule serializers ───────────────────────────────────────────────
 
 class DoctorDaySerializer(serializers.Serializer):
-    day_of_week  = serializers.ChoiceField(choices=DoctorSchedule.DAY_CHOICES)
+    day_of_week  = serializers.ChoiceField(choices=StaffBranchAssignment.DAY_CHOICES)
     is_available = serializers.BooleanField(default=True)
     start_time   = serializers.TimeField()
     end_time     = serializers.TimeField()
@@ -89,16 +88,16 @@ class DoctorScheduleSerializer(serializers.Serializer):
         return days
 
 
-class StaffProfileSerializer(serializers.ModelSerializer):
+class StaffProfileSerializer(PkModelSerializer):
     """Admin-side view/edit of a non-doctor staff member's profile — mirrors DoctorProfileSerializer."""
     class Meta:
         model  = StaffUser
         fields = ["registration_no", "council_name", "registration_expiry",
                   "qualification", "experience_years",
-                  "gender", "bio", "languages", "extra"]
+                  "gender", "bio", "languages"]
 
 
-class StaffProfileSelfSerializer(serializers.ModelSerializer):
+class StaffProfileSelfSerializer(PkModelSerializer):
     """Self-service view/edit for a non-doctor staff member's own profile —"""
     class Meta:
         model  = StaffUser
@@ -109,7 +108,7 @@ class StaffProfileSelfSerializer(serializers.ModelSerializer):
                              "qualification", "experience_years"]
 
 
-class StaffMeSerializer(serializers.ModelSerializer):
+class StaffMeSerializer(PkModelSerializer):
     """Self-service view/edit for ANY logged-in staff member's own basic"""
     # photo stores an S3 object key (see core/storage.py), not a usable
     photo = serializers.SerializerMethodField()
@@ -119,15 +118,21 @@ class StaffMeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model  = StaffUser
-        fields = ["id", "first_name", "last_name", "email", "role", "photo", "date_of_birth"]
-        read_only_fields = ["id", "first_name", "last_name", "email", "role"]
+        fields = ["staff_user_id", "first_name", "last_name", "email", "role", "photo", "date_of_birth"]
+        read_only_fields = ["staff_user_id", "first_name", "last_name", "email", "role"]
+
+    role = serializers.SerializerMethodField()
+
+    def get_role(self, obj):
+        return api_role(obj)
 
 
-class StaffSerializer(serializers.ModelSerializer):
+class StaffSerializer(PkModelSerializer):
     doctor_profile = serializers.SerializerMethodField()
     staff_profile  = serializers.SerializerMethodField()
-    role            = serializers.CharField(read_only=True)
-    group_name      = serializers.CharField(source="group.name", read_only=True)
+    role            = serializers.SerializerMethodField()
+    group           = serializers.IntegerField(source="user_group_id", read_only=True)
+    group_name      = serializers.CharField(source="user_group.name", read_only=True)
     branch          = serializers.SerializerMethodField()
     branch_name     = serializers.SerializerMethodField()
     department      = serializers.SerializerMethodField()
@@ -168,55 +173,48 @@ class StaffSerializer(serializers.ModelSerializer):
 
     def get_branch_department(self, obj):
         place = primary_place(obj)
-        return place.id if place else None
+        return place.pk if place else None
+
+    def get_role(self, obj):
+        return api_role(obj)
+
+    last_login = serializers.SerializerMethodField()
+
+    def get_last_login(self, obj):
+        logins = self.context.get("logins")
+        if logins is None:
+            logins = last_logins([obj])
+        return logins.get(obj.user_id)
 
     def get_custom_role(self, obj):
-        return None if obj.group.is_system_role else obj.group_id
+        return None
 
     def get_custom_role_name(self, obj):
-        return None if obj.group.is_system_role else obj.group.name
+        return None
 
     def get_custom_role_acts_as(self, obj):
-        return [] if obj.group.is_system_role else obj.group.acts_as
+        return []
 
     def get_branches(self, obj):
         db = obj._state.db or "default"
         primary = primary_place(obj, db)
         return [
-            {"id": place.branch_id, "name": place.branch.name, "is_primary": primary is not None and place.id == primary.id,
-             "branch_department_id": place.id, "department_id": place.department_id, "department_name": place.department.name}
+            {"branch_id": place.branch_id, "name": place.branch.name, "is_primary": primary is not None and place.pk == primary.pk,
+             "branch_department_id": place.pk, "department_id": place.department_id, "department_name": place.department.name}
             for place in get_staff_places(obj, db)
-        ]
-
-    # Only meaningful for role="nurse" — which doctor(s) the hospital admin
-    assigned_doctors = serializers.SerializerMethodField()
-
-    def get_assigned_doctors(self, obj):
-        if obj.role != "nurse":
-            return []
-        links = (
-            NurseDoctorAssignment.objects
-            .using(obj._state.db)
-            .filter(nurse_id=obj.id)
-            .select_related("doctor")
-            .order_by("doctor__first_name", "doctor__last_name")
-        )
-        return [
-            {"id": l.doctor_id, "name": l.doctor.get_full_name()}
-            for l in links
         ]
 
     class Meta:
         model  = StaffUser
-        fields = ["id", "email", "first_name", "last_name", "role", "group", "group_name",
+        fields = ["staff_user_id", "email", "first_name", "last_name", "role", "group", "group_name",
                   "custom_role", "custom_role_name", "custom_role_acts_as",
-                  "branch", "branch_name", "branches", "assigned_doctors",
+                  "branch", "branch_name", "branches",
                   "department", "department_name", "branch_department",
                   "phone", "employee_id", "date_of_birth", "is_active", "must_change_password", "photo",
                   "date_joined", "last_login", "doctor_profile", "staff_profile"]
-        read_only_fields = ["id", "date_joined", "last_login", "group", "group_name", "branch_department",
+        read_only_fields = ["staff_user_id", "date_joined", "last_login", "group", "group_name", "branch_department",
                             "custom_role_name", "custom_role_acts_as",
-                            "branch_name", "branches", "assigned_doctors", "department_name", "doctor_profile",
+                            "branch_name", "branches", "department_name", "doctor_profile",
                             "staff_profile", "must_change_password"]
 
 
@@ -230,11 +228,11 @@ class StaffInviteSerializer(serializers.Serializer):
             raise serializers.ValidationError("Enter a valid 10-digit mobile number.")
         return value
 
-    # Employee ID is NOT accepted as input — it's auto-generated via NNTM
+    # Employee ID is NOT accepted as input — it's auto-generated via NextNumber
     first_name    = serializers.CharField(max_length=150)
     last_name     = serializers.CharField(max_length=150, required=False, allow_blank=True)
     role          = serializers.ChoiceField(choices=[
-        "hospital_admin", "doctor", "nurse", "front_desk", "lab_tech", "pharmacist", "custom"
+        "hospital_admin", "doctor", "nurse", "front_desk", "custom"
     ])
     # Required (and validated further in the view, which needs request.hospital_db
     custom_role_id = serializers.IntegerField(required=False, allow_null=True)
@@ -260,40 +258,3 @@ class StaffInviteSerializer(serializers.Serializer):
     )
     # Working-hours schedule: list of up to 7 day objects.  Optional at
     schedule = DoctorScheduleSerializer(required=False, allow_null=True)
-
-
-# ── Table-driven RBAC (see apps.hospital_setup.rbac / docs/onboarding_auth_rbac_architecture.md 4.3) ──
-
-class PermissionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model  = Permission
-        fields = ["id", "code", "description"]
-
-
-class RoleSerializer(serializers.ModelSerializer):
-    permission_codes = serializers.SerializerMethodField()
-
-    def get_permission_codes(self, obj):
-        return list(obj.permissions.values_list("code", flat=True).order_by("code"))
-
-    class Meta:
-        model  = Role
-        fields = ["id", "name", "description", "is_system_role", "system_role_key",
-                  "permission_codes", "acts_as", "created_at"]
-        read_only_fields = ["id", "is_system_role", "system_role_key", "created_at"]
-
-
-class RoleWriteSerializer(serializers.Serializer):
-    """Input for creating/editing a CUSTOM role (system roles are read-only)."""
-    name              = serializers.CharField(max_length=100)
-    description       = serializers.CharField(max_length=255, required=False, allow_blank=True)
-    permission_codes  = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
-    # Which system-role identities this custom role should be treated as
-    acts_as           = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
-
-    def validate_acts_as(self, value):
-        from apps.hospital_setup.rbac import ACTS_AS_CHOICES
-        invalid = set(value) - set(ACTS_AS_CHOICES)
-        if invalid:
-            raise serializers.ValidationError(f"Invalid acts_as value(s): {', '.join(sorted(invalid))}.")
-        return value

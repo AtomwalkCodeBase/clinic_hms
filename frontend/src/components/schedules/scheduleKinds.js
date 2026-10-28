@@ -6,7 +6,7 @@ const missingAge = (r) => r.min_age_days === "" || r.min_age_days === null || r.
 
 function payload(nameKey, extra) {
   return (r) => ({
-    ...(r.id ? { id: r.id } : {}),
+    ...(r.immunization_schedule_rule_id ? { id: r.immunization_schedule_rule_id } : {}),
     [nameKey]: r[nameKey].trim(),
     ...extra(r),
     scheduled_label: r.scheduled_label.trim(),
@@ -47,38 +47,5 @@ export const VACCINATION = {
     nameLabel: "Vaccine Name *", nameExample: "e.g. BCG",
     labelLabel: "Scheduled Label (milestone) *", labelExample: "e.g. Birth, 6 weeks, 9 months",
     mandatory: "Mandatory",
-  },
-};
-
-export const MILESTONE = {
-  nameKey: "milestone",
-  extraKey: "domain",
-  endpoints: {
-    schedules: API_ENDPOINTS.ORG.MILESTONE_SCHEDULES,
-    schedule: API_ENDPOINTS.ORG.MILESTONE_SCHEDULE,
-    activate: API_ENDPOINTS.ORG.MILESTONE_SCHEDULE_ACTIVATE,
-    templates: API_ENDPOINTS.PLATFORM.MILESTONE_TEMPLATES,
-    template: API_ENDPOINTS.PLATFORM.MILESTONE_TEMPLATE,
-  },
-  emptyRule: (sort) => ({
-    _key: newKey(), domain: "gross_motor", milestone: "", scheduled_label: "", min_age_days: 0, max_age_days: "",
-    mandatory: true, sort_order: sort,
-  }),
-  ruleError: (r) => (!r.domain || !r.milestone?.trim() || !r.scheduled_label?.trim() || missingAge(r)
-    ? "Every milestone needs a domain, name, scheduled label, and min age." : null),
-  rulePayload: payload("milestone", (r) => ({ domain: r.domain })),
-  text: {
-    scheduleTitle: "Developmental Milestone Schedule",
-    templatesTitle: "Milestone Templates",
-    rules: "Milestones", addRule: "+ Add Milestone", rule: "milestone",
-    noRules: "No milestones yet. Add the first developmental checkpoint.",
-    useDefault: "You're currently using the system Default Schedule for every pediatric patient. Clone it — or a different template below — to start customizing milestones for your hospital.",
-    newTemplate: "New Milestone Template", templateExample: "e.g. Standard Developmental Checklist",
-    createTemplate: "Create & Add Milestones",
-    noTemplates: "No system milestone templates yet. Create one to give hospitals a starting checklist.",
-    loadSchedules: "Failed to load milestone schedules.", loadTemplates: "Failed to load milestone templates.",
-    nameLabel: "Milestone *", nameExample: "e.g. Sits without support",
-    labelLabel: "Scheduled Label (age window) *", labelExample: "e.g. 6 months, 12 months",
-    mandatory: "Mandatory (red-flag if missed)",
   },
 };

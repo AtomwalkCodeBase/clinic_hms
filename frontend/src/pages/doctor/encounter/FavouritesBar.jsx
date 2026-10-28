@@ -38,7 +38,7 @@ export function FavouritesBar({ currentItems, onApply, disabled }) {
 
   async function applyFav(fav) {
     if (applyingId) return;
-    setApplyingId(fav.id);
+    setApplyingId(fav.favourite_id);
     try {
       await onApply(fav.items || []);
     } finally {
@@ -48,7 +48,7 @@ export function FavouritesBar({ currentItems, onApply, disabled }) {
 
   async function removeFav(fav) {
     try {
-      await encounterApi.deleteFavourite(fav.id);
+      await encounterApi.deleteFavourite(fav.favourite_id);
       refetchFavs();
     } catch (err) {
       toastApiError(err, "Could not delete this favourite.");
@@ -62,13 +62,13 @@ export function FavouritesBar({ currentItems, onApply, disabled }) {
       {favourites.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
           {favourites.map(fav => (
-            <span key={fav.id} style={{
+            <span key={fav.favourite_id} style={{
               display: "inline-flex", alignItems: "center", gap: 2,
               border: "1px solid var(--color-primary)", borderRadius: 6, overflow: "hidden",
             }}>
               <button
                 type="button" onClick={() => applyFav(fav)}
-                disabled={disabled || applyingId === fav.id}
+                disabled={disabled || applyingId === fav.favourite_id}
                 title={(fav.items || []).map(i => i.drug_name).join(", ")}
                 style={{
                   fontSize: 11, fontWeight: 600, padding: "4px 8px", border: "none",
@@ -76,7 +76,7 @@ export function FavouritesBar({ currentItems, onApply, disabled }) {
                   cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1,
                 }}
               >
-                {applyingId === fav.id ? "Adding…" : `☆ ${fav.name} (${(fav.items || []).length})`}
+                {applyingId === fav.favourite_id ? "Adding…" : `☆ ${fav.name} (${(fav.items || []).length})`}
               </button>
               {!disabled && (
                 <button

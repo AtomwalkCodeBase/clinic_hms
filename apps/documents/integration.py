@@ -1,12 +1,13 @@
 """Where the timeline rules (the services folder) get a patient's date of birth and sex and a document's type, text and date from, which LLM answers them, and who may see a patient."""
 import json
+import time
 
 from django.conf import settings
 
 from apps.documents.lib_documents import document_text as doc_text
 from apps.hospital_master.models import Hospital
 from apps.patients.models import PatientRelationship
-from apps.opd.models import HospitalPatient
+from apps.hospital_patients.models import HospitalPatient
 
 MAX_AGE_DAYS = 6574
 
@@ -22,7 +23,8 @@ DOC_TYPE_MAP = {
 
 
 def ask_llm(system: str, user: str, timeout: int = None) -> str:
-    """The prompt of the services folder sent to the company LLM api (settings.LLM_API_URL, token auth, {"user_prompt": ...} in, the answer text out), or to a local Ollama when LLM_API_STYLE is "ollama"."""
+    """The prompt of the services folder sent to the company LLM api (settings.LLM_API_URL, token auth, {"user_prompt": ...} in, the answer text out),
+    to a local Ollama when LLM_API_STYLE is "ollama", or to an OpenAI-compatible api (Groq, xAI Grok, OpenAI) when it is "openai"."""
     import requests
 
     if not settings.LLM_API_URL:
@@ -37,6 +39,21 @@ def ask_llm(system: str, user: str, timeout: int = None) -> str:
         )
         resp.raise_for_status()
         return resp.json()["message"]["content"]
+    if settings.LLM_API_STYLE == "openai":
+        for attempt in range(6):
+            resp = requests.post(
+                settings.LLM_API_URL,
+                json={"model": settings.LLM_API_MODEL, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                      "response_format": {"type": "json_object"}},
+                headers={"Authorization": f"Bearer {settings.LLM_API_TOKEN}"},
+                timeout=timeout,
+            )
+            if resp.status_code not in (429, 500, 502, 503) or attempt == 5:
+                break
+            # A hosted api limits requests per minute: wait as long as it asks (or longer each time) and ask again
+            time.sleep(min(float(resp.headers.get("retry-after") or 0) or 5 * 2 ** attempt, 60))
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
     resp = requests.post(
         settings.LLM_API_URL,
         json={"user_prompt": prompt},

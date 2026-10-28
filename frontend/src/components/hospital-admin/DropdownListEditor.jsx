@@ -60,10 +60,10 @@ export function DropdownListEditor({
   useEffect(() => { load(); }, [load]);
 
   async function toggleActive(item) {
-    setTogglingId(item.id);
+    setTogglingId(item.option_list_id);
     try {
-      await apiClient.patch(itemEndpoint(item.id), { is_active: !item.is_active });
-      setItems(its => its.map(i => i.id === item.id ? { ...i, is_active: !i.is_active } : i));
+      await apiClient.patch(itemEndpoint(item.option_list_id), { is_active: !item.is_active });
+      setItems(its => its.map(i => i.option_list_id === item.option_list_id ? { ...i, is_active: !i.is_active } : i));
     } catch (err) {
       toastApiError(err, "Could not update.");
     } finally {
@@ -92,7 +92,7 @@ export function DropdownListEditor({
     if (item.is_system) return;
     if (!confirm(`Remove "${item[identityField]}"?`)) return;
     try {
-      await apiClient.delete(itemEndpoint(item.id));
+      await apiClient.delete(itemEndpoint(item.option_list_id));
       toastSuccess("Removed.");
       load();
     } catch (err) {
@@ -101,7 +101,7 @@ export function DropdownListEditor({
   }
 
   function startEdit(item) {
-    setEditingId(item.id);
+    setEditingId(item.option_list_id);
     setEditDraft(item.label ?? item[identityField] ?? "");
   }
   function cancelEdit() {
@@ -120,7 +120,7 @@ export function DropdownListEditor({
     const patchKey = identityField === "value" ? "label" : identityField;
     setEditSaving(true);
     try {
-      await apiClient.patch(itemEndpoint(item.id), { [patchKey]: trimmed });
+      await apiClient.patch(itemEndpoint(item.option_list_id), { [patchKey]: trimmed });
       toastSuccess("Renamed.");
       cancelEdit();
       load();
@@ -140,10 +140,10 @@ export function DropdownListEditor({
       ) : (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: showAddForm ? 12 : 0 }}>
           {items.map((item, index) => {
-            const isEditing = editingId === item.id;
+            const isEditing = editingId === item.option_list_id;
             const color = itemColor(index);
             return (
-              <span key={item.id} style={{
+              <span key={item.option_list_id} style={{
                 display: "inline-flex", alignItems: "center", gap: 7,
                 fontSize: 12, fontWeight: 600, padding: isEditing ? "4px 6px" : "4px 8px 4px 10px", borderRadius: 999,
                 background: "var(--color-bg)", border: "1px solid var(--color-border)",
@@ -182,7 +182,7 @@ export function DropdownListEditor({
                     {item.label || item[identityField]}
                     {typeof badgeForItem === "function" && badgeForItem(item)}
                     {toggleable && (
-                      <MiniToggle checked={item.is_active} disabled={togglingId === item.id}
+                      <MiniToggle checked={item.is_active} disabled={togglingId === item.option_list_id}
                         onChange={() => toggleActive(item)} />
                     )}
                     <button type="button" onClick={() => startEdit(item)}

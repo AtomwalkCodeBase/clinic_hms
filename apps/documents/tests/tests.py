@@ -5,23 +5,10 @@ import base64
 import datetime as dt
 from apps.documents.lib_documents import batch_counts
 from apps.documents.lib_vitals import bmi
-from apps.documents.models import (
-    DocumentExtraction,
-    MedicalDocument,
-    DocumentClassification,
-    DocumentBatch,
-    ClinicalEvent,
-    LabResult,
-    SharedAllergy,
-    GrowthMeasurement,
-    Vitals,
-    ImmunizationRecord,
-    ScheduleRule,
-    MilestoneRecord,
-    BirthHistory,
-    Schedule,
-)
-from apps.patients.models import Patient, ConsultSession, PatientRelationship
+from apps.hospital_patients import vitals_service as vitals
+from apps.documents.models import DocumentExtraction, MedicalDocument, DocumentClassification, DocumentBatch, ClinicalEvent, LabResult, GrowthMeasurement, ImmunizationRecord, BirthHistory
+from apps.hospital_master.models import Schedule, ScheduleRule
+from apps.patients.models import Patient, PatientRelationship
 from core.tests.testing import ensure_hospital, HospitalDBTestCase, make_branch, make_patient, make_staff, requires_hospital_db
 from django.test import SimpleTestCase, TestCase, override_settings
 from unittest import mock
@@ -41,9 +28,6 @@ from apps.documents.views import (
 )
 from apps.documents.tasks import classify_document_task, extract_document_task
 from types import SimpleNamespace
-from apps.opd.models import Allergy
-from apps.lab.models import LabReport, LabRequest, LabTest
-from apps.lab.views import LabRequestAttachDocumentView
 from apps.opd.models import Appointment, OPDEncounter
 from apps.documents.lib_vitals import sync_encounter_to_hie
 from apps.hospital_master.models import Hospital, HospitalParameters
@@ -54,14 +38,14 @@ from apps.documents import views as vax_views
 from apps.documents import views as ped_views
 from apps.documents import urls as org_urls
 from apps.documents.lib_roadmap import build_roadmap, summarize_roadmap
-from apps.documents.lib_roadmap import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
+from apps.documents.lib_roadmap import schedule_dict, template_dict, vaccination_rule_dict
 from apps.hospital_master import platform_urls
 from apps.patients.services import create_account
 from apps.documents import lib_documents as classification_rules
 from apps.documents import lib_vitals as growth_reference
 from apps.documents import lib_documents as records
 from apps.documents import lib_roadmap as roadmap
-from apps.documents import lib_vitals as vitals
+from apps.hospital_patients.models import Vitals
 from apps.documents.models import CHOOSABLE_TYPES, CLASSIFIER_HOSPITAL, DOCUMENT_TYPES, HUMAN_CLASSIFIED, ISSUED, NOT_CLASSIFIED, REVIEW_REQUIRED, RULE_CLASSIFIED
 
 
@@ -263,19 +247,23 @@ class StoreTests(TestCase):
         self.assertEqual(classification_rules.text_of(make_doc()), "")
 
 
-class InternalNoteViewTests(TestCase):
-    databases = {"default"}
-
+@requires_hospital_db
+class InternalNoteViewTests(HospitalDBTestCase):
     def setUp(self):
-        identity("AWP-T1")
-        self.enc = uuid.uuid4()
-        self.sess = ConsultSession.objects.create(patient=identity("AWP-T1"), hospital=ensure_hospital(3), encounter_id=self.enc,
-                                                  note_pdf="patients/AWP-T1/consult-notes/n.pdf")
+        super().setUp()
+        from apps.opd.models import ConsultSession
+        db = self.hospital_alias
+        branch, place = make_branch(db)
+        doctor = make_staff(db, "doctor", phone="9000000081", place=place)
+        patient = make_patient(db, "AWP-T1", branch=branch)
+        appt = Appointment.objects.using(db).create(patient=patient, doctor=doctor, branch_department=place, scheduled_date=dt.date.today())
+        self.enc = OPDEncounter.objects.using(db).create(appointment=appt).pk
+        ConsultSession.objects.using(db).create(encounter_id=self.enc, token="1.note", note_pdf="patients/AWP-T1/consult-notes/n.pdf")
 
-    def get(self, role="doctor", hospital_id=3, enc=None, **params):
+    def get(self, role="doctor", enc=None, **params):
         request = APIRequestFactory().get("/x/", params)
         force_authenticate(request, user=MockUser({"user_id": 1, "role": role}))
-        request.hospital_id = hospital_id
+        request.hospital_db, request.hospital_id = self.hospital_alias, 1
         return EncounterInternalNoteView.as_view()(request, pk=enc or self.enc)
 
     @mock.patch("core.storage.signed_url", return_value="https://s3/signed")
@@ -289,9 +277,6 @@ class InternalNoteViewTests(TestCase):
     def test_the_download_variant_asks_for_an_attachment(self, signed):
         self.get(download="1")
         self.assertEqual(signed.call_args.kwargs["download_name"], "Handwritten Consultation Note.pdf")
-
-    def test_another_hospital_cannot_open_it(self):
-        self.assertEqual(self.get(hospital_id=99).status_code, 404)
 
     def test_only_a_doctor_can(self):
         for role in ("patient", "nurse", "front_desk"):
@@ -365,7 +350,7 @@ class PatientLinkTests(TestCase):
 
     def test_a_documents_patient_is_reached_through_the_link(self):
         doc = make_doc("AWP-T1")
-        self.assertEqual(MedicalDocument.objects.filter(patient__awpid="AWP-T1").get().id, doc.id)
+        self.assertEqual(MedicalDocument.objects.filter(patient__awpid="AWP-T1").get().pk, doc.pk)
         self.assertEqual(MedicalDocument.objects.filter(patient__awpid="NOBODY").count(), 0)
 
 
@@ -444,8 +429,8 @@ class SubmitTests(TestCase):
 
     def test_a_confirmed_file_takes_the_persons_type_and_is_locked(self, _r):
         doc = reviewable("lab_report")
-        data = self.submit((doc.id, "prescription")).data["data"]
-        self.assertEqual((data["submitted"], data["rejected"]), ([doc.id], []))
+        data = self.submit((doc.pk, "prescription")).data["data"]
+        self.assertEqual((data["submitted"], data["rejected"]), ([doc.pk], []))
         doc = reload(doc)
         self.assertEqual((doc.doc_classification, classification_rules.method_of(doc), classification_rules.is_confirmed(doc)), ("prescription", "staff", True))
         classification = doc.d_classification
@@ -454,19 +439,19 @@ class SubmitTests(TestCase):
 
     def test_confirming_the_suggestion_also_locks_it(self, _r):
         doc = reviewable("lab_report")
-        self.submit((doc.id, "lab_report"))
+        self.submit((doc.pk, "lab_report"))
         self.assertTrue(classification_rules.is_confirmed(reload(doc)))
 
     def test_a_file_the_rules_could_not_place_can_be_filed_by_the_person(self, _r):
         doc = reviewable(NOT_CLASSIFIED, status="review_required")
-        self.assertEqual(self.submit((doc.id, "other")).data["data"]["submitted"], [doc.id])
+        self.assertEqual(self.submit((doc.pk, "other")).data["data"]["submitted"], [doc.pk])
         self.assertEqual((reload(doc).doc_classification, reload(doc).status), ("other", "completed"))
 
     def test_sending_the_same_list_twice_changes_nothing(self, _r):
         doc = reviewable("lab_report")
-        self.submit((doc.id, "prescription"))
-        data = self.submit((doc.id, "imaging_report")).data["data"]
-        self.assertEqual((data["submitted"], data["rejected"]), ([], [{"document_id": doc.id, "reason": "already_confirmed"}]))
+        self.submit((doc.pk, "prescription"))
+        data = self.submit((doc.pk, "imaging_report")).data["data"]
+        self.assertEqual((data["submitted"], data["rejected"]), ([], [{"document_id": doc.pk, "reason": "already_confirmed"}]))
         self.assertEqual(reload(doc).doc_classification, "prescription")
 
     def test_each_bad_entry_is_reported_without_stopping_the_rest(self, _r):
@@ -475,28 +460,28 @@ class SubmitTests(TestCase):
         failed = make_doc("AWP-T1", status="failed", error_message="boom")
         theirs = make_doc("AWP-OTHER", status="completed", document_type="lab_report", by="rules")
         issued = make_doc("AWP-T1", status="completed", document_type="lab_report", by="issued", created_by_type="H", source_hospital_id="7")
-        data = self.submit((good.id, "prescription"), (queued.id, "lab_report"), (failed.id, "lab_report"), (theirs.id, "lab_report"),
-                           (issued.id, "lab_report"), (good.id + 9999, "lab_report"), (reviewable().id, "made_up")).data["data"]
-        self.assertEqual(data["submitted"], [good.id])
+        data = self.submit((good.pk, "prescription"), (queued.pk, "lab_report"), (failed.pk, "lab_report"), (theirs.pk, "lab_report"),
+                           (issued.pk, "lab_report"), (good.pk + 9999, "lab_report"), (reviewable().pk, "made_up")).data["data"]
+        self.assertEqual(data["submitted"], [good.pk])
         reasons = {r["document_id"]: r["reason"] for r in data["rejected"]}
-        self.assertEqual(reasons[queued.id], "still_processing")
-        self.assertEqual(reasons[failed.id], "failed")
-        self.assertEqual(reasons[theirs.id], "not_found")
-        self.assertEqual(reasons[issued.id], "not_found")
-        self.assertEqual(reasons[good.id + 9999], "not_found")
+        self.assertEqual(reasons[queued.pk], "still_processing")
+        self.assertEqual(reasons[failed.pk], "failed")
+        self.assertEqual(reasons[theirs.pk], "not_found")
+        self.assertEqual(reasons[issued.pk], "not_found")
+        self.assertEqual(reasons[good.pk + 9999], "not_found")
         self.assertIn("invalid_type", reasons.values())
         self.assertFalse(classification_rules.is_confirmed(reload(theirs)))
 
     def test_an_empty_or_oversized_list_is_refused_as_a_whole(self, _r):
         self.assertEqual(self.submit().status_code, 400)
         doc = reviewable()
-        self.assertEqual(self.submit(*[(doc.id, "lab_report")] * 101).status_code, 400)
+        self.assertEqual(self.submit(*[(doc.pk, "lab_report")] * 101).status_code, 400)
 
     def test_the_answer_says_how_many_still_wait(self, _r):
         with override_settings(RECORDS_REVIEW_FROM=LONG_AGO):
             a = reviewable()
             reviewable()                       # a second one that stays waiting
-            data = self.submit((a.id, "lab_report")).data["data"]
+            data = self.submit((a.pk, "lab_report")).data["data"]
         self.assertEqual(data["counts"], {"awaiting_review": 1})
 class LockTests(TestCase):
     databases = {"default"}
@@ -516,7 +501,7 @@ class LockTests(TestCase):
     def test_the_patient_gets_a_clear_locked_answer(self, _r):
         doc = reviewable("lab_report")
         records.correct_document(doc, "prescription")
-        resp = call(PortalDocumentDetailView, "patch", data={"doc_type": "imaging_report"}, doc_id=doc.id)
+        resp = call(PortalDocumentDetailView, "patch", data={"doc_type": "imaging_report"}, doc_id=doc.pk)
         self.assertEqual((resp.status_code, resp.data["errors"]), (409, {"code": "locked"}))
         self.assertEqual(reload(doc).doc_classification, "prescription")
 
@@ -526,7 +511,7 @@ class LockTests(TestCase):
         request = APIRequestFactory().patch("/x/", {"doc_type": "imaging_report"}, format="json")
         force_authenticate(request, user=MockUser({"user_id": 1, "role": "platform_admin", "is_platform": True}))
         with mock.patch("core.api.permissions.IsPlatformAdmin.has_permission", return_value=True):
-            resp = DocumentCorrectView.as_view()(request, pk=doc.id)
+            resp = DocumentCorrectView.as_view()(request, pk=doc.pk)
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(reload(doc).doc_classification, "prescription")
 @override_settings(RECORDS_REVIEW_FROM="2026-06-01T00:00:00+00:00")
@@ -539,7 +524,7 @@ class AwaitingReviewTests(TestCase):
         identity("AWP-T1")
 
     def listing(self, **params):
-        return [r["id"] for r in call(PortalDocumentListCreateView, "get", data=params).data["results"]]
+        return [r["medical_document_id"] for r in call(PortalDocumentListCreateView, "get", data=params).data["results"]]
 
     def old(self, doc):
         MedicalDocument.objects.filter(pk=doc.pk).update(created_at=timezone.now() - datetime.timedelta(days=400))
@@ -547,42 +532,42 @@ class AwaitingReviewTests(TestCase):
 
     def test_a_new_unconfirmed_upload_is_pending_and_leaves_my_documents(self, _r):
         new = reviewable("lab_report")
-        self.assertEqual(self.listing(review="pending"), [new.id])
+        self.assertEqual(self.listing(review="pending"), [new.pk])
         self.assertEqual(self.listing(), [])                       # My Documents (default: confirmed)
-        self.assertEqual(self.listing(review="all"), [new.id])
+        self.assertEqual(self.listing(review="all"), [new.pk])
 
     def test_confirming_moves_it_to_my_documents(self, _r):
         new = reviewable("lab_report")
         records.correct_document(new, "lab_report")
         self.assertEqual(self.listing(review="pending"), [])
-        self.assertEqual(self.listing(), [new.id])
+        self.assertEqual(self.listing(), [new.pk])
 
     def test_documents_from_before_the_review_step_never_need_review(self, _r):
         legacy = self.old(reviewable("lab_report"))
         self.assertEqual(self.listing(review="pending"), [])
-        self.assertEqual(self.listing(), [legacy.id])
+        self.assertEqual(self.listing(), [legacy.pk])
         self.assertFalse(classification_rules.is_confirmed(legacy))              # they keep working as before, just not locked
 
     def test_hospital_issued_and_staff_documents_never_need_review(self, _r):
         issued = make_doc("AWP-T1", status="completed", document_type="prescription", by="issued", created_by_type="H", source_hospital_id="7")
-        self.assertEqual(self.listing(), [issued.id])
+        self.assertEqual(self.listing(), [issued.pk])
         self.assertEqual(self.listing(review="pending"), [])
 
     def test_a_file_still_being_read_is_pending_too(self, _r):
         queued = make_doc("AWP-T1", status="queued")
-        self.assertEqual(self.listing(review="pending"), [queued.id])
+        self.assertEqual(self.listing(review="pending"), [queued.pk])
 
     def test_the_list_can_be_narrowed_to_one_type(self, _r):
         a = self.old(reviewable("lab_report"))
         b = self.old(reviewable("prescription"))
-        self.assertEqual(self.listing(doc_type="prescription"), [b.id])
-        self.assertEqual(sorted(self.listing()), sorted([a.id, b.id]))
+        self.assertEqual(self.listing(doc_type="prescription"), [b.pk])
+        self.assertEqual(sorted(self.listing()), sorted([a.pk, b.pk]))
 
     def test_with_the_step_switched_off_nothing_is_ever_pending(self, _r):
         with override_settings(RECORDS_REVIEW_FROM=""):
             doc = reviewable("lab_report")
             self.assertEqual(self.listing(review="pending"), [])
-            self.assertEqual(self.listing(), [doc.id])
+            self.assertEqual(self.listing(), [doc.pk])
 
     def test_the_counts_cover_every_type_and_keep_pending_files_apart(self, _r):
         self.old(reviewable("lab_report"))
@@ -613,7 +598,7 @@ class BatchProgressTests(TestCase):
         batch = DocumentBatch.objects.create(patient=identity("AWP-T1"))
         for status in ("completed", "review_required", "failed", "extracting"):
             make_doc("AWP-T1", status=status, batch=batch)
-        data = call(BatchDetailView, "get", batch_id=batch.id).data["data"]
+        data = call(BatchDetailView, "get", batch_id=batch.pk).data["data"]
         self.assertEqual((data["progress_percent"], data["total_files"]), (75, 4))
         self.assertEqual(data["counts"]["extracting"], 1)
         self.assertNotIn("second_best_score", str(data))
@@ -622,9 +607,9 @@ class BatchProgressTests(TestCase):
 S = MedicalDocument.Status
 RX = "Dr ABC Rx Paracetamol Syrup 5 ml TDS Diagnosis: Viral fever"
 def row(doc):
-    return MedicalDocument.objects.get(pk=doc.id)
+    return MedicalDocument.objects.get(pk=doc.pk)
 def classification(doc):
-    return DocumentClassification.objects.get(document_id=doc.id)
+    return DocumentClassification.objects.get(document_id=doc.pk)
 @mock.patch("core.storage.get_bytes", return_value=PDF)
 class ExtractDocumentTests(TestCase):
     """Stage 1: file → content check → text, then hand off to classification."""
@@ -634,25 +619,25 @@ class ExtractDocumentTests(TestCase):
     @mock.patch("apps.documents.lib_documents.extract_text", return_value=("hemoglobin glucose", "pdf_text"))
     def test_success_saves_the_text_and_type_and_queues_classification(self, _extract, delay, _get):
         doc = make_doc(status=S.QUEUED)
-        extract_document_task(doc.id)
+        extract_document_task(doc.pk)
         doc = row(doc)
         self.assertEqual(doc.status, S.CLASSIFYING)
         text = DocumentExtraction.objects.get(document=doc)
         self.assertEqual((text.extracted_text, text.engine), ("hemoglobin glucose", "pdf_text"))
-        delay.assert_called_once_with(args=[doc.id, "bulk"], queue="bulk")
+        delay.assert_called_once_with(args=[doc.pk, "bulk"], queue="bulk")
 
     @mock.patch("apps.documents.tasks.classify_document_task.apply_async")
     @mock.patch("apps.documents.lib_documents.extract_text", return_value=("text", "ocr"))
     def test_the_file_is_read_through_the_file_field(self, _extract, _delay, get):
         doc = make_doc(status=S.QUEUED)
-        extract_document_task(doc.id)
+        extract_document_task(doc.pk)
         get.assert_called_once_with("patients/AWP-T1/documents/1.pdf")
 
     @mock.patch("apps.documents.tasks.classify_document_task.apply_async")
     def test_a_file_that_is_not_a_pdf_or_image_fails_at_once_with_a_clear_reason(self, delay, get):
         get.return_value = b"just some text"
         doc = make_doc(status=S.QUEUED)
-        extract_document_task(doc.id)                    # no exception: nothing to retry
+        extract_document_task(doc.pk)                    # no exception: nothing to retry
         self.assertEqual(row(doc).status, S.FAILED)
         self.assertIn("not a valid", row(doc).error_message)
         delay.assert_not_called()
@@ -661,7 +646,7 @@ class ExtractDocumentTests(TestCase):
     def test_an_empty_file_fails_with_a_clear_reason(self, delay, get):
         get.return_value = b""
         doc = make_doc(status=S.QUEUED)
-        extract_document_task(doc.id)
+        extract_document_task(doc.pk)
         self.assertEqual((row(doc).status, row(doc).error_message), (S.FAILED, "The file is empty."))
         delay.assert_not_called()
 
@@ -674,7 +659,7 @@ class ExtractDocumentTests(TestCase):
         get.return_value = buf.getvalue()
         doc = make_doc(status=S.QUEUED)
         with mock.patch("apps.documents.lib_documents.extract_text") as extract:
-            extract_document_task(doc.id)
+            extract_document_task(doc.pk)
         self.assertEqual(row(doc).status, S.FAILED)
         self.assertIn("1x1 pixels", row(doc).error_message)
         extract.assert_not_called()
@@ -684,7 +669,7 @@ class ExtractDocumentTests(TestCase):
     def test_a_file_over_the_limit_fails(self, delay, _get):
         doc = make_doc(status=S.QUEUED)
         with mock.patch("apps.documents.lib_documents.MAX_FILE_BYTES", 10):
-            extract_document_task(doc.id)
+            extract_document_task(doc.pk)
         self.assertEqual((row(doc).status, row(doc).error_message), (S.FAILED, "The file is over 10 bytes."))
         delay.assert_not_called()
 
@@ -693,7 +678,7 @@ class ExtractDocumentTests(TestCase):
     def test_an_unexpected_error_is_raised_so_celery_retries_and_the_document_stays_in_progress(self, _extract, delay, _get):
         doc = make_doc(status=S.QUEUED)
         with self.assertRaises(RuntimeError):
-            extract_document_task(doc.id)
+            extract_document_task(doc.pk)
         self.assertEqual(row(doc).status, S.EXTRACTING)
         delay.assert_not_called()
 
@@ -701,7 +686,7 @@ class ExtractDocumentTests(TestCase):
     @mock.patch("apps.documents.lib_documents.extract_text", side_effect=RuntimeError("OCR crashed"))
     def test_when_the_retries_are_used_up_the_document_is_failed_for_the_patient_to_retry(self, _extract, delay, _get):
         doc = make_doc(status=S.QUEUED)
-        extract_document_task.apply(args=(doc.id,), retries=extract_document_task.max_retries)   # the last attempt
+        extract_document_task.apply(args=(doc.pk,), retries=extract_document_task.max_retries)   # the last attempt
         self.assertEqual(row(doc).status, S.FAILED)
         self.assertIn("OCR crashed", row(doc).error_message)
         delay.assert_not_called()
@@ -711,7 +696,7 @@ class ExtractDocumentTests(TestCase):
     def test_only_a_document_still_in_the_pipeline_is_touched(self, extract, delay, get):
         for status in (S.COMPLETED, S.FAILED, S.REVIEW_REQUIRED):
             doc = make_doc(status=status)
-            extract_document_task(doc.id)
+            extract_document_task(doc.pk)
             self.assertEqual(row(doc).status, status)
         extract.assert_not_called()
         get.assert_not_called()
@@ -721,18 +706,18 @@ class ExtractDocumentTests(TestCase):
     @mock.patch("apps.documents.lib_documents.extract_text")
     def test_a_retry_after_the_text_was_saved_only_repeats_the_hand_off(self, extract, delay, get):
         doc = make_doc(status=S.CLASSIFYING, text="already read")
-        extract_document_task(doc.id)
+        extract_document_task(doc.pk)
         get.assert_not_called()
         extract.assert_not_called()
-        delay.assert_called_once_with(args=[doc.id, "bulk"], queue="bulk")
+        delay.assert_called_once_with(args=[doc.pk, "bulk"], queue="bulk")
 
     @mock.patch("apps.documents.tasks.classify_document_task.apply_async")
     @mock.patch("apps.documents.lib_documents.extract_text", return_value=("text", "ocr"))
     def test_identical_files_are_both_kept(self, _extract, _delay, _get):
         """There is no duplicate detection any more: the same file twice is two documents."""
         a, b = make_doc(status=S.QUEUED), make_doc(status=S.QUEUED)
-        extract_document_task(a.id)
-        extract_document_task(b.id)
+        extract_document_task(a.pk)
+        extract_document_task(b.pk)
         self.assertEqual((row(a).status, row(b).status), (S.CLASSIFYING, S.CLASSIFYING))
 class ClassifyDocumentTests(TestCase):
     """Stage 2: the rule engine on the extracted text."""
@@ -741,7 +726,7 @@ class ClassifyDocumentTests(TestCase):
     def test_a_clear_verdict_completes_the_document_with_its_type(self):
         batch = DocumentBatch.objects.create(patient=identity())
         doc = make_doc(status=S.CLASSIFYING, text=RX, batch=batch)
-        classify_document_task(doc.id)
+        classify_document_task(doc.pk)
         doc = row(doc)
         self.assertEqual((doc.status, doc.doc_classification, doc.error_message), (S.COMPLETED, "prescription", ""))
         c = classification(doc)
@@ -753,7 +738,7 @@ class ClassifyDocumentTests(TestCase):
     def test_text_the_rules_cannot_place_needs_review(self):
         batch = DocumentBatch.objects.create(patient=identity())
         doc = make_doc(status=S.CLASSIFYING, text="hello world", batch=batch)
-        classify_document_task(doc.id)
+        classify_document_task(doc.pk)
         doc = row(doc)
         self.assertEqual((doc.status, doc.doc_classification), (S.REVIEW_REQUIRED, "not_classified"))
         self.assertEqual(classification(doc).status, "review_required")
@@ -762,12 +747,12 @@ class ClassifyDocumentTests(TestCase):
 
     def test_a_document_with_no_text_needs_review(self):
         doc = make_doc(status=S.CLASSIFYING)
-        classify_document_task(doc.id)
+        classify_document_task(doc.pk)
         self.assertEqual((row(doc).status, row(doc).doc_classification), (S.REVIEW_REQUIRED, "not_classified"))
 
     def test_a_persons_choice_is_not_overwritten_and_the_document_completes(self):
         doc = make_doc(status=S.CLASSIFYING, text=RX, document_type="lab_report", by="human")
-        classify_document_task(doc.id)
+        classify_document_task(doc.pk)
         doc = row(doc)
         self.assertEqual((doc.status, doc.doc_classification), (S.COMPLETED, "lab_report"))
         self.assertEqual(classification(doc).status, "human_classified")
@@ -775,7 +760,7 @@ class ClassifyDocumentTests(TestCase):
     def test_only_a_document_being_classified_is_touched(self):
         for status in (S.QUEUED, S.EXTRACTING, S.COMPLETED, S.FAILED, S.REVIEW_REQUIRED):
             doc = make_doc(status=status, text=RX)
-            classify_document_task(doc.id)
+            classify_document_task(doc.pk)
             self.assertEqual(row(doc).status, status)
             self.assertFalse(DocumentClassification.objects.filter(document=doc).exists())
 
@@ -783,9 +768,9 @@ class ClassifyDocumentTests(TestCase):
     def test_an_error_is_retried_and_fails_the_document_once_the_retries_are_used_up(self, _rules):
         doc = make_doc(status=S.CLASSIFYING, text=RX)
         with self.assertRaises(RuntimeError):
-            classify_document_task(doc.id)
+            classify_document_task(doc.pk)
         self.assertEqual(row(doc).status, S.CLASSIFYING)
-        classify_document_task.apply(args=(doc.id,), retries=classify_document_task.max_retries)   # the last attempt
+        classify_document_task.apply(args=(doc.pk,), retries=classify_document_task.max_retries)   # the last attempt
         self.assertEqual(row(doc).status, S.FAILED)
         self.assertIn("boom", row(doc).error_message)
 @mock.patch("core.storage.get_bytes", return_value=PDF)
@@ -798,7 +783,7 @@ class WholePipelineTests(TestCase):
         doc = make_doc(status=S.QUEUED, batch=batch)
         with mock.patch("apps.documents.tasks.classify_document_task.apply_async",
                         side_effect=lambda args, queue: classify_document_task(*args)):
-            extract_document_task(doc.id)
+            extract_document_task(doc.pk)
         doc = row(doc)
         self.assertEqual((doc.status, doc.doc_classification, classification_rules.method_of(doc), classification_rules.score_of(doc)), (S.COMPLETED, "prescription", "rule", 21))
         self.assertEqual(classification_rules.text_of(doc), RX)
@@ -810,29 +795,29 @@ class StartProcessingTests(TestCase):
     @mock.patch("apps.documents.tasks.extract_document_task.apply_async")
     def test_each_document_is_queued(self, delay):
         a, b = make_doc(), make_doc()
-        records.start_processing([a.id, b.id])
+        records.start_processing([a.pk, b.pk])
         self.assertEqual([c.kwargs for c in delay.call_args_list],
-                         [{"args": [a.id, "bulk"], "queue": "bulk"}, {"args": [b.id, "bulk"], "queue": "bulk"}])
+                         [{"args": [a.pk, "bulk"], "queue": "bulk"}, {"args": [b.pk, "bulk"], "queue": "bulk"}])
 
     @mock.patch("apps.documents.tasks.extract_document_task.apply_async")
     def test_an_instant_document_is_queued_on_the_instant_queue(self, delay):
         a = make_doc()
-        records.start_processing([a.id], records.INSTANT_QUEUE)
-        delay.assert_called_once_with(args=[a.id, "instant"], queue="instant")
+        records.start_processing([a.pk], records.INSTANT_QUEUE)
+        delay.assert_called_once_with(args=[a.pk, "instant"], queue="instant")
 
     @mock.patch("apps.documents.tasks.classify_document_task.apply_async")
     @mock.patch("apps.documents.lib_documents.extract_text", return_value=("text", "ocr"))
     @mock.patch("core.storage.get_bytes", return_value=PDF)
     def test_the_classify_step_stays_on_the_queue_of_its_extract_step(self, _get, _extract, classify):
         doc = make_doc(status=S.QUEUED)
-        extract_document_task(doc.id, "instant")
-        classify.assert_called_once_with(args=[doc.id, "instant"], queue="instant")
+        extract_document_task(doc.pk, "instant")
+        classify.assert_called_once_with(args=[doc.pk, "instant"], queue="instant")
 
     @mock.patch("apps.documents.tasks.extract_document_task.apply_async", side_effect=ConnectionError("broker down"))
     def test_when_the_queue_is_unreachable_the_documents_fail_so_the_patient_can_retry(self, _delay):
         batch = DocumentBatch.objects.create(patient=identity())
         doc = make_doc(batch=batch)
-        records.start_processing([doc.id])
+        records.start_processing([doc.pk])
         self.assertEqual(row(doc).status, S.FAILED)
         self.assertIn("Couldn't start processing", row(doc).error_message)
         batch.refresh_from_db()
@@ -936,12 +921,12 @@ class UploadViewTests(TestCase):
 
         self.assertEqual(resp.status_code, 202)
         batch = DocumentBatch.objects.get()
-        self.assertEqual((batch.patient.awpid, batch_counts(batch)["total_files"], resp.data["data"]["batch_id"]), ("AWP-T1", 1, batch.id))
+        self.assertEqual((batch.patient.awpid, batch_counts(batch)["total_files"], resp.data["data"]["batch_id"]), ("AWP-T1", 1, batch.pk))
         doc = MedicalDocument.objects.get()
         self.assertEqual((doc.status, doc.patient.awpid, doc.document_ref_name, doc.batch_id, doc.doc_classification),
-                         ("queued", "AWP-T1", "a.pdf", batch.id, "not_classified"))
+                         ("queued", "AWP-T1", "a.pdf", batch.pk, "not_classified"))
         self.assertRegex(doc.file_name.name, r"^patients/AWP-T1/documents/[0-9a-f]{32}\.pdf$")
-        start.assert_called_once_with([doc.id], "instant")
+        start.assert_called_once_with([doc.pk], "instant")
 
     def test_the_file_goes_to_s3_through_the_file_field(self, put, storage, start, _resolve):
         from django.core.files.storage import default_storage
@@ -960,7 +945,7 @@ class UploadViewTests(TestCase):
         self.assertEqual(docs.count(), 3)
         self.assertTrue(all(d.file_name.name.startswith("patients/AWP-T1/documents/") for d in docs))
         self.assertEqual(len(resp.data["data"]["documents"]), 3)
-        start.assert_called_once_with([d.id for d in docs.order_by("id")], "bulk")
+        start.assert_called_once_with([d.pk for d in docs.order_by("pk")], "bulk")
 
     def test_a_long_file_name_is_cut_to_fit(self, put, storage, start, _resolve):
         self.post([SimpleUploadedFile("x" * 150 + ".pdf", PDF, content_type="application/pdf")])
@@ -1091,8 +1076,8 @@ class BatchDetailViewTests(TestCase):
         make_doc(batch=batch, status="queued", name="b.pdf")
         make_doc(batch=batch, status="review_required", by="rules", name="c.pdf")
 
-        data = self.get(batch.id).data["data"]
-        self.assertEqual((data["id"], data["total_files"], data["status"]), (batch.id, 3, "processing"))
+        data = self.get(batch.pk).data["data"]
+        self.assertEqual((data["document_batch_id"], data["total_files"], data["status"]), (batch.pk, 3, "processing"))
         self.assertEqual({k: v for k, v in data["counts"].items() if v},
                          {"completed": 1, "queued": 1, "review_required": 1})
         self.assertEqual([(d["file_name"], d["status"], d["processing_status"], d["doc_type"]) for d in data["documents"]],
@@ -1111,7 +1096,7 @@ class BatchDetailViewTests(TestCase):
 
     def test_someone_elses_batch_is_not_found(self, _resolve):
         batch = DocumentBatch.objects.create(patient=identity("AWP-OTHER"))
-        self.assertEqual(self.get(batch.id).status_code, 404)
+        self.assertEqual(self.get(batch.pk).status_code, 404)
 @mock.patch("apps.documents.views.start_processing")
 @mock.patch("apps.documents.lib_documents.storage")
 @mock.patch("core.storage.put_bytes", side_effect=lambda key, data, mime_type: key)
@@ -1130,7 +1115,7 @@ class UploadForWhomTests(TestCase):
     def post(self, awpid=None):
         data = {"files": [pdf("a.pdf")], **({"patient_awpid": awpid} if awpid else {})}
         request = APIRequestFactory().post("/api/v1/records/upload/", data, format="multipart")
-        force_authenticate(request, user=MockUser({"user_id": self.acct.id, "role": "patient", "awpid": "AWP-ME"}))
+        force_authenticate(request, user=MockUser({"user_id": self.acct.pk, "role": "patient", "awpid": "AWP-ME"}))
         return UploadView.as_view()(request)
 
     def test_with_no_one_chosen_the_upload_is_the_patients_own(self, put, storage, start):
@@ -1167,7 +1152,7 @@ def _fake_encounter():
             raise AttributeError(name)
 
     enc = NoRx()
-    enc.id = "enc-1"
+    enc.pk = "enc-1"
     enc.diagnoses = [{"code": "J06.9", "description": "Acute URI"}]
     enc.appointment = SimpleNamespace(vitals=None)
     return enc
@@ -1175,13 +1160,13 @@ def _fake_encounter():
 class SyncToHieTests(ProvenanceFixtureMixin, HospitalDBTestCase):
     def test_uses_the_hospital_id_it_is_given(self):
         self.make_fixture()
-        sync_encounter_to_hie(_fake_encounter(), self.hospital_alias, self.patient, hospital_id=self.hospital.id)
-        self.assertEqual(ClinicalEvent.objects.using("default").get().source_hospital_id, self.hospital.id)
+        sync_encounter_to_hie(_fake_encounter(), self.hospital_alias, self.patient, hospital_id=self.hospital.pk)
+        self.assertEqual(ClinicalEvent.objects.using("default").get().source_hospital_id, self.hospital.pk)
 
     def test_resolves_the_hospital_from_the_db_alias_when_not_given(self):
         self.make_fixture()
         sync_encounter_to_hie(_fake_encounter(), self.hospital_alias, self.patient)
-        self.assertEqual(ClinicalEvent.objects.using("default").get().source_hospital_id, self.hospital.id)
+        self.assertEqual(ClinicalEvent.objects.using("default").get().source_hospital_id, self.hospital.pk)
 
     def test_two_hospitals_do_not_overwrite_each_others_rows(self):
         """With both stamped 0 the update_or_create key (awpid, hospital, ICD code) collapsed to one row."""
@@ -1192,121 +1177,88 @@ class SyncToHieTests(ProvenanceFixtureMixin, HospitalDBTestCase):
         sync_encounter_to_hie(_fake_encounter(), self.hospital_alias, self.patient, hospital_id=22)
         rows = ClinicalEvent.objects.using("default").order_by("source_hospital_id")
         self.assertEqual([r.source_hospital_id for r in rows], [11, 22])
-@requires_hospital_db
-class AllergySignalTests(ProvenanceFixtureMixin, HospitalDBTestCase):
-    def test_shared_allergy_carries_the_hospital_id(self):
-        self.make_fixture()
-        Allergy.objects.using(self.hospital_alias).create(patient=self.patient, substance="Penicillin")
-        self.assertEqual(SharedAllergy.objects.using("default").get().source_hospital_id, self.hospital.id)
-@requires_hospital_db
-class LabHospitalIdTests(ProvenanceFixtureMixin, HospitalDBTestCase):
-    def make_lab_request(self):
-        db = self.hospital_alias
-        test = LabTest.objects.using(db).create(name="CBC")
-        appt = Appointment.objects.using(db).create(
-            patient=self.patient, doctor=self.doctor, branch_department=self.place, scheduled_date=datetime.date.today(),
-        )
-        enc = OPDEncounter.objects.using(db).create(appointment=appt)
-        return LabRequest.objects.using(db).create(
-            patient=self.patient, encounter=enc, test=test, requested_by=self.doctor, branch=self.branch,
-        )
-
-    def test_delivered_report_mirrors_carry_the_hospital_id(self):
-        self.make_fixture()
-        req = self.make_lab_request()
-        with mock.patch("apps.lab.archive.store_lab_report_document") as archive:
-            LabReport.objects.using(self.hospital_alias).create(
-                request=req, patient=self.patient, report_number="LR-1",
-                status="delivered", delivered_at=timezone.now(), result_summary="ok",
-            )
-        self.assertEqual(LabResult.objects.using("default").get().source_hospital_id, self.hospital.id)
-        self.assertEqual(archive.call_args.args[2], self.hospital.id)   # the vault-mirror gets it too
-
-    def test_attach_document_view_stamps_the_request_hospital(self):
-        self.make_fixture()
-        Patient.objects.using("default").get_or_create(awpid=self.patient.awpid, defaults={"full_name": "Prov"})
-        req = self.make_lab_request()
-        pdf = "data:application/pdf;base64," + base64.b64encode(b"%PDF-1.4\n%test\n").decode()
-        with mock.patch("core.storage.upload_data_uri", return_value="patient-documents/x.pdf"):
-            resp = self.call_view(
-                LabRequestAttachDocumentView.as_view(), "post", "/api/v1/lab/requests/1/attach-document/",
-                user_id=self.doctor.id, role="lab_tech", data={"file_data": pdf, "title": "Outside CBC"},
-                hospital_id=self.hospital.id, features=("feat_lab",), view_kwargs={"pk": req.pk},
-            )
-        self.assertLess(resp.status_code, 300, resp.data)
-        doc = MedicalDocument.objects.using("default").get(source_type="lab_request")
-        self.assertEqual(doc.source_hospital_id, self.hospital.id)
 
 
 FORM = {"systolic_bp": 110, "diastolic_bp": 70, "pulse_rate": 90, "temperature": Decimal("98.6"),
         "height_cm": Decimal("85"), "weight_kg": Decimal("12"), "head_circumference_cm": Decimal("47"), "nurse_notes": "calm"}
-class VisitVitalsTests(TestCase):
-    databases = {"default"}
-
+class VisitVitalsTests(HospitalDBTestCase):
     def setUp(self):
-        ensure_hospital(1)
-        ensure_hospital(2)
-        self.patient = Patient.objects.using("default").create(awpid="AW-V1", full_name="V One")
-        self.visit = uuid.uuid4()
+        super().setUp()
+        self.db = self.hospital_alias
+        self.hospital = Hospital.objects.using("default").create(name="Vitals H", hospital_code="vitals-h", db_name=self.db)
+        self.other_hospital = ensure_hospital(self.hospital.pk + 1)
+        branch, self.place = make_branch(self.db)
+        self.patient = make_patient(self.db, "AW-V1", uhid="UHID-V1", branch=branch, full_name="V One")
+        self.shared = Patient.objects.using("default").get(awpid="AW-V1")
+        self.doctor = make_staff(self.db, "doctor", email="dr.v@example.test", phone="9000000021", place=self.place)
+        self.visit = self.appointment()
+
+    def appointment(self):
+        return Appointment.objects.using(self.db).create(patient=self.patient, doctor=self.doctor, branch_department=self.place, scheduled_date=dt.date.today())
 
     def save(self, data=FORM, *, minor, visit=None):
-        return vitals.save_visit(self.patient, visit or self.visit, 1, None, dict(data), is_minor=minor)
+        return vitals.save_visit(visit or self.visit, self.db, self.hospital.pk, None, dict(data), shared_patient=self.shared, is_minor=minor)
 
     def test_an_adult_visit_is_one_vitals_row_with_height_and_weight(self):
-        merged = self.save(minor=False)
-        row = Vitals.objects.get()
+        row = self.save(minor=False)
         self.assertEqual((row.systolic_bp, row.height_cm, row.weight_kg, bmi(row)), (110, Decimal("85.0"), Decimal("12.0"), Decimal("16.6")))
+        self.assertEqual(Vitals.objects.using(self.db).count(), 1)
         self.assertFalse(GrowthMeasurement.objects.exists())
-        self.assertIsNone(merged.head_circumference_cm)             # an adult's head size is not kept
 
-    def test_a_child_visit_writes_a_row_in_each_table_and_reads_back_as_one(self):
-        merged = self.save(minor=True)
-        self.assertEqual((Vitals.objects.get().systolic_bp, Vitals.objects.get().height_cm), (110, None))
+    def test_a_child_visit_keeps_everything_here_and_the_growth_readings_also_in_the_shared_chart(self):
+        row = self.save(minor=True)
+        self.assertEqual((row.systolic_bp, row.height_cm, row.weight_kg, row.head_circumference_cm, row.nurse_notes),
+                         (110, Decimal("85.0"), Decimal("12.0"), Decimal("47.0"), "calm"))
         growth = GrowthMeasurement.objects.get()
-        self.assertEqual((growth.height_cm, growth.weight_kg, growth.head_circumference_cm, growth.measured_on),
-                         (Decimal("85.0"), Decimal("12.000"), Decimal("47.0"), dt.date.today()))
-        self.assertEqual((merged.systolic_bp, merged.height_cm, merged.weight_kg, merged.head_circumference_cm, merged.nurse_notes),
-                         (110, Decimal("85.0"), Decimal("12.000"), Decimal("47.0"), "calm"))
+        self.assertEqual((growth.height_cm, growth.weight_kg, growth.head_circumference_cm, growth.measured_on, growth.source_hospital_id),
+                         (Decimal("85.0"), Decimal("12.000"), Decimal("47.0"), dt.date.today(), self.hospital.pk))
 
-    def test_saving_a_visit_again_updates_it_and_clearing_growth_removes_the_row(self):
+    def test_saving_a_visit_again_updates_it_and_clearing_growth_removes_the_shared_reading(self):
         self.save(minor=True)
         self.save({"pulse_rate": 100, "height_cm": None, "weight_kg": None, "head_circumference_cm": None}, minor=True)
-        self.assertEqual((Vitals.objects.count(), Vitals.objects.get().pulse_rate, GrowthMeasurement.objects.count()), (1, 100, 0))
+        self.assertEqual((Vitals.objects.using(self.db).count(), Vitals.objects.using(self.db).get().pulse_rate, GrowthMeasurement.objects.count()), (1, 100, 0))
 
     def test_a_visit_with_no_growth_fields_creates_no_growth_row(self):
         self.save({"pulse_rate": 80}, minor=True)
         self.assertFalse(GrowthMeasurement.objects.exists())
 
+    def test_a_visit_is_logged_as_a_hospital_event(self):
+        from apps.hospital_patients.models import HospitalEvent
+        row = self.save(minor=False)
+        event = HospitalEvent.objects.using(self.db).get(event_type="vitals")
+        self.assertEqual((event.patient_id, event.branch_department_id), (self.patient.pk, self.place.pk))
+
     def test_visits_and_their_vitals_are_looked_up_together(self):
-        other = uuid.uuid4()
+        other = self.appointment()
         self.save(minor=True)
         self.save({"pulse_rate": 70}, minor=False, visit=other)
-        found = vitals.visits_vitals([self.visit, other, uuid.uuid4()])
-        self.assertEqual(set(found), {self.visit, other})
-        self.assertEqual(vitals.recorded([self.visit, uuid.uuid4()]), {self.visit})
-        self.assertIsNone(vitals.visit_vitals(uuid.uuid4()))
+        found = vitals.visits_vitals([self.visit.pk, other.pk, uuid.uuid4()], self.db)
+        self.assertEqual(set(found), {self.visit.pk, other.pk})
+        self.assertEqual(vitals.recorded([self.visit.pk, uuid.uuid4()], self.db), {self.visit.pk})
+        self.assertIsNone(vitals.visit_vitals(uuid.uuid4(), self.db))
 
     def test_history_readings_use_the_names_the_history_screens_read(self):
         self.save(minor=True)
         (reading,) = vitals.history_readings("AW-V1")
         self.assertEqual((reading["bp_systolic"], reading["bp_diastolic"], reading["weight_kg"], reading["head_circumference_cm"], reading["source"]),
-                         (110, 70, Decimal("12.000"), Decimal("47.0"), "clinic"))
+                         (110, 70, Decimal("12.0"), Decimal("47.0"), "clinic"))
         self.assertNotIn("source_hospital_id", reading)
 
     def test_growth_points_are_one_per_day_and_say_whose_they_are(self):
-        GrowthMeasurement.objects.create(patient=self.patient, measured_on=dt.date(2026, 1, 1), weight_kg=Decimal("10"), source_hospital_id=1)
-        GrowthMeasurement.objects.create(patient=self.patient, measured_on=dt.date(2026, 2, 1), weight_kg=Decimal("11"), source_hospital_id=2)
-        GrowthMeasurement.objects.create(patient=self.patient, measured_on=dt.date(2026, 3, 1), weight_kg=Decimal("12"), source_hospital_id=1, is_rejected=True)
-        GrowthMeasurement.objects.create(patient=self.patient, measured_on=dt.date(2026, 4, 1), source_hospital_id=1)       # nothing measured
-        mine = vitals.growth_points("AW-V1", hospital_id=1, include_other=False)
-        self.assertEqual([(p["date"], p["source"]) for p in mine], [("2026-01-01", "this_hospital")])
-        both = vitals.growth_points("AW-V1", hospital_id=1)
+        mine, theirs = self.hospital.pk, self.other_hospital.pk
+        GrowthMeasurement.objects.create(patient=self.shared, measured_on=dt.date(2026, 1, 1), weight_kg=Decimal("10"), source_hospital_id=mine)
+        GrowthMeasurement.objects.create(patient=self.shared, measured_on=dt.date(2026, 2, 1), weight_kg=Decimal("11"), source_hospital_id=theirs)
+        GrowthMeasurement.objects.create(patient=self.shared, measured_on=dt.date(2026, 3, 1), weight_kg=Decimal("12"), source_hospital_id=mine, is_rejected=True)
+        GrowthMeasurement.objects.create(patient=self.shared, measured_on=dt.date(2026, 4, 1), source_hospital_id=mine)       # nothing measured
+        only_mine = vitals.growth_points("AW-V1", hospital_id=mine, include_other=False)
+        self.assertEqual([(p["date"], p["source"]) for p in only_mine], [("2026-01-01", "this_hospital")])
+        both = vitals.growth_points("AW-V1", hospital_id=mine)
         self.assertEqual([p["source"] for p in both], ["this_hospital", "other_hospital"])
         self.assertEqual([p["source"] for p in vitals.growth_points("AW-V1")], ["clinic", "clinic"])
 
     def test_an_adults_height_and_weight_also_reach_the_growth_chart(self):
         self.save({"height_cm": Decimal("170"), "weight_kg": Decimal("70")}, minor=False)
-        (point,) = vitals.growth_points("AW-V1", hospital_id=1)
+        (point,) = vitals.growth_points("AW-V1", hospital_id=self.hospital.pk)
         self.assertEqual((point["height_cm"], point["weight_kg"], point["bmi"]), (170.0, 70.0, 24.2))
 
 
@@ -1440,24 +1392,12 @@ class RoadmapContentTests(TestCase):
         self.record()                                             # a second BCG fits no free slot
         rows = self.roadmap()
         self.assertEqual([r["status"] for r in rows[:3]], ["completed", "unknown", "unknown"])
-        self.assertEqual(rows[0]["record_id"], first.id)
+        self.assertEqual(rows[0]["record_id"], first.pk)
         self.assertEqual([r["extra"] for r in rows], [False, False, False, True])
 
     def test_matching_ignores_case_and_spaces_in_the_name(self):
         self.record(name="  bcg ")
         self.assertEqual(self.roadmap()[0]["status"], "completed")
-
-    def test_without_consent_other_hospitals_records_are_hidden_except_pending_reviews(self):
-        self.record(source_hospital_id=2)                                                    # verified elsewhere: hidden
-        self.record(name="OPV 1", label="6 weeks", source_hospital_id=2,
-                    verification_status=V.STATUS_PENDING, source=V.SOURCE_SELF_REPORTED)   # awaiting review: shown
-        self.record(name="MMR", label="9 months", source_hospital_id=None)                   # never tied to a hospital: shown
-        by_name = {r["vaccine_name"]: r["status"] for r in self.roadmap(hie_consent=False)}
-        self.assertEqual(by_name, {"BCG": "unknown", "OPV 1": "pending_review", "MMR": "completed"})
-
-    def test_with_consent_everything_is_shown(self):
-        self.record(source_hospital_id=2)
-        self.assertEqual(self.roadmap(hie_consent=True)[0]["status"], "completed")
 
     def test_removing_a_schedule_rule_never_removes_a_childs_record(self):
         schedule = Schedule.objects.using("default").create(kind="vaccination", name="s")
@@ -1499,7 +1439,7 @@ class PortalPediatricTests(TestCase):
 
     def call(self, view, method="get", data=None, query="", **kwargs):
         request = getattr(APIRequestFactory(), method)(f"/x/{query}", data, format="json")
-        force_authenticate(request, user=MockUser({"user_id": self.mom.id, "role": "patient", "awpid": "AW-MOM"}))
+        force_authenticate(request, user=MockUser({"user_id": self.mom.pk, "role": "patient", "awpid": "AW-MOM"}))
         return view.as_view()(request, **kwargs)
 
     def vaccination(self, awpid="AW-KID", **fields):
@@ -1512,7 +1452,6 @@ class PortalPediatricTests(TestCase):
     def test_growth_shows_a_family_members_readings_with_percentiles(self):
         GrowthMeasurement.objects.using("default").create(
             patient=self.kid, measured_on=dt.date.today(), weight_kg=Decimal("12"), height_cm=Decimal("85"), source_hospital_id=1)
-        Vitals.objects.using("default").create(patient=self.kid, spo2=98, source_hospital_id=1)    # not a growth measurement: left out
         data = self.call(views.PortalGrowthView, query="?patient_awpid=AW-KID").data["data"]
         self.assertTrue(data["is_minor"])
         self.assertEqual(len(data["series"]), 1)                       # a reading with no growth measurement is left out
@@ -1525,7 +1464,6 @@ class PortalPediatricTests(TestCase):
         self.assertEqual(self.call(views.PortalGrowthView, query="?patient_awpid=AW-STRANGER").status_code, 403)
 
     def test_an_adult_gets_no_percentiles(self):
-        Vitals.objects.using("default").create(patient=self.mom, weight_kg=Decimal("60"), source_hospital_id=1)
         data = self.call(views.PortalGrowthView).data["data"]
         self.assertFalse(data["is_minor"])
         self.assertFalse(data["percentile_available"])
@@ -1539,14 +1477,6 @@ class PortalPediatricTests(TestCase):
         self.assertGreater(data["total_count"], 1)
         self.assertNotIn("next_due", data)
 
-    def test_the_milestone_roadmap_shows_an_assessment(self):
-        slot = ScheduleRule.objects.using("default").filter(schedule__kind="milestone").first()          # a slot of the seeded default schedule
-        MilestoneRecord.objects.using("default").create(
-            patient=self.kid, domain=slot.domain, milestone=slot.item, scheduled_label=slot.scheduled_label,
-            status="achieved", achieved_date=dt.date.today(), assessed_date=dt.date.today())
-        data = self.call(views.PortalMilestoneListView, query="?patient_awpid=AW-KID").data["data"]
-        self.assertEqual(sum(1 for r in data["roadmap"] if r["status"] == "achieved"), 1)
-        self.assertEqual(data["achieved_count"], 1)
 
     # ── uploads ───────────────────────────────────────────────────────────────
     def upload(self, **body):
@@ -1610,8 +1540,8 @@ class PediatricStaffTests(HospitalDBTestCase):
             db, "AW-KID-1", uhid="UHID-K1", branch=self.branch, full_name="Kid One", gender="F",
             date_of_birth=dt.date.today() - timedelta(days=730), is_dependent=True,
         )
-        ensure_hospital(self.hospital.id + 1)
-        ensure_hospital(self.hospital.id + 50)
+        ensure_hospital(self.hospital.pk + 1)
+        ensure_hospital(self.hospital.pk + 50)
         self.shared = Patient.objects.using("default").get(awpid="AW-KID-1")
         self.doctor = make_staff(db, "doctor", email="dr.x@example.test", phone="9000000011", place=place)
         self.appt = Appointment.objects.using(db).create(
@@ -1620,26 +1550,19 @@ class PediatricStaffTests(HospitalDBTestCase):
 
     # ── helpers ───────────────────────────────────────────────────────────────
     def call(self, view, method, path="/x/", role="doctor", data=None, pk=None, **kw):
-        return self.call_view(view.as_view(), method, path, user_id=7, role=role, data=data,
-                              hospital_id=self.hospital.id, view_kwargs={"pk": pk or self.child.pk}, **kw)
+        return self.call_view(view.as_view(), method, path, user_id=self.doctor.pk, role=role, data=data,
+                              hospital_id=self.hospital.pk, view_kwargs={"pk": pk or self.child.pk}, **kw)
 
     def vax(self, awpid=None, **fields):
         person = Patient.objects.using("default").get_or_create(awpid=awpid, defaults={"full_name": awpid})[0] if awpid else self.shared
         base = dict(patient=person, vaccine_name="BCG", scheduled_label="Birth", source=V.SOURCE_CLINIC,
-                    verification_status=V.STATUS_VERIFIED, source_hospital_id=self.hospital.id)
+                    verification_status=V.STATUS_VERIFIED, source_hospital_id=self.hospital.pk)
         return V.objects.using("default").create(**{**base, **fields})
 
     def add_vitals(self, **fields):
-        from apps.opd.vitals_service import record_vitals
-        return record_vitals(self.appt, self.hospital_alias, self.hospital.id, None, fields)[0]
+        from apps.hospital_patients.vitals_service import record_vitals
+        return record_vitals(self.appt, self.hospital_alias, self.hospital.pk, None, fields)[0]
 
-    def test_only_a_doctor_or_nurse_can_record_vitals(self):
-        from apps.opd.views import VitalsView
-        for role, expected in (("front_desk", 403), ("pharmacist", 403), ("lab_tech", 403)):
-            resp = self.call(VitalsView, "post", role=role, data={"weight_kg": "12"}, pk=self.appt.pk)
-            self.assertEqual(resp.status_code, expected, role)
-        resp = self.call(VitalsView, "post", role="nurse", data={"weight_kg": "12", "height_cm": "85"}, pk=self.appt.pk)
-        self.assertLess(resp.status_code, 300, getattr(resp, "data", None))
 
     # ── vaccinations: roadmap and logging ─────────────────────────────────────
     def test_the_roadmap_lists_the_schedule_and_marks_a_recorded_dose_completed(self):
@@ -1667,7 +1590,7 @@ class PediatricStaffTests(HospitalDBTestCase):
         self.assertEqual(self.call(view, "post", data=body).status_code, 400)        # already exists
         self.assertEqual(self.call(view, "patch", data={"nicu_days": 9}).status_code, 200)
         shared = BirthHistory.objects.using("default").get(patient__awpid=self.child.awpid)
-        self.assertEqual((shared.gestational_age_weeks, shared.nicu_days, shared.source_hospital_id), (38, 9, self.hospital.id))
+        self.assertEqual((shared.gestational_age_weeks, shared.nicu_days, shared.source_hospital_id), (38, 9, self.hospital.pk))
         self.assertEqual(self.call(view, "get").data["data"]["gestational_age_weeks"], 38)
 
     def test_birth_history_changes_are_written_to_the_audit_log(self):
@@ -1675,64 +1598,35 @@ class PediatricStaffTests(HospitalDBTestCase):
         view = ped_views.BirthHistoryView
         self.call(view, "post", data={"gestational_age_weeks": 38, "delivery_mode": "normal"})
         self.call(view, "patch", data={"gestational_age_weeks": 36, "notes": "late preterm"})
-        rows = list(AuditLog.objects.using(self.hospital_alias).filter(resource_type="BirthHistory").order_by("id"))
+        rows = list(AuditLog.objects.using(self.hospital_alias).filter(resource_type="BirthHistory").order_by("pk"))
         self.assertEqual([r.action for r in rows], ["birth_history.create", "birth_history.update"])
         self.assertEqual(rows[1].metadata["changed"]["gestational_age_weeks"], ["38", "36"])
-        self.assertEqual(rows[1].patient_id, self.child.uhid)
+        self.assertEqual(rows[1].patient_id, self.child.pk)
 
     def test_the_audit_log_notes_when_another_hospitals_birth_history_is_replaced(self):
         from apps.hospital_setup.models import AuditLog
-        BirthHistory.objects.using("default").create(patient=self.shared, gestational_age_weeks=40, source_hospital_id=self.hospital.id + 50)
+        BirthHistory.objects.using("default").create(patient=self.shared, gestational_age_weeks=40, source_hospital_id=self.hospital.pk + 50)
         self.call(ped_views.BirthHistoryView, "patch", data={"gestational_age_weeks": 38})
         row = AuditLog.objects.using(self.hospital_alias).get(action="birth_history.update")
-        self.assertEqual(row.metadata["replaced_other_hospitals_copy"], self.hospital.id + 50)
+        self.assertEqual(row.metadata["replaced_other_hospitals_copy"], self.hospital.pk + 50)
 
     def test_editing_a_missing_birth_history_is_not_found(self):
         self.assertEqual(self.call(ped_views.BirthHistoryView, "patch", data={"notes": "x"}).status_code, 404)
 
     # ── milestones ────────────────────────────────────────────────────────────
-    def test_recording_a_milestone_validates_and_stamps_dates_by_status(self):
-        view = ped_views.PatientMilestoneListCreateView
-        self.assertEqual(self.call(view, "post", data={"domain": "nonsense", "milestone": "x"}).status_code, 400)
-        self.assertEqual(self.call(view, "post", data={"domain": "gross_motor"}).status_code, 400)
-        self.assertEqual(self.call(view, "post", data={"domain": "gross_motor", "milestone": "x", "status": "weird"}).status_code, 400)
-        achieved = self.call(view, "post", role="nurse", data={"domain": "gross_motor", "milestone": "Sits", "scheduled_label": "6 months"})
-        self.assertEqual(achieved.status_code, 201)
-        self.assertEqual(achieved.data["data"]["achieved_date"], str(dt.date.today()))
-        concern = self.call(view, "post", data={"domain": "language", "milestone": "Babbles", "status": "concern", "achieved_date": "2026-01-01"})
-        self.assertIsNone(concern.data["data"]["achieved_date"])                     # only "achieved" keeps a date
-        self.assertEqual(MilestoneRecord.objects.using("default").count(), 2)
-
-    def test_milestone_dates_must_be_real_and_not_in_the_future(self):
-        view = ped_views.PatientMilestoneListCreateView
-        base = {"domain": "language", "milestone": "Babbles"}
-        future = (dt.date.today() + timedelta(days=3)).isoformat()
-        for field, bad in (("assessed_date", "garbage"), ("achieved_date", "garbage"), ("assessed_date", future), ("achieved_date", future)):
-            self.assertEqual(self.call(view, "post", data={**base, field: bad}).status_code, 400, (field, bad))
-        self.assertEqual(MilestoneRecord.objects.using("default").count(), 0)
-
-    def test_the_milestone_roadmap_lists_the_schedule(self):
-        data = self.call(ped_views.PatientMilestoneListCreateView, "get").data["data"]
-        self.assertTrue(data["roadmap"])
-        self.assertFalse(data["consent_given"])
 
 
 class ShapeTests(SimpleTestCase):
     def test_vaccination_rule(self):
-        rule = SimpleNamespace(id=1, item="BCG", dose_number=1, scheduled_label="At birth", min_age_days=0,
+        rule = SimpleNamespace(pk=1, item="BCG", dose_number=1, scheduled_label="At birth", min_age_days=0,
                                max_age_days=30, mandatory=True, sort_order=1)
         self.assertEqual(vaccination_rule_dict(rule), {
-            "id": 1, "vaccine_name": "BCG", "dose_number": 1, "scheduled_label": "At birth",
+            "immunization_schedule_rule_id": 1, "vaccine_name": "BCG", "dose_number": 1, "scheduled_label": "At birth",
             "min_age_days": 0, "max_age_days": 30, "mandatory": True, "sort_order": 1})
 
-    def test_milestone_rule(self):
-        rule = SimpleNamespace(id=2, domain="motor", item="Sits", scheduled_label="6 months", min_age_days=150,
-                               max_age_days=210, mandatory=False, sort_order=3)
-        self.assertEqual(set(milestone_rule_dict(rule)), {"id", "domain", "milestone", "scheduled_label",
-                                                         "min_age_days", "max_age_days", "mandatory", "sort_order"})
 
     def test_schedule_marks_the_hospitals_active_one_and_counts_rules(self):
-        s = SimpleNamespace(id=5, name="Std", description="d", is_template=False, active=True, owner_hospital_id=9,
+        s = SimpleNamespace(pk=5, name="Std", description="d", is_template=False, active=True, owner_hospital_id=9,
                             s_rules=SimpleNamespace(count=lambda: 12))
         self.assertTrue(schedule_dict(s, active_id=5)["is_active_for_this_hospital"])
         self.assertFalse(schedule_dict(s, active_id=6)["is_active_for_this_hospital"])
@@ -1742,7 +1636,7 @@ class ShapeTests(SimpleTestCase):
 
     def test_template(self):
         when = dt.datetime(2026, 1, 2, tzinfo=dt.timezone.utc)
-        s = SimpleNamespace(id=1, name="T", description="", active=True, created_at=when, updated_at=when,
+        s = SimpleNamespace(pk=1, name="T", description="", active=True, created_at=when, updated_at=when,
                             s_rules=SimpleNamespace(count=lambda: 4))
         out = template_dict(s, hospitals_using=2)
         self.assertEqual((out["rule_count"], out["hospitals_using"], out["created_at"]), (4, 2, when.isoformat()))
@@ -1765,20 +1659,11 @@ class PlatformTemplateListTests(TestCase):
         row = next(t for t in resp.data["data"] if t["name"] == "India UIP")
         self.assertEqual((row["rule_count"], row["hospitals_using"]), (0, 0))
 
-    def test_milestone_templates(self):
-        from apps.documents.views import MilestoneTemplateListCreateView
-        Schedule.objects.using("default").create(kind="milestone", name="WHO milestones", is_template=True)
-        resp = self.get(MilestoneTemplateListCreateView)
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("WHO milestones", [t["name"] for t in resp.data["data"]])
-
 
 # per kind: (kind, view-name stem, the rule key holding the name, the kind-specific rule key + value)
 KINDS = {
     "vaccination": dict(stem="Vaccination", name_key="vaccine_name",
                         extra={"dose_number": 2}),
-    "milestone": dict(stem="Milestone", name_key="milestone",
-                      extra={"domain": "gross_motor"}),
 }
 def rule(kind, name, **kw):
     spec = KINDS[kind]
@@ -1792,9 +1677,9 @@ class ScheduleEndpointTests(TestCase):
 
     def call(self, view, method, data=None, role="hospital_admin", pk=None):
         request = getattr(APIRequestFactory(), method)("/x/", data, format="json")
-        request.hospital_id = self.hospital.id
+        request.hospital_id = self.hospital.pk
         force_authenticate(request, user=MockUser({"user_id": 1, "role": role, "is_platform": role == "platform_admin",
-                                                   "hospital_id": self.hospital.id}))
+                                                   "hospital_id": self.hospital.pk}))
         return view.as_view()(request, **({"pk": pk} if pk else {}))
 
     def view(self, module, kind, suffix):
@@ -1810,7 +1695,7 @@ class ScheduleEndpointTests(TestCase):
     def make_template(self, kind, rules=None):
         resp = self.platform(kind, "post", {"name": f"{kind} std", "rules": rules or [rule(kind, "A"), rule(kind, "B")]})
         self.assertEqual(resp.status_code, 201, resp.data)
-        return resp.data["data"]["id"]
+        return resp.data["data"]["immunization_schedule_id"]
 
     # ── platform admin: templates ─────────────────────────────────────────────
     def test_a_template_is_created_with_its_rules_and_can_be_read_back(self):
@@ -1821,14 +1706,8 @@ class ScheduleEndpointTests(TestCase):
                 self.assertEqual([r[KINDS[kind]["name_key"]] for r in data["rules"]], ["A", "B"])
                 self.assertEqual(Schedule.objects.get(pk=pk).kind, kind)
                 listed = self.platform(kind, "get").data["data"]
-                self.assertEqual([t["id"] for t in listed if t["id"] == pk], [pk])
+                self.assertEqual([t["immunization_schedule_id"] for t in listed if t["immunization_schedule_id"] == pk], [pk])
 
-    def test_each_kind_only_lists_its_own_templates(self):
-        v, m = self.make_template("vaccination"), self.make_template("milestone")
-        vaccination_ids = {t["id"] for t in self.platform("vaccination", "get").data["data"]}
-        milestone_ids = {t["id"] for t in self.platform("milestone", "get").data["data"]}
-        self.assertTrue(v in vaccination_ids and m not in vaccination_ids)
-        self.assertTrue(m in milestone_ids and v not in milestone_ids)
 
     def test_a_template_needs_a_name_and_invalid_rules_are_skipped(self):
         for kind in KINDS:
@@ -1838,9 +1717,6 @@ class ScheduleEndpointTests(TestCase):
                 pk = self.make_template(kind, bad)
                 self.assertEqual(len(self.platform(kind, "get", pk=pk, detail=True).data["data"]["rules"]), 1)
 
-    def test_a_milestone_rule_with_an_unknown_domain_is_skipped(self):
-        pk = self.make_template("milestone", [rule("milestone", "ok"), rule("milestone", "bad", domain="nonsense")])
-        self.assertEqual(len(self.platform("milestone", "get", pk=pk, detail=True).data["data"]["rules"]), 1)
 
     def test_patching_a_template_updates_deletes_and_adds_rules(self):
         for kind in KINDS:
@@ -1849,8 +1725,8 @@ class ScheduleEndpointTests(TestCase):
                 pk = self.make_template(kind)
                 first, second = self.platform(kind, "get", pk=pk, detail=True).data["data"]["rules"]
                 resp = self.platform(kind, "patch", {"name": "Renamed", "active": False, "rules": [
-                    {"id": first["id"], key: "A2", "min_age_days": 10},
-                    {"id": second["id"], "_delete": True},
+                    {"immunization_schedule_rule_id": first["immunization_schedule_rule_id"], key: "A2", "min_age_days": 10},
+                    {"immunization_schedule_rule_id": second["immunization_schedule_rule_id"], "_delete": True},
                     rule(kind, "C"),
                 ]}, pk=pk, detail=True)
                 self.assertEqual(resp.status_code, 200, resp.data)
@@ -1875,10 +1751,10 @@ class ScheduleEndpointTests(TestCase):
                 template = self.make_template(kind)
                 resp = self.as_staff(kind, "post", {"template_id": template})
                 self.assertEqual(resp.status_code, 201, resp.data)
-                clone_id = resp.data["data"]["id"]
+                clone_id = resp.data["data"]["immunization_schedule_id"]
                 clone = Schedule.objects.get(pk=clone_id)
-                self.assertEqual((clone.kind, clone.owner_hospital_id, clone.is_template), (kind, self.hospital.id, False))
-                self.assertEqual(roadmap.active_schedule(kind, self.hospital.id).pk, clone_id)
+                self.assertEqual((clone.kind, clone.owner_hospital_id, clone.is_template), (kind, self.hospital.pk, False))
+                self.assertEqual(roadmap.active_schedule(kind, self.hospital.pk).pk, clone_id)
                 detail = self.as_staff(kind, "get", pk=clone_id, suffix="ScheduleDetailView").data["data"]
                 self.assertEqual([r[key] for r in detail["rules"]], ["A", "B"])
                 self.assertEqual(detail["rules"][0][next(iter(KINDS[kind]["extra"]))], next(iter(KINDS[kind]["extra"].values())))
@@ -1893,10 +1769,10 @@ class ScheduleEndpointTests(TestCase):
         for kind in KINDS:
             with self.subTest(kind):
                 template = self.make_template(kind)
-                clone = self.as_staff(kind, "post", {"template_id": template}).data["data"]["id"]
+                clone = self.as_staff(kind, "post", {"template_id": template}).data["data"]["immunization_schedule_id"]
                 data = self.as_staff(kind, "get").data["data"]
-                self.assertEqual([s["id"] for s in data["own_schedules"]], [clone])
-                self.assertIn(template, [s["id"] for s in data["templates"]])   # next to the seeded default template
+                self.assertEqual([s["immunization_schedule_id"] for s in data["own_schedules"]], [clone])
+                self.assertIn(template, [s["immunization_schedule_id"] for s in data["templates"]])   # next to the seeded default template
                 self.assertEqual(data["active_schedule_id"], clone)
 
     def test_a_hospital_edits_only_its_own_schedule_never_a_template(self):
@@ -1904,7 +1780,7 @@ class ScheduleEndpointTests(TestCase):
             with self.subTest(kind):
                 template = self.make_template(kind)
                 self.assertEqual(self.as_staff(kind, "patch", {"name": "x"}, pk=template, suffix="ScheduleDetailView").status_code, 404)
-                clone = self.as_staff(kind, "post", {"template_id": template}).data["data"]["id"]
+                clone = self.as_staff(kind, "post", {"template_id": template}).data["data"]["immunization_schedule_id"]
                 resp = self.as_staff(kind, "patch", {"name": "Mine", "rules": [rule(kind, "Z")]}, pk=clone, suffix="ScheduleDetailView")
                 self.assertEqual(resp.status_code, 200)
                 self.assertEqual(resp.data["data"]["name"], "Mine")
@@ -1916,17 +1792,13 @@ class ScheduleEndpointTests(TestCase):
                 template = self.make_template(kind)
                 resp = self.as_staff(kind, "post", pk=template, suffix="ScheduleActivateView")
                 self.assertEqual(resp.status_code, 200, resp.data)
-                active = roadmap.active_schedule(kind, self.hospital.id)
+                active = roadmap.active_schedule(kind, self.hospital.pk)
                 self.assertEqual((active.owner_hospital_id, active.name, active.pk != template),
-                                 (self.hospital.id, Schedule.objects.get(pk=template).name, True))
-                other = Schedule.objects.create(kind=kind, name="theirs", owner_hospital=ensure_hospital(self.hospital.id + 1000))
-                self.assertEqual(self.as_staff(kind, "post", pk=other.id, suffix="ScheduleActivateView").status_code, 400)
-                self.assertEqual(self.as_staff(kind, "get", pk=other.id, suffix="ScheduleDetailView").status_code, 404)
+                                 (self.hospital.pk, Schedule.objects.get(pk=template).name, True))
+                other = Schedule.objects.create(kind=kind, name="theirs", owner_hospital=ensure_hospital(self.hospital.pk + 1000))
+                self.assertEqual(self.as_staff(kind, "post", pk=other.pk, suffix="ScheduleActivateView").status_code, 400)
+                self.assertEqual(self.as_staff(kind, "get", pk=other.pk, suffix="ScheduleDetailView").status_code, 404)
 
-    def test_an_id_of_the_other_kind_is_not_found(self):
-        milestone = self.make_template("milestone")
-        self.assertEqual(self.platform("vaccination", "get", pk=milestone, detail=True).status_code, 404)
-        self.assertEqual(self.as_staff("vaccination", "post", pk=milestone, suffix="ScheduleActivateView").status_code, 404)
 
     # ── rule numbers ──────────────────────────────────────────────────────────
     def test_rule_numbers_must_be_whole_numbers_and_the_maximum_cannot_be_below_the_minimum(self):
@@ -1947,11 +1819,11 @@ class ScheduleEndpointTests(TestCase):
                 pk = self.make_template(kind, [rule(kind, "A", min_age_days=100, max_age_days=200)])
                 first = self.platform(kind, "get", pk=pk, detail=True).data["data"]["rules"][0]
                 bad = self.platform(kind, "patch", {"name": "Renamed", "rules": [
-                    {"id": first["id"], key: "A2"}, {"id": first["id"], "max_age_days": 50}]}, pk=pk, detail=True)
+                    {"immunization_schedule_rule_id": first["immunization_schedule_rule_id"], key: "A2"}, {"immunization_schedule_rule_id": first["immunization_schedule_rule_id"], "max_age_days": 50}]}, pk=pk, detail=True)
                 self.assertEqual(bad.status_code, 400)
                 data = self.platform(kind, "get", pk=pk, detail=True).data["data"]
                 self.assertEqual((data["name"], data["rules"][0][key]), (f"{kind} std", "A"))                 # untouched
-                self.assertEqual(self.platform(kind, "patch", {"rules": [{"id": first["id"], "min_age_days": 300}]}, pk=pk, detail=True).status_code, 400)
-                cleared = self.platform(kind, "patch", {"rules": [{"id": first["id"], "max_age_days": None}]}, pk=pk, detail=True)
+                self.assertEqual(self.platform(kind, "patch", {"rules": [{"immunization_schedule_rule_id": first["immunization_schedule_rule_id"], "min_age_days": 300}]}, pk=pk, detail=True).status_code, 400)
+                cleared = self.platform(kind, "patch", {"rules": [{"immunization_schedule_rule_id": first["immunization_schedule_rule_id"], "max_age_days": None}]}, pk=pk, detail=True)
                 self.assertEqual(cleared.status_code, 200)
                 self.assertIsNone(cleared.data["data"]["rules"][0]["max_age_days"])

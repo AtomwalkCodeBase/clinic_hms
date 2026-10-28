@@ -19,8 +19,6 @@ const ROLE_LABELS = {
   doctor:         { label: "Doctor",         color: "#0ea5e9" },
   nurse:          { label: "Nurse",          color: "#16a34a" },
   front_desk:     { label: "Front Desk",     color: "#B07C24" },
-  lab_tech:       { label: "Lab Tech",       color: "#0891b2" },
-  pharmacist:     { label: "Pharmacist",     color: "#dc2626" },
 };
 
 const ROLES = Object.keys(ROLE_LABELS);
@@ -28,8 +26,6 @@ const ROLES = Object.keys(ROLE_LABELS);
 // Which "basics" fields to collect at invite time, per role — mirrors the
 const ROLE_BASICS = {
   nurse:          { license: true,  licenseLabel: "Nursing Council Registration No." },
-  pharmacist:     { license: true,  licenseLabel: "Pharmacy Council Registration No." },
-  lab_tech:       { license: true,  licenseLabel: "Professional Registration No. (if applicable)" },
   front_desk:     { license: false },
   hospital_admin: { license: false },
 };
@@ -56,8 +52,6 @@ const QUALIFICATIONS_BY_ROLE = {
     "BDS", "BDS, MDS", "BAMS", "BHMS", "BUMS",
   ],
   nurse: ["ANM", "GNM", "BSc Nursing", "Post Basic BSc Nursing", "MSc Nursing"],
-  pharmacist: ["D.Pharm", "B.Pharm", "M.Pharm", "Pharm.D"],
-  lab_tech: ["DMLT", "BSc MLT", "MSc MLT", "BSc Biotechnology", "DMRT"],
   front_desk: ["12th Pass", "Graduate (Any Discipline)", "BBA", "Diploma in Hospital Management"],
   hospital_admin: ["Graduate (Any Discipline)", "MBA (Hospital Administration)", "MHA", "PGDHM"],
 };
@@ -105,7 +99,7 @@ function WorkingHoursRoomGrid({
 
   function openAssign(day) {
     setOpenDay(day.day_of_week);
-    setBlockForm({ start_time: day.start_time, end_time: day.end_time, room_id: rooms[0] ? String(rooms[0].id) : "" });
+    setBlockForm({ start_time: day.start_time, end_time: day.end_time, room_id: rooms[0] ? String(rooms[0].room_id) : "" });
   }
 
   async function submitBlock(day) {
@@ -196,7 +190,7 @@ function WorkingHoursRoomGrid({
                         style={{ ...smallInput, width: 150 }}>
                         <option value="">Room…</option>
                         {rooms.map(r => (
-                          <option key={r.id} value={r.id}>{r.name}{r.floor ? ` (Fl ${r.floor})` : ""}</option>
+                          <option key={r.room_id} value={r.room_id}>{r.name}{r.floor ? ` (Fl ${r.floor})` : ""}</option>
                         ))}
                       </select>
                       <button type="button" disabled={busy || !blockForm.room_id} onClick={() => submitBlock(day)}
@@ -257,7 +251,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
   }, [api, permissions?.feat_custom_roles]);
 
   const selectedCustomRole = form.role === "custom"
-    ? customRoles.find(r => String(r.id) === String(form.custom_role_id))
+    ? customRoles.find(r => String(r.user_group_id) === String(form.custom_role_id))
     : null;
   // Whether the currently-selected role (system "doctor" or a custom role
   const roleActsAsDoctor = form.role === "doctor"
@@ -289,7 +283,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
   }, {});
 
   async function addRoomBlock(day_of_week, blockForm) {
-    const room = rooms.find(r => String(r.id) === String(blockForm.room_id));
+    const room = rooms.find(r => String(r.room_id) === String(blockForm.room_id));
     setRoomBlocks(bs => [...bs, {
       key: `${day_of_week}-${Date.now()}`,
       day_of_week,
@@ -399,13 +393,13 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
       toastSuccess(`${form.first_name} invited successfully.`);
 
       // Room tagging can only be saved now that the doctor actually has an
-      if (roleActsAsDoctor && roomBlocks.length > 0 && res.data?.id) {
+      if (roleActsAsDoctor && roomBlocks.length > 0 && res.data?.staff_user_id) {
         let okCount = 0;
         const failMsgs = [];
         for (const b of roomBlocks) {
           try {
             await api.post(API_ENDPOINTS.ORG.ROOM_ASSIGNMENTS, {
-              room: parseInt(b.room_id), doctor: res.data.id,
+              room: parseInt(b.room_id), doctor: res.data.staff_user_id,
               day_of_week: b.day_of_week, start_time: b.start_time, end_time: b.end_time,
             });
             okCount++;
@@ -545,7 +539,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                       {customRoles.map(r => {
                         const capped = r.acts_as?.includes("doctor") ? doctorsCapped : staffCapped;
                         return (
-                          <option key={`custom:${r.id}`} value={`custom:${r.id}`} disabled={capped}>
+                          <option key={`custom:${r.user_group_id}`} value={`custom:${r.user_group_id}`} disabled={capped}>
                             {r.name}{capped ? " — limit reached" : ""}
                           </option>
                         );
@@ -573,7 +567,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                 <label style={labelStyle}>{roleActsAsDoctor ? "Primary Branch" : "Branch"}</label>
                 <select style={inputStyle} value={form.branch_id} onChange={set("branch_id")}>
                   <option value="">— No branch assigned —</option>
-                  {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  {branches.map(b => <option key={b.branch_id} value={b.branch_id}>{b.name}</option>)}
                 </select>
               </div>
 
@@ -585,10 +579,10 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                     border: "1.5px solid var(--color-border)", borderRadius: 8, padding: "10px 12px",
                     maxHeight: 140, overflowY: "auto",
                   }}>
-                    {branches.filter(b => String(b.id) !== String(form.branch_id)).map(b => (
-                      <label key={b.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
-                        <input type="checkbox" checked={extraBranchIds.includes(b.id)}
-                          onChange={() => toggleExtraBranch(b.id)} />
+                    {branches.filter(b => String(b.branch_id) !== String(form.branch_id)).map(b => (
+                      <label key={b.branch_id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                        <input type="checkbox" checked={extraBranchIds.includes(b.branch_id)}
+                          onChange={() => toggleExtraBranch(b.branch_id)} />
                         {b.name}
                       </label>
                     ))}
@@ -604,7 +598,7 @@ function InviteModal({ branches, onClose, onInvited, atCapacity, permissions }) 
                   <label style={labelStyle}>Department</label>
                   <select style={inputStyle} value={form.department_id} onChange={set("department_id")}>
                     <option value="">— No department —</option>
-                    {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    {departments.map(d => <option key={d.department_id} value={d.department_id}>{d.name}</option>)}
                   </select>
                 </div>
               )}
@@ -815,16 +809,16 @@ function DoctorProfileModal({ staff, onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [roomBusy, setRoomBusy] = useState(false);
 
-  const branchId = staff.branch || staff.branches?.find(b => b.is_primary)?.id || staff.branches?.[0]?.id || "";
+  const branchId = staff.branch || staff.branches?.find(b => b.is_primary)?.branch_id || staff.branches?.[0]?.branch_id || "";
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
       const [profileRes, scheduleRes, assignRes, roomsRes] = await Promise.allSettled([
-        api.get(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}doctor-profile/`),
-        api.get(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}schedule/`),
-        api.get(`${API_ENDPOINTS.ORG.ROOM_ASSIGNMENTS}?doctor_id=${staff.id}`),
+        api.get(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.staff_user_id)}doctor-profile/`),
+        api.get(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.staff_user_id)}schedule/`),
+        api.get(`${API_ENDPOINTS.ORG.ROOM_ASSIGNMENTS}?doctor_id=${staff.staff_user_id}`),
         branchId ? api.get(`${API_ENDPOINTS.ORG.ROOMS}?branch_id=${branchId}`) : Promise.resolve(null),
       ]);
       if (cancelled) return;
@@ -850,11 +844,11 @@ function DoctorProfileModal({ staff, onClose, onSaved }) {
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [api, staff.id, branchId]);
+  }, [api, staff.staff_user_id, branchId]);
 
   const blocksByDay = assignments.reduce((acc, a) => {
     (acc[a.day_of_week] = acc[a.day_of_week] || []).push({
-      key: a.id, id: a.id, day_of_week: a.day_of_week,
+      key: a.schedule_block_id, id: a.schedule_block_id, day_of_week: a.day_of_week,
       start_time: a.start_time, end_time: a.end_time,
       room_id: a.room, room_name: a.room_name, floor: a.floor,
     });
@@ -865,7 +859,7 @@ function DoctorProfileModal({ staff, onClose, onSaved }) {
     setRoomBusy(true);
     try {
       const { data: res } = await api.post(API_ENDPOINTS.ORG.ROOM_ASSIGNMENTS, {
-        room: parseInt(blockForm.room_id), doctor: staff.id,
+        room: parseInt(blockForm.room_id), doctor: staff.staff_user_id,
         day_of_week, start_time: blockForm.start_time, end_time: blockForm.end_time,
       });
       setAssignments(as => [...as, res.data]);
@@ -880,8 +874,8 @@ function DoctorProfileModal({ staff, onClose, onSaved }) {
   async function removeRoomBlock(day_of_week, block) {
     setRoomBusy(true);
     try {
-      await api.delete(API_ENDPOINTS.ORG.ROOM_ASSIGNMENT(block.id));
-      setAssignments(as => as.filter(a => a.id !== block.id));
+      await api.delete(API_ENDPOINTS.ORG.ROOM_ASSIGNMENT(block.schedule_block_id));
+      setAssignments(as => as.filter(a => a.schedule_block_id !== block.schedule_block_id));
       toastSuccess("Room assignment removed.");
     } catch (err) { toastApiError(err, "Could not remove assignment."); }
     finally { setRoomBusy(false); }
@@ -892,10 +886,10 @@ function DoctorProfileModal({ staff, onClose, onSaved }) {
     setSaving(true);
     const payload = { ...form, experience_years: form.experience_years ? parseInt(form.experience_years) : null };
     try {
-      await api.patch(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}doctor-profile/`, payload)
-        .catch(() => api.post(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}doctor-profile/`, payload));
+      await api.patch(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.staff_user_id)}doctor-profile/`, payload)
+        .catch(() => api.post(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.staff_user_id)}doctor-profile/`, payload));
       // Working hours — full replace, same shape as invite-time.
-      await api.put(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}schedule/`, {
+      await api.put(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.staff_user_id)}schedule/`, {
         slot_duration_minutes: slotDuration,
         days: schedule,
       });
@@ -1010,11 +1004,11 @@ function StaffProfileModal({ staff, onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    api.get(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}profile/`)
+    api.get(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.staff_user_id)}profile/`)
       .then(r => { if (r.data?.data) setForm(f => ({ ...f, ...r.data.data })); })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [api, staff.id]);
+  }, [api, staff.staff_user_id]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -1025,8 +1019,8 @@ function StaffProfileModal({ staff, onClose, onSaved }) {
       registration_expiry: form.registration_expiry || null,
     };
     try {
-      await api.patch(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}profile/`, payload)
-        .catch(() => api.post(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id)}profile/`, payload));
+      await api.patch(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.staff_user_id)}profile/`, payload)
+        .catch(() => api.post(`${API_ENDPOINTS.ORG.STAFF_MEMBER(staff.staff_user_id)}profile/`, payload));
       toastSuccess("Profile saved.");
       onSaved();
       onClose();
@@ -1116,7 +1110,7 @@ function EditStaffModal({ staff, branches, onClose, onSaved }) {
     last_name:   staff.last_name   || "",
     phone:       staff.phone       || "",
     date_of_birth: staff.date_of_birth || "",
-    branch_id:   staff.branch_id   || staff.branch?.id || "",
+    branch_id:   staff.branch_id   || (typeof staff.branch === "object" ? staff.branch?.branch_id : staff.branch) || "",   // the server sends the primary branch as `branch` (its id)
   });
   const [saving, setSaving] = useState(false);
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
@@ -1130,14 +1124,14 @@ function EditStaffModal({ staff, branches, onClose, onSaved }) {
   useEffect(() => {
     if (!isDoctor) return;
     if (Array.isArray(staff.branches)) {
-      setExtraBranchIds(staff.branches.filter(b => !b.is_primary).map(b => b.id));
+      setExtraBranchIds(staff.branches.filter(b => !b.is_primary).map(b => b.branch_id));
       return;
     }
-    api.get(API_ENDPOINTS.ORG.STAFF_BRANCHES(staff.id))
-      .then(r => setExtraBranchIds((r.data?.data || []).filter(b => !b.is_primary).map(b => b.id)))
+    api.get(API_ENDPOINTS.ORG.STAFF_BRANCHES(staff.staff_user_id))
+      .then(r => setExtraBranchIds((r.data?.data || []).filter(b => !b.is_primary).map(b => b.branch_id)))
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isDoctor, staff.id]);
+  }, [isDoctor, staff.staff_user_id]);
 
   const inputStyle = {
     width: "100%", boxSizing: "border-box",
@@ -1160,14 +1154,14 @@ function EditStaffModal({ staff, branches, onClose, onSaved }) {
         branch_id: form.branch_id ? parseInt(form.branch_id) : null,
         date_of_birth: form.date_of_birth || null,
       };
-      await api.patch(API_ENDPOINTS.ORG.STAFF_MEMBER(staff.id), payload);
+      await api.patch(API_ENDPOINTS.ORG.STAFF_MEMBER(staff.staff_user_id), payload);
       // Doctor's full branch set — primary is whatever's selected in the
       if (isDoctor) {
         const branchIds = [
           ...(payload.branch_id ? [payload.branch_id] : []),
           ...extraBranchIds.filter(id => id !== payload.branch_id),
         ];
-        await api.put(API_ENDPOINTS.ORG.STAFF_BRANCHES(staff.id), {
+        await api.put(API_ENDPOINTS.ORG.STAFF_BRANCHES(staff.staff_user_id), {
           branch_ids: branchIds,
           primary_branch_id: payload.branch_id || null,
         });
@@ -1234,7 +1228,7 @@ function EditStaffModal({ staff, branches, onClose, onSaved }) {
               <label style={labelStyle}>{isDoctor ? "Primary Branch" : "Branch"}</label>
               <select style={inputStyle} value={form.branch_id} onChange={set("branch_id")}>
                 <option value="">— No branch assigned —</option>
-                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                {branches.map(b => <option key={b.branch_id} value={b.branch_id}>{b.name}</option>)}
               </select>
             </div>
 
@@ -1246,10 +1240,10 @@ function EditStaffModal({ staff, branches, onClose, onSaved }) {
                   border: "1.5px solid var(--color-border)", borderRadius: 8, padding: "10px 12px",
                   maxHeight: 140, overflowY: "auto",
                 }}>
-                  {branches.filter(b => String(b.id) !== String(form.branch_id)).map(b => (
-                    <label key={b.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
-                      <input type="checkbox" checked={extraBranchIds.includes(b.id)}
-                        onChange={() => toggleExtraBranch(b.id)} />
+                  {branches.filter(b => String(b.branch_id) !== String(form.branch_id)).map(b => (
+                    <label key={b.branch_id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                      <input type="checkbox" checked={extraBranchIds.includes(b.branch_id)}
+                        onChange={() => toggleExtraBranch(b.branch_id)} />
                       {b.name}
                     </label>
                   ))}
@@ -1272,106 +1266,6 @@ function EditStaffModal({ staff, branches, onClose, onSaved }) {
   );
 }
 
-function AssignDoctorsModal({ nurse, onClose, onSaved }) {
-  const api = apiClient;
-  const { toastSuccess, toastApiError } = useToast();
-  const [doctors, setDoctors] = useState([]);
-  const [selectedIds, setSelectedIds] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      api.get(API_ENDPOINTS.ORG.DOCTORS),
-      api.get(API_ENDPOINTS.ORG.STAFF_DOCTORS(nurse.id)),
-    ]).then(([doctorsRes, assignedRes]) => {
-      if (cancelled) return;
-      setDoctors(doctorsRes.data?.data?.results || doctorsRes.data?.data || []);
-      setSelectedIds((assignedRes.data?.data || []).map(d => d.id));
-    }).catch(() => {}).finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nurse.id]);
-
-  function toggleDoctor(id) {
-    setSelectedIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
-  }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      await api.put(API_ENDPOINTS.ORG.STAFF_DOCTORS(nurse.id), { doctor_ids: selectedIds });
-      toastSuccess("Doctor assignment updated.");
-      onSaved();
-      onClose();
-    } catch (err) { toastApiError(err, "Failed to update assignment."); }
-    finally { setSaving(false); }
-  }
-
-  return (
-    <div style={{
-      position: "fixed", inset: 0, zIndex: 1000,
-      background: "rgba(0,0,0,0.45)",
-      display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
-    }}>
-      <div style={{
-        background: "var(--color-surface)", borderRadius: 16,
-        width: "100%", maxWidth: 480,
-        padding: 32, boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-          <h2 style={{ margin: 0, fontSize: 18 }}>
-            Assign Doctors — {nurse.first_name} {nurse.last_name}
-          </h2>
-          <button type="button" onClick={onClose}
-            style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "var(--color-text-muted)" }}>✕</button>
-        </div>
-        <p style={{ margin: "0 0 20px", fontSize: 13, color: "var(--color-text-muted)" }}>
-          This nurse's queue, vitals list, patient monitoring, and upcoming schedule will only
-          show patients booked with the doctor(s) checked below.
-        </p>
-        <form onSubmit={handleSubmit}>
-          {loading ? (
-            <div style={{ textAlign: "center", padding: 30, color: "var(--color-text-muted)" }}>Loading…</div>
-          ) : doctors.length === 0 ? (
-            <div style={{ textAlign: "center", padding: 30, color: "var(--color-text-muted)" }}>
-              No doctors yet — invite a doctor first.
-            </div>
-          ) : (
-            <div style={{
-              display: "flex", flexDirection: "column", gap: 6,
-              border: "1.5px solid var(--color-border)", borderRadius: 8, padding: "10px 12px",
-              maxHeight: 260, overflowY: "auto",
-            }}>
-              {doctors.map(d => (
-                <label key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
-                  <input type="checkbox" checked={selectedIds.includes(d.id)}
-                    onChange={() => toggleDoctor(d.id)} />
-                  Dr. {d.first_name} {d.last_name}
-                  {d.doctor_profile?.specialisation && (
-                    <span style={{ color: "var(--color-text-muted)" }}>— {d.doctor_profile.specialisation}</span>
-                  )}
-                </label>
-              ))}
-            </div>
-          )}
-          <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-            <button type="button" onClick={onClose}
-              style={{ flex: 1, padding: "9px 0", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "none", cursor: "pointer", fontSize: 14, fontWeight: 600 }}>
-              Cancel
-            </button>
-            <button type="submit" disabled={saving || loading} className="btn-primary" style={{ flex: 2 }}>
-              {saving ? "Saving…" : "Save Assignment"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
 export default function StaffPage() {
   const api = apiClient;
   const { user } = useAuth();
@@ -1384,7 +1278,6 @@ export default function StaffPage() {
   const [doctorModal, setDoctorModal] = useState(null);
   const [profileModal, setProfileModal] = useState(null);
   const [editModal,   setEditModal]   = useState(null);
-  const [assignDoctorsModal, setAssignDoctorsModal] = useState(null);
   const [roleFilter, setRoleFilter]   = useState("all");
   const [search,     setSearch]       = useState("");
   const [page,       setPage]         = useState(1);
@@ -1423,7 +1316,7 @@ export default function StaffPage() {
   async function deactivate(s) {
     if (!confirm(`Deactivate ${s.first_name} ${s.last_name}?`)) return;
     try {
-      await api.delete(API_ENDPOINTS.ORG.STAFF_MEMBER(s.id));
+      await api.delete(API_ENDPOINTS.ORG.STAFF_MEMBER(s.staff_user_id));
       toastSuccess("Staff deactivated.");
       refetchCurrentPage(); refreshPermissions();
     } catch (err) { toastApiError(err, "Failed."); }
@@ -1431,7 +1324,7 @@ export default function StaffPage() {
 
   async function resendInvite(s) {
     try {
-      const { data: res } = await api.post(`${API_ENDPOINTS.ORG.STAFF_MEMBER(s.id)}resend-invite/`);
+      const { data: res } = await api.post(`${API_ENDPOINTS.ORG.STAFF_MEMBER(s.staff_user_id)}resend-invite/`);
       const tempPassword = res.data?.temp_password || "";
       navigator.clipboard.writeText(tempPassword);
       toastSuccess("New temp password copied to clipboard.");
@@ -1506,7 +1399,7 @@ export default function StaffPage() {
           <>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {filtered.map(s => (
-              <div key={s.id} className="card" style={{ padding: "14px 20px", display: "flex", alignItems: "center", gap: 14 }}>
+              <div key={s.staff_user_id} className="card" style={{ padding: "14px 20px", display: "flex", alignItems: "center", gap: 14 }}>
                 {/* Avatar */}
                 <div style={{
                   width: 44, height: 44, borderRadius: "50%", flexShrink: 0,
@@ -1540,13 +1433,6 @@ export default function StaffPage() {
                     {s.department_name && ` / ${s.department_name}`}
                     {formatAgeYM(s.date_of_birth) && ` · ${formatAgeYM(s.date_of_birth)}`}
                   </div>
-                  {s.role === "nurse" && (
-                    <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 2 }}>
-                      {Array.isArray(s.assigned_doctors) && s.assigned_doctors.length > 0
-                        ? `Assigned to: ${s.assigned_doctors.map(d => `Dr. ${d.name}`).join(", ")}`
-                        : "Not assigned to any doctor yet"}
-                    </div>
-                  )}
                 </div>
                 <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
                   <button onClick={() => setEditModal(s)}
@@ -1557,19 +1443,13 @@ export default function StaffPage() {
                     style={{ padding: "6px 12px", borderRadius: 8, border: "1.5px solid var(--color-primary)", background: "none", color: "var(--color-primary)", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
                     Profile
                   </button>
-                  {s.role === "nurse" && (
-                    <button onClick={() => setAssignDoctorsModal(s)}
-                      style={{ padding: "6px 12px", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "none", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
-                      Assign Doctors
-                    </button>
-                  )}
-                  {s.password === "!" && (
+                  {s.is_active && (
                     <button onClick={() => resendInvite(s)}
                       style={{ padding: "6px 12px", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "none", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
                       Resend
                     </button>
                   )}
-                  {s.is_active && s.id !== user?.user_id && (
+                  {s.is_active && s.staff_user_id !== user?.user_id && (
                     <button onClick={() => deactivate(s)}
                       style={{ padding: "6px 12px", borderRadius: 8, border: "1.5px solid var(--color-error)", background: "none", color: "var(--color-error)", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
                       Remove
@@ -1643,14 +1523,6 @@ export default function StaffPage() {
             staff={editModal}
             branches={branches}
             onClose={() => setEditModal(null)}
-            onSaved={refetchCurrentPage}
-          />
-        )}
-
-        {assignDoctorsModal && (
-          <AssignDoctorsModal
-            nurse={assignDoctorsModal}
-            onClose={() => setAssignDoctorsModal(null)}
             onSaved={refetchCurrentPage}
           />
         )}

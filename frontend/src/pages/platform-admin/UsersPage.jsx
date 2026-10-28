@@ -62,10 +62,10 @@ export default function UsersPage() {
   }, [page]);
 
   async function toggleActive(u) {
-    const key = `${u.hospital_id}:${u.id}`;
+    const key = `${u.hospital_id}:${u.staff_user_id}`;
     setBusyKey(key);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_DETAIL(u.hospital_id, u.id), { is_active: !u.is_active });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_DETAIL(u.hospital_id, u.staff_user_id), { is_active: !u.is_active });
       toastSuccess(`${u.full_name} ${u.is_active ? "deactivated" : "reactivated"}.`);
       fetchUsers(page);
     } catch (err) {
@@ -76,10 +76,10 @@ export default function UsersPage() {
   }
 
   async function resetPassword(u) {
-    const key = `${u.hospital_id}:${u.id}`;
+    const key = `${u.hospital_id}:${u.staff_user_id}`;
     setBusyKey(key);
     try {
-      const { data: res } = await api.post(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_RESET_PASSWORD(u.hospital_id, u.id));
+      const { data: res } = await api.post(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_RESET_PASSWORD(u.hospital_id, u.staff_user_id));
       navigator.clipboard?.writeText(res.data.temp_password).catch(() => {});
       toastSuccess(`Temp password for ${u.email || u.full_name}: ${res.data.temp_password} (copied to clipboard)`, { duration: 15000 });
     } catch (err) {
@@ -91,10 +91,10 @@ export default function UsersPage() {
 
   async function changeRole(u, newRole) {
     if (newRole === u.role) return;
-    const key = `${u.hospital_id}:${u.id}`;
+    const key = `${u.hospital_id}:${u.staff_user_id}`;
     setBusyKey(key);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_DETAIL(u.hospital_id, u.id), { role: newRole });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_DETAIL(u.hospital_id, u.staff_user_id), { role: newRole });
       toastSuccess(`${u.full_name}'s role changed to ${ROLE_LABELS[newRole] || newRole}.`);
       fetchUsers(page);
     } catch (err) {
@@ -125,7 +125,7 @@ export default function UsersPage() {
           />
           <select value={hospitalFilter} onChange={e => setHospitalFilter(e.target.value)} style={selectStyle}>
             <option value="">All hospitals</option>
-            {hospitals.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+            {hospitals.map(h => <option key={h.hospital_id} value={h.hospital_id}>{h.name}</option>)}
           </select>
           <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} style={selectStyle}>
             <option value="">All roles</option>
@@ -155,7 +155,7 @@ export default function UsersPage() {
                 </thead>
                 <tbody>
                   {users.map(u => {
-                    const key = `${u.hospital_id}:${u.id}`;
+                    const key = `${u.hospital_id}:${u.staff_user_id}`;
                     return (
                       <tr key={key} style={{ borderTop: "1px solid var(--color-border)" }}>
                         <td style={{ padding: "10px 14px", fontSize: 13.5 }}>

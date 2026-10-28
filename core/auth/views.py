@@ -17,7 +17,10 @@ from apps.hospital_master.models import Hospital, Subscription
 from apps.hospital_master.services import TIER_FEATURE_DEFAULTS
 from apps.hospital_setup.models import StaffUser
 from apps.hospital_setup.branch_utils import PLACE_PREFETCH, primary_branch_id
-from apps.patients.models import StaffMobileIndex
+from core.api.permissions import granted_modules
+from apps.hospital_setup.rbac import api_role, default_modules, get_effective_modules, granted_module_names, jwt_acts_as
+from apps.hospital_setup.staff_services import check_login_password, login_of, set_login_password
+from apps.hospital_master.models import GlobalStaffUserIndexCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -68,16 +71,16 @@ class StaffLoginView(APIView):
                 hospital = Hospital.objects.get(hospital_code__iexact=d["hospital_code"], is_active=True)
             except Hospital.DoesNotExist:
                 return error("Invalid credentials.")
-            db_name, hospital_id = hospital.db_name, hospital.id
+            db_name, hospital_id = hospital.db_name, hospital.pk
         else:
             # ── Step 1 (mobile/email path): look up which hospital DB this
             identifier = d["mobile"]
             try:
                 if "@" in identifier:
-                    index = StaffMobileIndex.objects.using("default").get(email__iexact=identifier)
+                    index = GlobalStaffUserIndexCatalog.objects.using("default").select_related("hospital", "user").get(email__iexact=identifier)
                 else:
-                    index = StaffMobileIndex.objects.using("default").get(mobile=identifier)
-            except StaffMobileIndex.DoesNotExist:
+                    index = GlobalStaffUserIndexCatalog.objects.using("default").select_related("hospital", "user").get(mobile=identifier)
+            except GlobalStaffUserIndexCatalog.DoesNotExist:
                 return error("Invalid credentials.")
             db_name, hospital_id = index.hospital.db_name, index.hospital_id
 
@@ -94,24 +97,22 @@ class StaffLoginView(APIView):
         # ── Step 4: Fetch StaffUser from hospital DB ────────────────────────────
         try:
             if login_by_employee_id:
-                staff = StaffUser.objects.using(db_name).select_related("group").prefetch_related(*PLACE_PREFETCH).get(
+                staff = StaffUser.objects.using(db_name).select_related("user_group").prefetch_related(*PLACE_PREFETCH).get(
                     employee_id=d["employee_id"], is_active=True
                 )
             else:
-                staff = StaffUser.objects.using(db_name).select_related("group").prefetch_related(*PLACE_PREFETCH).get(
-                    Q(phone=d["mobile"]) | Q(email__iexact=d["mobile"]), is_active=True
+                staff = StaffUser.objects.using(db_name).select_related("user_group").prefetch_related(*PLACE_PREFETCH).get(
+                    user_id=index.user.username, is_active=True
                 )
         except StaffUser.DoesNotExist:
             return error("Invalid credentials.")
 
-        # ── Step 5: Check password ─────────────────────────────────────────────
-        if staff.password == "!":
-            return error(
-                "Account not activated. Please set your password via the invite link.",
-                status=403,
-            )
+        # ── Step 5: Check password (the Django login holds it) ─────────────────
+        login = login_of(staff)
+        if not login.has_usable_password():
+            return error("Account not activated. Ask your hospital admin to reset your password.", status=403)
 
-        if not staff.check_password(d["password"]):
+        if not login.check_password(d["password"]):
             return error("Invalid credentials.")
 
         # ── Step 6: Get subscription ───────────────────────────────────────────
@@ -122,25 +123,27 @@ class StaffLoginView(APIView):
 
         from apps.hospital_setup.rbac import resolve_acts_as
         payload = {
-            "user_id":      staff.id,
+            "user_id":      staff.pk,
             "email":        staff.email,
             "full_name":    staff.get_full_name(),
-            "role":         staff.role,
+            "role":         api_role(staff),
             # [] for the 6 system roles — see resolve_acts_as() and
-            "acts_as":      sorted(resolve_acts_as(staff)),
+            "acts_as":      jwt_acts_as(staff),
             # Display-only — lets the sidebar/topbar show "Doctor Clinic"
-            "custom_role_name": staff.custom_role.name if staff.role == "custom" and staff.custom_role else None,
+            "custom_role_name": None,
             "db_name":      db_name,
             "hospital_id":    hospital_id,
             "hospital_name": hospital.name,
             "license_tier": subscription.license_tier,
             "is_platform":  False,
             "branch_id":    primary_branch_id(staff, db_name),
+            "modules":      sorted(get_effective_modules(staff, db_name)),
+            "granted_modules": sorted(granted_module_names(staff, db_name)),
         }
 
         # Update last_login
-        staff.last_login = timezone.now()
-        staff.save(using=db_name, update_fields=["last_login"])
+        login.last_login = timezone.now()
+        login.save(using="default", update_fields=["last_login"])
 
         return success(data={
             **_make_tokens(payload),
@@ -182,7 +185,7 @@ class PlatformLoginView(APIView):
             return error("Invalid credentials.")
 
         payload = {
-            "user_id":     user.id,
+            "user_id":     user.pk,
             "email":       user.email,
             "username":    user.username,
             "role":        "platform_admin",
@@ -227,7 +230,7 @@ class PatientLoginView(APIView):
         acct.save(using="default", update_fields=["last_login"])
 
         payload = {
-            "user_id":     acct.id,
+            "user_id":     acct.pk,
             "email":       acct.email,
             "full_name":   acct.full_name,
             "awpid":       acct.awpid,
@@ -279,8 +282,7 @@ class SetupPasswordView(APIView):
         except StaffUser.DoesNotExist:
             return error("Staff account not found or deactivated.")
 
-        staff.set_password(d["new_password"])
-        staff.save(using=hospital_db, update_fields=["password"])
+        set_login_password(staff, d["new_password"])
 
         return success(message="Password set successfully. You can now log in.")
 
@@ -304,7 +306,7 @@ class ChangePasswordView(APIView):
         db_name = request.hospital_db
         try:
             staff = StaffUser.objects.using(db_name).get(
-                pk=request.user.id, is_active=True
+                pk=request.user.pk, is_active=True
             )
         except StaffUser.DoesNotExist:
             return error("Staff account not found.")
@@ -314,12 +316,12 @@ class ChangePasswordView(APIView):
             current = d.get("current_password") or ""
             if not current:
                 return error("Current password is required.", errors={"current_password": "Required."})
-            if not staff.check_password(current):
+            if not check_login_password(staff, current):
                 return error("Current password is incorrect.", errors={"current_password": "Incorrect."})
 
-        staff.set_password(d["new_password"])
+        set_login_password(staff, d["new_password"])
         staff.must_change_password = False
-        staff.save(using=db_name, update_fields=["password", "must_change_password"])
+        staff.save(using=db_name, update_fields=["must_change_password", "updated_at"])
 
         return success(message="Password changed successfully.")
 
@@ -402,8 +404,6 @@ class PermissionsView(APIView):
             usage = {"doctors": None, "branches": None, "staff": None}
 
         return success(data={
-            "feat_lab":          sub.feat_lab,
-            "feat_pharmacy":     sub.feat_pharmacy,
             "feat_whatsapp":     sub.feat_whatsapp,
             "feat_multi_branch": sub.feat_multi_branch,
             "feat_ai_voice":     sub.feat_ai_voice,
@@ -418,6 +418,8 @@ class PermissionsView(APIView):
             "max_branches":      sub.max_branches,
             "max_staff":         sub.max_staff,
             "usage":             usage,
+            "modules":           sorted(default_modules(request.user.role) | granted_modules(request)),
+            "granted_modules":   sorted(granted_modules(request)),
         })
 
 
@@ -442,8 +444,8 @@ class TokenRefreshView(APIView):
         except jwt.InvalidTokenError:
             return error("Invalid refresh token.", status=401)
 
-        from apps.patients.models import BlacklistedToken
-        if payload.get("jti") and BlacklistedToken.objects.using("default").filter(jti=payload["jti"]).exists():
+        from core.auth.otp import is_revoked
+        if payload.get("jti") and is_revoked(payload["jti"]):
             return error("Refresh token has been revoked. Please log in again.", status=401)
 
         payload.pop("exp", None)
@@ -456,7 +458,7 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        from apps.patients.models import BlacklistedToken
+        from core.auth.otp import revoke_token
 
         auth_header = request.headers.get("Authorization", "")
         token = auth_header.split(" ", 1)[1] if auth_header.startswith("Bearer ") else None
@@ -480,7 +482,6 @@ class LogoutView(APIView):
                 pass
 
         for jti, exp in jtis_to_blacklist:
-            expires_at = timezone.datetime.fromtimestamp(exp, tz=timezone.utc) if exp else timezone.now() + timedelta(days=7)
-            BlacklistedToken.objects.using("default").get_or_create(jti=jti, defaults={"expires_at": expires_at})
+            revoke_token(jti, exp)
 
         return success(data={"logged_out": True})

@@ -60,7 +60,7 @@ class ResolveSourceHospitalIdTests(TestCase):
 
     def test_looks_the_hospital_up_from_its_db_alias(self):
         t = Hospital.objects.using("default").create(name="H", hospital_code="h-res", db_name="aw_hospital_res")
-        self.assertEqual(resolve_source_hospital_id("aw_hospital_res"), t.id)
+        self.assertEqual(resolve_source_hospital_id("aw_hospital_res"), t.pk)
 
     def test_unknown_or_empty_alias_is_zero(self):
         self.assertEqual(resolve_source_hospital_id("nope"), 0)

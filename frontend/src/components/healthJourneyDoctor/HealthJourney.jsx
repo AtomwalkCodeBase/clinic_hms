@@ -126,15 +126,6 @@ export default function HealthJourney({ http, children, initialChildId, initialP
           <p className="dhj-muted">
             Age {payload.patient.age_label}
           </p>
-          {payload.sharing_limited && (
-            <section className="dhj-card" role="note">
-              <h3 className="dhj-h3">No cross-hospital history on file</h3>
-              <p className="dhj-muted">
-                This patient hasn't consented to sharing records from other hospitals with this one, so only what's recorded here is visible.
-                Anything documented at this hospital going forward will still show up normally.
-              </p>
-            </section>
-          )}
           <SummaryTiles s={payload.summary} doctor={doctor} />
           {payload.notes.map((n) => <p key={n} className="dhj-callout">{n}</p>)}
 

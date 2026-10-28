@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 from core.api.permissions import IsHospitalAdmin, IsHospitalStaff
 from core.api.response import created, error, not_found, success
 
-from apps.billing.models import OptionList
+from apps.hospital_setup.models import OptionList
 
 
 # ── Configurable dropdown lists ──────────────────────────────────────────────

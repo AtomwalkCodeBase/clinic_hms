@@ -67,8 +67,8 @@ export const SORTS = [
 ];
 export function sortReports(docs, key) {
   const by = {
-    newest: (a, b) => String(b.created_at).localeCompare(String(a.created_at)) || b.id - a.id,
-    oldest: (a, b) => String(a.created_at).localeCompare(String(b.created_at)) || a.id - b.id,
+    newest: (a, b) => String(b.created_at).localeCompare(String(a.created_at)) || b.medical_document_id - a.medical_document_id,
+    oldest: (a, b) => String(a.created_at).localeCompare(String(b.created_at)) || a.medical_document_id - b.medical_document_id,
     name: (a, b) => (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" }),
     size: (a, b) => (b.size || 0) - (a.size || 0),
   };

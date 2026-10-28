@@ -77,36 +77,18 @@ export default function DoctorDashboardPage() {
   const { toastSuccess, toastApiError } = useToast();
   const [starting, setStarting] = useState(null);
 
-  // ── External-referral countersign queue ──────────────────────────────
-  const { data: extReferralsData, refetch: refetchExtReferrals } = useApi(API_ENDPOINTS.IPD.REFERRALS, { pollMs: 45000 });
-  const extReferrals = extReferralsData || [];
-  const [accepting, setAccepting] = useState(null);
-
-  const acceptReferral = useCallback(async (r) => {
-    setAccepting(r.id);
-    try {
-      await apiClient.post(API_ENDPOINTS.IPD.REFERRAL_ACCEPT(r.id), {});
-      toastSuccess(`Countersigned — front desk can now register ${r.patient_name}'s admission.`);
-      refetchExtReferrals();
-    } catch (err) {
-      toastApiError(err, "Could not accept this referral.");
-    } finally {
-      setAccepting(null);
-    }
-  }, [toastSuccess, toastApiError, refetchExtReferrals]);
-
   const { data: meData } = useApi(API_ENDPOINTS.ORG.MY_PROFILE);
   const photo = meData?.photo;
   const { branches, activeBranchId, setActiveBranchId, hasMultiple } = useActiveBranch();
 
   const startEncounter = useCallback(async (appt) => {
-    setStarting(appt.id);
+    setStarting(appt.appointment_id);
     try {
       const { data } = await apiClient.post(API_ENDPOINTS.OPD.ENCOUNTERS, {
-        appointment_id: appt.id,
+        appointment_id: appt.appointment_id,
         patient_id:     appt.patient_id,
       });
-      const encId = data?.id || data?.data?.id;
+      const encId = data?.opd_encounter_id || data?.data?.opd_encounter_id;
       navigate(`/doctor/encounter/${encId}`);
     } catch (err) {
       toastApiError(err, "Could not start encounter.");
@@ -231,57 +213,6 @@ export default function DoctorDashboardPage() {
           </div>
         </div>
 
-        {/* ── External-referral countersign queue ────────────────────── */}
-        {extReferrals.length > 0 && (
-          <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: 22, borderLeft: "3px solid var(--color-warning)" }}>
-            <div style={{
-              display: "flex", justifyContent: "space-between", alignItems: "center",
-              padding: "14px 20px", borderBottom: "1px solid var(--color-border)",
-            }}>
-              <span className="dot-label dot-label--gold">Admission referrals awaiting your countersign</span>
-              <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>{extReferrals.length} pending</span>
-            </div>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Patient</th>
-                  <th>Referred by</th>
-                  <th>Source</th>
-                  <th>Reason</th>
-                  <th style={{ width: 110 }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {extReferrals.map(r => (
-                  <tr key={r.id}>
-                    <td>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>{r.patient_name}</div>
-                      <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>UHID {r.patient_uhid}</div>
-                    </td>
-                    <td style={{ fontSize: 12 }}>
-                      {r.front_desk_logged
-                        ? <span title={r.external_referring_facility}>{r.external_referring_doctor_name || "External doctor"} <span style={{ color: "var(--color-text-muted)" }}>(letter logged by front desk)</span></span>
-                        : (r.recommended_by_name || "—")}
-                    </td>
-                    <td style={{ fontSize: 12 }}>{r.admission_type}</td>
-                    <td style={{ fontSize: 12, maxWidth: 260 }}>{r.reason_for_admission}</td>
-                    <td>
-                      <button
-                        className="btn-primary"
-                        style={{ fontSize: 11, padding: "4px 12px" }}
-                        disabled={accepting === r.id}
-                        onClick={() => acceptReferral(r)}
-                      >
-                        {accepting === r.id ? "…" : "Accept →"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
         {/* ── Today's patients ───────────────────────────────────────── */}
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{
@@ -318,7 +249,7 @@ export default function DoctorDashboardPage() {
               </thead>
               <tbody>
                 {appointments.map(a => (
-                  <tr key={a.id}>
+                  <tr key={a.appointment_id}>
                     <td>
                       <span style={{
                         display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -341,17 +272,17 @@ export default function DoctorDashboardPage() {
                         <button
                           className="btn-primary"
                           style={{ fontSize: 11, padding: "4px 12px" }}
-                          disabled={starting === a.id}
+                          disabled={starting === a.appointment_id}
                           onClick={() => startEncounter(a)}
                         >
-                          {starting === a.id ? "…" : "▶ Start"}
+                          {starting === a.appointment_id ? "…" : "▶ Start"}
                         </button>
                       )}
-                      {a.status === "in_progress" && a.encounter?.id && (
+                      {a.status === "in_progress" && a.encounter?.opd_encounter_id && (
                         <button
                           className="btn-primary"
                           style={{ fontSize: 11, padding: "4px 12px", background: "var(--color-accent)" }}
-                          onClick={() => navigate(`/doctor/encounter/${a.encounter.id}`)}
+                          onClick={() => navigate(`/doctor/encounter/${a.encounter.opd_encounter_id}`)}
                         >
                           Open notes
                         </button>
@@ -404,7 +335,7 @@ export default function DoctorDashboardPage() {
                 </thead>
                 <tbody>
                   {upcomingList.map(a => (
-                    <tr key={a.id}>
+                    <tr key={a.appointment_id}>
                       <td style={{ fontSize: 12, fontWeight: 700 }}>{formatScheduleDate(a.scheduled_date)}</td>
                       <td style={{ fontSize: 12, fontWeight: 700 }}>{a.scheduled_time ? a.scheduled_time.slice(0, 5) : "—"}</td>
                       <td style={{ fontSize: 13, fontWeight: 600 }}>{a.patient_name || "—"}</td>

@@ -1,12 +1,8 @@
-import os
-import uuid
-
 from django.db import models
-from core.utils.tokens import new_pad_token
 from apps.hospital_master.models import Hospital
 
-def get_patient_photo_path(instance, filename):
-    return f"patients/{instance.patient.awpid}/photos/{filename}"
+def patient_photo_path(instance, filename):
+    return f"patients/{instance.awpid}/photo/{filename}"
 
 
 class Patient(models.Model):
@@ -25,7 +21,7 @@ class Patient(models.Model):
     blood_group         = models.CharField(max_length=3, choices=BLOOD_GROUP_CHOICES, blank=True)
     preferred_language  = models.CharField(max_length=10, default="en")
     password      = models.CharField(max_length=128, blank=True)
-    photo         = models.ImageField(upload_to=get_patient_photo_path, blank=True, null=True)
+    photo         = models.ImageField(upload_to=patient_photo_path, blank=True, null=True)
     is_active     = models.BooleanField(default=True)
     last_login    = models.DateTimeField(null=True, blank=True)
     emergency_contact_name     = models.CharField(max_length=100, blank=True)
@@ -49,7 +45,7 @@ class Patient(models.Model):
     def __str__(self):
         return f"{self.full_name} ({self.awpid})"
 
-
+# not reviewed
 class PatientRelationship(models.Model):
     REL_CHOICES = [
         ("child", "Child"), ("parent", "Parent"), ("spouse", "Spouse"),
@@ -62,7 +58,7 @@ class PatientRelationship(models.Model):
 
     class Meta:
         db_table  = "patient_relationship"
-        unique_together = [("dependent", "guardian")]
+        constraints = [models.UniqueConstraint(fields=["dependent", "guardian"], name="uniq_relationship_dependent_guardian")]
 
     def __str__(self):
         return f"{self.guardian.awpid} -> {self.dependent.awpid} ({self.relationship})"
@@ -73,14 +69,14 @@ class PatientBooking(models.Model):
         ("scheduled", "Scheduled"), ("waiting", "Waiting"), ("vitals_done", "Vitals done"),
         ("in_progress", "In progress"), ("done", "Done"), ("cancelled", "Cancelled"), ("no_show", "No show"),
     ]
-    booked_by       = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.SET_NULL, related_name="p_bookings_made") # check & delete if not needed
+    booked_by       = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.SET_NULL, related_name="p_bookings_made")
     patient         = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_bookings")
     hospital        = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_bookings")
-    appointment_id  = models.UUIDField(db_index=True)
+    appointment_id  = models.UUIDField()
     doctor_name     = models.CharField(max_length=100, blank=True)
     scheduled_date  = models.DateField()
     chief_complaint = models.TextField(blank=True)
-    status          = models.CharField(max_length=15, choices=STATUS_CHOICES, default="scheduled", db_index=True)
+    status          = models.CharField(max_length=15, choices=STATUS_CHOICES, default="scheduled")
     created_at      = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -88,7 +84,7 @@ class PatientBooking(models.Model):
         ordering  = ["-created_at"]
 
     def __str__(self):
-        return f"Booking {self.id} for patient {self.patient_id} on {self.scheduled_date} - {self.status}"
+        return f"Booking {self.pk} for patient {self.patient_id} on {self.scheduled_date} - {self.status}"
 
 
 class RecurrenceFlag(models.Model):
@@ -108,51 +104,7 @@ class RecurrenceFlag(models.Model):
         db_table = "recurrence_flag"
         constraints = [models.UniqueConstraint(fields=["patient", "condition_group"], name="uniq_recurrence_per_patient_group")]
 
-
-# Not Reviewed Below
-class BlacklistedToken(models.Model):
-    jti        = models.CharField(max_length=64, unique=True, db_index=True)
-    expires_at = models.DateTimeField()
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table  = "blacklisted_token"
-
-
-class OTPCode(models.Model):
-    PURPOSE_PASSWORD_RESET_STAFF   = "password_reset_staff"
-    PURPOSE_PASSWORD_RESET_PATIENT = "password_reset_patient"
-    PURPOSE_REGISTRATION_PATIENT   = "registration_patient"
-    PURPOSE_LOGIN_PATIENT          = "login_patient"
-    PURPOSE_CONTACT_CHANGE_PATIENT = "contact_change_patient"
-    PURPOSE_CHOICES = [
-        (PURPOSE_PASSWORD_RESET_STAFF,   "Staff password reset"),
-        (PURPOSE_PASSWORD_RESET_PATIENT, "Patient password reset"),
-        (PURPOSE_REGISTRATION_PATIENT,   "Patient registration"),
-        (PURPOSE_LOGIN_PATIENT,          "Patient OTP login"),
-        (PURPOSE_CONTACT_CHANGE_PATIENT, "Patient mobile-number change"),
-    ]
-
-    CHANNEL_SMS   = "sms"
-    CHANNEL_EMAIL = "email"
-    CHANNEL_CHOICES = [(CHANNEL_SMS, "SMS"), (CHANNEL_EMAIL, "Email")]
-
-    purpose     = models.CharField(max_length=30, choices=PURPOSE_CHOICES, db_index=True)
-    identifier  = models.CharField(max_length=254, db_index=True)
-    channel     = models.CharField(max_length=10, choices=CHANNEL_CHOICES)
-    code_hash   = models.CharField(max_length=64)
-    target_type = models.CharField(max_length=10, blank=True)
-    target_id   = models.IntegerField(null=True, blank=True)
-    hospital    = models.ForeignKey("hospital_master.Hospital", null=True, blank=True, on_delete=models.CASCADE, related_name="h_otp_codes")
-    attempts    = models.PositiveSmallIntegerField(default=0)
-    is_used     = models.BooleanField(default=False)
-    expires_at  = models.DateTimeField(db_index=True)
-    created_at  = models.DateTimeField(auto_now_add=True)
-    class Meta:
-        db_table  = "otp_code"
-        indexes = [models.Index(fields=["identifier", "purpose", "-created_at"])]
-
-
+# not reviewed
 class EmergencyAccessLog(models.Model):
     EVENT_GENERATED = "generated"
     EVENT_VIEWED    = "viewed"
@@ -164,10 +116,9 @@ class EmergencyAccessLog(models.Model):
         (EVENT_PRIVACY,    "Shared-records privacy changed"),
     ]
 
-    patient    = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.CASCADE, related_name="p_emergency_access_logs")
+    patient    = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_emergency_access_logs")
     event      = models.CharField(max_length=24, choices=EVENT_CHOICES)
-    generated_by = models.ForeignKey("patients.Patient", null=True, blank=True, on_delete=models.SET_NULL, related_name="p_generated_access_logs")
-    consent_confirmed = models.BooleanField(default=False)
+    generated_by = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.SET_NULL, related_name="p_generated_access_logs")
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -175,43 +126,7 @@ class EmergencyAccessLog(models.Model):
         db_table  = "emergency_access_log"
         ordering  = ["-created_at"]
 
-
-class ConsultSession(models.Model):
-    STATUS_OPEN    = "open"
-    STATUS_SIGNED  = "signed"
-    STATUS_EXPIRED = "expired"
-    STATUS_CHOICES = [
-        (STATUS_OPEN,    "Open"),
-        (STATUS_SIGNED,  "Signed"),
-        (STATUS_EXPIRED, "Expired"),
-    ]
-
-    token           = models.CharField(max_length=64, unique=True, db_index=True, default=new_pad_token)
-    patient         = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_consult_sessions")
-    hospital          = models.ForeignKey(Hospital  , on_delete=models.CASCADE, related_name="h_consult_sessions")
-    encounter_id    = models.UUIDField(db_index=True)
-    doctor_user_id  = models.UUIDField(null=True, blank=True)
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES,
-                              default=STATUS_OPEN, db_index=True)
-    rx_pages      = models.JSONField(default=list, blank=True)
-    rx_recognised = models.JSONField(null=True, blank=True)
-    note_pages      = models.JSONField(default=list, blank=True)
-    note_recognised = models.JSONField(null=True, blank=True)
-    note_pdf = models.CharField(max_length=500, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    expires_at = models.DateTimeField(null=True, blank=True)
-    signed_at  = models.DateTimeField(null=True, blank=True)
-
-    class Meta:
-        db_table  = "consult_session"
-        ordering  = ["-created_at"]
-        indexes = [
-            models.Index(fields=["encounter_id", "status"]),
-            models.Index(fields=["patient", "hospital", "status"]),
-        ]
-
-
+# not reviewed
 class RecordsShareRequest(models.Model):
     STATUS_PENDING  = "pending"
     STATUS_APPROVED = "approved"
@@ -228,15 +143,15 @@ class RecordsShareRequest(models.Model):
 
     WINDOW_HOURS = 2
 
-    token       = models.CharField(max_length=32, unique=True, db_index=True)
-    code        = models.CharField(max_length=8, db_index=True)
+    token       = models.CharField(max_length=32, unique=True)
+    code        = models.CharField(max_length=8)
     requester_label = models.CharField(max_length=120, blank=True)
     opened_at   = models.DateTimeField(null=True, blank=True)
     device_hash = models.CharField(max_length=64, blank=True)
     pairing     = models.CharField(max_length=12, blank=True)
     patient     = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_records_share_requests")
     status      = models.CharField(max_length=12, choices=STATUS_CHOICES,
-                                   default=STATUS_PENDING, db_index=True)
+                                   default=STATUS_PENDING)
     created_at  = models.DateTimeField(auto_now_add=True)
     decided_at  = models.DateTimeField(null=True, blank=True)
     expires_at  = models.DateTimeField(null=True, blank=True)
@@ -255,11 +170,8 @@ class RecordsShareRequest(models.Model):
     class Meta:
         db_table  = "records_share_request"
         ordering  = ["-created_at"]
-        indexes = [
-            models.Index(fields=["patient", "status"]),
-        ]
 
-
+# not reviewed
 class RecordsPrivacy(models.Model):
     SECTIONS = ("summary", "vitals", "diagnoses", "vaccinations")
 
@@ -274,13 +186,3 @@ class RecordsPrivacy(models.Model):
 
     class Meta:
         db_table  = "records_privacy"
-
-
-class StaffMobileIndex(models.Model):
-    mobile    = models.CharField(max_length=15, unique=True, db_index=True)
-    email     = models.EmailField(max_length=254, unique=True, null=True, blank=True, db_index=True)
-    hospital = models.ForeignKey("hospital_master.Hospital", on_delete=models.CASCADE, related_name="h_staff_mobile_index")
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table  = "staff_mobile_index"

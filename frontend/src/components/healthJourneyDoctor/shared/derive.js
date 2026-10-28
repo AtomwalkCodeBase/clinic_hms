@@ -97,7 +97,7 @@ export function miniLanes(payload, max = 4) {
 // ------------------------------------------------------------------ feed (list)
 const docFields = (ev) => (ev ? {
   icd10: ev.icd10, evidence: ev.evidence, severity: ev.severity, verified: ev.verified,
-  provisional: ev.is_provisional, eventId: ev.id,
+  provisional: ev.is_provisional, eventId: ev.clinical_event_id,
 } : null);
 
 export function feedItems(payload) {
@@ -314,7 +314,7 @@ export function reviewQueue(payload) {
   for (const lane of payload.lanes) {
     const eps = lane.type === 'chronic' ? [lane.episode] : lane.type === 'acute' ? lane.episodes : [];
     eps.forEach((ep) => ep.events.filter((e) => e.is_provisional && !e.verified).forEach((e) => q.push({
-      id: `ev:${e.id}`, kind: 'provisional', eventId: e.id, laneId: lane.id,
+      id: `ev:${e.clinical_event_id}`, kind: 'provisional', eventId: e.clinical_event_id, laneId: lane.id,
       title: `${e.text}${e.icd10 ? ` (${e.icd10})` : ''}`, detail: `Provisional · ${fmtDate(e.date)}${e.evidence ? ` · “${e.evidence}”` : ''}`,
       documentId: e.document_id,
     })));

@@ -33,7 +33,7 @@ function OverviewTab({ hospital, overview, onChanged }) {
   async function save() {
     setSaving(true);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), form);
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.hospital_id), form);
       toastSuccess("Hospital profile updated.");
       setEditing(false);
       onChanged();
@@ -194,9 +194,9 @@ function UsersTab({ hospitalId }) {
   useEffect(() => { fetchStaff(); }, [fetchStaff]);
 
   async function toggleActive(s) {
-    setBusyId(s.id);
+    setBusyId(s.staff_user_id);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_DETAIL(hospitalId, s.id), { is_active: !s.is_active });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_DETAIL(hospitalId, s.staff_user_id), { is_active: !s.is_active });
       toastSuccess(`${s.full_name} ${s.is_active ? "deactivated" : "reactivated"}.`);
       fetchStaff();
     } catch (err) {
@@ -207,9 +207,9 @@ function UsersTab({ hospitalId }) {
   }
 
   async function resetPassword(s) {
-    setBusyId(s.id);
+    setBusyId(s.staff_user_id);
     try {
-      const { data: res } = await api.post(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_RESET_PASSWORD(hospitalId, s.id));
+      const { data: res } = await api.post(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_RESET_PASSWORD(hospitalId, s.staff_user_id));
       navigator.clipboard?.writeText(res.data.temp_password).catch(() => {});
       toastSuccess(`Temp password for ${s.email || s.phone}: ${res.data.temp_password} (copied to clipboard)`, { duration: 15000 });
     } catch (err) {
@@ -221,9 +221,9 @@ function UsersTab({ hospitalId }) {
 
   async function changeRole(s, newRole) {
     if (newRole === s.role) return;
-    setBusyId(s.id);
+    setBusyId(s.staff_user_id);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_DETAIL(hospitalId, s.id), { role: newRole });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL_STAFF_DETAIL(hospitalId, s.staff_user_id), { role: newRole });
       toastSuccess(`${s.full_name}'s role changed to ${ROLE_LABELS[newRole] || newRole}.`);
       fetchStaff();
     } catch (err) {
@@ -249,10 +249,10 @@ function UsersTab({ hospitalId }) {
           </thead>
           <tbody>
             {staff.map(s => (
-              <tr key={s.id} style={{ borderTop: "1px solid var(--color-border)" }}>
+              <tr key={s.staff_user_id} style={{ borderTop: "1px solid var(--color-border)" }}>
                 <td style={{ padding: "10px 14px", fontSize: 13.5, fontWeight: 600 }}>{s.full_name}</td>
                 <td style={{ padding: "10px 14px" }}>
-                  <select value={s.role} disabled={busyId === s.id}
+                  <select value={s.role} disabled={busyId === s.staff_user_id}
                     onChange={e => changeRole(s, e.target.value)}
                     style={{ padding: "5px 8px", borderRadius: 6, fontSize: 12.5, border: "1.5px solid var(--color-border)", background: "var(--color-surface)", color: "var(--color-text)" }}>
                     {Object.entries(ROLE_LABELS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
@@ -267,12 +267,12 @@ function UsersTab({ hospitalId }) {
                 </td>
                 <td style={{ padding: "10px 14px" }}>
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={() => resetPassword(s)} disabled={busyId === s.id}
+                    <button onClick={() => resetPassword(s)} disabled={busyId === s.staff_user_id}
                       title="Reset password"
                       style={{ background: "none", border: "1.5px solid var(--color-border)", borderRadius: 6, padding: "4px 8px", cursor: "pointer" }}>
                       <KeyRound size={13} />
                     </button>
-                    <button onClick={() => toggleActive(s)} disabled={busyId === s.id}
+                    <button onClick={() => toggleActive(s)} disabled={busyId === s.staff_user_id}
                       title={s.is_active ? "Deactivate" : "Reactivate"}
                       style={{
                         background: "none", borderRadius: 6, padding: "4px 8px", cursor: "pointer",
@@ -313,7 +313,7 @@ function SubscriptionTab({ hospital, onChanged }) {
       if (tierPick !== hospital.subscription?.license_tier) payload.tier = tierPick;
       if (statusPick !== hospital.subscription?.status) payload.status = statusPick;
       if (Object.keys(payload).length === 0) { setSaving(false); return; }
-      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), payload);
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.hospital_id), payload);
       toastSuccess("Subscription updated.");
       onChanged();
     } catch (err) {
@@ -432,9 +432,9 @@ export default function HospitalDetailPage() {
             </div>
 
             {tab === "Overview" && <OverviewTab hospital={hospital} overview={overview} onChanged={fetchHospital} />}
-            {tab === "Users & Roles" && <UsersTab hospitalId={hospital.id} />}
+            {tab === "Users & Roles" && <UsersTab hospitalId={hospital.hospital_id} />}
             {tab === "Subscription" && <SubscriptionTab hospital={hospital} onChanged={fetchHospital} />}
-            {tab === "Audit Log" && <AuditTab hospitalId={hospital.id} />}
+            {tab === "Audit Log" && <AuditTab hospitalId={hospital.hospital_id} />}
           </>
         )}
       </PageShell>

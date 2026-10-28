@@ -171,7 +171,7 @@ export default function NurseDashboardPage() {
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {waiting.map(appt => (
-                <div key={appt.id} className="card"
+                <div key={appt.appointment_id} className="card"
                   onClick={() => navigate("/nurse/vitals")}
                   style={{ padding: "12px 20px", cursor: "pointer", display: "flex", alignItems: "center", gap: 14,
                     border: "1.5px solid #fde68a", background: "#fffbeb" }}>
@@ -281,7 +281,7 @@ export default function NurseDashboardPage() {
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {items.map(appt => (
-                      <div key={appt.id} className="card" style={{ padding: "12px 20px", display: "flex", alignItems: "center", gap: 14 }}>
+                      <div key={appt.appointment_id} className="card" style={{ padding: "12px 20px", display: "flex", alignItems: "center", gap: 14 }}>
                         <div style={{
                           width: 36, height: 36, borderRadius: "50%",
                           background: "var(--color-primary-light)", color: "var(--color-primary)",
@@ -401,7 +401,7 @@ export default function NurseDashboardPage() {
                     </thead>
                     <tbody>
                       {items.map(a => (
-                        <tr key={a.id}>
+                        <tr key={a.appointment_id}>
                           <td style={{ fontSize: 12, fontWeight: 700 }}>{formatScheduleDate(a.scheduled_date)}</td>
                           <td style={{ fontSize: 12, fontWeight: 700 }}>{a.scheduled_time ? a.scheduled_time.slice(0, 5) : "—"}</td>
                           <td style={{ fontSize: 13, fontWeight: 600 }}>{a.patient_name || "—"}</td>

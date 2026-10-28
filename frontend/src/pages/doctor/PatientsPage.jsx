@@ -366,13 +366,12 @@ export default function DoctorPatientsPage() {
                       <th>Age / Gender</th>
                       <th>Blood Group</th>
                       <th>Mobile</th>
-                      <th>Payer</th>
                       <th style={{ width: 90 }}>Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {resultPaging.pageItems.map(p => (
-                      <tr key={p.id}>
+                      <tr key={p.patient_id}>
                         <td>
                           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                             <div style={{ fontWeight: 700, fontSize: 13 }}>{p.full_name}</div>
@@ -402,9 +401,6 @@ export default function DoctorPatientsPage() {
                           ) : <span style={{ color: "var(--color-text-muted)" }}>—</span>}
                         </td>
                         <td style={{ fontSize: 12 }}>{p.mobile || "—"}</td>
-                        <td style={{ fontSize: 12, textTransform: "capitalize" }}>
-                          {p.payer_type || "self"}
-                        </td>
                         <td>
                           <button
                             className="btn-outline"

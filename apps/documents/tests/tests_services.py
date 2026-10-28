@@ -228,7 +228,7 @@ def test_timeline_payload_shape():
            _ev(3, date(2024, 5, 20), "H66.9"), _ev(4, date(2024, 2, 1), "J45.9")]
     eps = build_episodes(evs, CFG)
     rec = detect_recurrence(eps, DOB, date(2024, 8, 1), CFG)
-    events_by_id = {e.id: {"date": e.event_date, "severity": e.severity,
+    events_by_id = {e.pk: {"date": e.event_date, "severity": e.severity,
                            "document_id": e.document_id, "condition_text": ""} for e in evs}
     imm = immunization_status(DOB, [], date(2024, 8, 1), CFG)
     payload = build_timeline(
@@ -250,7 +250,7 @@ def test_timeline_payload_shape():
 def test_doctor_audience_adds_clinical_fields_only_for_doctor():
     evs = [_ev(1, date(2024, 1, 5), "H66.9"), _ev(2, date(2024, 3, 1), "J45.9", prov=True)]
     eps = build_episodes(evs, CFG)
-    events_by_id = {e.id: {"date": e.event_date, "severity": e.severity, "document_id": e.document_id,
+    events_by_id = {e.pk: {"date": e.event_date, "severity": e.severity, "document_id": e.document_id,
                            "condition_text": "AOM", "icd10": e.icd10, "evidence": "Imp: AOM",
                            "is_provisional": e.is_provisional} for e in evs}
     common = dict(dob=DOB, sex="male", p_from=date(2024, 1, 1), p_to=date(2024, 8, 1), episodes=eps,

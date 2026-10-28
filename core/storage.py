@@ -7,6 +7,7 @@ import uuid
 
 from django.conf import settings
 from django.core.files.base import ContentFile
+from storages.backends.s3boto3 import S3Boto3Storage
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ def identity_slug(*, name: str = "", identifier: str = "") -> str:
     parts = " ".join(p for p in (name, identifier) if p)
     return sanitize_folder_name(parts)
 
-# Maps a verified mime_type (see core.utils.file_validation.ALLOWED_MIME_TYPES) to
+# Maps a verified mime_type (see core.validation.ALLOWED_MIME_TYPES) to
 _EXT_BY_MIME = {
     "application/pdf": "pdf",
     "image/jpeg": "jpg",
@@ -69,7 +70,7 @@ class StorageError(Exception):
 
 
 def _storage():
-    """The project's default file storage (settings.DEFAULT_FILE_STORAGE): S3 through core.storage_backend.mediaStorage,"""
+    """The project's default file storage (settings.DEFAULT_FILE_STORAGE): S3 through core.storage.mediaStorage,"""
     if getattr(settings, "DEFAULT_FILE_STORAGE", "").endswith("mediaStorage") and not settings.AWS_STORAGE_BUCKET_NAME:
         raise StorageError(
             "File storage isn't configured yet — set AWS_S3_BUCKET, AWS_S3_REGION, "
@@ -123,6 +124,7 @@ def _attachment_disposition(name: str) -> str:
 
 def signed_url(key: str, *, expires_in: int = None, download_name: str = None) -> str:
     """A time-limited link to the stored file. Forgiving: returns "" for a blank key, or when storage isn't configured or"""
+    key = getattr(key, "name", key)            # a model's FileField value is accepted as well as its path
     if not key:
         return ""
     try:
@@ -144,6 +146,7 @@ def signed_url(key: str, *, expires_in: int = None, download_name: str = None) -
 
 def delete(key: str) -> None:
     """Best-effort delete (a replaced photo or logo). Never raises."""
+    key = getattr(key, "name", key)
     if not key:
         return
     try:
@@ -157,3 +160,13 @@ def get_bytes(key: str) -> bytes:
     storage = _storage()
     with storage.open(key, "rb") as fh:
         return fh.read()
+
+
+class mediaStorage(S3Boto3Storage):
+    """The project's file storage (settings.DEFAULT_FILE_STORAGE): one S3 bucket, every key under settings.S3_KEY_PREFIX."""
+    location = settings.S3_KEY_PREFIX
+    file_overwrite = False
+    default_acl = None
+
+    def get_available_name(self, name, max_length=None):
+        return name

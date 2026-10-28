@@ -1,84 +1,91 @@
+from decimal import Decimal
+
 from rest_framework import serializers
-from apps.billing.models import (
-    BillingService,
-    Invoice,
-    InvoiceItem,
-    Payment,
-    OptionList,
-)
+from core.api.serializers import PkModelSerializer
+from apps.billing.models import BillingItem, Invoice
+from apps.hospital_setup.models import OptionList
 
 
-class ServiceCategorySerializer(serializers.ModelSerializer):
+class ServiceCategorySerializer(PkModelSerializer):
     # `name` is kept as the external field name (source="label") so the
     name = serializers.CharField(source="label")
 
     class Meta:
         model  = OptionList
-        fields = ["id", "name", "is_active", "is_system", "sort_order"]
-        read_only_fields = ["id", "is_system"]
+        fields = ["option_list_id", "name", "is_active", "is_system", "sort_order"]
+        read_only_fields = ["option_list_id", "is_system"]
 
 
-class PaymentModeOptionSerializer(serializers.ModelSerializer):
+class PaymentModeOptionSerializer(PkModelSerializer):
     name = serializers.CharField(source="label")
 
     class Meta:
         model  = OptionList
-        fields = ["id", "name", "is_active", "is_system", "sort_order"]
-        read_only_fields = ["id", "is_system"]
+        fields = ["option_list_id", "name", "is_active", "is_system", "sort_order"]
+        read_only_fields = ["option_list_id", "is_system"]
 
 
-class InvoiceStatusOptionSerializer(serializers.ModelSerializer):
+class InvoiceStatusOptionSerializer(PkModelSerializer):
     class Meta:
         model  = OptionList
-        fields = ["id", "value", "label", "is_active", "is_system", "sort_order"]
-        read_only_fields = ["id", "is_system"]
+        fields = ["option_list_id", "value", "label", "is_active", "is_system", "sort_order"]
+        read_only_fields = ["option_list_id", "is_system"]
 
 
-class RoomTypeOptionSerializer(serializers.ModelSerializer):
-    # Same value+label shape as InvoiceStatusOptionSerializer (not the
+class RoomTypeOptionSerializer(PkModelSerializer):
     class Meta:
         model  = OptionList
-        fields = ["id", "value", "label", "is_active", "is_system", "sort_order",
-                  "category", "is_bed_based", "daily_rate"]
-        read_only_fields = ["id", "is_system"]
+        fields = ["option_list_id", "value", "label", "is_active", "is_system", "sort_order"]
+        read_only_fields = ["option_list_id", "is_system"]
 
 
-class BillingServiceSerializer(serializers.ModelSerializer):
+class BillingServiceSerializer(PkModelSerializer):
     class Meta:
-        model  = BillingService
-        fields = ["id", "name", "code", "category", "unit_price", "tax_rate", "is_active"]
-        read_only_fields = ["id"]
+        model  = BillingItem
+        fields = ["billing_item_id", "name", "code", "category", "unit_price", "tax_rate", "tax_inclusive", "is_price_editable", "is_active"]
+        read_only_fields = ["billing_item_id"]
 
 
-class InvoiceItemSerializer(serializers.ModelSerializer):
-    class Meta:
-        model  = InvoiceItem
-        fields = ["id", "service", "description", "quantity", "unit_price", "tax_rate", "total"]
-        read_only_fields = ["id"]
+class InvoiceItemSerializer(serializers.Serializer):
+    """One line on an invoice, as sent when adding it."""
+    service     = serializers.PrimaryKeyRelatedField(queryset=BillingItem.objects.none(), required=False, allow_null=True)
+    description = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    quantity    = serializers.IntegerField(min_value=1, default=1)
+    unit_price  = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal("0"), required=False)
+    tax_rate    = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)
+    tax_inclusive = serializers.BooleanField(required=False)
+
+    def __init__(self, *args, db=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if db:
+            self.fields["service"].queryset = BillingItem.objects.using(db)
 
 
-class PaymentSerializer(serializers.ModelSerializer):
-    class Meta:
-        model  = Payment
-        fields = ["id", "invoice", "amount", "payment_mode", "transaction_ref", "paid_at"]
-        read_only_fields = ["id", "paid_at"]
-        extra_kwargs = {"amount": {"min_value": 0.01}}
-        validators = []
+class PaymentSerializer(serializers.Serializer):
+    """A payment as sent when recording it."""
+    invoice         = serializers.PrimaryKeyRelatedField(queryset=Invoice.objects.none())
+    amount          = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal("0.01"))
+    payment_mode    = serializers.CharField(max_length=50)
+    transaction_ref = serializers.CharField(max_length=100, required=False, allow_blank=True)
+
+    def __init__(self, *args, db=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if db:
+            self.fields["invoice"].queryset = Invoice.objects.using(db)
 
 
-class InvoiceSerializer(serializers.ModelSerializer):
-    items    = InvoiceItemSerializer(many=True, read_only=True, source="i_items")
-    payments = PaymentSerializer(many=True, read_only=True, source="i_payments")
-    # `patient` on its own is just a FK id — front desk's billing list needs
+class InvoiceSerializer(PkModelSerializer):
+    items    = serializers.JSONField(read_only=True, source="lines")
+    payments = serializers.JSONField(read_only=True)
     patient_name = serializers.SerializerMethodField()
     patient_uhid = serializers.SerializerMethodField()
 
     class Meta:
         model  = Invoice
-        fields = ["id", "patient", "patient_name", "patient_uhid", "branch", "invoice_number", "status",
+        fields = ["invoice_id", "patient", "patient_name", "patient_uhid", "branch", "invoice_number", "status",
                   "subtotal", "tax_amount", "discount_amount", "total_amount", "paid_amount",
                   "notes", "issued_at", "created_at", "items", "payments"]
-        read_only_fields = ["id", "invoice_number", "created_at"]
+        read_only_fields = ["invoice_id", "invoice_number", "created_at"]
 
     def get_patient_name(self, obj):
         return obj.patient.get_patient_details()["full_name"] if obj.patient_id else None

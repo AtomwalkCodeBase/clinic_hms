@@ -186,7 +186,7 @@ export default function SubscriptionsPage() {
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {list.map(t => (
-                      <HospitalRow key={t.id} hospital={t} onManage={setSelected} />
+                      <HospitalRow key={t.hospital_id} hospital={t} onManage={setSelected} />
                     ))}
                   </div>
                 </div>

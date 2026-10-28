@@ -152,7 +152,7 @@ function DeptList({ branchId }) {
       ) : (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
           {depts.map(d => (
-            <span key={d.id} style={{
+            <span key={d.department_id} style={{
               padding: "4px 12px", borderRadius: 20,
               background: "var(--color-bg)", border: "1px solid var(--color-border)", fontSize: 13,
             }}>{d.name}</span>
@@ -201,7 +201,7 @@ export default function BranchesPage() {
   async function handleUpdate(form) {
     setSaving(true);
     try {
-      await api.patch(API_ENDPOINTS.ORG.BRANCH(editing.id), form);
+      await api.patch(API_ENDPOINTS.ORG.BRANCH(editing.branch_id), form);
       toastSuccess("Branch updated.");
       setModal(null); setEditing(null); fetchBranches();
     } catch (err) { toastApiError(err, "Failed to update branch."); }
@@ -211,7 +211,7 @@ export default function BranchesPage() {
   async function handleDeactivate(branch) {
     if (!confirm(`Deactivate branch "${branch.name}"?`)) return;
     try {
-      await api.delete(API_ENDPOINTS.ORG.BRANCH(branch.id));
+      await api.delete(API_ENDPOINTS.ORG.BRANCH(branch.branch_id));
       toastSuccess("Branch deactivated.");
       fetchBranches(); refreshPermissions();
     } catch (err) { toastApiError(err, "Failed to deactivate."); }
@@ -258,9 +258,9 @@ export default function BranchesPage() {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {branches.map(branch => (
-              <div key={branch.id} className="card" style={{ padding: 0, overflow: "hidden" }}>
+              <div key={branch.branch_id} className="card" style={{ padding: 0, overflow: "hidden" }}>
                 <div style={{ padding: "16px 20px", display: "flex", alignItems: "center", gap: 12 }}>
-                  <div style={{ flex: 1, cursor: "pointer" }} onClick={() => setExpanded(e => ({ ...e, [branch.id]: !e[branch.id] }))}>
+                  <div style={{ flex: 1, cursor: "pointer" }} onClick={() => setExpanded(e => ({ ...e, [branch.branch_id]: !e[branch.branch_id] }))}>
                     <div style={{ fontWeight: 700, fontSize: 16 }}>{branch.name}</div>
                     <div style={{ fontSize: 13, color: "var(--color-text-muted)", marginTop: 3 }}>
                       {[branch.city, branch.state].filter(Boolean).join(", ") || "No location set"}
@@ -276,13 +276,13 @@ export default function BranchesPage() {
                     Remove
                   </button>
                   <span style={{ cursor: "pointer", color: "var(--color-text-muted)" }}
-                    onClick={() => setExpanded(e => ({ ...e, [branch.id]: !e[branch.id] }))}>
-                    {expanded[branch.id] ? "▾" : "▸"}
+                    onClick={() => setExpanded(e => ({ ...e, [branch.branch_id]: !e[branch.branch_id] }))}>
+                    {expanded[branch.branch_id] ? "▾" : "▸"}
                   </span>
                 </div>
-                {expanded[branch.id] && (
+                {expanded[branch.branch_id] && (
                   <div style={{ padding: "0 20px 20px" }}>
-                    <DeptList branchId={branch.id} />
+                    <DeptList branchId={branch.branch_id} />
                   </div>
                 )}
               </div>

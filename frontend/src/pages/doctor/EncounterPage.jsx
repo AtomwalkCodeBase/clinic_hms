@@ -23,20 +23,18 @@ import { Field, Textarea } from "./encounter/FormParts";
 import { DiagnosisSearch } from "./encounter/DiagnosisSearch";
 import { FavouritesBar } from "./encounter/FavouritesBar";
 import { DrugForm } from "./encounter/DrugForm";
-import { LabOrderSection } from "./encounter/LabOrderSection";
 import { PastConsultationTab } from "./encounter/PastConsultationTab";
 import { HistorySidebar } from "./encounter/HistorySidebar";
 import apiClient from "../../services/api.client";
 import HealthJourney from "../../components/healthJourneyDoctor/HealthJourney";
 import DoctorInsights from "../../components/healthJourneyDoctor/DoctorInsights";
 import { openDocumentWith } from "../../components/healthJourney/openDocument";
-import { AdmissionReferralModal } from "./encounter/AdmissionReferralModal";
 import { FollowUpModal } from "./encounter/FollowUpModal";
 import { DocumentViewerDrawer } from "./encounter/DocumentViewerDrawer";
 import { ConsultPadQRModal } from "./encounter/ConsultPadQRModal";
 import { RecognisedTextModal } from "./encounter/RecognisedTextModal";
 
-// A source document of the timeline, through the staff endpoint (it applies the same hospital-sharing consent rule).
+// A source document of the timeline, through the staff endpoint.
 
 export default function EncounterPage() {
   const { id }   = useParams();
@@ -75,7 +73,6 @@ export default function EncounterPage() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [viewerDoc, setViewerDoc] = useState(null); // document currently open in the resizable viewer
   const [activeTab, setActiveTab] = useState("consultation"); // "past" | "consultation" | "timeline"
-  const [admissionModalOpen, setAdmissionModalOpen] = useState(false);
   const [followUpModalOpen, setFollowUpModalOpen] = useState(false);
 
   // Handwriting session — the doctor starts it from this encounter
@@ -241,10 +238,10 @@ export default function EncounterPage() {
   }
 
   async function openConsultPadQR() {
-    if (!enc?.id) return;
+    if (!enc?.opd_encounter_id) return;
     setQrLoading(true);
     try {
-      const { data } = await encounterApi.createConsultSession(enc.id);
+      const { data } = await encounterApi.createConsultSession(enc.opd_encounter_id);
       setQrData(data?.data || data);
       setQrOpen(true);
     } catch (err) {
@@ -272,9 +269,9 @@ export default function EncounterPage() {
 
   // Fetch the session and either apply it or report why not.
   async function pullHandwrittenNote({ quiet = false } = {}) {
-    if (!enc?.id) return "inactive";
+    if (!enc?.opd_encounter_id) return "inactive";
     try {
-      const { data: res } = await encounterApi.getConsultSession(enc.id);
+      const { data: res } = await encounterApi.getConsultSession(enc.opd_encounter_id);
       const s = res?.data || res;
       if (!s?.active) {
         if (!quiet) toastError('No handwriting session yet — tap "Handwrite (QR)" and write on the phone first.');
@@ -335,13 +332,13 @@ export default function EncounterPage() {
   }
 
   async function loadHandwrittenNote() {
-    if (!enc?.id || loadingNote || hwWatch) return;
+    if (!enc?.opd_encounter_id || loadingNote || hwWatch) return;
     setLoadingNote(true);
     let verdict = "waiting";
     try {
       // Lazy compile: nothing is transcribed until this click. The server
       try {
-        await encounterApi.recogniseConsultSession(enc.id);
+        await encounterApi.recogniseConsultSession(enc.opd_encounter_id);
       } catch { /* the pull below reports if there's no session yet */ }
       verdict = await pullHandwrittenNote({ quiet: false });
     } finally {
@@ -415,7 +412,7 @@ export default function EncounterPage() {
     });
     setDiagnoses(enc.diagnoses || []);
     if (enc.prescription) {
-      setRxId(enc.prescription.id);
+      setRxId(enc.prescription.opd_prescription_id);
       setRxItems(enc.prescription.items || []);
     }
     setDirty(false);
@@ -474,7 +471,7 @@ export default function EncounterPage() {
   async function ensureRx() {
     if (rxId) return rxId;
     const res = await encounterApi.createPrescription(id);
-    const newId = res.data?.id || res.data?.data?.id;
+    const newId = res.data?.opd_prescription_id || res.data?.data?.opd_prescription_id;
     setRxId(newId);
     return newId;
   }
@@ -499,7 +496,7 @@ export default function EncounterPage() {
     setRemovingItem(itemId);
     try {
       await encounterApi.removePrescriptionItem(rxId, itemId);
-      setRxItems(prev => prev.filter(i => i.id !== itemId));
+      setRxItems(prev => prev.filter(i => i.opd_prescription_item_id !== itemId));
     } catch (err) {
       toastApiError(err, "Failed to remove drug.");
     } finally {
@@ -697,9 +694,6 @@ export default function EncounterPage() {
         title={enc.patient_name || "Consultation"}
         action={
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <button className="btn-outline" onClick={() => setAdmissionModalOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-              Recommend Admission
-            </button>
             <button className="btn-outline" onClick={() => setFollowUpModalOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
               Book Follow-up
             </button>
@@ -1108,7 +1102,7 @@ export default function EncounterPage() {
                 </thead>
                 <tbody>
                   {rxItems.map(item => (
-                    <tr key={item.id} style={{ borderBottom: "1px solid var(--color-border)" }}>
+                    <tr key={item.opd_prescription_item_id} style={{ borderBottom: "1px solid var(--color-border)" }}>
                       <td style={{ padding: "8px 8px", fontWeight: 600 }}>{item.drug_name}</td>
                       <td style={{ padding: "8px 8px" }}>{item.dosage}</td>
                       <td style={{ padding: "8px 8px", fontWeight: 600, color: "var(--color-primary)" }}>
@@ -1120,11 +1114,11 @@ export default function EncounterPage() {
                       {!isClosed && (
                         <td style={{ padding: "8px 6px", textAlign: "center" }}>
                           <button
-                            onClick={() => removeDrug(item.id)}
-                            disabled={removingItem === item.id}
+                            onClick={() => removeDrug(item.opd_prescription_item_id)}
+                            disabled={removingItem === item.opd_prescription_item_id}
                             style={{ background: "none", border: "none", cursor: "pointer", color: "#EF4444", fontSize: 15 }}
                           >
-                            {removingItem === item.id ? "…" : "✕"}
+                            {removingItem === item.opd_prescription_item_id ? "…" : "✕"}
                           </button>
                         </td>
                       )}
@@ -1141,8 +1135,7 @@ export default function EncounterPage() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, alignItems: "start" }}>
           <SectionCard title="Investigations / Orders"
             extra={<DictateButton disabled={isClosed} onTranscript={t => openDictation("investigations", t)} />}>
-            <LabOrderSection encounterId={id} isClosed={isClosed} onViewReport={setViewerDoc} />
-            <Field label="Other orders (radiology, imaging — not in the lab catalog)">
+            <Field label="Investigations / orders (lab tests, radiology, imaging)">
               <Textarea
                 value={form.investigations}
                 onChange={v => upd("investigations", v)}
@@ -1385,15 +1378,6 @@ export default function EncounterPage() {
           onOpenDocument={setViewerDoc}
         />
       </div>
-      {admissionModalOpen && (
-        <AdmissionReferralModal
-          patientId={enc.patient_pk}
-          patientName={enc.patient_name}
-          patientUhid={enc.patient_uhid}
-          encounterId={id}
-          onClose={() => setAdmissionModalOpen(false)}
-        />
-      )}
       {followUpModalOpen && (
         <FollowUpModal
           enc={enc}

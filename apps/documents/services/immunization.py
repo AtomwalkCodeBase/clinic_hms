@@ -41,7 +41,7 @@ def resolve_vaccines(text: str, cfg=None) -> List[str]:
 
 def immunization_status(dob: date, given: List[dict], as_of: date, cfg=None) -> dict:
     """
-    given: [{"vaccine_text": "Penta 1", "given_on": date, "document_id": 12, "id": 5}, ...]
+    given: [{"vaccine_text": "Penta 1", "given_on": date, "document_id": 12, "immunization_record_id": 5}, ...]
     -> {
          "rows": [{code, vaccine, dose, due_on, due_age, status, given_on, delay_days, document_id}],
          "extra_doses": [...], "unresolved": [...],
@@ -113,7 +113,7 @@ def immunization_status(dob: date, given: List[dict], as_of: date, cfg=None) -> 
         "source": cfg["immunization_schedule"].get("source"),
         "rows": rows,
         "extra_doses": extra,
-        "unresolved": [{"vaccine_text": u.get("vaccine_text"), "id": u.get("id")} for u in unresolved],
+        "unresolved": [{"vaccine_text": u.get("vaccine_text"), "immunization_record_id": u.get("immunization_record_id")} for u in unresolved],
         "summary": {
             "given": count("GIVEN"), "overdue": count("OVERDUE"), "due": count("DUE"),
             "upcoming": count("UPCOMING"),

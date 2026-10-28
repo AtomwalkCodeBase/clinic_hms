@@ -17,20 +17,20 @@ function TemplateEditor({ kind, template, onSaved, onDeleted, onBack }) {
   const [active, setActive] = useState(!!template.active);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const list = useRules(kind, template.rules, template.id);
+  const list = useRules(kind, template.rules, template.immunization_schedule_id);
 
   useEffect(() => {
     setName(template.name);
     setDescription(template.description || "");
     setActive(!!template.active);
-  }, [template.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [template.immunization_schedule_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleSave() {
     const problem = list.error();
     if (problem) { toastError(problem); return; }
     setSaving(true);
     try {
-      const { data: res } = await apiClient.patch(kind.endpoints.template(template.id), { name, description, active, rules: list.payload() });
+      const { data: res } = await apiClient.patch(kind.endpoints.template(template.immunization_schedule_id), { name, description, active, rules: list.payload() });
       toastSuccess(res.message || "Template updated.");
       onSaved(res.data);
     } catch (err) {
@@ -44,9 +44,9 @@ function TemplateEditor({ kind, template, onSaved, onDeleted, onBack }) {
     if (!window.confirm(`Delete template "${template.name}"? This can't be undone.`)) return;
     setDeleting(true);
     try {
-      const { data: res } = await apiClient.delete(kind.endpoints.template(template.id));
+      const { data: res } = await apiClient.delete(kind.endpoints.template(template.immunization_schedule_id));
       toastSuccess(res.message || "Template deleted.");
-      onDeleted(template.id);
+      onDeleted(template.immunization_schedule_id);
     } catch (err) {
       // a 400 carries "N hospital(s) currently have this template…" when it is still in use; show that message as it is
       toastApiError(err, "Failed to delete template.");
@@ -148,7 +148,7 @@ function NewTemplateForm({ kind, onCreated, onCancel }) {
 
 function TemplateCard({ kind, template, onSelect }) {
   return (
-    <div className="card card--interactive" style={{ padding: "16px 20px", cursor: "pointer" }} onClick={() => onSelect(template.id)}>
+    <div className="card card--interactive" style={{ padding: "16px 20px", cursor: "pointer" }} onClick={() => onSelect(template.immunization_schedule_id)}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 6 }}>
         <div style={{ fontWeight: 700, fontSize: 15 }}>{template.name}</div>
         {template.active ? <Badge tone="primary">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}
@@ -244,7 +244,7 @@ export default function PlatformTemplatesPage({ kind }) {
             {creating && (
               <NewTemplateForm
                 kind={kind}
-                onCreated={(created) => { setCreating(false); fetchList(); setSelectedId(created.id); }}
+                onCreated={(created) => { setCreating(false); fetchList(); setSelectedId(created.immunization_schedule_id); }}
                 onCancel={() => setCreating(false)}
               />
             )}
@@ -255,7 +255,7 @@ export default function PlatformTemplatesPage({ kind }) {
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
                 {templates.map(t => (
-                  <TemplateCard key={t.id} kind={kind} template={t} onSelect={(id) => { setCreating(false); setSelectedId(id); }} />
+                  <TemplateCard key={t.immunization_schedule_id} kind={kind} template={t} onSelect={(id) => { setCreating(false); setSelectedId(id); }} />
                 ))}
               </div>
             )}

@@ -3,7 +3,7 @@ import { RuleRow } from "./RuleRow";
 
 /** The rule list of one schedule or template: add, edit, reorder, remove, and the payload the PATCH endpoint takes. */
 export function useRules(kind, saved, resetKey) {
-  const seed = () => (saved || []).map(r => ({ ...r, _key: `existing-${r.id}` }));
+  const seed = () => (saved || []).map(r => ({ ...r, _key: `existing-${r.immunization_schedule_rule_id}` }));
   const [rules, setRules] = useState(seed);
   const [removedIds, setRemovedIds] = useState([]);
 
@@ -19,7 +19,7 @@ export function useRules(kind, saved, resetKey) {
     update: (key, next) => setRules(rs => rs.map(r => (r._key === key ? next : r))),
     remove: (key) => setRules(rs => {
       const target = rs.find(r => r._key === key);
-      if (target?.id) setRemovedIds(ids => [...ids, target.id]);
+      if (target?.immunization_schedule_rule_id) setRemovedIds(ids => [...ids, target.immunization_schedule_rule_id]);
       return rs.filter(r => r._key !== key);
     }),
     move: (index, dir) => setRules(rs => {

@@ -92,11 +92,11 @@ export default function ClassificationRulesPage() {
                 </tr></thead>
                 <tbody>
                   {report.results.map(d => (
-                    <tr key={d.id} style={{ borderTop: "1px solid var(--color-border)" }}>
+                    <tr key={d.medical_document_id} style={{ borderTop: "1px solid var(--color-border)" }}>
                       <td style={cellStyle}>{d.title}</td>
                       <td style={cellStyle}>
                         <select style={{ ...inputStyle, padding: "2px 4px" }} value={d.doc_type} disabled={busy}
-                          onChange={e => correctDoc(d.id, e.target.value)}>
+                          onChange={e => correctDoc(d.medical_document_id, e.target.value)}>
                           {d.doc_type === NOT_CLASSIFIED && (
                             <option value={NOT_CLASSIFIED} disabled>
                               Not classified{d.best_guess ? ` — closest: ${d.best_guess}` : ""}

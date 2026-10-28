@@ -87,7 +87,6 @@ export default function QuickRegisterModal({ open, onClose, onRegistered, branch
     const payload = {
       full_name: fullName.trim(),
       branch_id: branchId,
-      dpdp_consent: false,
       gender: gender || undefined,
       date_of_birth: dob || undefined,
       ...(guardian

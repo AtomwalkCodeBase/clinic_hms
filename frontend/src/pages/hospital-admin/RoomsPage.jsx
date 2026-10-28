@@ -15,16 +15,8 @@ import {
   Check, X,
 } from "lucide-react";
 
-const EMPTY_ROOM = { branch: "", floor_obj: "", name: "", room_type: "consultation", capacity: "", department: "" };
+const EMPTY_ROOM = { branch: "", floor_obj: "", name: "", room_type: "consultation", department: "" };
 const EMPTY_FLOOR = { branch: "", name: "", level: "0" };
-const EMPTY_BED   = { room: "", bed_number: "" };
-
-const ROOM_TYPE_CATEGORY_OPTIONS = [
-  { value: "opd", label: "OPD" },
-  { value: "ipd", label: "IPD" },
-  { value: "procedure", label: "Procedure" },
-  { value: "other", label: "Other" },
-];
 
 // Room Type is a single hospital-configurable catalog (billing.OptionList,
 const TYPE_COLOR_PALETTE = [
@@ -40,28 +32,7 @@ function roomTypeMeta(value, options) {
   const opt = idx >= 0 ? options[idx] : null;
   const label = opt ? opt.label : (value || "—");
   const color = TYPE_COLOR_PALETTE[(idx >= 0 ? idx : 0) % TYPE_COLOR_PALETTE.length];
-  return { label, ...color, isBedBased: !!opt?.is_bed_based, category: opt?.category || "" };
-}
-
-const BED_STATUSES = [
-  { value: "available",      label: "Available",      color: "#1a7f37" },
-  { value: "occupied",       label: "Occupied",        color: "#c0362c" },
-  { value: "cleaning",       label: "Cleaning",        color: "#b8860b" },
-  { value: "blocked",        label: "Blocked",         color: "#6b7280" },
-  { value: "out_of_service", label: "Out of Service",  color: "#374151" },
-];
-const bedStatusMeta = (status) => BED_STATUSES.find(s => s.value === status) || BED_STATUSES[0];
-
-// "12 Sep 2026" / "12 Sep 2026, 14:05" — used for a bed's current occupant
-function formatDate(value) {
-  if (!value) return "";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
-}
-function formatDateTime(value) {
-  if (!value) return "";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString(undefined, { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return { label, ...color };
 }
 
 // 1 -> "1st", 2 -> "2nd", 3 -> "3rd", 4 -> "4th", 11 -> "11th", 21 -> "21st"...
@@ -72,8 +43,6 @@ function ordinal(n) {
   if (j === 3 && k !== 13) return `${n}rd`;
   return `${n}th`;
 }
-
-// ── Small shared bits ───────────────────────────────────────────────────
 
 function Modal({ title, children, onClose, width = 480 }) {
   return (
@@ -240,7 +209,7 @@ function StatCard({ icon: Icon, value, label, iconBg, iconColor }) {
 
 // Bordered box wrapping a real (invisible, overlaid) <select> so the
 function BranchSelector({ branches, value, onChange }) {
-  const selected = branches.find(b => String(b.id) === String(value));
+  const selected = branches.find(b => String(b.branch_id) === String(value));
   return (
     <div style={{
       position: "relative", display: "flex", alignItems: "center", gap: 10,
@@ -257,7 +226,7 @@ function BranchSelector({ branches, value, onChange }) {
       <ChevronDown size={16} style={{ color: "var(--color-text-muted)", flexShrink: 0 }} />
       <select value={value} onChange={e => onChange(e.target.value)}
         style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%", height: "100%" }}>
-        {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+        {branches.map(b => <option key={b.branch_id} value={b.branch_id}>{b.name}</option>)}
       </select>
     </div>
   );
@@ -370,159 +339,9 @@ function FloorListItem({ floor, roomCount, selected, onSelect, icon: Icon = Buil
   );
 }
 
-// Per-night price for each bed-based Room Type — billing.OptionList.daily_rate,
-function RoomTypeRatesEditor({ roomTypes, onSaved }) {
-  const { toastSuccess, toastApiError } = useToast();
-  const [editingId, setEditingId] = useState(null);
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const bedBased = (roomTypes || []).filter(t => t.is_bed_based);
-  if (bedBased.length === 0) return null;
-
-  function startEdit(t) {
-    setEditingId(t.id);
-    setDraft(t.daily_rate ?? "");
-  }
-  function cancelEdit() {
-    setEditingId(null);
-    setDraft("");
-  }
-  async function save(t) {
-    const value = draft === "" ? null : Number(draft);
-    if (value !== null && (Number.isNaN(value) || value < 0)) {
-      toastApiError({ message: "Enter a valid rate." });
-      return;
-    }
-    setSaving(true);
-    try {
-      await apiClient.patch(API_ENDPOINTS.BILLING.ROOM_TYPE(t.id), { daily_rate: value });
-      toastSuccess(`Daily rate updated for ${t.label}.`);
-      cancelEdit();
-      onSaved();
-    } catch (err) {
-      toastApiError(err, "Could not update daily rate.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--color-border)" }}>
-      <div style={{ fontSize: 11.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--color-text-muted)", marginBottom: 8 }}>
-        Daily rates (bed-based types)
-      </div>
-      <div style={{ display: "grid", gap: 6 }}>
-        {bedBased.map(t => (
-          <div key={t.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, fontSize: 12.5 }}>
-            <span>{t.label}</span>
-            {editingId === t.id ? (
-              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <input
-                  autoFocus type="number" min="0" step="0.01" value={draft} disabled={saving}
-                  onChange={e => setDraft(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === "Enter") { e.preventDefault(); save(t); }
-                    if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
-                  }}
-                  style={{
-                    width: 90, border: "1.5px solid var(--color-border)", borderRadius: 6, padding: "3px 8px",
-                    fontSize: 12.5, background: "var(--color-surface)", color: "var(--color-text)", outline: "none",
-                  }}
-                />
-                <button type="button" onClick={() => save(t)} disabled={saving}
-                  style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1, color: "var(--color-primary)" }}>
-                  <Check size={13} />
-                </button>
-                <button type="button" onClick={cancelEdit} disabled={saving}
-                  style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1, color: "var(--color-text-muted)" }}>
-                  <X size={13} />
-                </button>
-              </span>
-            ) : (
-              <button type="button" onClick={() => startEdit(t)}
-                style={{
-                  background: "none", border: "none", cursor: "pointer", padding: 0,
-                  fontSize: 12.5, fontWeight: 700,
-                  color: t.daily_rate ? "var(--color-text)" : "var(--color-error)",
-                }}>
-                {t.daily_rate ? `₹${Number(t.daily_rate).toLocaleString("en-IN")}/night` : "Set rate →"}
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Rooms ───────────────────────────────────────────────────────────────
-
-// "3 of 5 beds" for a bed-based room with capacity set, "3 beds" (uncapped)
-function bedsLabel(room, isBedBased) {
-  if (!isBedBased) return "—";
-  if (room.capacity == null) return `${room.bed_count} bed${room.bed_count === 1 ? "" : "s"}`;
-  return `${room.bed_count} of ${room.capacity} bed${room.capacity === 1 ? "" : "s"}`;
-}
-// Whether every bed slot the room's capacity allows has already been
-function bedCapacityReached(room, isBedBased) {
-  return isBedBased && room.capacity != null && room.bed_count >= room.capacity;
-}
-// Real, patient-facing occupancy for a room, computed from its actual
-function roomOccupancy(roomBeds) {
-  const total = roomBeds.length;
-  const available = roomBeds.filter((b) => b.status === "available").length;
-  const occupied = roomBeds.filter((b) => b.status === "occupied").length;
-  return { total, available, occupied };
-}
-
 function RoomForm({ branches, floors, roomTypes, departments, initial, onSave, onCancel, saving }) {
   const [form, setForm] = useState(initial || EMPTY_ROOM);
   const set = (k) => (v) => setForm(f => ({ ...f, [k]: v }));
-  const typeMeta = roomTypeMeta(form.room_type, roomTypes);
-  const isBedBased = typeMeta.isBedBased;
-  const currentBeds = initial?.bed_count ?? 0;
-  const capacityTooLow = isBedBased && form.capacity !== "" && Number(form.capacity) < currentBeds;
-
-  function submit(e) {
-    e.preventDefault();
-    onSave(form, isBedBased);
-  }
-
-  return (
-    <form onSubmit={submit}>
-      <Select label="Branch *" value={form.branch} onChange={set("branch")}
-        options={branches.map(b => ({ value: String(b.id), label: b.name }))} required />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <Select label="Floor *" value={form.floor_obj} onChange={set("floor_obj")}
-          options={floors.map(f => ({ value: String(f.id), label: f.name }))}
-          hint={floors.length === 0 ? "No floors set up yet — add one first." : "The room is at this floor's branch."} required />
-        <Field label="Room Number / Name *" value={form.name} onChange={set("name")} placeholder="e.g. OPD-01, Ward 1, ICU-A" required />
-      </div>
-      <Select label="Room Type *" value={form.room_type} onChange={set("room_type")}
-        options={roomTypes.map(t => ({ value: t.value, label: t.label }))}
-        hint={roomTypes.length === 0 ? "No room types configured yet." : undefined} required />
-      {isBedBased && (
-        <Field label="Bed Capacity *" type="number" min="1" value={form.capacity} onChange={set("capacity")}
-          placeholder="e.g. 5"
-          hint={capacityTooLow
-            ? `This room already has ${currentBeds} bed${currentBeds === 1 ? "" : "s"} — capacity can't be set lower. Remove a bed first if you need to shrink it.`
-            : "Maximum number of beds this room can hold — beds can't be added past this."} required />
-      )}
-      <Select label="Department (optional)" value={form.department} onChange={set("department")}
-        options={departments.map(d => ({ value: String(d.id), label: d.name }))}
-        hint="Only needed if this room belongs to a specific clinical department." />
-      <ModalActions onCancel={onCancel} saving={saving}
-        disabled={!form.branch || !form.floor_obj || !form.name || !form.room_type || (isBedBased && (!form.capacity || Number(form.capacity) < 1 || capacityTooLow))}
-        submitLabel={initial ? "Update Room" : "Create Room"} />
-    </form>
-  );
-}
-
-function BedForm({ initial, onSave, onCancel, saving }) {
-  const [form, setForm] = useState(initial || EMPTY_BED);
-  const set = (k) => (v) => setForm(f => ({ ...f, [k]: v }));
-  const isEdit = !!initial;
 
   function submit(e) {
     e.preventDefault();
@@ -531,19 +350,28 @@ function BedForm({ initial, onSave, onCancel, saving }) {
 
   return (
     <form onSubmit={submit}>
-      <Field label="Bed Number / Label *" value={form.bed_number} onChange={set("bed_number")} placeholder="e.g. A-01, 12" required />
-      {isEdit && (
-        <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", marginBottom: 14 }}>
-          Status ({bedStatusMeta(initial.status).label}) isn't editable here — it only changes when front desk
-          assigns or releases this bed for an admission.
-        </div>
-      )}
-      <ModalActions onCancel={onCancel} saving={saving} disabled={!form.bed_number} submitLabel={isEdit ? "Update Bed" : "Add Bed"} />
+      <Select label="Branch *" value={form.branch} onChange={set("branch")}
+        options={branches.map(b => ({ value: String(b.branch_id), label: b.name }))} required />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Select label="Floor *" value={form.floor_obj} onChange={set("floor_obj")}
+          options={floors.map(f => ({ value: String(f.floor_id), label: f.name }))}
+          hint={floors.length === 0 ? "No floors set up yet — add one first." : "The room is at this floor's branch."} required />
+        <Field label="Room Number / Name *" value={form.name} onChange={set("name")} placeholder="e.g. OPD-01, Ward 1, ICU-A" required />
+      </div>
+      <Select label="Room Type *" value={form.room_type} onChange={set("room_type")}
+        options={roomTypes.map(t => ({ value: t.value, label: t.label }))}
+        hint={roomTypes.length === 0 ? "No room types configured yet." : undefined} required />
+      <Select label="Department (optional)" value={form.department} onChange={set("department")}
+        options={departments.map(d => ({ value: String(d.department_id), label: d.name }))}
+        hint="Only needed if this room belongs to a specific clinical department." />
+      <ModalActions onCancel={onCancel} saving={saving}
+        disabled={!form.branch || !form.floor_obj || !form.name || !form.room_type}
+        submitLabel={initial ? "Update Room" : "Create Room"} />
     </form>
   );
 }
 
-function RoomsTable({ rooms, roomTypes, bedsByRoom, onEdit, onDeactivate, onManageBeds }) {
+function RoomsTable({ rooms, roomTypes, onEdit, onDeactivate }) {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [activeFilter, setActiveFilter] = useState("active");
@@ -590,9 +418,9 @@ function RoomsTable({ rooms, roomTypes, bedsByRoom, onEdit, onDeactivate, onMana
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "1.5px solid var(--color-border)" }}>
-                  {["Room", "Room Type", "Beds", "Actions"].map((h, i) => (
+                  {["Room", "Room Type", "Actions"].map((h, i) => (
                     <th key={h} style={{
-                      textAlign: i === 3 ? "right" : "left", padding: "0 8px 10px", fontSize: 11, fontWeight: 700,
+                      textAlign: i === 2 ? "right" : "left", padding: "0 8px 10px", fontSize: 11, fontWeight: 700,
                       color: "var(--color-text-muted)", letterSpacing: "0.04em", textTransform: "uppercase",
                     }}>{h}</th>
                   ))}
@@ -601,46 +429,24 @@ function RoomsTable({ rooms, roomTypes, bedsByRoom, onEdit, onDeactivate, onMana
               <tbody>
                 {pageRows.map(room => {
                   const meta = roomTypeMeta(room.room_type, roomTypes);
-                  const roomBeds = (bedsByRoom && bedsByRoom[room.id]) || [];
-                  const occ = roomOccupancy(roomBeds);
-                  // "Full" here means real, patient-facing occupancy — every
-                  const noVacancy = meta.isBedBased && occ.total > 0 && occ.available === 0;
                   return (
-                    <tr key={room.id} style={{ borderBottom: "1px solid var(--color-border)" }}>
+                    <tr key={room.room_id} style={{ borderBottom: "1px solid var(--color-border)" }}>
                       <td style={{ padding: "12px 8px" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                           <div style={{ width: 30, height: 30, borderRadius: 8, background: "var(--color-bg)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                            {meta.isBedBased ? <BedDouble size={14} style={{ color: "var(--color-text-muted)" }} /> : <DoorOpen size={14} style={{ color: "var(--color-text-muted)" }} />}
+                            <DoorOpen size={14} style={{ color: "var(--color-text-muted)" }} />
                           </div>
                           <div>
                             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                               <span style={{ fontWeight: 700, fontSize: 13.5 }}>{room.name}</span>
-                              {noVacancy && <Pill label="Full" bg="#fde8ef" text="#e11d48" />}
                             </div>
                             {room.department_name && <div style={{ fontSize: 11.5, color: "var(--color-text-muted)" }}>{room.department_name}</div>}
                           </div>
                         </div>
                       </td>
                       <td style={{ padding: "12px 8px" }}><Pill label={meta.label} bg={meta.bg} text={meta.text} /></td>
-                      <td style={{ padding: "12px 8px", fontSize: 12.5, fontWeight: 700 }}>
-                        {!meta.isBedBased ? (
-                          <span style={{ color: "var(--color-text-muted)", fontWeight: 600 }}>—</span>
-                        ) : occ.total === 0 ? (
-                          <span style={{ color: "var(--color-text-muted)", fontWeight: 600 }}>No beds set up</span>
-                        ) : (
-                          <span style={{ color: occ.available > 0 ? "#1a7f37" : "#e11d48" }}>
-                            {occ.available} of {occ.total} available
-                          </span>
-                        )}
-                      </td>
                       <td style={{ padding: "12px 8px" }}>
                         <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
-                          {meta.isBedBased && (
-                            <button type="button" onClick={() => onManageBeds(room)} title="Manage Beds"
-                              style={{ background: "none", border: "none", cursor: "pointer", padding: 6, color: "var(--color-text-muted)" }}>
-                              <BedIcon size={14} />
-                            </button>
-                          )}
                           <button type="button" onClick={() => onEdit(room)} title="Edit"
                             style={{ background: "none", border: "none", cursor: "pointer", padding: 6, color: "var(--color-text-muted)" }}>
                             <Pencil size={14} />
@@ -666,129 +472,11 @@ function RoomsTable({ rooms, roomTypes, bedsByRoom, onEdit, onDeactivate, onMana
   );
 }
 
-function BedsTable({ beds, onEdit, onRemove }) {
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [sort, setSort] = useState("number_asc");
-  const [page, setPage] = useState(1);
-  const pageSize = 8;
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    let list = beds.filter(b => {
-      if (q && !b.bed_number.toLowerCase().includes(q)) return false;
-      if (statusFilter && b.status !== statusFilter) return false;
-      return true;
-    });
-    list = [...list].sort((a, b) => {
-      if (sort === "number_desc") return b.bed_number.localeCompare(a.bed_number, undefined, { numeric: true });
-      if (sort === "status") return a.status.localeCompare(b.status);
-      return a.bed_number.localeCompare(b.bed_number, undefined, { numeric: true });
-    });
-    return list;
-  }, [beds, search, statusFilter, sort]);
-
-  useEffect(() => { setPage(1); }, [search, statusFilter, sort, beds.length]);
-  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const pageRows = filtered.slice((page - 1) * pageSize, page * pageSize);
-
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Search beds by number…" />
-        <FilterSelect value={statusFilter} onChange={setStatusFilter} width={140}
-          options={[{ value: "", label: "All Statuses" }, ...BED_STATUSES.map(s => ({ value: s.value, label: s.label }))]} />
-        <FilterSelect value={sort} onChange={setSort} width={170}
-          options={[
-            { value: "number_asc", label: "Bed Number (A – Z)" },
-            { value: "number_desc", label: "Bed Number (Z – A)" },
-            { value: "status", label: "Status" },
-          ]} />
-      </div>
-
-      {beds.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "40px 0", color: "var(--color-text-muted)" }}>
-          <BedIcon size={32} style={{ marginBottom: 10 }} />
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>No beds in this room yet</div>
-          <div style={{ fontSize: 12.5 }}>Add the first bed using the button above.</div>
-        </div>
-      ) : (
-        <>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ borderBottom: "1.5px solid var(--color-border)" }}>
-                  {["Bed Number", "Status", "Occupied By", "Is Active", "Actions"].map((h, i) => (
-                    <th key={h} style={{
-                      textAlign: i === 4 ? "right" : "left", padding: "0 8px 10px", fontSize: 11, fontWeight: 700,
-                      color: "var(--color-text-muted)", letterSpacing: "0.04em", textTransform: "uppercase",
-                    }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {pageRows.map(bed => {
-                  const meta = bedStatusMeta(bed.status);
-                  const occ = bed.current_admission;
-                  return (
-                    <tr key={bed.id} style={{ borderBottom: "1px solid var(--color-border)" }}>
-                      <td style={{ padding: "10px 8px", fontWeight: 700, fontSize: 13.5 }}>{bed.bed_number}</td>
-                      <td style={{ padding: "10px 8px" }}>
-                        <Pill label={meta.label} bg={`${meta.color}1c`} text={meta.color} />
-                      </td>
-                      <td style={{ padding: "10px 8px" }}>
-                        {occ ? (
-                          <div>
-                            <div style={{ fontWeight: 700, fontSize: 12.5 }}>{occ.patient_name}</div>
-                            <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
-                              UHID {occ.patient_uhid} · Admitted {formatDateTime(occ.admitted_at)}
-                            </div>
-                            {occ.expected_discharge_date && (
-                              <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
-                                Exp. discharge {formatDate(occ.expected_discharge_date)}
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <span style={{ color: "var(--color-text-muted)" }}>—</span>
-                        )}
-                      </td>
-                      <td style={{ padding: "10px 8px" }}><StatusDot active={bed.is_active} /></td>
-                      <td style={{ padding: "10px 8px" }}>
-                        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
-                          <button type="button" onClick={() => onEdit(bed)} title="Edit"
-                            style={{ background: "none", border: "none", cursor: "pointer", padding: 6, color: "var(--color-text-muted)" }}>
-                            <Pencil size={14} />
-                          </button>
-                          <KebabMenu items={[{ label: "Remove Bed", danger: true, onClick: () => onRemove(bed) }]} />
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14 }}>
-            <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
-              Showing {pageRows.length} of {filtered.length} bed{filtered.length === 1 ? "" : "s"}
-            </span>
-            <Pagination page={page} pageCount={pageCount} onChange={setPage} />
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ── Page ────────────────────────────────────────────────────────────────
-
 export default function RoomsPage() {
   const { toastSuccess, toastApiError } = useToast();
   const [branchId, setBranchId] = useState("");
 
   const [rooms, setRooms] = useState([]);
-  const [beds, setBeds] = useState([]);
   const [loadingRooms, setLoadingRooms] = useState(true);
   const [floors, setFloors] = useState([]);
   const [loadingFloors, setLoadingFloors] = useState(true);
@@ -798,16 +486,15 @@ export default function RoomsPage() {
 
   const [selectedFloorId, setSelectedFloorId] = useState("");
 
-  const [modal, setModal] = useState(null); // "room" | "floor" | "beds" | "bed"
+  const [modal, setModal] = useState(null); // "room" | "floor"
   const [editing, setEditing] = useState(null);
-  const [bedsModalRoom, setBedsModalRoom] = useState(null);
   const [saving, setSaving] = useState(false);
 
   const { data: branchData } = useApi(API_ENDPOINTS.ORG.BRANCHES);
   const branches = useMemo(() => branchData || [], [branchData]);
 
   useEffect(() => {
-    if (!branchId && branches.length) setBranchId(String(branches[0].id));
+    if (!branchId && branches.length) setBranchId(String(branches[0].branch_id));
   }, [branches, branchId]);
 
   // Branch switch resets whichever floor was selected for the old branch —
@@ -826,17 +513,13 @@ export default function RoomsPage() {
     finally { setLoadingFloors(false); }
   }, [branchId]);
 
-  const fetchRoomsAndBeds = useCallback(async () => {
-    if (!branchId) { setRooms([]); setBeds([]); setLoadingRooms(false); return; }
+  const fetchRooms = useCallback(async () => {
+    if (!branchId) { setRooms([]); setLoadingRooms(false); return; }
     setLoadingRooms(true);
     try {
-      const [{ data: roomRes }, { data: bedRes }] = await Promise.all([
-        apiClient.get(API_ENDPOINTS.ORG.ROOMS, { params: { branch_id: branchId } }),
-        apiClient.get(API_ENDPOINTS.ORG.BEDS, { params: { branch_id: branchId } }),
-      ]);
+      const { data: roomRes } = await apiClient.get(API_ENDPOINTS.ORG.ROOMS, { params: { branch_id: branchId } });
       setRooms(roomRes.data || []);
-      setBeds(bedRes.data || []);
-    } catch { setRooms([]); setBeds([]); }
+    } catch { setRooms([]); }
     finally { setLoadingRooms(false); }
   }, [branchId]);
 
@@ -854,37 +537,18 @@ export default function RoomsPage() {
     } catch { setDepartments([]); }
   }, [branchId]);
 
-  useEffect(() => { fetchFloors(); fetchRoomsAndBeds(); fetchDepartments(); }, [fetchFloors, fetchRoomsAndBeds, fetchDepartments]);
+  useEffect(() => { fetchFloors(); fetchRooms(); fetchDepartments(); }, [fetchFloors, fetchRooms, fetchDepartments]);
   useEffect(() => { fetchRoomTypes(); }, [fetchRoomTypes]);
 
   useEffect(() => {
-    if (!selectedFloorId && floors.length) setSelectedFloorId(String(floors[0].id));
+    if (!selectedFloorId && floors.length) setSelectedFloorId(String(floors[0].floor_id));
   }, [floors, selectedFloorId]);
 
-  const bedsByRoom = useMemo(() => {
-    const map = {};
-    for (const b of beds) (map[b.room] = map[b.room] || []).push(b);
-    return map;
-  }, [beds]);
-
-  const selectedFloor = floors.find(f => String(f.id) === String(selectedFloorId)) || null;
+  const selectedFloor = floors.find(f => String(f.floor_id) === String(selectedFloorId)) || null;
   const roomsOnFloor = useMemo(
-    () => rooms.filter(r => selectedFloor && String(r.floor_obj) === String(selectedFloor.id)),
+    () => rooms.filter(r => selectedFloor && String(r.floor_obj) === String(selectedFloor.floor_id)),
     [rooms, selectedFloor],
   );
-
-  const bedsModalRoomTypeMeta = bedsModalRoom ? roomTypeMeta(bedsModalRoom.room_type, roomTypes) : null;
-  const bedsInModalRoom = useMemo(
-    () => (bedsModalRoom ? (bedsByRoom[bedsModalRoom.id] || []) : []),
-    [bedsModalRoom, bedsByRoom],
-  );
-
-  // Branch-wide bed status totals for the top stat row.
-  const bedStatusTotals = useMemo(() => {
-    const t = { available: 0, occupied: 0, cleaning: 0, blocked: 0, out_of_service: 0 };
-    beds.forEach(b => { if (t[b.status] !== undefined) t[b.status]++; });
-    return t;
-  }, [beds]);
 
   // ── Floor CRUD ──
   async function handleCreateFloor(form) {
@@ -899,18 +563,18 @@ export default function RoomsPage() {
   async function handleUpdateFloor(form) {
     setSaving(true);
     try {
-      await apiClient.patch(API_ENDPOINTS.ORG.FLOOR(editing.id), { name: form.name, level: Number(form.level) || 0 });
+      await apiClient.patch(API_ENDPOINTS.ORG.FLOOR(editing.floor_id), { name: form.name, level: Number(form.level) || 0 });
       toastSuccess("Floor updated.");
-      setModal(null); setEditing(null); fetchFloors(); fetchRoomsAndBeds();
+      setModal(null); setEditing(null); fetchFloors(); fetchRooms();
     } catch (err) { toastApiError(err, "Failed to update floor."); }
     finally { setSaving(false); }
   }
   async function handleRemoveFloor(floor) {
     if (!confirm(`Remove floor "${floor.name}"? Rooms on it will keep their name but show no floor until reassigned.`)) return;
     try {
-      await apiClient.delete(API_ENDPOINTS.ORG.FLOOR(floor.id));
+      await apiClient.delete(API_ENDPOINTS.ORG.FLOOR(floor.floor_id));
       toastSuccess("Floor removed.");
-      if (String(selectedFloorId) === String(floor.id)) setSelectedFloorId("");
+      if (String(selectedFloorId) === String(floor.floor_id)) setSelectedFloorId("");
       fetchFloors();
     } catch (err) { toastApiError(err, "Failed to remove floor."); }
   }
@@ -938,102 +602,40 @@ export default function RoomsPage() {
   }
 
   // ── Room CRUD ──
-  async function handleCreateRoom(form, isBedBased) {
+  async function handleCreateRoom(form) {
     setSaving(true);
     try {
       await apiClient.post(API_ENDPOINTS.ORG.ROOMS, {
         branch: Number(form.branch), name: form.name, room_type: form.room_type,
         floor_obj: Number(form.floor_obj),
         department: form.department ? Number(form.department) : null,
-        capacity: isBedBased && form.capacity ? Number(form.capacity) : null,
       });
       toastSuccess(`Room "${form.name}" created.`);
-      setModal(null); fetchRoomsAndBeds();
+      setModal(null); fetchRooms();
     } catch (err) { toastApiError(err, "Failed to create room."); }
     finally { setSaving(false); }
   }
-  async function handleUpdateRoom(form, isBedBased) {
+  async function handleUpdateRoom(form) {
     setSaving(true);
     try {
-      await apiClient.patch(API_ENDPOINTS.ORG.ROOM(editing.id), {
+      await apiClient.patch(API_ENDPOINTS.ORG.ROOM(editing.room_id), {
         branch: Number(form.branch), name: form.name, room_type: form.room_type,
         floor_obj: Number(form.floor_obj),
         department: form.department ? Number(form.department) : null,
-        capacity: isBedBased && form.capacity ? Number(form.capacity) : null,
       });
       toastSuccess("Room updated.");
-      setModal(null); setEditing(null); fetchRoomsAndBeds();
+      setModal(null); setEditing(null); fetchRooms();
     } catch (err) { toastApiError(err, "Failed to update room."); }
     finally { setSaving(false); }
   }
   async function handleDeactivateRoom(room) {
-    if (!confirm(`Remove room "${room.name}"? Any doctor assignments or beds for it will be left as-is.`)) return;
+    if (!confirm(`Remove room "${room.name}"? Any doctor assignments for it will be left as-is.`)) return;
     try {
-      await apiClient.delete(API_ENDPOINTS.ORG.ROOM(room.id));
+      await apiClient.delete(API_ENDPOINTS.ORG.ROOM(room.room_id));
       toastSuccess("Room removed.");
-      fetchRoomsAndBeds();
+      fetchRooms();
     } catch (err) { toastApiError(err, "Failed to remove room."); }
   }
-
-  // ── Bed CRUD ──
-  async function handleCreateBed(form) {
-    setSaving(true);
-    try {
-      await apiClient.post(API_ENDPOINTS.ORG.BEDS, { room: Number(bedsModalRoom.id), bed_number: form.bed_number });
-      toastSuccess(`Bed "${form.bed_number}" added to ${bedsModalRoom.name}.`);
-      setModal("beds"); setEditing(null); fetchRoomsAndBeds();
-    } catch (err) { toastApiError(err, "Failed to add bed."); }
-    finally { setSaving(false); }
-  }
-  async function handleUpdateBed(form) {
-    setSaving(true);
-    try {
-      await apiClient.patch(API_ENDPOINTS.ORG.BED(editing.id), { bed_number: form.bed_number });
-      toastSuccess("Bed updated.");
-      setModal("beds"); setEditing(null); fetchRoomsAndBeds();
-    } catch (err) { toastApiError(err, "Failed to update bed."); }
-    finally { setSaving(false); }
-  }
-  async function handleRemoveBed(bed) {
-    if (!confirm(`Remove bed "${bed.bed_number}"?`)) return;
-    try {
-      await apiClient.delete(API_ENDPOINTS.ORG.BED(bed.id));
-      toastSuccess("Bed removed.");
-      fetchRoomsAndBeds();
-    } catch (err) { toastApiError(err, "Failed to remove bed."); }
-  }
-
-  function handleExportBedList() {
-    if (!bedsModalRoom) return;
-    const rows = [
-      ["Bed Number", "Status", "Is Active", "Patient", "UHID", "Admitted", "Expected Discharge"],
-      ...bedsInModalRoom.map(b => [
-        b.bed_number,
-        bedStatusMeta(b.status).label,
-        b.is_active ? "Active" : "Inactive",
-        b.current_admission?.patient_name || "",
-        b.current_admission?.patient_uhid || "",
-        b.current_admission ? formatDateTime(b.current_admission.admitted_at) : "",
-        b.current_admission?.expected_discharge_date ? formatDate(b.current_admission.expected_discharge_date) : "",
-      ]),
-    ];
-    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${bedsModalRoom.name.replace(/\s+/g, "_")}_beds.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }
-
-  // Room Type add-form's extra fields (category + bed-based) — see
-  const roomTypeExtraFields = [
-    { name: "category", type: "select", label: "Category", options: ROOM_TYPE_CATEGORY_OPTIONS, default: "opd" },
-    { name: "is_bed_based", type: "checkbox", label: "Bed-based (IPD)", default: false },
-  ];
 
   return (
     <AppShell>
@@ -1042,7 +644,7 @@ export default function RoomsPage() {
           <div>
             <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800 }}>Rooms & Floors</h1>
             <div style={{ fontSize: 13, color: "var(--color-text-muted)", marginTop: 4 }}>
-              Manage floors, rooms and beds{branches.find(b => String(b.id) === String(branchId)) ? ` for ${branches.find(b => String(b.id) === String(branchId)).name}` : ""}
+              Manage floors and rooms{branches.find(b => String(b.branch_id) === String(branchId)) ? ` for ${branches.find(b => String(b.branch_id) === String(branchId)).name}` : ""}
             </div>
           </div>
           <BranchSelector branches={branches} value={branchId} onChange={handleBranchChange} />
@@ -1051,9 +653,6 @@ export default function RoomsPage() {
         <div style={{ display: "flex", gap: 16, margin: "20px 0", flexWrap: "wrap" }}>
           <StatCard icon={Building2} value={floors.length} label="Total Floors" />
           <StatCard icon={DoorOpen} value={rooms.length} label="Total Rooms" />
-          <StatCard icon={BedIcon} value={beds.length} label="Total Beds" />
-          <StatCard icon={BedIcon} value={bedStatusTotals.available} label="Available Beds" iconBg="#e3f7ec" iconColor="#1a7f37" />
-          <StatCard icon={BedIcon} value={bedStatusTotals.occupied} label="Occupied Beds" iconBg="#fde8e8" iconColor="#c0362c" />
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 20, alignItems: "start" }}>
@@ -1075,10 +674,10 @@ export default function RoomsPage() {
                 </div>
               ) : (
                 floors.map(f => (
-                  <FloorListItem key={f.id} floor={f}
-                    roomCount={rooms.filter(r => String(r.floor_obj) === String(f.id)).length}
-                    selected={String(selectedFloorId) === String(f.id)}
-                    onSelect={() => setSelectedFloorId(String(f.id))} />
+                  <FloorListItem key={f.floor_id} floor={f}
+                    roomCount={rooms.filter(r => String(r.floor_obj) === String(f.floor_id)).length}
+                    selected={String(selectedFloorId) === String(f.floor_id)}
+                    onSelect={() => setSelectedFloorId(String(f.floor_id))} />
                 ))
               )}
             </div>
@@ -1094,29 +693,18 @@ export default function RoomsPage() {
                 </button>
               </div>
               <div style={{ fontSize: 11.5, color: "var(--color-text-muted)", margin: "4px 0 14px" }}>
-                One catalog for every kind of room — OPD (Consultation, Procedure…) and bed-based IPD (General Ward, ICU…) alike.
+                One catalog for every kind of room — Consultation, Procedure and so on.
               </div>
               <DropdownListEditor
                 title="" compact
                 listEndpoint={API_ENDPOINTS.BILLING.ROOM_TYPES}
                 itemEndpoint={API_ENDPOINTS.BILLING.ROOM_TYPE}
                 identityField="value"
-                extraFields={roomTypeExtraFields}
                 showAddForm={roomTypeAddOpen}
                 onAdded={() => setRoomTypeAddOpen(false)}
                 onChange={fetchRoomTypes}
                 dotColorForIndex={(i) => TYPE_COLOR_PALETTE[i % TYPE_COLOR_PALETTE.length].text}
-                badgeForItem={(item) => (
-                  <span style={{
-                    fontSize: 9.5, fontWeight: 700, padding: "1px 6px", borderRadius: 999,
-                    background: "var(--color-bg)", border: "1px solid var(--color-border)", color: "var(--color-text-muted)",
-                    textTransform: "uppercase", letterSpacing: "0.03em",
-                  }}>
-                    {item.is_bed_based ? "Beds" : (item.category || "OPD")}
-                  </span>
-                )}
               />
-              <RoomTypeRatesEditor roomTypes={roomTypes} onSaved={fetchRoomTypes} />
             </div>
           </div>
 
@@ -1163,10 +751,9 @@ export default function RoomsPage() {
                 {loadingRooms ? (
                   <div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>Loading…</div>
                 ) : (
-                  <RoomsTable rooms={roomsOnFloor} roomTypes={roomTypes} bedsByRoom={bedsByRoom}
+                  <RoomsTable rooms={roomsOnFloor} roomTypes={roomTypes}
                     onEdit={(r) => { setEditing(r); setModal("room"); }}
-                    onDeactivate={handleDeactivateRoom}
-                    onManageBeds={(r) => { setBedsModalRoom(r); setModal("beds"); }} />
+                    onDeactivate={handleDeactivateRoom} />
                 )}
               </>
             )}
@@ -1178,8 +765,7 @@ export default function RoomsPage() {
             <RoomForm branches={branches} floors={floors} roomTypes={roomTypes} departments={departments}
               initial={editing
                 ? { ...editing, branch: String(editing.branch), floor_obj: editing.floor_obj ? String(editing.floor_obj) : "",
-                    department: editing.department ? String(editing.department) : "",
-                    capacity: editing.capacity != null ? String(editing.capacity) : "" }
+                    department: editing.department ? String(editing.department) : "" }
                 : { ...EMPTY_ROOM, branch: branchId, floor_obj: selectedFloorId }}
               onSave={editing ? handleUpdateRoom : handleCreateRoom}
               onCancel={() => { setModal(null); setEditing(null); }} saving={saving} />
@@ -1195,39 +781,6 @@ export default function RoomsPage() {
           </Modal>
         )}
 
-        {modal === "beds" && bedsModalRoom && (
-          <Modal title={`${bedsModalRoom.name} — Beds`} width={720} onClose={() => { setModal(null); setBedsModalRoom(null); }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
-              <div style={{ fontSize: 12.5, color: "var(--color-text-muted)" }}>
-                {bedsModalRoomTypeMeta?.label} · {bedsLabel(bedsModalRoom, true)}
-                {bedCapacityReached(bedsModalRoom, true) && <span style={{ color: "var(--color-text-muted)", fontWeight: 700 }}> · At capacity</span>}
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button type="button" onClick={handleExportBedList}
-                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, border: "1.5px solid var(--color-border)", background: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>
-                  <Download size={13} /> Export
-                </button>
-                <button className="btn-primary" style={{ fontSize: 12.5, padding: "7px 14px", opacity: bedCapacityReached(bedsModalRoom, true) ? 0.5 : 1, cursor: bedCapacityReached(bedsModalRoom, true) ? "default" : "pointer" }}
-                  disabled={bedCapacityReached(bedsModalRoom, true)}
-                  title={bedCapacityReached(bedsModalRoom, true) ? "This room is at full capacity — increase its capacity or remove a bed first." : undefined}
-                  onClick={() => { setEditing(null); setModal("bed"); }}>
-                  + Add Bed
-                </button>
-              </div>
-            </div>
-            <BedsTable beds={bedsInModalRoom}
-              onEdit={(b) => { setEditing(b); setModal("bed"); }}
-              onRemove={handleRemoveBed} />
-          </Modal>
-        )}
-
-        {modal === "bed" && (
-          <Modal title={editing ? "Edit Bed" : `Add Bed — ${bedsModalRoom?.name || ""}`} onClose={() => { setModal("beds"); setEditing(null); }}>
-            <BedForm initial={editing || null}
-              onSave={editing ? handleUpdateBed : handleCreateBed}
-              onCancel={() => { setModal("beds"); setEditing(null); }} saving={saving} />
-          </Modal>
-        )}
       </PageShell>
     </AppShell>
   );

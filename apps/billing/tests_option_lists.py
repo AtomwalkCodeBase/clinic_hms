@@ -3,7 +3,6 @@
 from core.tests.testing import HospitalDBTestCase, requires_hospital_db
 
 from apps.billing.views import ServiceCategoryListCreateView
-from apps.ipd.views import AdmissionTypeListCreateView
 from apps.opd.views import AppointmentTypeListCreateView
 
 
@@ -13,7 +12,7 @@ class OptionListViewTests(HospitalDBTestCase):
         return self.call_view(view.as_view(), "get", "/x/", user_id=1, role=role)
 
     def test_list_endpoints_built_on_the_shared_views_still_work(self):
-        for view in (ServiceCategoryListCreateView, AdmissionTypeListCreateView, AppointmentTypeListCreateView):
+        for view in (ServiceCategoryListCreateView, AppointmentTypeListCreateView):
             with self.subTest(view=view.__name__):
                 resp = self.get(view)
                 self.assertEqual(resp.status_code, 200)

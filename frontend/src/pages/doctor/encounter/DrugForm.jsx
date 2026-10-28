@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { EMPTY_DRUG, FREQ_LABELS, ROUTE_LABELS } from "./constants";
-import { DrugNameSearch } from "./DrugNameSearch";
 
 export function DrugForm({ onSave, disabled }) {
   const [d, setD] = useState(EMPTY_DRUG);
-  function upd(k, v) { setD(p => ({ ...p, [k]: v, ...(k === "drug_name" ? { drug: null } : {}) })); }
+  function upd(k, v) { setD(p => ({ ...p, [k]: v })); }
 
   function submit(e) {
     e.preventDefault();
@@ -18,17 +17,7 @@ export function DrugForm({ onSave, disabled }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
         <div>
           <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>DRUG NAME *</label>
-          <DrugNameSearch
-            value={d.drug_name}
-            onChange={v => upd("drug_name", v)}
-            onSelectCatalog={c => setD(p => ({
-              ...p,
-              drug: c.id,
-              drug_name: c.strength ? `${c.name} ${c.strength}` : c.name,
-              dosage: c.strength || p.dosage,
-            }))}
-            disabled={disabled}
-          />
+          <input className="form-input" value={d.drug_name} onChange={e => upd("drug_name", e.target.value)} placeholder="e.g. Paracetamol 500mg" required disabled={disabled} />
         </div>
         <div>
           <label style={{ fontSize: 11, fontWeight: 700, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>DOSE *</label>

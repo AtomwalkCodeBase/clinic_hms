@@ -29,7 +29,7 @@ class StaffVaccineActionTests(HospitalDBTestCase):
     def test_an_ordered_dose_can_then_be_given(self):
         self.act(vax_views.PatientVaccinationOrderView, "doctor", vaccine_name="MMR", reason="due")
         record = V.objects.using("default").get()
-        self.act(vax_views.PatientVaccinationAdministerView, "nurse", record_id=record.id)
+        self.act(vax_views.PatientVaccinationAdministerView, "nurse", record_id=record.pk)
         record.refresh_from_db()
         self.assertEqual(record.verification_status, V.STATUS_VERIFIED)
 

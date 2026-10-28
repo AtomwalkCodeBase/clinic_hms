@@ -41,7 +41,7 @@ function HistoryTable({ rows, role, navigate, docActions, tableClass }) {
       </thead>
       <tbody>
         {rows.map(r => (
-          <tr key={r.id}>
+          <tr key={r.appointment_id}>
             <td>
               <span style={{
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -72,7 +72,7 @@ function HistoryTable({ rows, role, navigate, docActions, tableClass }) {
                   {r.internal_note_available ? (
                     <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
                       <span style={{ fontWeight: 700, color: "var(--color-text-secondary)" }}>Internal note:</span>
-                      {docActions(r.encounter.id, null, API_ENDPOINTS.OPD.ENCOUNTER_INTERNAL_NOTE(r.encounter.id))}
+                      {docActions(r.encounter.opd_encounter_id, null, API_ENDPOINTS.OPD.ENCOUNTER_INTERNAL_NOTE(r.encounter.opd_encounter_id))}
                     </div>
                   ) : (
                     <span style={{ color: r.has_internal_note ? "var(--color-text-secondary)" : "var(--color-text-muted)" }}>
@@ -97,7 +97,7 @@ function HistoryTable({ rows, role, navigate, docActions, tableClass }) {
               <td>
                 {r.has_encounter ? (
                   <button className="btn-outline" style={{ fontSize: 11, padding: "5px 12px" }}
-                    onClick={() => navigate(ROUTES.DOCTOR.ENCOUNTER(r.encounter.id))}>
+                    onClick={() => navigate(ROUTES.DOCTOR.ENCOUNTER(r.encounter.opd_encounter_id))}>
                     View notes
                   </button>
                 ) : (

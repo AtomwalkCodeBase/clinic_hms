@@ -1,7 +1,7 @@
-"""Views for documents, the timeline, vaccination and growth, and the immunization and milestone schedules."""
+"""Views for documents, the timeline, vaccination and growth, and the immunization schedules."""
 import logging
 import time
-from apps.documents.models import DOMAIN_CHOICES, Schedule, ScheduleRule
+from apps.hospital_master.models import Schedule, ScheduleRule
 from apps.documents.lib_documents import text, staff_name
 from datetime import date
 from rest_framework.parsers import MultiPartParser
@@ -19,24 +19,24 @@ from core.api.permissions import (
 )
 from core.api.response import error, not_found, success, created
 from apps.documents.models import (
-    BirthHistory, DocumentBatch, ImmunizationRecord, MilestoneRecord,
+    BirthHistory, DocumentBatch, ImmunizationRecord,
 )
 from apps.documents.serializers import SubmitSerializer, UploadSerializer
 from apps.documents.lib_documents import BULK_QUEUE, INSTANT_QUEUE, awaiting_review_q, batch_summary, save_upload, start_processing, submit_decisions
 from rest_framework.throttling import ScopedRateThrottle
-from core.utils import qr_token as _qt
+from core import utils as _qt
 from core import storage as blob_storage
-from apps.documents.lib_roadmap import milestone_rule_dict, schedule_dict, template_dict, vaccination_rule_dict
-from core.utils.file_validation import validate_data_uri, FileValidationError
-from core.utils.age import age_years_months
+from apps.documents.lib_roadmap import schedule_dict, template_dict, vaccination_rule_dict
+from core.validation import validate_data_uri, FileValidationError
+from core.utils import age_years_months
 from apps.documents.lib_documents import PATIENT_NOT_FOUND, get_patient, parse_date, text as _text
 from apps.documents.lib_vitals import add_percentiles
 from apps.documents.lib_roadmap import active_schedule, rules_for, schedule_usage
 from apps.patients.models import Patient, PatientRelationship
-from apps.documents.lib_vitals import growth_points
-from core.utils.audit import log_action
-from apps.opd.patient_serializers import BirthHistorySerializer
-from apps.opd.patient_services import PatientService
+from apps.hospital_patients.vitals_service import growth_points
+from apps.hospital_setup.compliance_services import log_action
+from apps.hospital_patients.serializers import BirthHistorySerializer
+from apps.hospital_patients.services import PatientService
 from apps.patients.services import accounts
 from apps.documents import lib_documents as classification
 from apps.documents import lib_documents as records
@@ -65,15 +65,15 @@ class UploadView(APIView):
         started = time.monotonic()
         try:
             batch, docs = save_upload(awpid, files)
-            logger.info("records: batch %s — %d file(s) stored in %.1fs", batch.id, len(docs), time.monotonic() - started)
+            logger.info("records: batch %s — %d file(s) stored in %.1fs", batch.pk, len(docs), time.monotonic() - started)
         except Exception:
             logger.exception("records: upload to S3 failed")
             return error("Upload to storage failed — nothing was saved. Please try again.", status=503)
-        start_processing([d.id for d in docs], INSTANT_QUEUE if mode == "instant" else BULK_QUEUE)
-        docs = list(batch.b_documents.order_by("id"))      # fresh: a file that couldn't be queued is already "failed"
+        start_processing([d.pk for d in docs], INSTANT_QUEUE if mode == "instant" else BULK_QUEUE)
+        docs = list(batch.b_documents.order_by("pk"))      # fresh: a file that couldn't be queued is already "failed"
         return success(data={
-            "batch_id": batch.id, "mode": mode,
-            "documents": [{"id": d.id, "file_name": records.display_name(d), "processing_status": d.status} for d in docs],
+            "batch_id": batch.pk, "mode": mode,
+            "documents": [{"medical_document_id": d.pk, "file_name": records.display_name(d), "processing_status": d.status} for d in docs],
             "skipped": skipped,
         }, status=202)
 
@@ -113,6 +113,15 @@ class SubmitView(APIView):
             return error("Nothing was submitted - check the list and try again.", errors=serializer.errors)
         result = submit_decisions(awpid, serializer.validated_data["decisions"])
         from apps.documents.models import MedicalDocument
+        if result["submitted"]:
+            # What was read from these files now counts: refresh the patient's recurring conditions and growth scores
+            from apps.documents.tasks import rebuild_patient_task
+            patient_id = MedicalDocument.objects.using("default").filter(pk=result["submitted"][0]).values_list("patient_id", flat=True).first()
+            if patient_id:
+                try:
+                    rebuild_patient_task.delay(patient_id)
+                except Exception:
+                    logger.exception("the health journey was not refreshed after a submit (patient %s)", patient_id)
         result["counts"] = {"awaiting_review": MedicalDocument.objects.using("default")
                             .filter(awaiting_review_q(), patient__awpid=awpid,
                                     status__in=(MedicalDocument.Status.COMPLETED, MedicalDocument.Status.REVIEW_REQUIRED)).count()}
@@ -126,7 +135,7 @@ class DocumentViewView(APIView):
     throttle_scope = "view_report"
 
     def get(self, request, token):
-        v = _qt.verify(token)
+        v = _qt.verify_qr_token(token)
         if not v.ok or not v.awpid or not v.public_document_id:
             return error(message="This code is invalid.", status=400)
 
@@ -148,7 +157,7 @@ class DocumentViewView(APIView):
         try:
             file_url = blob_storage.signed_url(doc.file_name.name, download_name=records.display_name(doc) or None)
         except Exception:
-            logger.exception("view-report: signed_url failed for MedicalDocument id=%s", doc.id)
+            logger.exception("view-report: signed_url failed for MedicalDocument id=%s", doc.pk)
             return error(message="This document could not be opened right now. Please try again.", status=500)
 
         return success(data={
@@ -182,7 +191,7 @@ def _checked_numbers(rd, current=None):
 class _Kind:
     def __init__(self, noun, name_key, extra_key, extra_default, rule_dict, template_message):
         self.noun, self.name_key = noun, name_key
-        self.extra_key, self.extra_default = extra_key, extra_default   # dose_number (defaults to 1) / domain (required)
+        self.extra_key, self.extra_default = extra_key, extra_default   # dose_number (defaults to 1)
         self.rule_dict, self.template_message = rule_dict, template_message
         self.editable = [name_key, extra_key, "scheduled_label", "min_age_days", "max_age_days", "mandatory", "sort_order"]
 
@@ -195,8 +204,6 @@ class _Kind:
     def new_rule(self, rd, default_sort):
         """The field values for a new rule from a request dict, or None when it is missing something required."""
         if not rd.get(self.name_key) or not rd.get("scheduled_label") or rd.get("min_age_days") is None:
-            return None
-        if self.extra_default is None and rd.get(self.extra_key) not in dict(DOMAIN_CHOICES):
             return None
         numbers = _checked_numbers(rd)
         return {
@@ -211,21 +218,19 @@ class _Kind:
         return rules, [self.rule_dict(r) for r in rules]
 VACCINATION = _Kind("vaccination", "vaccine_name", "dose_number", 1,
                     vaccination_rule_dict, "Vaccination schedule template created.")
-MILESTONE = _Kind("milestone", "milestone", "domain", None,
-                  milestone_rule_dict, "Milestone schedule template created.")
 def _edit(kind, schedule, d):
     """Apply a PATCH body to a schedule and its rules. Returns how many rule changes were made. Raises _InvalidRule, before"""
     rules_in = [rd for rd in (d["rules"] if isinstance(d.get("rules"), list) else []) if isinstance(rd, dict)]
-    existing = {str(r.id): r for r in schedule.s_rules.all()}
+    existing = {str(r.pk): r for r in schedule.s_rules.all()}
     checked = {}
     for rd in rules_in:
         if rd.get("_delete"):
             continue
-        current = existing.get(str(rd.get("id"))) if rd.get("id") else None
+        current = existing.get(str(rd.get("immunization_schedule_rule_id"))) if rd.get("immunization_schedule_rule_id") else None
         if "min_age_days" in rd and rd["min_age_days"] in (None, ""):
             raise _InvalidRule("Minimum age is required.")
         checked[id(rd)] = _checked_numbers(rd, current) if (current or rd.get("min_age_days") is not None) else {}
-        if not rd.get("id"):
+        if not rd.get("immunization_schedule_rule_id"):
             kind.new_rule(rd, 0)                                    # also checks the rest of a new rule
 
     changed = []
@@ -243,7 +248,7 @@ def _edit(kind, schedule, d):
 
     touched = 0
     for rd in rules_in:
-        rid = rd.get("id")
+        rid = rd.get("immunization_schedule_rule_id")
         if rid and rd.get("_delete"):
             ScheduleRule.objects.using("default").filter(pk=rid, schedule=schedule).delete()
             touched += 1
@@ -268,7 +273,7 @@ def _clone_template(request, kind, template, name):
         name=name, description=template.description, owner_hospital_id=request.hospital_id, is_template=False, active=True)
     rules = list(kind.rules().filter(schedule=template).order_by("sort_order"))
     ScheduleRule.objects.using("default").bulk_create([
-        ScheduleRule(schedule=clone, item=r.item, dose_number=r.dose_number, domain=r.domain,
+        ScheduleRule(schedule=clone, item=r.item, dose_number=r.dose_number,
                   scheduled_label=r.scheduled_label, min_age_days=r.min_age_days, max_age_days=r.max_age_days,
                   mandatory=r.mandatory, sort_order=r.sort_order)
         for r in rules])
@@ -278,7 +283,7 @@ def _set_active(request, kind, schedule):
     from apps.hospital_master.models import Hospital
     hospital = Hospital.objects.using("default").filter(pk=request.hospital_id).first()
     if hospital:
-        kind.schedules().filter(owner_hospital_id=hospital.id).exclude(pk=schedule.pk).update(active=False)
+        kind.schedules().filter(owner_hospital_id=hospital.pk).exclude(pk=schedule.pk).update(active=False)
     return hospital
 # ── hospital admin ────────────────────────────────────────────────────────────────────────────────────────────────
 def hospital_views(kind):
@@ -287,7 +292,7 @@ def hospital_views(kind):
 
         def get(self, request):
             active = active_schedule(kind.noun, request.hospital_id)
-            active_id = active.id if active else None
+            active_id = active.pk if active else None
             own = kind.schedules().filter(owner_hospital_id=request.hospital_id).order_by("-created_at")
             templates = (kind.schedules()
                          .filter(owner_hospital_id__isnull=True, is_template=True, active=True).order_by("name"))
@@ -309,7 +314,7 @@ def hospital_views(kind):
             name = (request.data.get("name") or "").strip() or f"{template.name} (customized)"
             clone, rules = _clone_template(request, kind, template, name)
             label = "" if kind is VACCINATION else f"{kind.noun} "
-            return created(data=schedule_dict(clone, clone.id, len(rules)),
+            return created(data=schedule_dict(clone, clone.pk, len(rules)),
                            message=f"Cloned '{template.name}' and set as this hospital's active {label}schedule.")
 
     class Detail(APIView):
@@ -350,7 +355,7 @@ def hospital_views(kind):
                 return not_found("Hospital not found.")
             else:
                 kind.schedules().filter(pk=schedule.pk).update(active=True)
-            return success(data={"active_schedule_id": schedule.id},
+            return success(data={"active_schedule_id": schedule.pk},
                            message=f"'{schedule.name}' is now this hospital's active {kind.noun} schedule.")
 
     return ListCreate, Detail, Activate
@@ -366,7 +371,7 @@ def template_views(kind):
             templates = (kind.schedules()
                          .filter(owner_hospital_id__isnull=True, is_template=True).order_by("name"))
             using = schedule_usage(kind.noun)
-            return success(data=[template_dict(t, hospitals_using=using.get(t.id, 0)) for t in templates])
+            return success(data=[template_dict(t, hospitals_using=using.get(t.pk, 0)) for t in templates])
 
         def post(self, request):
             d = request.data
@@ -413,7 +418,7 @@ def template_views(kind):
             template = get_template(pk)
             if not template:
                 return not_found("Template not found.")
-            in_use = schedule_usage(kind.noun).get(template.id, 0)
+            in_use = schedule_usage(kind.noun).get(template.pk, 0)
             if in_use:
                 return error(
                     f"{in_use} hospital(s) currently have this template set as their active {kind.noun} schedule — "
@@ -424,9 +429,7 @@ def template_views(kind):
 
     return ListCreate, Detail
 VaccinationScheduleListCreateView, VaccinationScheduleDetailView, VaccinationScheduleActivateView = hospital_views(VACCINATION)
-MilestoneScheduleListCreateView, MilestoneScheduleDetailView, MilestoneScheduleActivateView = hospital_views(MILESTONE)
 VaccinationTemplateListCreateView, VaccinationTemplateDetailView = template_views(VACCINATION)
-MilestoneTemplateListCreateView, MilestoneTemplateDetailView = template_views(MILESTONE)
 
 
 V = ImmunizationRecord
@@ -447,7 +450,7 @@ def _refuse_certificate(data):
     if data.get("file_data"):
         return error("A certificate can't be attached to a dose record.", errors={"file_data": "Not supported."})
 def _given_json(record):
-    return {"id": record.id, "vaccine_name": record.vaccine_name, "administered_date": str(record.administered_date),
+    return {"immunization_record_id": record.pk, "vaccine_name": record.vaccine_name, "administered_date": str(record.administered_date),
             "verification_status": record.verification_status, "has_certificate": record.document_id is not None}
 # ── vaccinations ──────────────────────────────────────────────────────────────────────────────────────────────────
 class PatientVaccinationListCreateView(APIView):
@@ -462,9 +465,9 @@ class PatientVaccinationListCreateView(APIView):
             return not_found(PATIENT_NOT_FOUND)
         details = patient.get_patient_details()
         roadmap = build_roadmap(patient.awpid, details["date_of_birth"], rules_for("vaccination", request.hospital_id),
-                                viewer_hospital_id=request.hospital_id, hie_consent=patient.hie_consent_given)
+                                viewer_hospital_id=request.hospital_id)
         return success(data={"patient_name": details["full_name"], "date_of_birth": details["date_of_birth"],
-                             "consent_given": patient.hie_consent_given, "roadmap": roadmap})
+                             "roadmap": roadmap})
 
     def post(self, request, pk):
         patient = get_patient(request, pk)
@@ -501,7 +504,7 @@ class PatientVaccinationVerifyView(APIView):
         record.remarks = _text(request.data, "review_notes")[:200] or record.remarks
         record.source_hospital_id = record.source_hospital_id or request.hospital_id      # first hospital to review claims it
         record.save(using="default", update_fields=["verification_status", "remarks", "source_hospital_id", "updated_at"])
-        return success(data={"id": record.id, "verification_status": record.verification_status},
+        return success(data={"immunization_record_id": record.pk, "verification_status": record.verification_status},
                        message=f"Vaccination record {action}d.")
 class PatientVaccinationOrderView(APIView):
     """Doctor recommends a vaccine that isn't given yet. Body: {vaccine_name, reason, due_date?, scheduled_label?, dose_number?}"""
@@ -524,7 +527,7 @@ class PatientVaccinationOrderView(APIView):
             request, patient, vaccine_name=name, scheduled_label=_text(d, "scheduled_label"), remarks=reason,
             due_date=due_on, dose_number=d.get("dose_number") or None, administered_date=None,
             source=V.SOURCE_DOCTOR_ORDERED, verification_status=V.STATUS_ORDERED)
-        return created(data={"id": record.id, "vaccine_name": record.vaccine_name, "reason": record.remarks,
+        return created(data={"immunization_record_id": record.pk, "vaccine_name": record.vaccine_name, "reason": record.remarks,
                              "due_date": str(record.due_date) if record.due_date else None,
                              "verification_status": record.verification_status}, message="Vaccine order recorded.")
 class PatientVaccinationDeclineView(APIView):
@@ -552,7 +555,7 @@ class PatientVaccinationDeclineView(APIView):
         record.remarks = reason or record.remarks
         record.source_hospital_id = record.source_hospital_id or request.hospital_id
         record.save(using="default", update_fields=["verification_status", "remarks", "source_hospital_id", "updated_at"])
-        return success(data={"id": record.id, "vaccine_name": record.vaccine_name,
+        return success(data={"immunization_record_id": record.pk, "vaccine_name": record.vaccine_name,
                              "verification_status": record.verification_status}, message="Vaccine marked as not required.")
 class PatientVaccinationAdministerView(APIView):
     """Nurse or doctor marks a dose given today (or on administered_date)."""
@@ -625,7 +628,7 @@ class BirthHistoryView(APIView):
         bh = BirthHistory.objects.using("default").create(
             patient=shared, source_hospital_id=request.hospital_id, **serializer.validated_data)
         log_action(request, request.hospital_db, "birth_history.create", resource_type="BirthHistory",
-                   resource_id=bh.id, patient_id=patient, metadata={"replaced_other_hospitals_copy": None})
+                   resource_id=bh.pk, patient_id=patient, metadata={"replaced_other_hospitals_copy": None})
         return created(data=BirthHistorySerializer(bh).data, message="Birth history recorded.")
 
     def patch(self, request, pk):
@@ -644,62 +647,12 @@ class BirthHistoryView(APIView):
         changed = {f: [str(old), str(getattr(bh, f))] for f, old in before.items() if getattr(bh, f) != old}
         replaced = previous_hospital if previous_hospital not in (None, request.hospital_id) else None
         log_action(request, request.hospital_db, "birth_history.update", resource_type="BirthHistory",
-                   resource_id=bh.id, patient_id=patient,
+                   resource_id=bh.pk, patient_id=patient,
                    metadata={"changed": changed, "replaced_other_hospitals_copy": replaced})
         return success(data=BirthHistorySerializer(bh).data, message="Birth history updated.")
-class PatientMilestoneListCreateView(APIView):
-    """POST body: {domain, milestone, status ("achieved" | "not_yet" | "concern"), scheduled_label?, achieved_date?, assessed_date?, notes?}"""
-    permission_classes = [IsDoctorOrNurse]
-
-    def get(self, request, pk):
-        from apps.documents.lib_roadmap import milestone_roadmap_build_roadmap as build_roadmap
-
-        patient = get_patient(request, pk)
-        if not patient:
-            return not_found(PATIENT_NOT_FOUND)
-        details = patient.get_patient_details()
-        roadmap = build_roadmap(patient.awpid, details["date_of_birth"], rules_for("milestone", request.hospital_id),
-                                viewer_hospital_id=request.hospital_id, hie_consent=patient.hie_consent_given)
-        return success(data={"patient_name": details["full_name"], "date_of_birth": details["date_of_birth"],
-                             "consent_given": patient.hie_consent_given, "roadmap": roadmap})
-
-    def post(self, request, pk):
-        M = MilestoneRecord
-        patient = get_patient(request, pk)
-        if not patient:
-            return not_found(PATIENT_NOT_FOUND)
-        d = request.data
-        domain, milestone = text(d, "domain"), text(d, "milestone")
-        status = text(d, "status") or M.STATUS_ACHIEVED
-        if domain not in dict(M._meta.get_field("domain").choices):
-            return error("A valid domain is required.", errors={"domain": "Required/invalid."})
-        if not milestone:
-            return error("Milestone is required.", errors={"milestone": "Required."})
-        if status not in dict(M.STATUS_CHOICES):
-            return error("Invalid status.", errors={"status": "Invalid."})
-
-        achieved_on, err = parse_date(d.get("achieved_date"), "achieved_date", "Achieved date")
-        if err:
-            return err
-        assessed_on, err = parse_date(d.get("assessed_date"), "assessed_date", "Assessed date")
-        if err:
-            return err
-        # only an achieved milestone has an achieved date (today unless one is given)
-        achieved = (achieved_on or date.today()) if status == M.STATUS_ACHIEVED else None
-        record = M.objects.using("default").create(
-            patient=_shared_patient(patient), domain=domain, milestone=milestone, scheduled_label=text(d, "scheduled_label"),
-            status=status, achieved_date=achieved, assessed_date=assessed_on or date.today(),
-            notes=text(d, "notes"), recorded_by_name=staff_name(request), source_hospital_id=request.hospital_id)
-        return created(data={
-            "id": record.id, "domain": record.domain, "milestone": record.milestone, "status": record.status,
-            "achieved_date": str(record.achieved_date) if record.achieved_date else None,
-            "assessed_date": str(record.assessed_date) if record.assessed_date else None,
-        }, message="Milestone assessment recorded.")
-
-
 _MAX_CERTIFICATE_CHARS = 15_500_000      # about 11 MB of base64, the same cap as document uploads
 def _account(request):
-    return accounts().get(pk=request.user.id)
+    return accounts().get(pk=request.user.pk)
 # ── growth ────────────────────────────────────────────────────────────────────────────────────────────────────────
 class PortalGrowthView(APIView):
     """Readings come from growth_measurement and vitals (every hospital's visits), with source "clinic" or "home"."""
@@ -735,20 +688,6 @@ class PortalVaccinationListView(APIView):
         roadmap = build_roadmap(awpid, dob, rules_for("vaccination"))
         summary = summarize_roadmap(roadmap)
         return success(data={"date_of_birth": dob, "roadmap": roadmap, "completed_count": summary["completed_count"],
-                             "total_count": summary["total_count"], "next_recommended": summary["next_recommended"],
-                             "stats": summary["stats"]})
-class PortalMilestoneListView(APIView):
-    permission_classes = [IsPatient]
-
-    def get(self, request):
-        from apps.documents.lib_roadmap import milestone_roadmap_build_roadmap as build_roadmap, milestone_roadmap_summarize_roadmap as summarize_roadmap
-
-        awpid, dob, err = resolve_target_awpid_and_dob(request)
-        if err:
-            return err
-        roadmap = build_roadmap(awpid, dob, rules_for("milestone"))
-        summary = summarize_roadmap(roadmap)
-        return success(data={"date_of_birth": dob, "roadmap": roadmap, "achieved_count": summary["achieved_count"],
                              "total_count": summary["total_count"], "next_recommended": summary["next_recommended"],
                              "stats": summary["stats"]})
 # ── vaccination uploads ───────────────────────────────────────────────────────────────────────────────────────────
@@ -790,7 +729,7 @@ class PortalVaccinationUploadView(APIView):
             patient=Patient.objects.using("default").filter(awpid=awpid).first(), vaccine_name=name, scheduled_label=text(d, "scheduled_label"), administered_date=given_on,
             source=ImmunizationRecord.SOURCE_SELF_REPORTED, verification_status=ImmunizationRecord.STATUS_PENDING,
             file_name=file_name, mime_type=mime_type, file_data=file_key)
-        return success(data={"id": record.id, "vaccine_name": record.vaccine_name,
+        return success(data={"immunization_record_id": record.pk, "vaccine_name": record.vaccine_name,
                              "administered_date": str(record.administered_date),
                              "verification_status": record.verification_status},
                        message="Submitted. This will show as pending review until a doctor confirms it.")

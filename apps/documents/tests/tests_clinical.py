@@ -6,7 +6,7 @@ from django.test import TestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.documents import integration as ig, lib_clinical, views_timeline as views
-from apps.documents.models import DocumentExtraction, LabResult, MedicalDocument, SharedPrescriptionItem
+from apps.documents.models import DocumentExtraction, LabResult, MedicalDocument
 from apps.documents.tests.tests_timeline import child, document, with_config
 from core.api.authentication import MockUser
 
@@ -34,7 +34,6 @@ class LabTrendTests(TestCase):
         self.assertTrue(hb["points"][-1]["reference"])                      # the range for this age is shown
 
 
-
 @with_config
 class GapsAndMedicinesTests(TestCase):
     databases = {"default"}
@@ -50,15 +49,7 @@ class GapsAndMedicinesTests(TestCase):
         self.assertIn("could not be read", texts)
         self.assertIn("No weight or height has been recorded", texts)
         self.assertEqual(gaps["reports"]["FAILED"], 1)
-        self.assertEqual(gaps["items"][0]["documents"][0]["document_id"], doc.id)
-
-    def test_the_medicines_a_hospital_prescribed_are_listed_newest_first(self):
-        old = MedicalDocument.objects.create(patient=self.kid, document_ref_name="a", status="completed", document_date=date(2025, 1, 5))
-        new = MedicalDocument.objects.create(patient=self.kid, document_ref_name="b", status="completed", document_date=date(2026, 2, 9))
-        SharedPrescriptionItem.objects.create(document=old, drug_name="Amoxicillin", dose="250", unit="mg", frequency="BD", duration_days=5)
-        SharedPrescriptionItem.objects.create(document=new, drug_name="Salbutamol", dose="2", unit="puffs", frequency="SOS")
-        meds = lib_clinical.medication_history(self.kid)
-        self.assertEqual([m["drug_name"] for m in meds], ["Salbutamol", "Amoxicillin"])
+        self.assertEqual(gaps["items"][0]["documents"][0]["document_id"], doc.pk)
 
 
 @with_config
@@ -71,7 +62,7 @@ class AccessTests(TestCase):
         def get(view, role):
             request = APIRequestFactory().get("/x/")
             force_authenticate(request, user=MockUser({"user_id": 1, "role": role, "awpid": "AW-KID" if role == "patient" else None, "hospital_id": None if role == "patient" else 1}))
-            with mock.patch.object(ig, "can_view_patient", return_value=True), mock.patch.object(views, "_own_hospital_only", return_value=None):
+            with mock.patch.object(ig, "can_view_patient", return_value=True):
                 return view.as_view()(request, awpid=kid.awpid).status_code
         self.assertEqual(get(views.PatientClinicalSummaryView, "patient"), 403)
         self.assertEqual(get(views.PatientClinicalSummaryView, "doctor"), 200)
@@ -99,41 +90,6 @@ class OneResultListedOnceTests(TestCase):
 
 
 @with_config
-class NoConsentToShareTests(TestCase):
-    """A hospital whose patient has not agreed to share between hospitals sees only its own record, and the screens say so."""
-    databases = {"default"}
-
-    def test_the_timeline_says_it_is_limited_and_claims_nothing_about_vaccines(self):
-        from apps.documents import lib_processing
-        kid = child(years=3)
-        limited = lib_processing.build_timeline_payload(kid, kid.date_of_birth, date.today(), "doctor", hospital_id=1)
-        self.assertTrue(limited["sharing_limited"])
-        self.assertIsNone(limited["summary"]["vaccine_coverage_pct"])
-        self.assertEqual(limited["summary"]["vaccines_overdue"], 0)
-        self.assertNotIn("immunization", {lane["type"] for lane in limited["lanes"]})
-        full = lib_processing.build_timeline_payload(kid, kid.date_of_birth, date.today(), "doctor")
-        self.assertNotIn("sharing_limited", full)
-        self.assertIn("immunization", {lane["type"] for lane in full["lanes"]})
-
-    def test_the_vaccination_and_growth_views_follow_the_same_rule(self):
-        kid = child(years=3)
-        from apps.documents.models import GrowthMeasurement
-        GrowthMeasurement.objects.create(patient=kid, measured_on=date.today() - timedelta(days=30), weight_kg=14, source_hospital_id=None)
-
-        def get(view, **query):
-            request = APIRequestFactory().get("/x/", query)
-            force_authenticate(request, user=MockUser({"user_id": 1, "role": "doctor", "hospital_id": 1}))
-            with mock.patch.object(ig, "can_view_patient", return_value=True), mock.patch.object(views, "_own_hospital_only", return_value=1):
-                return view_call(view, request, kid.awpid)
-        view_call = lambda view, request, awpid: view.as_view()(request, awpid=awpid)          # noqa: E731
-        immunization = get(views.PatientImmunizationView).data
-        self.assertTrue(immunization["sharing_limited"])
-        self.assertEqual(immunization["rows"], [])
-        growth = get(views.PatientGrowthView, indicator="weight_kg").data
-        self.assertEqual(growth["points"], [])               # the reading came from no hospital that this one may see
-
-
-@with_config
 class GrowthReferenceNoteTests(TestCase):
     databases = {"default"}
 
@@ -141,7 +97,7 @@ class GrowthReferenceNoteTests(TestCase):
         kid = child(years=3)
         request = APIRequestFactory().get("/x/", {"indicator": "weight_kg"})
         force_authenticate(request, user=MockUser({"user_id": 1, "role": "doctor", "hospital_id": 1}))
-        with mock.patch.object(ig, "can_view_patient", return_value=True), mock.patch.object(views, "_own_hospital_only", return_value=None):
+        with mock.patch.object(ig, "can_view_patient", return_value=True):
             with mock.patch.object(views, "get_table", return_value=None):
                 self.assertEqual(views.PatientGrowthView.as_view()(request, awpid=kid.awpid).data["reference_note"], "WHO 2006 (0-5 y)")
             with mock.patch.object(views, "get_table", return_value=object()):

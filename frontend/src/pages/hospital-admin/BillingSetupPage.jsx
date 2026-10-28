@@ -169,7 +169,7 @@ function ServiceCatalog() {
   useEffect(() => { load(); }, [load]);
 
   function startEdit(svc) {
-    setEditingId(svc.id);
+    setEditingId(svc.billing_item_id);
     setForm({ name: svc.name, code: svc.code || "", category: svc.category, unit_price: svc.unit_price, tax_rate: svc.tax_rate });
   }
   function cancelEdit() {
@@ -205,7 +205,7 @@ function ServiceCatalog() {
   async function deactivate(svc) {
     if (!confirm(`Remove "${svc.name}" from the price catalog?`)) return;
     try {
-      await apiClient.delete(API_ENDPOINTS.BILLING.SERVICE(svc.id));
+      await apiClient.delete(API_ENDPOINTS.BILLING.SERVICE(svc.billing_item_id));
       toastSuccess("Service removed.");
       load();
     } catch (err) {
@@ -231,7 +231,7 @@ function ServiceCatalog() {
           <label style={labelStyle}>Category</label>
           <select style={inputStyle} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
             <option value="">Select…</option>
-            {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+            {categories.map(c => <option key={c.option_list_id} value={c.name}>{c.name}</option>)}
           </select>
         </div>
         <div>
@@ -259,7 +259,7 @@ function ServiceCatalog() {
       ) : (
         <div style={{ display: "grid", gap: 6 }}>
           {services.map(svc => (
-            <div key={svc.id} style={{
+            <div key={svc.billing_item_id} style={{
               display: "flex", alignItems: "center", justifyContent: "space-between",
               padding: "8px 12px", borderRadius: 8, background: "var(--color-surface)", border: "1px solid var(--color-border)",
             }}>

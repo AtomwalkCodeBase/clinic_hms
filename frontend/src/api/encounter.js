@@ -1,6 +1,6 @@
 import { http, API_ENDPOINTS } from "./http";
 
-const { OPD, PATIENTS, LAB, IPD } = API_ENDPOINTS;
+const { OPD, PATIENTS } = API_ENDPOINTS;
 
 /** Everything the doctor's consultation workspace (pages/doctor/EncounterPage) sends to the backend. */
 export const encounterApi = {
@@ -28,8 +28,6 @@ export const encounterApi = {
   transcribe: (formData) => http.post(OPD.TRANSCRIBE, formData, { headers: { "Content-Type": "multipart/form-data" } }),
 
   // investigations / referral
-  orderLabTests:      (encounterId, testIds) => http.post(LAB.REQUESTS, { encounter_id: encounterId, tests: testIds }),
-  recommendAdmission: (body)                 => http.post(IPD.REFERRAL_RECOMMEND, body),
 
   // pediatric / vaccination panels of the history sidebar
   orderVaccination:     (patientPk, body)  => http.post(PATIENTS.VACCINATION_ORDER(patientPk), body),
@@ -39,5 +37,4 @@ export const encounterApi = {
   verifyVaccination:    (recordId, action) => http.patch(PATIENTS.VACCINATION_VERIFY(recordId), { action }),
   saveBirthHistory:     (patientPk, body, exists) =>
     (exists ? http.patch : http.post)(PATIENTS.BIRTH_HISTORY(patientPk), body),
-  addMilestone:         (patientPk, body)  => http.post(PATIENTS.MILESTONES(patientPk), body),
 };

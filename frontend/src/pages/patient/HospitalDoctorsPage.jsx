@@ -212,12 +212,12 @@ export default function PatientHospitalDoctorsPage() {
             <div style={{ display: "grid", gap: 14 }}>
               {doctorPaging.pageItems.map(d => (
                 <DoctorCard
-                  key={d.id}
+                  key={d.staff_user_id}
                   d={d}
                   hospitalName={hospital?.name}
                   hospitalCity={hospital?.city}
-                  onBook={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(hospitalId, d.id))}
-                  onViewProfile={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(hospitalId, d.id))}
+                  onBook={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(hospitalId, d.staff_user_id))}
+                  onViewProfile={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(hospitalId, d.staff_user_id))}
                 />
               ))}
             </div>

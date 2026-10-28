@@ -61,7 +61,7 @@ function AuditLogTab() {
           </thead>
           <tbody>
             {rows.map(r => (
-              <tr key={r.id}>
+              <tr key={r.record_amendment_id}>
                 <td style={{ fontSize: 12 }}>{fmtDate(r.created_at)}</td>
                 <td style={{ fontSize: 12 }}>
                   {r.actor_email || "—"}
@@ -129,7 +129,7 @@ function AmendmentsTab() {
       ) : (
         <div style={{ display: "grid", gap: 0 }}>
           {rows.map(r => (
-            <div key={r.id} style={{ padding: "16px 20px", borderBottom: "1px solid var(--color-border)" }}>
+            <div key={r.record_amendment_id} style={{ padding: "16px 20px", borderBottom: "1px solid var(--color-border)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 700 }}>
@@ -163,15 +163,15 @@ function AmendmentsTab() {
                   <input
                     className="form-input" style={{ flex: 1, minWidth: 200, fontSize: 12 }}
                     placeholder="Review notes (optional)"
-                    value={noteDraft[r.id] || ""}
-                    onChange={e => setNoteDraft(d => ({ ...d, [r.id]: e.target.value }))}
+                    value={noteDraft[r.record_amendment_id] || ""}
+                    onChange={e => setNoteDraft(d => ({ ...d, [r.record_amendment_id]: e.target.value }))}
                   />
                   <button className="btn-primary" style={{ fontSize: 12, padding: "6px 14px", display: "flex", alignItems: "center", gap: 6 }}
-                    disabled={busyId === r.id} onClick={() => resolve(r.id, "approved")}>
+                    disabled={busyId === r.record_amendment_id} onClick={() => resolve(r.record_amendment_id, "approved")}>
                     <Check size={13} /> Approve
                   </button>
                   <button className="btn-outline" style={{ fontSize: 12, padding: "6px 14px", display: "flex", alignItems: "center", gap: 6 }}
-                    disabled={busyId === r.id} onClick={() => resolve(r.id, "rejected")}>
+                    disabled={busyId === r.record_amendment_id} onClick={() => resolve(r.record_amendment_id, "rejected")}>
                     <X size={13} /> Reject
                   </button>
                 </div>
@@ -190,56 +190,6 @@ function AmendmentsTab() {
   );
 }
 
-/* ── Consent Records tab ──────────────────────────────────────────────── */
-function ConsentsTab() {
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-  const [patientId, setPatientId] = useState("");
-
-  const { data, isLoading } = useApi(API_ENDPOINTS.COMPLIANCE.CONSENTS, {
-    params: { page, page_size: pageSize, patient_id: patientId || undefined },
-  });
-  const rows = data?.results || [];
-  const pagination = data?.pagination || null;
-
-  return (
-    <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: "1px solid var(--color-border)", flexWrap: "wrap", gap: 10 }}>
-        <span className="dot-label dot-label--green">
-          Consent proof trail — DPDP data processing + cross-hospital sharing
-        </span>
-        <input
-          className="form-input" style={{ width: 160 }} placeholder="Filter by patient ID"
-          value={patientId} onChange={e => { setPatientId(e.target.value); setPage(1); }}
-        />
-      </div>
-      {isLoading ? (
-        <div style={{ padding: 40, textAlign: "center", color: "var(--color-text-muted)" }}>Loading…</div>
-      ) : rows.length === 0 ? (
-        <div style={{ padding: 40, textAlign: "center", color: "var(--color-text-muted)", fontSize: 13 }}>No consent records match this filter.</div>
-      ) : (
-        <table className="data-table">
-          <thead>
-            <tr><th>When</th><th>Patient</th><th>Type</th><th>Source</th><th>Recorded by</th><th>Policy</th></tr>
-          </thead>
-          <tbody>
-            {rows.map(r => (
-              <tr key={r.id}>
-                <td style={{ fontSize: 12 }}>{fmtDate(r.created_at)}</td>
-                <td style={{ fontSize: 12 }}>{r.patient_name} <span style={{ color: "var(--color-text-muted)" }}>· {r.patient_uhid}</span></td>
-                <td style={{ fontSize: 12 }}>{r.consent_type_display}</td>
-                <td style={{ fontSize: 12 }}>{r.source_display}</td>
-                <td style={{ fontSize: 12 }}>{r.recorded_by_name || <em style={{ color: "var(--color-text-muted)" }}>patient (self)</em>}</td>
-                <td style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{r.policy_version}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      <PaginationControls pagination={pagination} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
-    </div>
-  );
-}
 
 export default function CompliancePage() {
   const [tab, setTab] = useState("amendments");
@@ -247,14 +197,13 @@ export default function CompliancePage() {
   const tabs = [
     ["amendments", "Correction Requests", FileClock],
     ["audit", "Audit Log", FileSearch],
-    ["consents", "Consent Records", ShieldCheck],
   ];
 
   return (
     <AppShell>
       <PageShell title="Compliance">
         <div style={{ fontSize: 12.5, color: "var(--color-text-muted)", marginBottom: 16, marginTop: -8 }}>
-          DPDP Act 2023 — access audit trail, correction requests, and consent proof.
+          DPDP Act 2023 — access audit trail and correction requests.
         </div>
         <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
           {tabs.map(([val, label, Icon]) => (
@@ -268,7 +217,6 @@ export default function CompliancePage() {
 
         {tab === "amendments" && <AmendmentsTab />}
         {tab === "audit" && <AuditLogTab />}
-        {tab === "consents" && <ConsentsTab />}
       </PageShell>
     </AppShell>
   );

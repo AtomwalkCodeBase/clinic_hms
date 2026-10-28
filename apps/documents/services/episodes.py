@@ -2,7 +2,7 @@
 Episode grouping and recurrent-episode detection.
 
 ClinicalEvent  = "this condition was mentioned in this document on this date"
-HealthEpisode  = the real-world illness instance the events belong to
+Episode        = the real-world illness instance the events belong to (built on demand, never stored)
 
 Rules
 -----

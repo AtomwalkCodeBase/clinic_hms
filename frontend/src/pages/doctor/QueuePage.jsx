@@ -145,14 +145,14 @@ export default function DoctorQueuePage() {
   }, [refetch, refetchUpcoming, toastSuccess, toastApiError]);
 
   const startEncounter = useCallback(async (appt) => {
-    setActionLoading(appt.id + "start");
+    setActionLoading(appt.appointment_id + "start");
     try {
       // Create encounter — the backend moves status to in_progress automatically
       const { data } = await apiClient.post(API_ENDPOINTS.OPD.ENCOUNTERS, {
-        appointment_id: appt.id,
+        appointment_id: appt.appointment_id,
         patient_id:     appt.patient_id,
       });
-      const encId = data?.id || data?.data?.id;
+      const encId = data?.opd_encounter_id || data?.data?.opd_encounter_id;
       navigate(`/doctor/encounter/${encId}`);
     } catch (err) {
       toastApiError(err, "Could not start encounter.");
@@ -230,7 +230,7 @@ export default function DoctorQueuePage() {
                 <label className="stat-label" style={{ display: "block", marginBottom: 5 }}>Room</label>
                 <select className="form-input" style={{ appearance: "auto" }} value={todayRoomFilter} onChange={e => setTodayRoomFilter(e.target.value)}>
                   <option value="">Any room</option>
-                  {rooms.map(r => <option key={r.id} value={r.id}>{r.name}{r.floor ? ` (Fl ${r.floor})` : ""}</option>)}
+                  {rooms.map(r => <option key={r.room_id} value={r.room_id}>{r.name}{r.floor ? ` (Fl ${r.floor})` : ""}</option>)}
                 </select>
               </div>
               {hasActiveTodayFilters && (
@@ -272,9 +272,9 @@ export default function DoctorQueuePage() {
               </thead>
               <tbody>
                 {appointments.map(appt => {
-                  const busy = actionLoading?.startsWith(appt.id);
+                  const busy = actionLoading?.startsWith(appt.appointment_id);
                   return (
-                    <tr key={appt.id}>
+                    <tr key={appt.appointment_id}>
                       <td>
                         <span style={{
                           display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -329,7 +329,7 @@ export default function DoctorQueuePage() {
                               className="btn-primary"
                               style={{ fontSize: 11, padding: "5px 12px" }}
                               disabled={busy}
-                              onClick={() => navigate(`/doctor/encounter/${appt.encounter?.id || appt.id}`)}
+                              onClick={() => navigate(`/doctor/encounter/${appt.encounter?.opd_encounter_id || appt.appointment_id}`)}
                             >
                               Open Notes
                             </button>
@@ -339,7 +339,7 @@ export default function DoctorQueuePage() {
                               className="btn-outline"
                               style={{ fontSize: 11, padding: "5px 12px" }}
                               disabled={busy}
-                              onClick={() => moveStatus(appt.id, "waiting")}
+                              onClick={() => moveStatus(appt.appointment_id, "waiting")}
                             >
                               Check In
                             </button>
@@ -430,7 +430,7 @@ export default function DoctorQueuePage() {
                 <label className="stat-label" style={{ display: "block", marginBottom: 5 }}>Room</label>
                 <select className="form-input" style={{ appearance: "auto" }} value={roomFilter} onChange={e => setRoomFilter(e.target.value)}>
                   <option value="">Any room</option>
-                  {rooms.map(r => <option key={r.id} value={r.id}>{r.name}{r.floor ? ` (Fl ${r.floor})` : ""}</option>)}
+                  {rooms.map(r => <option key={r.room_id} value={r.room_id}>{r.name}{r.floor ? ` (Fl ${r.floor})` : ""}</option>)}
                 </select>
               </div>
               <div>
@@ -484,7 +484,7 @@ export default function DoctorQueuePage() {
                   </thead>
                   <tbody>
                     {group.items.map(a => (
-                      <tr key={a.id}>
+                      <tr key={a.appointment_id}>
                         <td style={{ fontSize: 12 }}>{formatDateLabel(a.scheduled_date)}</td>
                         <td style={{ fontSize: 12, fontWeight: 700 }}>{a.scheduled_time ? a.scheduled_time.slice(0, 5) : "—"}</td>
                         <td style={{ fontSize: 12, fontWeight: 700, color: "var(--color-primary)" }}>{a.token_number}</td>

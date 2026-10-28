@@ -1,0 +1,742 @@
+[
+{
+ "model": "hospital_setup.branch",
+ "pk": 1,
+ "fields": {
+  "name": "MahaNandi Hospitals - Broookefield",
+  "branch_code": null,
+  "address": "AECS Layout",
+  "city": "Bengaluru",
+  "state": "Karnataka",
+  "pincode": "560037",
+  "phone": "9000000000",
+  "lat": null,
+  "lng": null,
+  "is_active": true,
+  "created_at": "2026-10-28T10:31:57.449Z",
+  "updated_at": "2026-10-28T10:31:57.449Z"
+ }
+},
+{
+ "model": "hospital_setup.nextnumber",
+ "pk": 1,
+ "fields": {
+  "branch": null,
+  "entity": "employee_id",
+  "prefix": "EMP-",
+  "last_number": 5,
+  "pad_length": 6,
+  "updated_at": "2026-10-28T10:30:57.538Z"
+ }
+},
+{
+ "model": "hospital_setup.nextnumber",
+ "pk": 2,
+ "fields": {
+  "branch": 1,
+  "entity": "uhid",
+  "prefix": "UHID-",
+  "last_number": 0,
+  "pad_length": 6,
+  "updated_at": "2026-10-28T10:31:57.465Z"
+ }
+},
+{
+ "model": "hospital_setup.nextnumber",
+ "pk": 3,
+ "fields": {
+  "branch": 1,
+  "entity": "invoice",
+  "prefix": "INV-",
+  "last_number": 0,
+  "pad_length": 6,
+  "updated_at": "2026-10-28T10:31:57.465Z"
+ }
+},
+{
+ "model": "hospital_setup.nextnumber",
+ "pk": 4,
+ "fields": {
+  "branch": 1,
+  "entity": "prescription",
+  "prefix": "RX-",
+  "last_number": 0,
+  "pad_length": 6,
+  "updated_at": "2026-10-28T10:31:57.481Z"
+ }
+},
+{
+ "model": "hospital_setup.nextnumber",
+ "pk": 5,
+ "fields": {
+  "branch": 1,
+  "entity": "queue",
+  "prefix": "Q-",
+  "last_number": 0,
+  "pad_length": 4,
+  "updated_at": "2026-10-28T10:31:57.481Z"
+ }
+},
+{
+ "model": "hospital_setup.floor",
+ "pk": 1,
+ "fields": {
+  "branch": 1,
+  "name": "Ground",
+  "level": 0,
+  "is_active": true,
+  "created_at": "2026-10-28T10:31:57.514Z",
+  "updated_at": "2026-10-28T10:31:57.514Z"
+ }
+},
+{
+ "model": "hospital_setup.department",
+ "pk": 1,
+ "fields": {
+  "name": "General",
+  "department_code": null,
+  "is_active": true,
+  "created_at": "2026-10-28T10:31:57.503Z",
+  "updated_at": "2026-10-28T10:31:57.503Z"
+ }
+},
+{
+ "model": "hospital_setup.department",
+ "pk": 2,
+ "fields": {
+  "name": "Pediatrics",
+  "department_code": null,
+  "is_active": true,
+  "created_at": "2026-10-28T10:34:06.852Z",
+  "updated_at": "2026-10-28T10:34:06.852Z"
+ }
+},
+{
+ "model": "hospital_setup.branchdepartment",
+ "pk": 1,
+ "fields": {
+  "branch": 1,
+  "department": 1,
+  "floor": 1,
+  "is_active": true,
+  "created_at": "2026-10-28T10:31:57.514Z",
+  "updated_at": "2026-10-28T10:31:57.514Z"
+ }
+},
+{
+ "model": "hospital_setup.branchdepartment",
+ "pk": 2,
+ "fields": {
+  "branch": 1,
+  "department": 2,
+  "floor": 1,
+  "is_active": true,
+  "created_at": "2026-10-28T10:34:06.877Z",
+  "updated_at": "2026-10-28T10:34:06.877Z"
+ }
+},
+{
+ "model": "hospital_setup.usergroup",
+ "pk": 1,
+ "fields": {
+  "name": "Doctor",
+  "role": "d",
+  "is_active": true
+ }
+},
+{
+ "model": "hospital_setup.usergroup",
+ "pk": 2,
+ "fields": {
+  "name": "Nurse",
+  "role": "n",
+  "is_active": true
+ }
+},
+{
+ "model": "hospital_setup.usergroup",
+ "pk": 3,
+ "fields": {
+  "name": "Front Desk",
+  "role": "f",
+  "is_active": true
+ }
+},
+{
+ "model": "hospital_setup.usergroup",
+ "pk": 4,
+ "fields": {
+  "name": "Admin (hospital admin)",
+  "role": "a",
+  "is_active": true
+ }
+},
+{
+ "model": "hospital_setup.usergroup",
+ "pk": 5,
+ "fields": {
+  "name": "All (single user, every permission)",
+  "role": "l",
+  "is_active": true
+ }
+},
+{
+ "model": "hospital_setup.staffuser",
+ "pk": 1,
+ "fields": {
+  "user_id": "7132e47d-af85-43a9-b1bb-d15a9b50af27",
+  "user_group": 4,
+  "department": null,
+  "phone": "9000000000",
+  "employee_id": "EMP-000001",
+  "date_of_birth": null,
+  "gender": "",
+  "photo": "",
+  "is_active": true,
+  "must_change_password": false,
+  "date_joined": "2026-10-28T10:30:58.297Z",
+  "registration_no": "",
+  "council_name": "",
+  "registration_expiry": null,
+  "qualification": "",
+  "experience_years": null,
+  "bio": "",
+  "languages": "",
+  "specialisation": "",
+  "consultation_fee": null,
+  "followup_fee": null,
+  "digital_signature": "",
+  "known_for": "",
+  "prescription_favourites": {},
+  "updated_at": "2026-10-28T11:17:52.439Z"
+ }
+},
+{
+ "model": "hospital_setup.staffuser",
+ "pk": 2,
+ "fields": {
+  "user_id": "9880b71e-a742-4099-92f2-387d7a322eba",
+  "user_group": 1,
+  "department": 1,
+  "phone": "8000010000",
+  "employee_id": "EMP-000002",
+  "date_of_birth": null,
+  "gender": "",
+  "photo": "",
+  "is_active": true,
+  "must_change_password": false,
+  "date_joined": "2026-10-28T10:33:43.045Z",
+  "registration_no": "",
+  "council_name": "",
+  "registration_expiry": null,
+  "qualification": "MBBS, MD (General Medicine)",
+  "experience_years": 7,
+  "bio": "",
+  "languages": "",
+  "specialisation": "General Physician",
+  "consultation_fee": "600.00",
+  "followup_fee": "250.00",
+  "digital_signature": "",
+  "known_for": "",
+  "prescription_favourites": {},
+  "updated_at": "2026-10-28T11:29:21.929Z"
+ }
+},
+{
+ "model": "hospital_setup.staffuser",
+ "pk": 3,
+ "fields": {
+  "user_id": "ce18c9be-6f88-4baa-ac60-b26881796cf0",
+  "user_group": 1,
+  "department": 2,
+  "phone": "8000020000",
+  "employee_id": "EMP-000003",
+  "date_of_birth": null,
+  "gender": "",
+  "photo": "",
+  "is_active": true,
+  "must_change_password": false,
+  "date_joined": "2026-10-28T10:35:32.621Z",
+  "registration_no": "",
+  "council_name": "",
+  "registration_expiry": null,
+  "qualification": "MBBS, MD (Pediatrics)",
+  "experience_years": 12,
+  "bio": "",
+  "languages": "",
+  "specialisation": "Pediatrics",
+  "consultation_fee": "700.00",
+  "followup_fee": "300.00",
+  "digital_signature": "",
+  "known_for": "",
+  "prescription_favourites": {},
+  "updated_at": "2026-10-28T11:29:21.916Z"
+ }
+},
+{
+ "model": "hospital_setup.staffuser",
+ "pk": 4,
+ "fields": {
+  "user_id": "7700e714-dbc4-4f03-804e-87a6d540aa96",
+  "user_group": 2,
+  "department": 1,
+  "phone": "8000030000",
+  "employee_id": "EMP-000004",
+  "date_of_birth": null,
+  "gender": "",
+  "photo": "",
+  "is_active": true,
+  "must_change_password": false,
+  "date_joined": "2026-10-28T10:36:13.597Z",
+  "registration_no": "",
+  "council_name": "",
+  "registration_expiry": null,
+  "qualification": "BSc Nursing",
+  "experience_years": 4,
+  "bio": "",
+  "languages": "",
+  "specialisation": "",
+  "consultation_fee": null,
+  "followup_fee": null,
+  "digital_signature": "",
+  "known_for": "",
+  "prescription_favourites": {},
+  "updated_at": "2026-10-28T10:37:56.264Z"
+ }
+},
+{
+ "model": "hospital_setup.staffuser",
+ "pk": 5,
+ "fields": {
+  "user_id": "155caba6-f39e-4541-8573-fbcfb36590ad",
+  "user_group": 3,
+  "department": 1,
+  "phone": "8000040000",
+  "employee_id": "EMP-000005",
+  "date_of_birth": null,
+  "gender": "",
+  "photo": "",
+  "is_active": true,
+  "must_change_password": false,
+  "date_joined": "2026-10-28T10:37:00.741Z",
+  "registration_no": "",
+  "council_name": "",
+  "registration_expiry": null,
+  "qualification": "BBA",
+  "experience_years": 2,
+  "bio": "",
+  "languages": "",
+  "specialisation": "",
+  "consultation_fee": null,
+  "followup_fee": null,
+  "digital_signature": "",
+  "known_for": "",
+  "prescription_favourites": {},
+  "updated_at": "2026-10-28T10:38:11.901Z"
+ }
+},
+{
+ "model": "hospital_setup.staffbranchassignment",
+ "pk": 1,
+ "fields": {
+  "staff": 2,
+  "branch": 1,
+  "is_primary": true,
+  "slot_duration_minutes": 15,
+  "weekly_hours": [
+   {
+    "end_time": "21:00",
+    "is_active": true,
+    "start_time": "09:00",
+    "day_of_week": 0
+   },
+   {
+    "end_time": "21:00",
+    "is_active": true,
+    "start_time": "09:00",
+    "day_of_week": 1
+   },
+   {
+    "end_time": "21:00",
+    "is_active": true,
+    "start_time": "09:00",
+    "day_of_week": 2
+   },
+   {
+    "end_time": "21:00",
+    "is_active": true,
+    "start_time": "09:00",
+    "day_of_week": 3
+   },
+   {
+    "end_time": "21:00",
+    "is_active": true,
+    "start_time": "09:00",
+    "day_of_week": 4
+   },
+   {
+    "end_time": "17:00",
+    "is_active": false,
+    "start_time": "09:00",
+    "day_of_week": 5
+   },
+   {
+    "end_time": "17:00",
+    "is_active": false,
+    "start_time": "09:00",
+    "day_of_week": 6
+   }
+  ],
+  "created_at": "2026-10-28T10:33:43.066Z",
+  "updated_at": "2026-10-28T10:33:43.074Z"
+ }
+},
+{
+ "model": "hospital_setup.staffbranchassignment",
+ "pk": 2,
+ "fields": {
+  "staff": 3,
+  "branch": 1,
+  "is_primary": true,
+  "slot_duration_minutes": 15,
+  "weekly_hours": [
+   {
+    "end_time": "21:00",
+    "is_active": true,
+    "start_time": "09:00",
+    "day_of_week": 0
+   },
+   {
+    "end_time": "21:00",
+    "is_active": true,
+    "start_time": "09:00",
+    "day_of_week": 1
+   },
+   {
+    "end_time": "21:00",
+    "is_active": true,
+    "start_time": "09:00",
+    "day_of_week": 2
+   },
+   {
+    "end_time": "21:00",
+    "is_active": true,
+    "start_time": "09:00",
+    "day_of_week": 3
+   },
+   {
+    "end_time": "21:00",
+    "is_active": true,
+    "start_time": "09:00",
+    "day_of_week": 4
+   },
+   {
+    "end_time": "17:00",
+    "is_active": false,
+    "start_time": "09:00",
+    "day_of_week": 5
+   },
+   {
+    "end_time": "17:00",
+    "is_active": false,
+    "start_time": "09:00",
+    "day_of_week": 6
+   }
+  ],
+  "created_at": "2026-10-28T10:35:32.642Z",
+  "updated_at": "2026-10-28T10:35:32.649Z"
+ }
+},
+{
+ "model": "hospital_setup.staffbranchassignment",
+ "pk": 3,
+ "fields": {
+  "staff": 4,
+  "branch": 1,
+  "is_primary": true,
+  "slot_duration_minutes": 15,
+  "weekly_hours": [],
+  "created_at": "2026-10-28T10:36:13.619Z",
+  "updated_at": "2026-10-28T10:36:13.619Z"
+ }
+},
+{
+ "model": "hospital_setup.staffbranchassignment",
+ "pk": 4,
+ "fields": {
+  "staff": 5,
+  "branch": 1,
+  "is_primary": true,
+  "slot_duration_minutes": 15,
+  "weekly_hours": [],
+  "created_at": "2026-10-28T10:37:00.760Z",
+  "updated_at": "2026-10-28T10:37:00.760Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 1,
+ "fields": {
+  "list_type": "service_category",
+  "value": "Consultation",
+  "label": "Consultation",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 0,
+  "created_at": "2026-10-28T10:30:57.354Z",
+  "updated_at": "2026-10-28T10:30:57.354Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 2,
+ "fields": {
+  "list_type": "service_category",
+  "value": "Procedure",
+  "label": "Procedure",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 1,
+  "created_at": "2026-10-28T10:30:57.360Z",
+  "updated_at": "2026-10-28T10:30:57.360Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 3,
+ "fields": {
+  "list_type": "service_category",
+  "value": "Other",
+  "label": "Other",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 2,
+  "created_at": "2026-10-28T10:30:57.363Z",
+  "updated_at": "2026-10-28T10:30:57.363Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 4,
+ "fields": {
+  "list_type": "payment_mode",
+  "value": "Cash",
+  "label": "Cash",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 3,
+  "created_at": "2026-10-28T10:30:57.366Z",
+  "updated_at": "2026-10-28T10:30:57.366Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 5,
+ "fields": {
+  "list_type": "payment_mode",
+  "value": "Card",
+  "label": "Card",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 4,
+  "created_at": "2026-10-28T10:30:57.369Z",
+  "updated_at": "2026-10-28T10:30:57.369Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 6,
+ "fields": {
+  "list_type": "payment_mode",
+  "value": "UPI",
+  "label": "UPI",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 5,
+  "created_at": "2026-10-28T10:30:57.373Z",
+  "updated_at": "2026-10-28T10:30:57.373Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 7,
+ "fields": {
+  "list_type": "payment_mode",
+  "value": "Online",
+  "label": "Online",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 6,
+  "created_at": "2026-10-28T10:30:57.376Z",
+  "updated_at": "2026-10-28T10:30:57.376Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 8,
+ "fields": {
+  "list_type": "payment_mode",
+  "value": "Credit",
+  "label": "Credit",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 7,
+  "created_at": "2026-10-28T10:30:57.379Z",
+  "updated_at": "2026-10-28T10:30:57.379Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 9,
+ "fields": {
+  "list_type": "invoice_status",
+  "value": "draft",
+  "label": "Draft",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 8,
+  "created_at": "2026-10-28T10:30:57.382Z",
+  "updated_at": "2026-10-28T10:30:57.382Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 10,
+ "fields": {
+  "list_type": "invoice_status",
+  "value": "issued",
+  "label": "Issued",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 9,
+  "created_at": "2026-10-28T10:30:57.385Z",
+  "updated_at": "2026-10-28T10:30:57.385Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 11,
+ "fields": {
+  "list_type": "invoice_status",
+  "value": "paid",
+  "label": "Paid",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 10,
+  "created_at": "2026-10-28T10:30:57.388Z",
+  "updated_at": "2026-10-28T10:30:57.388Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 12,
+ "fields": {
+  "list_type": "invoice_status",
+  "value": "partially_paid",
+  "label": "Partially Paid",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 11,
+  "created_at": "2026-10-28T10:30:57.392Z",
+  "updated_at": "2026-10-28T10:30:57.392Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 13,
+ "fields": {
+  "list_type": "invoice_status",
+  "value": "cancelled",
+  "label": "Cancelled",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 12,
+  "created_at": "2026-10-28T10:30:57.395Z",
+  "updated_at": "2026-10-28T10:30:57.395Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 14,
+ "fields": {
+  "list_type": "room_type",
+  "value": "consultation",
+  "label": "Consultation",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 13,
+  "created_at": "2026-10-28T10:30:57.398Z",
+  "updated_at": "2026-10-28T10:30:57.398Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 15,
+ "fields": {
+  "list_type": "room_type",
+  "value": "procedure",
+  "label": "Procedure",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 14,
+  "created_at": "2026-10-28T10:30:57.401Z",
+  "updated_at": "2026-10-28T10:30:57.401Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 16,
+ "fields": {
+  "list_type": "room_type",
+  "value": "other",
+  "label": "Other",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 15,
+  "created_at": "2026-10-28T10:30:57.404Z",
+  "updated_at": "2026-10-28T10:30:57.404Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 17,
+ "fields": {
+  "list_type": "appointment_type",
+  "value": "opd",
+  "label": "OPD",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 16,
+  "created_at": "2026-10-28T10:30:57.407Z",
+  "updated_at": "2026-10-28T10:30:57.407Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 18,
+ "fields": {
+  "list_type": "appointment_type",
+  "value": "followup",
+  "label": "Follow-up",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 17,
+  "created_at": "2026-10-28T10:30:57.410Z",
+  "updated_at": "2026-10-28T10:30:57.410Z"
+ }
+},
+{
+ "model": "hospital_setup.optionlist",
+ "pk": 19,
+ "fields": {
+  "list_type": "appointment_type",
+  "value": "emergency",
+  "label": "Emergency",
+  "is_active": true,
+  "is_system": true,
+  "sort_order": 18,
+  "created_at": "2026-10-28T10:30:57.414Z",
+  "updated_at": "2026-10-28T10:30:57.414Z"
+ }
+}
+]

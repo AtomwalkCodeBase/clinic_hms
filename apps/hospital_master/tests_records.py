@@ -65,7 +65,7 @@ class DocumentCorrectViewTests(TestCase):
 
     def test_correcting_a_document_sets_type_and_marks_it_human(self):
         doc = make_doc(status="completed", document_type="lab_report", by="rules")
-        resp = call(DocumentCorrectView, "patch", {"doc_type": "prescription"}, pk=doc.id)
+        resp = call(DocumentCorrectView, "patch", {"doc_type": "prescription"}, pk=doc.pk)
         self.assertEqual(resp.status_code, 200)
         doc = MedicalDocument.objects.get(pk=doc.pk)
         self.assertEqual((doc.doc_classification, doc.status), ("prescription", "completed"))
@@ -73,23 +73,23 @@ class DocumentCorrectViewTests(TestCase):
 
     def test_rejects_an_unknown_doc_type(self):
         doc = make_doc(status="completed")
-        self.assertEqual(call(DocumentCorrectView, "patch", {"doc_type": "not_a_real_type"}, pk=doc.id).status_code, 400)
-        self.assertEqual(call(DocumentCorrectView, "patch", {"doc_type": "not_classified"}, pk=doc.id).status_code, 400)
+        self.assertEqual(call(DocumentCorrectView, "patch", {"doc_type": "not_a_real_type"}, pk=doc.pk).status_code, 400)
+        self.assertEqual(call(DocumentCorrectView, "patch", {"doc_type": "not_classified"}, pk=doc.pk).status_code, 400)
 
     def test_a_document_that_needs_review_can_be_filed(self):
         doc = make_doc(status="review_required", by="rules")
-        self.assertEqual(call(DocumentCorrectView, "patch", {"doc_type": "imaging_report"}, pk=doc.id).status_code, 200)
+        self.assertEqual(call(DocumentCorrectView, "patch", {"doc_type": "imaging_report"}, pk=doc.pk).status_code, 200)
         self.assertEqual(MedicalDocument.objects.get(pk=doc.pk).status, "completed")
 
     def test_correcting_a_failed_document_completes_it(self):
         doc = make_doc(status="failed", error_message="unreadable")
-        call(DocumentCorrectView, "patch", {"doc_type": "lab_report"}, pk=doc.id)
+        call(DocumentCorrectView, "patch", {"doc_type": "lab_report"}, pk=doc.pk)
         doc = MedicalDocument.objects.get(pk=doc.pk)
         self.assertEqual((doc.status, doc.error_message), ("completed", ""))
 
     def test_a_file_still_being_read_cannot_be_corrected(self):
         doc = make_doc(status="classifying")
-        self.assertEqual(call(DocumentCorrectView, "patch", {"doc_type": "lab_report"}, pk=doc.id).status_code, 400)
+        self.assertEqual(call(DocumentCorrectView, "patch", {"doc_type": "lab_report"}, pk=doc.pk).status_code, 400)
 
     def test_an_unknown_document_is_not_found(self):
         self.assertEqual(call(DocumentCorrectView, "patch", {"doc_type": "lab_report"}, pk=999999).status_code, 404)
@@ -98,7 +98,7 @@ class DocumentCorrectViewTests(TestCase):
         doc = make_doc(status="completed")
         request = APIRequestFactory().patch("/x", {"doc_type": "lab_report"}, format="json")
         force_authenticate(request, user=MockUser({"user_id": 1, "role": "patient"}))
-        self.assertEqual(DocumentCorrectView.as_view()(request, pk=doc.id).status_code, 403)
+        self.assertEqual(DocumentCorrectView.as_view()(request, pk=doc.pk).status_code, 403)
 
 
 class ReclassifyViewTests(TestCase):

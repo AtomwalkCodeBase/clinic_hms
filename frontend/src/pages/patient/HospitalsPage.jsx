@@ -292,9 +292,9 @@ export default function PatientHospitalsPage() {
                   </div>
                   <div style={{ display: "grid", gap: 14 }}>
                     {foundDoctors.pageItems.map(d => (
-                      <DoctorCard key={`${d.hospital_id}-${d.id}`} d={d}
-                        onBook={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.hospital_id, d.id))}
-                        onViewProfile={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.hospital_id, d.id))} />
+                      <DoctorCard key={`${d.hospital_id}-${d.staff_user_id}`} d={d}
+                        onBook={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.hospital_id, d.staff_user_id))}
+                        onViewProfile={() => navigate(ROUTES.PATIENT.DOCTOR_PROFILE(d.hospital_id, d.staff_user_id))} />
                     ))}
                   </div>
                   <PaginationControls pagination={foundDoctors.pagination} page={foundDoctors.page} pageSize={foundDoctors.pageSize}

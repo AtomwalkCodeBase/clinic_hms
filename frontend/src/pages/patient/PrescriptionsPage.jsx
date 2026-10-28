@@ -22,20 +22,18 @@ const RX_STATUS_BADGE = {
   expired:   { label: "Expired",   bg: "#FEE2E2", color: "#991B1B" },
 };
 
-// One prescription, self-contained: choice -> (rx_number/pay | nothing more
+// One prescription, self-contained:
 function PrescriptionOrderCard({ rx, onChanged, patientAwpid }) {
   const { toastSuccess, toastApiError } = useToast();
-  const [saving, setSaving] = useState(false);
-  const [editingPayment, setEditingPayment] = useState(!rx.payment_preference);
   const [downloading, setDownloading] = useState(false);
   const [openingHw, setOpeningHw] = useState(false);
 
   async function downloadPdf() {
     setDownloading(true);
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PORTAL.PRESCRIPTION_RECEIPT(rx.hospital_db, rx.id));
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.PRESCRIPTION_RECEIPT(rx.hospital_db, rx.opd_prescription_id));
       const data = res.data?.data || res.data;
-      if (data?.file_data) downloadFile(data.file_data, `Prescription ${rx.rx_number || rx.id}.pdf`);
+      if (data?.file_data) downloadFile(data.file_data, `Prescription ${rx.rx_number || rx.opd_prescription_id}.pdf`);
       else toastApiError(null, "Could not generate the PDF.");
     } catch (err) {
       toastApiError(err, "Could not generate the PDF.");
@@ -60,24 +58,6 @@ function PrescriptionOrderCard({ rx, onChanged, patientAwpid }) {
     }
   }
 
-  async function chooseAndSave(choice, paymentPreference) {
-    setSaving(true);
-    try {
-      await apiClient.post(API_ENDPOINTS.PORTAL.PRESCRIPTION_CHOICE, {
-        hospital_db: rx.hospital_db, prescription_id: rx.id,
-        patient_choice: choice, payment_preference: paymentPreference || "",
-      });
-      toastSuccess(choice === "in_house" ? "Got it — quote your Rx number at the pharmacy counter." : "Okay — no action needed here.");
-      setEditingPayment(false);
-      onChanged?.();
-    } catch (err) {
-      toastApiError(err, "Could not save your choice.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const canEditPayment = rx.status === "active";
   const statusBadge = RX_STATUS_BADGE[rx.status] || RX_STATUS_BADGE.active;
 
   return (
@@ -142,70 +122,9 @@ function PrescriptionOrderCard({ rx, onChanged, patientAwpid }) {
           ))}
         </div>
 
-        {rx.patient_choice === "pending" ? (
-          <div style={{ display: "flex", gap: 10 }}>
-            <button className="btn-primary" disabled={saving} style={{ flex: 1 }}
-              onClick={() => chooseAndSave("in_house", "pay_at_pharmacy")}>
-              {rx.hospital ? `Buy at ${rx.hospital}` : "Buy at this pharmacy"}
-            </button>
-            <button className="btn-outline" disabled={saving} style={{ flex: 1 }}
-              onClick={() => chooseAndSave("outside", "")}>
-              I'll get it elsewhere
-            </button>
-          </div>
-        ) : rx.patient_choice === "in_house" ? (
-          <div style={{
-            background: "linear-gradient(135deg, #FFFDF5 0%, #FEF9EC 100%)",
-            borderLeft: "4px solid var(--color-warning)",
-            borderRadius: "0 10px 10px 0",
-            padding: "12px 16px",
-          }}>
-            <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 4 }}>
-              Quote this number at the pharmacy counter:
-            </div>
-            <div style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: 20, color: "var(--color-warning)", marginBottom: 10 }}>
-              {rx.rx_number || "—"}
-            </div>
-
-            {canEditPayment && editingPayment ? (
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ fontSize: 12, fontWeight: 600 }}>Payment:</span>
-                <button
-                  className={rx.payment_preference === "pay_at_pharmacy" ? "btn-primary" : "btn-outline"}
-                  style={{ fontSize: 12, padding: "5px 12px" }}
-                  disabled={saving}
-                  onClick={() => chooseAndSave("in_house", "pay_at_pharmacy")}
-                >
-                  Pay at the pharmacy
-                </button>
-                <button
-                  className={rx.payment_preference === "pay_online" ? "btn-primary" : "btn-outline"}
-                  style={{ fontSize: 12, padding: "5px 12px" }}
-                  disabled={saving}
-                  title="Online payment is coming soon — this just lets the pharmacy know your preference."
-                  onClick={() => chooseAndSave("in_house", "pay_online")}
-                >
-                  Pay online (coming soon)
-                </button>
-              </div>
-            ) : (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
-                <span style={{ fontWeight: 600 }}>Payment:</span>
-                <span>{rx.payment_preference ? PAY_PREF_LABEL[rx.payment_preference] : "Not set"}</span>
-                {canEditPayment && (
-                  <button type="button" onClick={() => setEditingPayment(true)}
-                    style={{ background: "none", border: "none", color: "var(--color-primary)", fontSize: 11, cursor: "pointer", padding: 0, marginLeft: "auto" }}>
-                    Change
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
-            You chose to get this elsewhere.
-          </div>
-        )}
+        <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+          Rx number: <strong>{rx.rx_number || "—"}</strong>
+        </div>
       </div>
     </div>
   );
@@ -466,11 +385,11 @@ export default function PatientPrescriptionsPage() {
           )}
         </div>
 
-        {/* Buy in-house or elsewhere — one card per Rx, same pattern as lab tests */}
+        {/* One card per Rx */}
         {!rxLoading && rxOrders.length > 0 && (
           <div style={{ display: "grid", gap: 14, marginBottom: 24 }}>
             {rxPaging.pageItems.map(rx => (
-              <PrescriptionOrderCard key={`${rx.hospital_db}-${rx.id}`} rx={rx} onChanged={refetchRxOrders} patientAwpid={patientAwpid} />
+              <PrescriptionOrderCard key={`${rx.hospital_db}-${rx.opd_prescription_id}`} rx={rx} onChanged={refetchRxOrders} patientAwpid={patientAwpid} />
             ))}
             <PaginationControls pagination={rxPaging.pagination} page={rxPaging.page} pageSize={rxPaging.pageSize}
               onPageChange={rxPaging.setPage} onPageSizeChange={rxPaging.setPageSize} pageSizeOptions={[5, 10, 20]} />

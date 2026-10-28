@@ -153,7 +153,7 @@ function LedgerTab({ dateFrom, dateTo }) {
         </span>
         <select className="form-input" style={{ width: 160, appearance: "auto" }} value={mode} onChange={e => { setMode(e.target.value); setPage(1); }}>
           <option value="">All payment modes</option>
-          {modes.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+          {modes.map(m => <option key={m.option_list_id} value={m.name}>{m.name}</option>)}
         </select>
       </div>
       {isLoading ? (
@@ -169,7 +169,7 @@ function LedgerTab({ dateFrom, dateTo }) {
           </thead>
           <tbody>
             {rows.map(p => (
-              <tr key={p.id}>
+              <tr key={p.payment_id}>
                 <td style={{ fontSize: 12 }}>{p.paid_at ? new Date(p.paid_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
                 <td style={{ fontSize: 12, fontWeight: 700 }}>{p.invoice_number}</td>
                 <td style={{ fontSize: 12 }}>{p.patient_name} <span style={{ color: "var(--color-text-muted)" }}>· {p.patient_uhid}</span></td>

@@ -15,7 +15,7 @@ import { formatAgeYM } from "../../utils/age";
 import { sanitizeMobileInput, isValidMobile } from "../../utils/validation";
 import { ROUTES } from "../../config/routes.config";
 import {
-  Search, Contact, Phone, Building2, Shield, Lock, Smartphone,
+  Search, Contact, Phone, Building2, Shield, Smartphone,
   AlertTriangle, User, Siren, Baby,
 } from "lucide-react";
 
@@ -118,7 +118,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
   const { user } = useAuth();
   const { data: branches } = useApi(API_ENDPOINTS.ORG.BRANCHES);
   const branchList = branches || [];
-  const defaultBranchId = user?.branch_id || branchList?.[0]?.id || "";
+  const defaultBranchId = user?.branch_id || branchList?.[0]?.branch_id || "";
 
   const [loading, setLoading] = useState(false);
   const [errors,  setErrors]  = useState({});
@@ -129,7 +129,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
   function handleQuickRegistered(created) {
     // QuickRegisterModal already toasts the "registered" confirmation —
     setQuickRegisterMember(null);
-    navigate(ROUTES.FRONT_DESK.INTAKE_OPD, { state: { patient: created, justRegistered: true } });
+    navigate(ROUTES.FRONT_DESK.APPOINTMENTS, { state: { patient: created, justRegistered: true } });
   }
 
   const [form, setForm] = useState({
@@ -160,15 +160,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
     branch_id:         "",
     referring_doctor:  "",
 
-    // Insurance
-    payer_type:        "self",
-    insurance_provider:"",
-    policy_number:     "",
-    tpa_name:          "",
 
-    // Consent
-    dpdp_consent: false,
-    hie_consent:  false,
 
     // Dependent / guardian — set when registering a family member (child,
     is_dependent:    false,
@@ -340,8 +332,6 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
     if (form.emergency_phone && !isValidMobile(form.emergency_phone))
                                       e.emergency_phone  = "Enter a valid 10-digit mobile number.";
     if (!form.branch_id)             e.branch_id      = "Branch is required.";
-    if (!form.payer_type)            e.payer_type     = "Payer type is required.";
-    if (!form.dpdp_consent)          e.dpdp_consent   = "DPDP consent is mandatory.";
     return e;
   }
 
@@ -356,7 +346,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
       const patient = envelope?.data;
 
       // Optional Birth History — only when there's actually something to
-      if (showBirthHistory && patient?.id) {
+      if (showBirthHistory && patient?.patient_id) {
         const bhBody = {};
         Object.entries(birthHistory).forEach(([k, v]) => {
           if (v === "" || v === null || v === undefined) return;
@@ -365,7 +355,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
         if (Object.keys(bhBody).length > 0) {
           bhBody.nicu_admission = !!birthHistory.nicu_admission;
           try {
-            await apiClient.post(API_ENDPOINTS.PATIENTS.BIRTH_HISTORY(patient.id), bhBody);
+            await apiClient.post(API_ENDPOINTS.PATIENTS.BIRTH_HISTORY(patient.patient_id), bhBody);
           } catch {
             // Non-fatal — registration already succeeded; birth history can
           }
@@ -374,7 +364,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
 
       toastSuccess("Patient registered successfully.");
       // Straight to booking, not the queue — a freshly registered patient
-      navigate(ROUTES.FRONT_DESK.INTAKE_OPD, { state: { patient, justRegistered: true } });
+      navigate(ROUTES.FRONT_DESK.APPOINTMENTS, { state: { patient, justRegistered: true } });
     } catch (err) {
       if (err?.errors) setErrors(err.errors);
       toastApiError(err, "Registration failed.");
@@ -473,7 +463,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
                     Use their existing record instead of creating a new one — book their appointment directly.
                   </div>
                   <button type="button" className="btn-primary" style={{ fontSize: 12, padding: "6px 14px" }}
-                    onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_OPD, {
+                    onClick={() => navigate(ROUTES.FRONT_DESK.APPOINTMENTS, {
                       state: { prefillQuery: lookup.existing_uhid || lookup.full_name },
                     })}>
                     Book Appointment →
@@ -504,8 +494,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
                     </div>
                   </div>
                   <div style={{ fontSize: 12, color: "#075985", lineHeight: 1.6, marginBottom: 10 }}>
-                    Not registered at this hospital yet. If this is the same person, use their details and ask
-                    their consent to share history with this hospital too — avoids a disconnected duplicate.
+                    Not registered at this hospital yet. If this is the same person, use their details — avoids a disconnected duplicate.
                   </div>
                   <div style={{ display: "flex", gap: 10 }}>
                     <button type="button" className="btn-primary" style={{ fontSize: 12, padding: "6px 14px" }}
@@ -553,7 +542,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
                           </div>
                           {m.already_registered_here ? (
                             <button type="button" className="btn-outline" style={{ fontSize: 11, padding: "5px 12px" }}
-                              onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_OPD, {
+                              onClick={() => navigate(ROUTES.FRONT_DESK.APPOINTMENTS, {
                                 state: { prefillQuery: m.full_name },
                               })}>
                               Already here — Book Appointment
@@ -857,7 +846,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
                   error={errors.branch_id} required>
                   <option value="">Select branch</option>
                   {branchList.map(b => (
-                    <option key={b.id} value={b.id}>{b.name}</option>
+                    <option key={b.branch_id} value={b.branch_id}>{b.name}</option>
                   ))}
                 </FSelect>
               </FieldGroup>
@@ -886,115 +875,6 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
                 </div>
               ))}
             </div>
-          </SectionCard>
-
-          {/* ── 4. Insurance & Payment ── */}
-          <SectionCard title="Insurance & Payment" icon={Shield} bgColor="#F5F3FF" color="#5B52EE">
-            <FieldGroup label="Payer Type *">
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {[
-                  { value: "self",      label: "Self Pay" },
-                  { value: "insurance", label: "Insurance" },
-                  { value: "corporate", label: "Corporate / Cashless" },
-                ].map(({ value, label }) => (
-                  <label key={value} style={{
-                    display: "flex", alignItems: "center", gap: 7,
-                    fontSize: 13, cursor: "pointer",
-                    padding: "8px 16px", borderRadius: 8,
-                    border: `1.5px solid ${form.payer_type === value ? "var(--color-primary)" : "var(--color-border)"}`,
-                    background: form.payer_type === value ? "var(--color-primary-light)" : "#fff",
-                    color: form.payer_type === value ? "var(--color-primary)" : "var(--color-text)",
-                    fontWeight: form.payer_type === value ? 600 : 400,
-                    transition: "all 120ms ease", userSelect: "none",
-                  }}>
-                    <input type="radio" name="payer_type" value={value}
-                      checked={form.payer_type === value} onChange={set("payer_type")}
-                      style={{ accentColor: "var(--color-primary)" }} />
-                    {label}
-                  </label>
-                ))}
-              </div>
-              {errors.payer_type && <div className="field-error" style={{ marginTop: 6 }}>{errors.payer_type}</div>}
-            </FieldGroup>
-
-            {form.payer_type === "insurance" && (
-              <ThreeCol>
-                <FieldGroup label="Insurance Provider">
-                  <Input value={form.insurance_provider} onChange={set("insurance_provider")}
-                    placeholder="e.g. Star Health" />
-                </FieldGroup>
-                <FieldGroup label="Policy Number">
-                  <Input value={form.policy_number} onChange={set("policy_number")}
-                    placeholder="Policy / Member ID" />
-                </FieldGroup>
-                <FieldGroup label="TPA Name">
-                  <Input value={form.tpa_name} onChange={set("tpa_name")}
-                    placeholder="TPA company name" />
-                </FieldGroup>
-              </ThreeCol>
-            )}
-            {form.payer_type === "corporate" && (
-              <FieldGroup label="Corporate / Employer Name">
-                <Input value={form.insurance_provider} onChange={set("insurance_provider")}
-                  placeholder="Employer / company name for cashless" />
-              </FieldGroup>
-            )}
-          </SectionCard>
-
-          {/* ── 5. DPDP Consent ── */}
-          <SectionCard title="Privacy Consent (DPDP Act 2023)" icon={Lock} bgColor="#FEF2F2" color="#B91C1C">
-            <div style={{
-              background: "#FFF7ED", border: "1px solid #FED7AA",
-              borderRadius: 8, padding: "10px 16px", marginBottom: 16,
-              fontSize: 12, color: "#92400E", lineHeight: 1.7,
-            }}>
-              Under the <strong>Digital Personal Data Protection (DPDP) Act 2023</strong>, explicit
-              consent must be obtained before collecting and processing this patient's personal and
-              health data. This is legally mandatory.
-            </div>
-            <label style={{
-              display: "flex", alignItems: "flex-start", gap: 12,
-              padding: "14px 16px", borderRadius: 8, cursor: "pointer",
-              border: `2px solid ${form.dpdp_consent ? "#16a34a" : errors.dpdp_consent ? "#ef4444" : "var(--color-border)"}`,
-              background: form.dpdp_consent ? "#f0fdf4" : "#fff",
-              transition: "all 150ms ease",
-            }}>
-              <input type="checkbox" checked={form.dpdp_consent} onChange={set("dpdp_consent")}
-                style={{ marginTop: 2, accentColor: "#16a34a", width: 16, height: 16, minWidth: 16, cursor: "pointer" }} />
-              <span style={{ fontSize: 13, lineHeight: 1.6, color: "var(--color-text)" }}>
-                <strong>I confirm</strong> that the patient has been informed about how their personal and
-                medical data will be collected, used, and stored by this hospital, and has given their
-                explicit verbal / written consent as required under the DPDP Act 2023.
-              </span>
-            </label>
-            {errors.dpdp_consent && (
-              <div className="field-error" style={{ marginTop: 6 }}>{errors.dpdp_consent}</div>
-            )}
-
-            <div style={{
-              background: "#F0F9FF", border: "1px solid #BAE6FD",
-              borderRadius: 8, padding: "10px 16px", margin: "16px 0",
-              fontSize: 12, color: "#0369a1", lineHeight: 1.7,
-            }}>
-              Separate from the above — this specifically governs whether <strong>this hospital's</strong> doctors
-              can see records the patient shared at <strong>other</strong> hospitals on Atomwalk (diagnoses,
-              allergies, prescriptions, lab results). Optional — declining just means this hospital only
-              sees what it records itself.
-            </div>
-            <label style={{
-              display: "flex", alignItems: "flex-start", gap: 12,
-              padding: "14px 16px", borderRadius: 8, cursor: "pointer",
-              border: `2px solid ${form.hie_consent ? "#16a34a" : "var(--color-border)"}`,
-              background: form.hie_consent ? "#f0fdf4" : "#fff",
-              transition: "all 150ms ease",
-            }}>
-              <input type="checkbox" checked={form.hie_consent} onChange={set("hie_consent")}
-                style={{ marginTop: 2, accentColor: "#16a34a", width: 16, height: 16, minWidth: 16, cursor: "pointer" }} />
-              <span style={{ fontSize: 13, lineHeight: 1.6, color: "var(--color-text)" }}>
-                <strong>I confirm</strong> the patient agrees to share their medical history from other
-                Atomwalk hospitals with this hospital's doctors.
-              </span>
-            </label>
           </SectionCard>
 
           {/* Submit row */}
@@ -1040,7 +920,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
                     const age = formatAgeYM(p.date_of_birth) || null;
                     const initials = (p.full_name || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
                     return (
-                      <div key={p.id} style={{
+                      <div key={p.patient_id} style={{
                         display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
                         background: "#fff", border: "1px solid var(--color-border)", borderRadius: 10,
                         padding: "12px 16px", transition: "box-shadow 0.15s, border-color 0.15s",
@@ -1073,7 +953,7 @@ export function RegisterPatientPageContent({ embedded = false } = {}) {
                           </div>
                         </div>
                         <button type="button" className="btn-outline" style={{ fontSize: 12, padding: "6px 14px", flexShrink: 0 }}
-                          onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_OPD, { state: { patient: p } })}>
+                          onClick={() => navigate(ROUTES.FRONT_DESK.APPOINTMENTS, { state: { patient: p } })}>
                           Book Appointment →
                         </button>
                       </div>

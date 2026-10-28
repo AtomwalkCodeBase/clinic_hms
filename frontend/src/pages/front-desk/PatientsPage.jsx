@@ -68,7 +68,7 @@ export default function FrontDeskPatientsPage() {
                 <button
                   className="btn-primary"
                   style={{ fontSize: 12, padding: "8px 18px" }}
-                  onClick={() => navigate(ROUTES.FRONT_DESK.INTAKE_REGISTER, { state: { mobile: debouncedQuery } })}
+                  onClick={() => navigate(ROUTES.FRONT_DESK.REGISTER_PATIENT, { state: { mobile: debouncedQuery } })}
                 >
                   Register them at this hospital
                 </button>
@@ -91,7 +91,7 @@ export default function FrontDeskPatientsPage() {
               </thead>
               <tbody>
                 {patients.map(p => (
-                  <tr key={p.id}>
+                  <tr key={p.patient_id}>
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                         <span style={{ fontWeight: 600, fontSize: 13 }}>{p.full_name}</span>

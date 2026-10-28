@@ -101,10 +101,10 @@ class Command(BaseCommand):
         parameters_of(hospital)
 
         # ── Hospital admin login ────────────────────────────────────────
+        from apps.hospital_master.models import GlobalStaffUserIndexCatalog as StaffMobileIndex
         from apps.hospital_setup.models import StaffUser
-        from apps.hospital_setup.staff_services import next_employee_id
-        from apps.hospital_setup.rbac import role_q, system_role
-        from apps.patients.models import StaffMobileIndex
+        from apps.hospital_setup.rbac import role_q
+        from apps.hospital_setup.staff_services import create_staff, next_employee_id, set_login_password
 
         if StaffUser.objects.using(db).filter(role_q("hospital_admin")).exists():
             self.stdout.write(self.style.WARNING("  hospital_admin already exists — skipping."))
@@ -112,27 +112,16 @@ class Command(BaseCommand):
 
         mobile = self._next_admin_mobile()
         password = _gen_password()
-        admin = StaffUser(
-            phone=mobile,
-            email="",
-            employee_id=next_employee_id(db),
-            first_name="Hospital",
-            last_name="Admin",
-            group=system_role(db, "hospital_admin"),
-            must_change_password=True,
+        admin = create_staff(
+            db, hospital.pk, "hospital_admin",
+            phone=mobile, email=None, employee_id=next_employee_id(db), first_name="Hospital", last_name="Admin",
         )
-        admin.set_password(password)
-        admin.save(using=db)
-
-        StaffMobileIndex.objects.using("default").update_or_create(
-            mobile=mobile,
-            defaults={"hospital_id": hospital.id, "email": None},
-        )
+        set_login_password(admin, password)
         self._credentials.append({"hospital": hospital.name, "mobile": mobile, "password": password})
         self.stdout.write(self.style.SUCCESS(f"  Created hospital_admin login: {mobile}"))
 
     def _next_admin_mobile(self):
-        from apps.patients.models import StaffMobileIndex
+        from apps.hospital_master.models import GlobalStaffUserIndexCatalog as StaffMobileIndex
         if not hasattr(self, "_mobile_counter"):
             self._mobile_counter = STARTING_ADMIN_MOBILE
         while True:

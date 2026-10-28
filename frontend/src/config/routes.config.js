@@ -29,7 +29,6 @@ export const ROUTES = {
     USERS:              "/platform/users",
     USAGE:              "/platform/usage",
     VACCINATION_TEMPLATES: "/platform/vaccination-templates",
-    MILESTONE_TEMPLATES: "/platform/milestone-templates",
     CLASSIFICATION_RULES: "/platform/classification-rules",
   },
 
@@ -45,7 +44,6 @@ export const ROUTES = {
     ROOMS:              "/admin/rooms",
     ROLES:              "/admin/roles",
     VACCINATION_SCHEDULE: "/admin/vaccination-schedule",
-    MILESTONE_SCHEDULE: "/admin/milestone-schedule",
     SETTINGS:           "/admin/settings",
     MY_PROFILE:         "/admin/my-profile",
   },
@@ -59,8 +57,6 @@ export const ROUTES = {
     PATIENT:     (id) => `/doctor/patients/${id}`,
     SCHEDULE:           "/doctor/schedule",
     HISTORY:            "/doctor/history",
-    IPD_REFERRALS:      "/doctor/ipd-referrals",
-    IPD_PATIENTS:       "/doctor/ipd-patients",
     MY_PROFILE:         "/doctor/my-profile",
   },
 
@@ -76,49 +72,17 @@ export const ROUTES = {
   // Front Desk
   FRONT_DESK: {
     DASHBOARD:          "/front-desk/dashboard",
-    // Consolidated Patient Intake workspace — ONE sidebar item (an
-    INTAKE:              "/front-desk/intake",
-    INTAKE_REGISTER:     "/front-desk/intake/register",
-    INTAKE_TRIAGE:       "/front-desk/intake/triage",
-    INTAKE_EMERGENCY:    "/front-desk/intake/emergency",
-    INTAKE_OPD:          "/front-desk/intake/opd",
-    INTAKE_REFERRALS:    "/front-desk/intake/referrals",
     TRIAGE:             "/front-desk/triage",
     REGISTER_PATIENT:   "/front-desk/register-patient",
-    REGISTER_EMERGENCY: "/front-desk/register-emergency",
     PATIENTS:           "/front-desk/patients",
     APPOINTMENTS:       "/front-desk/appointments",
     QUEUE:              "/front-desk/queue",
     BILLING:            "/front-desk/billing",
     HISTORY:            "/front-desk/history",
-    ADMISSIONS:         "/front-desk/admissions",
-    ADMISSION_DETAIL: (id) => `/front-desk/admissions/${id}`,
-    IPD_PATIENTS:       "/front-desk/ipd-patients",
-    BED_BOARD:          "/front-desk/bed-board",
     MY_PROFILE:         "/front-desk/my-profile",
   },
 
-  // Lab
-  LAB: {
-    DASHBOARD:          "/lab/dashboard",
-    REQUESTS:           "/lab/requests",
-    REPORTS:            "/lab/reports",
-    REPORT:      (id) => `/lab/reports/${id}`,
-    CATALOG:            "/lab/catalog",
-    SAMPLE_TYPE_SETUP:  "/lab/sample-type-setup",
-    MY_PROFILE:         "/lab/my-profile",
-  },
 
-  // Pharmacist
-  PHARMACIST: {
-    DASHBOARD:          "/pharmacist/dashboard",
-    PRESCRIPTIONS:      "/pharmacist/prescriptions",
-    STOCK:              "/pharmacist/stock",
-    TRANSACTIONS:       "/pharmacist/transactions",
-    CATALOG:            "/pharmacist/catalog",
-    DRUG_FORM_SETUP:    "/pharmacist/drug-form-setup",
-    MY_PROFILE:         "/pharmacist/my-profile",
-  },
 
   // Patient Portal
   PATIENT: {
@@ -129,7 +93,6 @@ export const ROUTES = {
     DOCTOR_PROFILE:     (hospitalId, doctorId) => `/patient/hospitals/${hospitalId}/doctors/${doctorId}`,
     RECORDS:            "/patient/records",
     PRESCRIPTIONS:      "/patient/prescriptions",
-    LAB_REPORTS:        "/patient/lab-reports",
     MY_REPORTS:         "/patient/my-reports",
     SHARED_RECORDS_PRIVACY: "/patient/shared-records-privacy",
     HEALTH_SUMMARY:     "/patient/health-summary",

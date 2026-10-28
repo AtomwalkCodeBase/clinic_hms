@@ -221,5 +221,10 @@
     "DUE": "Due now",
     "UPCOMING": "Coming up",
     "GIVEN": "Given"
+  },
+  "timeline_labels": {
+    "_note": "A condition's row label is its diagnosis cut at the first of these separators, then at most max_length characters. The full text and codes stay as the hover text.",
+    "cut_at": [" - ", " – ", " — ", " with ", " due to ", " secondary to ", " following ", " after ", " (", ",", ";", ":"],
+    "max_length": 34
   }
 }

@@ -1,5 +1,6 @@
 """apps/hospital_master/platform_views.py"""
 
+from django.conf import settings
 import re
 import secrets
 import string
@@ -18,10 +19,11 @@ from apps.hospital_master.services import create_hospital_database, run_hospital
 from apps.hospital_master.services import TIER_FEATURE_DEFAULTS
 from apps.hospital_master.services import get_usage_counts
 from apps.hospital_master.services import parameters_of
-from apps.hospital_setup.models import StaffUser
-from apps.hospital_setup.rbac import SYSTEM_ROLE_LABELS, acts_as_q, resolve_acts_as, role_q, system_role
+from apps.hospital_setup.models import ROLE_DOCTOR, StaffUser
+from apps.hospital_setup.rbac import ROLE_LABELS, acts_as_q, api_role, resolve_acts_as, role_q, system_role
+from apps.hospital_setup.staff_services import attach_logins, create_staff, last_logins, set_login_password
 from apps.hospital_setup.models import Branch
-from apps.patients.models import StaffMobileIndex
+from apps.hospital_master.models import GlobalStaffUserIndexCatalog as StaffMobileIndex
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +48,6 @@ def _hospital_to_dict(hospital):
             "max_doctors": sub.max_doctors,
             "max_branches": sub.max_branches,
             "max_staff": sub.max_staff,
-            "feat_lab": sub.feat_lab,
-            "feat_pharmacy": sub.feat_pharmacy,
             "feat_whatsapp": sub.feat_whatsapp,
             "feat_multi_branch": sub.feat_multi_branch,
             "feat_ai_voice": sub.feat_ai_voice,
@@ -61,7 +61,7 @@ def _hospital_to_dict(hospital):
         subscription = None
 
     return {
-        "id":         hospital.id,
+        "hospital_id": hospital.pk,
         "name":       hospital.name,
         "hospital_code":  hospital.hospital_code,
         "db_name":    hospital.db_name,
@@ -118,7 +118,7 @@ class HospitalListCreateView(APIView):
         for t in all_matching:
             try:
                 sub = Subscription.objects.get(hospital=t)
-                subs_by_hospital[t.id] = sub
+                subs_by_hospital[t.pk] = sub
                 tier_counts[sub.license_tier] = tier_counts.get(sub.license_tier, 0) + 1
                 status_counts[sub.status] = status_counts.get(sub.status, 0) + 1
             except Subscription.DoesNotExist:
@@ -132,11 +132,11 @@ class HospitalListCreateView(APIView):
 
         if tier_filter:
             hospitals = [t for t in all_matching
-                       if subs_by_hospital.get(t.id) and subs_by_hospital[t.id].license_tier == tier_filter]
+                       if subs_by_hospital.get(t.pk) and subs_by_hospital[t.pk].license_tier == tier_filter]
         if status_filter:
             base = hospitals if tier_filter else all_matching
             hospitals = [t for t in base
-                       if subs_by_hospital.get(t.id) and subs_by_hospital[t.id].status == status_filter]
+                       if subs_by_hospital.get(t.pk) and subs_by_hospital[t.pk].status == status_filter]
         if not tier_filter and not status_filter:
             hospitals = all_matching
 
@@ -178,7 +178,7 @@ class HospitalListCreateView(APIView):
             return error("Admin email is required.", errors={"admin_email": "Required."})
         if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", admin_email):
             return error("Enter a valid email address.", errors={"admin_email": "Invalid format."})
-        from core.utils.realworld_validation import validate_email_domain
+        from core.validation import validate_email_domain
         email_ok, email_reason = validate_email_domain(admin_email)
         if not email_ok:
             return error(email_reason, errors={"admin_email": email_reason})
@@ -189,7 +189,7 @@ class HospitalListCreateView(APIView):
 
         # ── Derive hospital_code and db_name ─────────────────────────────────────
         hospital_code = (d.get("hospital_code") or slugify(name)).strip().lower()[:20]
-        db_name = "aw_" + hospital_code.replace("-", "_")
+        db_name = settings.HOSPITAL_DB_PREFIX + hospital_code.replace("-", "_")
 
         city  = (d.get("city") or "").strip()
         state = (d.get("state") or "").strip()
@@ -208,7 +208,7 @@ class HospitalListCreateView(APIView):
             name=name, hospital_code=hospital_code, db_name=db_name,
             city=city, state=state, gstin=gstin, is_active=True,
         )
-        logger.info("Hospital created: %s (id=%s)", name, hospital.id)
+        logger.info("Hospital created: %s (id=%s)", name, hospital.pk)
 
         # ── Step 2: Create Subscription ───────────────────────────────────────
         feats = TIER_FEATURE_DEFAULTS[tier]
@@ -238,28 +238,17 @@ class HospitalListCreateView(APIView):
         email_sent = False
         try:
             from apps.hospital_setup.staff_services import next_employee_id
-            admin_staff = StaffUser(
-                phone=admin_mobile,
-                email=admin_email,
-                employee_id=next_employee_id(db_name),
-                first_name="Hospital",
-                last_name="Admin",
-                group=system_role(db_name, "hospital_admin"),
-                must_change_password=True,
+            admin_staff = create_staff(
+                db_name, hospital.pk, "hospital_admin",
+                phone=admin_mobile, email=admin_email, employee_id=next_employee_id(db_name),
+                first_name="Hospital", last_name="Admin",
             )
-            admin_staff.set_password(temp_password)
-            admin_staff.save(using=db_name)
+            set_login_password(admin_staff, temp_password)
             admin_employee_id = admin_staff.employee_id
-
-            # Write to atomwalk index — login uses mobile, not hospital_code
-            StaffMobileIndex.objects.using("default").update_or_create(
-                mobile=admin_mobile,
-                defaults={"hospital_id": hospital.id},
-            )
             logger.info("hospital_admin created and indexed for hospital %s", hospital_code)
 
             # Email is the only place the raw temp password goes — the
-            from core.messaging.email import send_hospital_provisioned_email
+            from core.messaging import send_hospital_provisioned_email
             email_sent = send_hospital_provisioned_email(
                 to=admin_email, hospital_name=name, hospital_code=hospital_code,
                 employee_id=admin_employee_id, admin_mobile=admin_mobile,
@@ -447,7 +436,7 @@ class HospitalAuditLogView(APIView):
 
         logs = HospitalAuditLog.objects.filter(hospital=hospital)[:100]
         return success(data=[{
-            "id": log.id,
+            "hospital_audit_log_id": log.pk,
             "action": log.action,
             "action_label": dict(HospitalAuditLog.ACTION_CHOICES).get(log.action, log.action),
             "before_value": log.before_value,
@@ -462,7 +451,7 @@ class PlatformStatsView(APIView):
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request):
-        from apps.opd.models import HospitalPatient
+        from apps.hospital_patients.models import HospitalPatient
         from apps.opd.models import Appointment
 
         hospitals = list(Hospital.objects.all())
@@ -487,7 +476,7 @@ class PlatformStatsView(APIView):
 
         recent_logs = HospitalAuditLog.objects.select_related("hospital").order_by("-created_at")[:15]
         activity = [{
-            "id": log.id,
+            "hospital_audit_log_id": log.pk,
             "hospital_name": log.hospital.name if log.hospital else "",
             "action": log.action,
             "action_label": dict(HospitalAuditLog.ACTION_CHOICES).get(log.action, log.action),
@@ -510,7 +499,7 @@ class HospitalOverviewView(APIView):
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
 
     def get(self, request, pk):
-        from apps.opd.models import HospitalPatient
+        from apps.hospital_patients.models import HospitalPatient
         from apps.opd.models import Appointment
 
         try:
@@ -546,21 +535,23 @@ class HospitalStaffListView(APIView):
             return not_found("Hospital not found.")
 
         try:
-            staff = StaffUser.objects.using(hospital.db_name).select_related("group").order_by("group__system_role_key", "first_name")
+            staff = list(StaffUser.objects.using(hospital.db_name).select_related("user_group").order_by("user_group__role"))
+            staff = sorted(attach_logins(staff), key=lambda s: (s.user_group.role, s.first_name.lower()))
+            logins = last_logins(staff)
         except Exception as exc:
             logger.warning("Staff list failed for %s: %s", hospital.db_name, exc)
             return error("This hospital's database couldn't be reached.", status=502)
 
         return success(data=[{
-            "id": s.id,
+            "staff_user_id": s.pk,
             "full_name": s.get_full_name(),
             "email": s.email,
-            "role": s.role,
+            "role": api_role(s),
             "phone": s.phone,
             "is_active": s.is_active,
             "must_change_password": s.must_change_password,
             "date_joined": s.date_joined.isoformat() if s.date_joined else None,
-            "last_login": s.last_login.isoformat() if s.last_login else None,
+            "last_login": logins.get(s.user_id).isoformat() if logins.get(s.user_id) else None,
         } for s in staff])
 
 
@@ -600,7 +591,7 @@ class HospitalStaffDetailView(APIView):
         if would_lose_admin_status:
             other_admins = StaffUser.objects.using(hospital.db_name).filter(
                 acts_as_q("hospital_admin"), is_active=True
-            ).exclude(pk=staff.id).exists()
+            ).exclude(pk=staff.pk).exists()
             if not other_admins:
                 return error(
                     "This is the only active hospital admin at this hospital — "
@@ -614,12 +605,12 @@ class HospitalStaffDetailView(APIView):
         final_active = bool(d["is_active"]) if "is_active" in d else was_active
         new_role = d.get("role")
         if new_role:
-            valid_roles = dict(SYSTEM_ROLE_LABELS)
+            valid_roles = dict(ROLE_LABELS)
             if new_role not in valid_roles:
                 return error(f"Invalid role. Choose: {', '.join(valid_roles)}")
-        final_role = new_role or staff.role
+        final_role = new_role or api_role(staff)
         # Checks acts_as too — a custom role bundling "doctor" must count
-        old_is_doctor = "doctor" in staff_acts_as
+        old_is_doctor = staff.get_role() == ROLE_DOCTOR
         old_resource = "doctors" if old_is_doctor else "staff"
         new_resource = "doctors" if final_role == "doctor" else "staff"
         needs_limit_check = (
@@ -638,11 +629,11 @@ class HospitalStaffDetailView(APIView):
             staff.is_active = final_active
             updated.append("is_active")
         if new_role:
-            staff.group = system_role(hospital.db_name, new_role)
+            staff.user_group = system_role(hospital.db_name, new_role)
             updated.append("role")
         if updated:
-            staff.save(using=hospital.db_name, update_fields=["group" if f == "role" else f for f in updated])
-        return success(data={"id": staff.id, "is_active": staff.is_active, "role": staff.role},
+            staff.save(using=hospital.db_name, update_fields=["user_group" if f == "role" else f for f in updated])
+        return success(data={"staff_user_id": staff.pk, "is_active": staff.is_active, "role": api_role(staff)},
                        message=f"Updated: {', '.join(updated) or 'nothing'}.")
 
 
@@ -660,9 +651,9 @@ class HospitalStaffResetPasswordView(APIView):
             return not_found("Staff member not found.")
 
         temp_password = _gen_password()
-        staff.set_password(temp_password)
+        set_login_password(staff, temp_password)
         staff.must_change_password = True
-        staff.save(using=hospital.db_name, update_fields=["password", "must_change_password"])
+        staff.save(using=hospital.db_name, update_fields=["must_change_password", "updated_at"])
         return success(data={"temp_password": temp_password},
                        message=f"Password reset for {staff.email}. Share the temp password securely.")
 
@@ -684,26 +675,26 @@ class PlatformUserListView(APIView):
         results = []
         for t in hospitals:
             try:
-                qs = StaffUser.objects.using(t.db_name).select_related("group")
+                qs = StaffUser.objects.using(t.db_name).select_related("user_group")
                 if role_filter:
                     qs = qs.filter(role_q(role_filter))
-                if status_filter == "active":
-                    qs = qs.filter(is_active=True)
-                elif status_filter == "inactive":
-                    qs = qs.filter(is_active=False)
+                qs = list(qs)
+                logins = last_logins(qs)
                 for s in qs:
+                    if (status_filter == "active" and not s.is_active) or (status_filter == "inactive" and s.is_active):
+                        continue
                     full_name = s.get_full_name()
                     if search and search not in full_name.lower() and search not in s.email.lower():
                         continue
                     results.append({
-                        "id": s.id,
-                        "hospital_id": t.id,
+                        "staff_user_id": s.pk,
+                        "hospital_id": t.pk,
                         "hospital_name": t.name,
                         "full_name": full_name,
                         "email": s.email,
-                        "role": s.role,
+                        "role": api_role(s),
                         "is_active": s.is_active,
-                        "last_login": s.last_login.isoformat() if s.last_login else None,
+                        "last_login": logins.get(s.user_id).isoformat() if logins.get(s.user_id) else None,
                     })
             except Exception as exc:
                 logger.warning("User directory skipped hospital %s: %s", t.db_name, exc)

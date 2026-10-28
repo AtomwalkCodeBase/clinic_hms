@@ -123,7 +123,7 @@ class PreviewViewTests(TestCase):
 
     def test_the_owner_gets_a_jpeg_with_cache_headers(self, _resolve):
         doc = make_doc(status="completed")
-        resp = self.get(doc.id, png_bytes((900, 1200)), {"width": "300"})
+        resp = self.get(doc.pk, png_bytes((900, 1200)), {"width": "300"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp["Content-Type"], "image/jpeg")
         self.assertIn("max-age=86400", resp["Cache-Control"])
@@ -133,52 +133,52 @@ class PreviewViewTests(TestCase):
     def test_a_pdf_page_two_and_a_missing_page(self, _resolve):
         doc = make_doc(status="completed")
         raw = pdf_bytes(2)
-        self.assertEqual(self.get(doc.id, raw, {"page": "2"}).status_code, 200)
-        self.assertEqual(self.get(doc.id, raw, {"page": "3"}).status_code, 404)
+        self.assertEqual(self.get(doc.pk, raw, {"page": "2"}).status_code, 200)
+        self.assertEqual(self.get(doc.pk, raw, {"page": "3"}).status_code, 404)
 
     def test_a_file_still_being_read_can_be_previewed(self, _resolve):
         doc = make_doc(status="extracting")
-        self.assertEqual(self.get(doc.id, png_bytes()).status_code, 200)
+        self.assertEqual(self.get(doc.pk, png_bytes()).status_code, 200)
 
     def test_the_same_etag_gets_not_modified_without_reading_the_file(self, _resolve):
         doc = make_doc(status="completed")
-        etag = self.get(doc.id, png_bytes())["ETag"]
+        etag = self.get(doc.pk, png_bytes())["ETag"]
         with mock.patch("apps.documents.previews.render_preview") as draw:
-            resp = self.get(doc.id, png_bytes(), headers={"HTTP_IF_NONE_MATCH": etag})
+            resp = self.get(doc.pk, png_bytes(), headers={"HTTP_IF_NONE_MATCH": etag})
         self.assertEqual(resp.status_code, 304)
         draw.assert_not_called()
 
     def test_a_different_width_is_a_different_etag(self, _resolve):
         doc = make_doc(status="completed")
-        self.assertNotEqual(self.get(doc.id, png_bytes(), {"width": "300"})["ETag"],
-                            self.get(doc.id, png_bytes(), {"width": "900"})["ETag"])
+        self.assertNotEqual(self.get(doc.pk, png_bytes(), {"width": "300"})["ETag"],
+                            self.get(doc.pk, png_bytes(), {"width": "900"})["ETag"])
 
     def test_another_patients_document_is_not_found(self, resolve):
         doc = make_doc(awpid="AWP-T1", status="completed")
         resolve.return_value = ("AWP-OTHER", None, None)
-        self.assertEqual(self.get(doc.id, png_bytes()).status_code, 404)
+        self.assertEqual(self.get(doc.pk, png_bytes()).status_code, 404)
 
     def test_a_bad_page_number_is_a_400_and_page_zero_a_404(self, _resolve):
         doc = make_doc(status="completed")
-        self.assertEqual(self.get(doc.id, png_bytes(), {"page": "x"}).status_code, 400)
-        self.assertEqual(self.get(doc.id, png_bytes(), {"page": "0"}).status_code, 404)
+        self.assertEqual(self.get(doc.pk, png_bytes(), {"page": "x"}).status_code, 400)
+        self.assertEqual(self.get(doc.pk, png_bytes(), {"page": "0"}).status_code, 404)
 
     def test_a_file_that_cannot_be_drawn_is_a_422(self, _resolve):
         doc = make_doc(status="completed")
-        self.assertEqual(self.get(doc.id, b"not a real file").status_code, 422)
-        self.assertEqual(self.get(doc.id, png_bytes((1, 1))).status_code, 422)
+        self.assertEqual(self.get(doc.pk, b"not a real file").status_code, 422)
+        self.assertEqual(self.get(doc.pk, png_bytes((1, 1))).status_code, 422)
 
     def test_a_file_over_the_size_limit_is_refused(self, _resolve):
         doc = make_doc(status="completed")
-        self.assertEqual(self.get(doc.id, b"%PDF" + b"x" * previews.MAX_BYTES).status_code, 422)
+        self.assertEqual(self.get(doc.pk, b"%PDF" + b"x" * previews.MAX_BYTES).status_code, 422)
 
     def test_a_staff_user_is_refused(self, _resolve):
         doc = make_doc(status="completed")
-        request = APIRequestFactory().get(f"/api/v1/portal/documents/{doc.id}/preview/")
+        request = APIRequestFactory().get(f"/api/v1/portal/documents/{doc.pk}/preview/")
         force_authenticate(request, user=MockUser({"user_id": 1, "role": "doctor", "awpid": ""}))
-        self.assertEqual(PortalDocumentPreviewView.as_view()(request, doc_id=doc.id).status_code, 403)
+        self.assertEqual(PortalDocumentPreviewView.as_view()(request, doc_id=doc.pk).status_code, 403)
 
     def test_no_login_is_refused(self, _resolve):
         doc = make_doc(status="completed")
-        request = APIRequestFactory().get(f"/api/v1/portal/documents/{doc.id}/preview/")
-        self.assertIn(PortalDocumentPreviewView.as_view()(request, doc_id=doc.id).status_code, (401, 403))
+        request = APIRequestFactory().get(f"/api/v1/portal/documents/{doc.pk}/preview/")
+        self.assertIn(PortalDocumentPreviewView.as_view()(request, doc_id=doc.pk).status_code, (401, 403))

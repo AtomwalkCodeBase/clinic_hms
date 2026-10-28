@@ -1,6 +1,6 @@
 export const STAFF_ROLE_LABELS = {
   hospital_admin: "Hospital Admin", doctor: "Doctor", nurse: "Nurse",
-  front_desk: "Front Desk", lab_tech: "Lab Technician", pharmacist: "Pharmacist",
+  front_desk: "Front Desk",
 };
 
 export const TEST_CATEGORY_LABELS = {

@@ -14,11 +14,11 @@ from apps.documents import ocr
 from apps.documents.models import CHOOSABLE_TYPES, CLASSIFIER_HOSPITAL, CLASSIFIER_RULES, DOCUMENT_TYPES, DocumentBatch, DocumentClassification, DocumentExtraction, HUMAN_CLASSIFIED, ISSUED, MedicalDocument, NOT_CLASSIFIED, REVIEW_REQUIRED, RULE_CLASSIFIED
 from apps.documents.serializers import MAX_FILE_BYTES, size_text
 from apps.documents.services import text_clean
-from apps.opd.models import HospitalPatient
+from apps.hospital_patients.models import HospitalPatient
 from apps.patients.models import Patient
 from core import storage
 from core.api.response import error
-from core.utils.file_validation import FileValidationError, validate_bytes
+from core.validation import FileValidationError, validate_bytes
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.files.base import ContentFile
@@ -357,7 +357,7 @@ def size_of(doc):
 
 def document_rows(queryset, limit=50):
     """Documents in the shape the history screens read: id, title, file_name, mime_type, doc_type, uploaded_by, created_at."""
-    return [{"id": d.id, "title": display_name(d), "file_name": display_name(d), "mime_type": mime_of(d),
+    return [{"medical_document_id": d.pk, "title": display_name(d), "file_name": display_name(d), "mime_type": mime_of(d),
              "doc_type": d.doc_classification, "uploaded_by": uploaded_by_of(d), "created_at": d.created_at}
             for d in queryset.order_by("-created_at")[:limit]]
 
@@ -406,7 +406,7 @@ def save_upload(awpid, files):
             _safe_delete(d.file_name.name if d.file_name else "")
         batch.delete()
         raise
-    return batch, list(MedicalDocument.objects.filter(batch=batch).order_by("id"))
+    return batch, list(MedicalDocument.objects.filter(batch=batch).order_by("pk"))
 def start_processing(document_ids, queue=BULK_QUEUE):
     """Queue each document's first stage on `queue`. If the queue can't be reached the document is marked failed -"""
     from apps.documents.tasks import extract_document_task
@@ -420,18 +420,18 @@ def start_processing(document_ids, queue=BULK_QUEUE):
                 fail_document(doc, "Couldn't start processing this file. Please try again.")
 def batch_summary(batch):
     """The batch and its documents, for the patient to follow: counts by status, then each file."""
-    docs = list(batch.b_documents.select_related("d_classification").order_by("id"))
+    docs = list(batch.b_documents.select_related("d_classification").order_by("pk"))
     counts = {s: 0 for s in Status.values}
     for d in docs:
         counts[d.status] = counts.get(d.status, 0) + 1
     finished = sum(counts.get(k, 0) for k in (Status.COMPLETED, Status.REVIEW_REQUIRED, Status.FAILED))
     total = len(docs)
     return {
-        "id": batch.id, "total_files": total, "created_at": batch.created_at,
+        "document_batch_id": batch.pk, "total_files": total, "created_at": batch.created_at,
         "status": "processing" if finished < total else "completed",
         "progress_percent": int(round(100.0 * finished / total)) if total else 100,
         "counts": counts,
-        "documents": [{"id": d.id, "file_name": display_name(d), "status": d.status,
+        "documents": [{"medical_document_id": d.pk, "file_name": display_name(d), "status": d.status,
                        "processing_status": d.status, "doc_type": d.doc_classification, "method": method_of(d),
                        "error": d.error_message} for d in docs],
     }
@@ -459,7 +459,7 @@ def _end(doc, status, **fields):
         setattr(doc, k, v)
     doc.save()
 def fail_document(doc, message):
-    logger.warning("records: document %s failed: %s", doc.id, message)
+    logger.warning("records: document %s failed: %s", doc.pk, message)
     _end(doc, Status.FAILED, error_message=str(message)[:2000])
 def fail_document_by_id(document_id, message):
     """For the task, once its retries are used up."""
@@ -525,7 +525,7 @@ def reclassify_existing(limit=5000):
             .filter(status__in=(Status.COMPLETED, Status.REVIEW_REQUIRED), source_hospital_id__isnull=True,
                     d_classification__status__in=(RULE_CLASSIFIED, REVIEW_REQUIRED),
                     d_extraction__isnull=False)
-            .order_by("id")[:limit])
+            .order_by("pk")[:limit])
     for doc in docs:
         before = doc.doc_classification
         result = classify_document_by_rules(text_of(doc))
@@ -564,13 +564,17 @@ def awaiting_review_q():
         return Q(pk__in=[])
     return (Q(created_by_type="P", source_hospital_id__isnull=True, created_at__gte=start)
             & ~Q(d_classification__status__in=(HUMAN_CLASSIFIED, ISSUED)))
+def confirmed_q(field="document"):
+    """Q for facts (growth, vaccines, diagnoses, labs...) that may go into the patient's health journey: those not read from an upload that is still
+    waiting for the patient to confirm its type. Facts with no document (written by a hospital or by hand) always qualify."""
+    return ~Q(**{f"{field}__in": MedicalDocument.objects.using("default").filter(awaiting_review_q()).values("pk")})
 def document_counts(awpid):
     """What the My Documents dropdown and the badges need: {"total", "awaiting_review", "unclassified", "by_type"}."""
     docs = MedicalDocument.objects.using("default").filter(patient__awpid=awpid)
     awaiting = awaiting_review_q()
     done = (Status.COMPLETED, Status.REVIEW_REQUIRED)
     by_type = {code: 0 for code in CHOOSABLE_TYPES}
-    for row in docs.exclude(awaiting).filter(status__in=done).values("doc_classification").annotate(n=Count("id")):
+    for row in docs.exclude(awaiting).filter(status__in=done).values("doc_classification").annotate(n=Count("pk")):
         if row["doc_classification"] in by_type:
             by_type[row["doc_classification"]] = row["n"]
     return {
@@ -583,14 +587,14 @@ def documents_by_day(qs, year=None):
     """The By-date view of My Documents, over `qs` (the patient's documents, already narrowed to what the list shows)."""
     qs = qs.order_by()
     years = [{"year": r["y"], "count": r["n"]}
-             for r in qs.annotate(y=ExtractYear("created_at")).values("y").annotate(n=Count("id")).order_by("-y")]
+             for r in qs.annotate(y=ExtractYear("created_at")).values("y").annotate(n=Count("pk")).order_by("-y")]
     if year is None and years:
         year = years[0]["year"]
     hospital_q = Q(source_hospital__isnull=False) | Q(created_by_type="H")
     in_year = qs.filter(created_at__year=year) if year else qs.none()
     days = {}
     for r in (in_year.annotate(day=TruncDate("created_at")).values("day", "doc_classification")
-              .annotate(n=Count("id"), h=Count("id", filter=hospital_q)).order_by("-day")):
+              .annotate(n=Count("pk"), h=Count("pk", filter=hospital_q)).order_by("-day")):
         day = days.setdefault(r["day"], {"date": r["day"].isoformat(), "total": 0, "hospital": 0, "yours": 0, "by_type": {}})
         day["total"] += r["n"]
         day["hospital"] += r["h"]
@@ -667,7 +671,7 @@ def clean_doctor_name(value):
 def submit_decisions(awpid, decisions):
     """The patient's final answer for a list of files: [{"document_id", "document_type"}]. Each file is checked on"""
     wanted = [d["document_id"] for d in decisions]
-    docs = {d.id: d for d in MedicalDocument.objects.using("default").filter(patient__awpid=awpid, pk__in=wanted)
+    docs = {d.pk: d for d in MedicalDocument.objects.using("default").filter(patient__awpid=awpid, pk__in=wanted)
             .select_related("d_classification")}
     submitted, rejected, seen = [], [], set()
 
@@ -786,7 +790,7 @@ def document_text(doc):
 
 
 def batch_counts(batch):
-    counts = dict(batch.b_documents.values_list("status").annotate(n=Count("id")))
+    counts = dict(batch.b_documents.values_list("status").annotate(n=Count("pk")))
     total = sum(counts.values())
     processed = counts.get(MedicalDocument.Status.COMPLETED, 0) + counts.get(MedicalDocument.Status.REVIEW_REQUIRED, 0)
     failed = counts.get(MedicalDocument.Status.FAILED, 0)

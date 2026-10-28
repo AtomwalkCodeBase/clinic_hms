@@ -1,3 +1,7 @@
+import csv
+import io
+import logging
+
 from django.conf import settings
 from decimal import Decimal
 from datetime import timedelta
@@ -7,11 +11,12 @@ from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Sum
+from django.utils.dateparse import parse_datetime
 
 from core.api.response import success, created, error, not_found
 from core.api.permissions import IsHospitalStaff, IsHospitalAdmin
-from core.api.pagination import paginate_queryset
-from core.utils.nntm import get_next_number
+from core.api.pagination import paginate_list, paginate_queryset
+from apps.hospital_setup.models import NextNumber
 from apps.billing.serializers import (
     InvoiceSerializer,
     InvoiceItemSerializer,
@@ -23,14 +28,12 @@ from apps.billing.serializers import (
     RoomTypeOptionSerializer,
 )
 from apps.billing.option_list_views import DropdownListCreateView, DropdownDetailView
-from apps.billing.services import recompute_invoice_totals
-from apps.billing.models import (
-    Invoice,
-    InvoiceItem,
-    Payment,
-    BillingService,
-    OptionList,
-)
+from apps.billing.services import add_payment, line_from_request, money, recompute_invoice_totals
+from apps.billing.models import Invoice, BillingItem
+from apps.hospital_setup.models import OptionList
+
+
+logger = logging.getLogger(__name__)
 
 
 class BillingServiceListView(APIView):
@@ -41,16 +44,62 @@ class BillingServiceListView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        services = BillingService.objects.using(request.hospital_db).filter(is_active=True)
+        services = BillingItem.objects.using(request.hospital_db).filter(is_active=True)
         return success(data=BillingServiceSerializer(services, many=True).data)
 
     def post(self, request):
         s = BillingServiceSerializer(data=request.data)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
-        svc = BillingService(**s.validated_data)
+        svc = BillingItem(**s.validated_data)
         svc.save(using=request.hospital_db)
         return created(data=BillingServiceSerializer(svc).data, message="Service added.")
+
+
+class BillingServiceUploadView(APIView):
+    """POST /api/v1/billing/services/upload/ — add or update the price list in one go.
+
+    Send a CSV file (field "file") with the columns code, name, category, unit_price, tax_rate, tax_inclusive, is_price_editable, is_active,
+    or JSON {"services": [...]} with the same keys. A row whose code already exists updates that service. Nothing is saved if any row is wrong."""
+    permission_classes = [IsAuthenticated, IsHospitalAdmin]
+
+    @staticmethod
+    def _rows(request):
+        upload = request.FILES.get("file")
+        if upload is None:
+            return request.data.get("services") or []
+        text = upload.read().decode("utf-8-sig")
+        return [{k.strip(): (v or "").strip() for k, v in row.items() if k} for row in csv.DictReader(io.StringIO(text))]
+
+    def post(self, request):
+        rows = self._rows(request)
+        if not rows:
+            return error("No price-list rows were sent.")
+        db = request.hospital_db
+        problems, parsed = {}, []
+        for number, row in enumerate(rows, start=1):
+            row = {k: v for k, v in row.items() if v != ""}
+            for flag in ("tax_inclusive", "is_price_editable", "is_active"):
+                if flag in row:
+                    row[flag] = str(row[flag]).lower() in ("true", "1", "yes", "y")
+            known = BillingItem.objects.using(db).filter(code=row["code"]).first() if row.get("code") else None
+            s = BillingServiceSerializer(known, data=row, partial=known is not None)
+            if not s.is_valid():
+                problems[number] = s.errors
+            elif not s.validated_data.get("code"):
+                problems[number] = {"code": ["Every row needs a code."]}
+            else:
+                parsed.append(s.validated_data)
+        if len({p["code"] for p in parsed}) != len(parsed):
+            problems["file"] = {"code": ["A code appears more than once."]}
+        if problems:
+            return error("The price list was not saved.", errors=problems)
+        added = updated = 0
+        with transaction.atomic(using=db):
+            for data in parsed:
+                _, was_added = BillingItem.objects.using(db).update_or_create(code=data["code"], defaults=data)
+                added, updated = added + was_added, updated + (not was_added)
+        return success(data={"added": added, "updated": updated}, message="Price list saved.")
 
 
 class BillingServiceDetailView(APIView):
@@ -59,8 +108,8 @@ class BillingServiceDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return BillingService.objects.using(request.hospital_db).get(pk=pk)
-        except BillingService.DoesNotExist:
+            return BillingItem.objects.using(request.hospital_db).get(pk=pk)
+        except BillingItem.DoesNotExist:
             return None
 
     def patch(self, request, pk):
@@ -199,27 +248,20 @@ class InvoiceListCreateView(APIView):
                 errors={"branch": "Required."},
             )
 
-        inv_number, _ = get_next_number(branch_id=branch_id, entity="invoice", using=db)
+        inv_number, _ = NextNumber.next(branch_id, "invoice", db)
         inv = Invoice.objects.using(db).create(
             patient_id=patient_pk,
             branch_id=branch_id,
             invoice_number=inv_number,
             notes=request.data.get("notes", ""),
-            created_by_id=request.user.id,
+            created_by_id=request.user.pk,
         )
 
-        # Optional line items in the same call — [{description, unit_price,
-        for item in request.data.get("items", []):
-            InvoiceItem.objects.using(db).create(
-                invoice=inv,
-                service_id=item.get("service"),
-                description=item.get("description", ""),
-                quantity=item.get("quantity", 1),
-                unit_price=item.get("unit_price", 0),
-                tax_rate=item.get("tax_rate", 0),
-                total=Decimal(str(item.get("unit_price", 0))) * int(item.get("quantity", 1)),
-            )
+        # Optional lines in the same call — [{description, unit_price, quantity, service}]
         if request.data.get("items"):
+            for item in request.data["items"]:
+                service = BillingItem.objects.using(db).filter(pk=item["service"]).first() if item.get("service") else None
+                inv.lines = [*inv.lines, line_from_request(item, service)]
             recompute_invoice_totals(inv, db)
             inv.refresh_from_db(using=db)
 
@@ -278,19 +320,36 @@ class InvoiceDetailView(APIView):
 
 
 class InvoicePDFView(APIView):
-    """GET /api/v1/billing/invoices/{id}/pdf/"""
+    """GET /api/v1/billing/invoices/{id}/pdf/ — the PDF is also kept as the hospital's document for the invoice (the latest print replaces the last)."""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
+
+    @staticmethod
+    def _keep(db, inv, patient, data_uri):
+        from core import storage as blob_storage
+        from apps.hospital_patients.hospital_log import event_for, record_document
+        from apps.hospital_setup.models import hospital_folder
+
+        if patient is None:
+            return
+        try:
+            key = blob_storage.upload_data_uri(data_uri, prefix=f"{hospital_folder(db)}/patients/{patient.uhid}/invoices", mime_type="application/pdf",
+                                               category="invoice")
+            old = record_document(db, event_for(db, patient.pk, "billing", inv.created_at), key)
+            if old:
+                blob_storage.delete(old)
+        except Exception:
+            logger.exception("invoice %s: the PDF was not kept as a hospital document", inv.pk)
 
     def get(self, request, pk):
         import base64
-        from apps.opd.models import HospitalPatient
+        from apps.hospital_patients.models import HospitalPatient
         from apps.hospital_setup.models import Branch
         from apps.hospital_master.models import Hospital
         from apps.billing.pdf import generate_invoice_pdf
 
         db = request.hospital_db
         try:
-            inv = Invoice.objects.using(db).prefetch_related("i_items", "i_payments").get(pk=pk)
+            inv = Invoice.objects.using(db).get(pk=pk)
         except Invoice.DoesNotExist:
             return not_found("Invoice not found.")
 
@@ -301,13 +360,14 @@ class InvoicePDFView(APIView):
 
         pdf_bytes = generate_invoice_pdf(
             invoice=inv,
-            items=list(inv.i_items.all()),
-            payments=list(inv.i_payments.all().order_by("paid_at")),
+            items=inv.lines,
+            payments=sorted(inv.payments, key=lambda p: p["paid_at"]),
             patient=patient,
             branch=branch,
             hospital_name=hospital_name,
         )
         data_uri = "data:application/pdf;base64," + base64.b64encode(pdf_bytes).decode("ascii")
+        self._keep(db, inv, patient, data_uri)
         return success(data={
             "file_data": data_uri,
             "file_name": f"{inv.invoice_number}.pdf",
@@ -328,100 +388,74 @@ class InvoiceItemCreateView(APIView):
         if inv.status not in ("draft", "issued"):
             return error(f"Cannot add items to a {inv.status} invoice.")
 
-        s = InvoiceItemSerializer(data=request.data)
+        s = InvoiceItemSerializer(data=request.data, db=db)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
         d = s.validated_data
-        InvoiceItem.objects.using(db).create(
-            invoice=inv,
-            service=d.get("service"),
-            description=d["description"],
-            quantity=d.get("quantity", 1),
-            unit_price=d["unit_price"],
-            tax_rate=d.get("tax_rate", 0),
-            total=d["unit_price"] * d.get("quantity", 1),
-        )
+        inv.lines = [*inv.lines, line_from_request(d, d.get("service"))]
         recompute_invoice_totals(inv, db)
-        return created(data=InvoiceSerializer(inv.__class__.objects.using(db).get(pk=inv.pk)).data,
-                       message="Item added.")
+        return created(data=InvoiceSerializer(inv).data, message="Item added.")
 
 
 class PaymentCreateView(APIView):
-    """POST /api/v1/billing/payments/  — record a payment against an invoice."""
+    """GET /api/v1/billing/payments/ — every payment, newest first; POST — record a payment against an invoice."""
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
-        from apps.opd.models import HospitalPatient
+        from apps.hospital_patients.models import HospitalPatient
         from apps.hospital_setup.models import StaffUser
 
         db = request.hospital_db
-        qs = Payment.objects.using(db).select_related("invoice").order_by("-paid_at")
-
-        if date_from := request.query_params.get("date_from"):
-            qs = qs.filter(paid_at__date__gte=date_from)
-        if date_to := request.query_params.get("date_to"):
-            qs = qs.filter(paid_at__date__lte=date_to)
-        if mode := request.query_params.get("payment_mode"):
-            qs = qs.filter(payment_mode=mode)
+        invoices = Invoice.objects.using(db).exclude(payments=[]).select_related("patient")
         if patient_id := request.query_params.get("patient_id"):
-            qs = qs.filter(invoice__patient_id=patient_id)
+            invoices = invoices.filter(patient_id=patient_id)
+        date_from, date_to = request.query_params.get("date_from"), request.query_params.get("date_to")
+        mode = request.query_params.get("payment_mode")
 
-        total_amount = qs.aggregate(total=Sum("amount"))["total"] or Decimal("0")
-        page_items, meta = paginate_queryset(request, qs)
+        rows = []
+        for inv in invoices:
+            for p in inv.payments:
+                paid_at = parse_datetime(p["paid_at"])
+                if (date_from and paid_at.date().isoformat() < date_from) or (date_to and paid_at.date().isoformat() > date_to) or (mode and p["payment_mode"] != mode):
+                    continue
+                rows.append((paid_at, inv, p))
+        rows.sort(key=lambda r: r[0], reverse=True)
+        total_amount = sum((money(p["amount"]) for _, _, p in rows), Decimal("0"))
+        page_items, meta = paginate_list(request, rows)
 
-        patient_ids = {p.invoice.patient_id for p in page_items}
-        rows = list(HospitalPatient.objects.using(db).filter(pk__in=patient_ids))
-        for p in rows[:1]:
-            p.get_patient_details(batch=rows)
-        patients = {p.id: p for p in rows}
-        recorder_ids = {p.recorded_by_id for p in page_items if p.recorded_by_id}
-        recorders = {s.id: s for s in StaffUser.objects.using(db).filter(pk__in=recorder_ids)}
+        patients = [inv.patient for _, inv, _ in page_items]
+        for p in patients[:1]:
+            p.get_patient_details(batch=patients)
+        recorders = {s.pk: s for s in StaffUser.objects.using(db).filter(pk__in={p["recorded_by_id"] for _, _, p in page_items if p.get("recorded_by_id")})}
 
         results = []
-        for p in page_items:
-            patient = patients.get(p.invoice.patient_id)
-            recorder = recorders.get(p.recorded_by_id)
+        for paid_at, inv, p in page_items:
+            recorder = recorders.get(p.get("recorded_by_id"))
             results.append({
-                "id": p.id,
-                "amount": p.amount,
-                "payment_mode": p.payment_mode,
-                "transaction_ref": p.transaction_ref,
-                "paid_at": p.paid_at,
-                "invoice_id": p.invoice_id,
-                "invoice_number": p.invoice.invoice_number,
-                "invoice_status": p.invoice.status,
-                "patient_name": patient.get_patient_details()["full_name"] if patient else "",
-                "patient_uhid": patient.uhid if patient else "",
+                "payment_id": f"{inv.pk}-{p['payment_id']}", "amount": p["amount"], "payment_mode": p["payment_mode"], "transaction_ref": p["transaction_ref"],
+                "paid_at": paid_at, "invoice_id": inv.pk, "invoice_number": inv.invoice_number, "invoice_status": inv.status,
+                "patient_name": inv.patient.get_patient_details()["full_name"], "patient_uhid": inv.patient.uhid,
                 "recorded_by_name": (f"{recorder.first_name} {recorder.last_name}".strip() or recorder.email) if recorder else "",
             })
-
-        return success(data={
-            "results": results,
-            "pagination": meta,
-            "total_amount": total_amount,
-        })
+        return success(data={"results": results, "pagination": meta, "total_amount": total_amount})
 
     def post(self, request):
-        s = PaymentSerializer(data=request.data)
+        db = request.hospital_db
+        s = PaymentSerializer(data=request.data, db=db)
         if not s.is_valid():
             return error("Validation error.", errors=s.errors)
-        db = request.hospital_db
-        # Payment + the invoice's running total in one transaction, with the invoice row
+        d = s.validated_data
+        # The payment and the invoice's running total in one transaction, with the invoice row locked
         with transaction.atomic(using=db):
-            inv = Invoice.objects.using(db).select_for_update().get(pk=s.validated_data["invoice"].pk)
+            inv = Invoice.objects.using(db).select_for_update().get(pk=d["invoice"].pk)
             outstanding = inv.total_amount - inv.paid_amount
-            if s.validated_data["amount"] > outstanding:
-                return error("That is more than the invoice still owes.",
-                             errors={"amount": f"At most {outstanding} is outstanding."})
-            ref = s.validated_data.get("transaction_ref") or ""
-            if ref and Payment.objects.using(db).filter(invoice=inv, transaction_ref=ref).exists():
-                return error("That payment reference is already recorded for this invoice.",
-                             errors={"transaction_ref": "Already used on this invoice."})
-            payment = Payment.objects.using(db).create(recorded_by_id=request.user.id, **s.validated_data)
-            inv.paid_amount += payment.amount
-            inv.status = "paid" if inv.paid_amount >= inv.total_amount else "partially_paid"
-            inv.save(using=db, update_fields=["paid_amount", "status"])
-        return created(data=PaymentSerializer(payment).data)
+            if d["amount"] > outstanding:
+                return error("That is more than the invoice still owes.", errors={"amount": f"At most {outstanding} is outstanding."})
+            ref = d.get("transaction_ref") or ""
+            if ref and any(p["transaction_ref"] == ref for p in inv.payments):
+                return error("That payment reference is already recorded for this invoice.", errors={"transaction_ref": "Already used on this invoice."})
+            payment = add_payment(inv, db, d["amount"], d["payment_mode"], ref, request.user.pk)
+        return created(data={**payment, "invoice": inv.pk})
 
 
 class RevenueReportView(APIView):
@@ -440,39 +474,29 @@ class RevenueReportView(APIView):
         invoices = Invoice.objects.using(db).filter(
             created_at__date__gte=date_from, created_at__date__lte=date_to,
         ).exclude(status=Invoice.STATUS_CANCELLED)
-        payments = Payment.objects.using(db).filter(
-            paid_at__date__gte=date_from, paid_at__date__lte=date_to,
-        )
+        # Payments sit on their invoice, so the ones made in the dates asked for are picked out of the invoices that have any
+        payments = [(parse_datetime(p["paid_at"]).date(), p) for inv in Invoice.objects.using(db).exclude(payments=[]) for p in inv.payments
+                    if date_from <= parse_datetime(p["paid_at"]).date().isoformat() <= date_to]
 
         total_billed = invoices.aggregate(t=Sum("total_amount"))["t"] or Decimal("0")
-        total_collected = payments.aggregate(t=Sum("amount"))["t"] or Decimal("0")
-        # Outstanding is a point-in-time balance (not date-scoped) across
-        total_outstanding = (
-            Invoice.objects.using(db)
-            .exclude(status__in=[Invoice.STATUS_CANCELLED, Invoice.STATUS_PAID])
-            .aggregate(t=Sum("total_amount"))["t"] or Decimal("0")
-        ) - (
-            Invoice.objects.using(db)
-            .exclude(status__in=[Invoice.STATUS_CANCELLED, Invoice.STATUS_PAID])
-            .aggregate(t=Sum("paid_amount"))["t"] or Decimal("0")
-        )
+        total_collected = sum((money(p["amount"]) for _, p in payments), Decimal("0"))
+        # Outstanding is a point-in-time balance (not date-scoped) across every unpaid invoice
+        open_invoices = Invoice.objects.using(db).exclude(status__in=[Invoice.STATUS_CANCELLED, Invoice.STATUS_PAID])
+        total_outstanding = (open_invoices.aggregate(t=Sum("total_amount"))["t"] or Decimal("0")) - (open_invoices.aggregate(t=Sum("paid_amount"))["t"] or Decimal("0"))
 
-        by_mode = list(
-            payments.values("payment_mode").annotate(amount=Sum("amount")).order_by("-amount")
-        )
-
+        by_mode = {}
+        for _, p in payments:
+            by_mode[p["payment_mode"]] = by_mode.get(p["payment_mode"], Decimal("0")) + money(p["amount"])
         daily_billed = {
             row["day"]: row["amount"] for row in
             invoices.annotate(day=TruncDate("created_at")).values("day").annotate(amount=Sum("total_amount")).order_by("day")
         }
-        daily_collected = {
-            row["day"]: row["amount"] for row in
-            payments.annotate(day=TruncDate("paid_at")).values("day").annotate(amount=Sum("amount")).order_by("day")
-        }
-        all_days = sorted(set(daily_billed) | set(daily_collected))
+        daily_collected = {}
+        for day, p in payments:
+            daily_collected[day] = daily_collected.get(day, Decimal("0")) + money(p["amount"])
         daily = [
             {"date": str(d), "billed": daily_billed.get(d, Decimal("0")), "collected": daily_collected.get(d, Decimal("0"))}
-            for d in all_days
+            for d in sorted(set(daily_billed) | set(daily_collected))
         ]
 
         return success(data={
@@ -483,8 +507,8 @@ class RevenueReportView(APIView):
             "total_outstanding": total_outstanding,
             "collection_rate": float(total_collected / total_billed) if total_billed else None,
             "invoice_count": invoices.count(),
-            "payment_count": payments.count(),
-            "by_payment_mode": by_mode,
+            "payment_count": len(payments),
+            "by_payment_mode": [{"payment_mode": m, "amount": a} for m, a in sorted(by_mode.items(), key=lambda kv: -kv[1])],
             "daily": daily,
         })
 
@@ -507,49 +531,13 @@ class BillingSummaryView(APIView):
         if not patient_id:
             return error("patient_id or appointment_id is required.")
 
-        # ── Billing (front-desk invoices) ───────────────────────────────
         invoices = Invoice.objects.using(db).filter(patient_id=patient_id)
-        billing_total  = sum((i.total_amount for i in invoices), Decimal("0"))
-        billing_paid   = sum((i.paid_amount for i in invoices), Decimal("0"))
-        billing_count  = invoices.count()
-
-        # ── Lab charges (own payment_status, never becomes an Invoice) ──
-        from apps.lab.models import LabRequest
-        lab_requests = (
-            LabRequest.objects.using(db)
-            .filter(patient_id=patient_id)
-            .exclude(status="cancelled")
-            .select_related("test")
-        )
-        lab_total = sum((lr.test.price or Decimal("0") for lr in lab_requests), Decimal("0"))
-        lab_paid  = sum(
-            (lr.test.price or Decimal("0") for lr in lab_requests if lr.payment_status == "paid"),
-            Decimal("0"),
-        )
-        lab_count = lab_requests.count()
-
-        # ── Pharmacy charges — ESTIMATED. Dispense has no sale-price field
-        from apps.pharmacy.models import Dispense
-        dispenses = (
-            Dispense.objects.using(db)
-            .filter(prescription_item__prescription__encounter__appointment__patient_id=patient_id)
-            .select_related("stock")
-        )
-        pharmacy_estimated_total = sum(
-            ((d.stock.unit_cost or Decimal("0")) * d.quantity for d in dispenses), Decimal("0")
-        )
-        pharmacy_count = dispenses.count()
-
-        grand_total = billing_total + lab_total + pharmacy_estimated_total
-        grand_paid  = billing_paid + lab_paid  # pharmacy has no payment tracking to add here
-
+        total = sum((i.total_amount for i in invoices), Decimal("0"))
+        paid = sum((i.paid_amount for i in invoices), Decimal("0"))
         return success(data={
             "patient_id": patient_id,
-            "billing":  {"invoice_count": billing_count, "total": str(billing_total), "paid": str(billing_paid)},
-            "lab":      {"request_count": lab_count, "total": str(lab_total), "paid": str(lab_paid)},
-            "pharmacy": {"dispense_count": pharmacy_count, "estimated_total": str(pharmacy_estimated_total),
-                         "note": "Estimated from stock cost — pharmacy doesn't capture a separate sale price yet."},
-            "grand_total": str(grand_total),
-            "grand_paid":  str(grand_paid),
-            "grand_outstanding": str(grand_total - grand_paid),
+            "billing": {"invoice_count": invoices.count(), "total": str(total), "paid": str(paid)},
+            "grand_total": str(total),
+            "grand_paid": str(paid),
+            "grand_outstanding": str(total - paid),
         })

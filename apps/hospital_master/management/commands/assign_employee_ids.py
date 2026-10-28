@@ -10,19 +10,17 @@ from django.utils import timezone
 from apps.hospital_master.models import Hospital
 from apps.hospital_master.services import ensure_hospital_db
 from apps.hospital_setup.models import StaffUser
+from apps.hospital_setup.rbac import api_role
 
 ROLE_PREFIX = {
     "doctor":         "DOC",
     "nurse":          "NUR",
     "front_desk":     "FD",
-    "lab_tech":       "LAB",
-    "pharmacist":     "PHR",
     "hospital_admin": "ADM",
 }
 DEFAULT_PREFIX = "STF"  # custom roles, or anything not in the map above
 ROLE_LABEL = {
     "doctor": "Doctor", "nurse": "Nurse", "front_desk": "Front Desk",
-    "lab_tech": "Lab Technician", "pharmacist": "Pharmacist",
     "hospital_admin": "Hospital Admin",
 }
 
@@ -80,26 +78,26 @@ class Command(BaseCommand):
                 StaffUser.objects.using(db)
                 .filter(is_active=True)
                 .filter(Q(employee_id__isnull=True) | Q(employee_id=""))
-                .select_related("group")
-                .order_by("group__system_role_key", "id")
+                .select_related("user_group")
+                .order_by("user_group__role", "pk")
             )
             for staff in staff_needing_id:
-                prefix = ROLE_PREFIX.get(staff.role, DEFAULT_PREFIX)
+                prefix = ROLE_PREFIX.get(api_role(staff), DEFAULT_PREFIX)
                 next_seq[prefix] = next_seq.get(prefix, 0) + 1
                 staff.employee_id = f"{prefix}-{next_seq[prefix]:03d}"
                 staff.save(using=db, update_fields=["employee_id"])
-                rows.append((ROLE_LABEL.get(staff.role, staff.role.title()), staff.get_full_name(), staff.employee_id, staff.phone))
-                self.stdout.write(f"  {staff.employee_id}  {staff.get_full_name()} ({staff.role})")
+                rows.append((ROLE_LABEL.get(api_role(staff), api_role(staff).title()), staff.get_full_name(), staff.employee_id, staff.phone))
+                self.stdout.write(f"  {staff.employee_id}  {staff.get_full_name()} ({api_role(staff)})")
 
         # Also list staff who already had an employee_id, so the printed
         already = (
             StaffUser.objects.using(db).filter(is_active=True)
             .exclude(employee_id__isnull=True).exclude(employee_id="")
-            .select_related("group")
-            .order_by("group__system_role_key", "employee_id")
+            .select_related("user_group")
+            .order_by("user_group__role", "employee_id")
         )
         already_rows = [
-            (ROLE_LABEL.get(s.role, s.role.title()), s.get_full_name(), s.employee_id, s.phone)
+            (ROLE_LABEL.get(api_role(s), api_role(s).title()), s.get_full_name(), s.employee_id, s.phone)
             for s in already if s.employee_id not in {r[2] for r in rows}
         ]
 

@@ -21,4 +21,4 @@ class Command(BaseCommand):
             self.stdout.write("Backfill queued inline")
         else:
             r = backfill_task.delay(limit=o["limit"])
-            self.stdout.write(f"Queued backfill task {r.id}")
+            self.stdout.write(f"Queued backfill task {r.pk}")

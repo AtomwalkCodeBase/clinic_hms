@@ -66,3 +66,9 @@ celerybeat-schedule*
 htmlcov/
 
 logs/
+
+# Local scratch and reports
+/_*.py
+e2e_report*.xlsx
+logs/
+seed_data_trial/

@@ -58,8 +58,6 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 
 class PermissionsSerializer(serializers.Serializer):
-    feat_lab          = serializers.BooleanField()
-    feat_pharmacy     = serializers.BooleanField()
     feat_whatsapp     = serializers.BooleanField()
     feat_multi_branch = serializers.BooleanField()
     feat_ai_voice     = serializers.BooleanField()

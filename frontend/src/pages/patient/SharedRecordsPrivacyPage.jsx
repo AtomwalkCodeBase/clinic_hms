@@ -8,7 +8,6 @@ import {
 import { AppShell } from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { useToast } from "../../hooks/useToast";
-import HospitalSharingCard from "../../components/common/HospitalSharingCard";
 import { usePatientContext } from "../../context/PatientContext";
 import apiClient from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
@@ -304,16 +303,16 @@ export default function SharedRecordsPrivacyPage() {
     const st = stateOf(d);
     const name = d.title;
     if (st === "on") {
-      askHide(1, name, () => setPrivate(d.id, true).then(() => toastUndo(`${name} is now private.`, () => setPrivate(d.id, false))));
+      askHide(1, name, () => setPrivate(d.medical_document_id, true).then(() => toastUndo(`${name} is now private.`, () => setPrivate(d.medical_document_id, false))));
     } else if (st === "visit") {
-      reveal(d.id, "conceal").then(() => toastUndo(`${name} hidden again.`, () => reveal(d.id, "visit")));
+      reveal(d.medical_document_id, "conceal").then(() => toastUndo(`${name} hidden again.`, () => reveal(d.medical_document_id, "visit")));
     } else if (session) {
       setDialog({
         title: "A doctor is viewing now",
         message: `Show ${name} to ${session.requester_label || "the doctor"} —`,
         actions: [
-          { label: "Just this visit", sub: "Hides again when the visit ends", primary: true, onClick: () => reveal(d.id, "visit") },
-          { label: "Always", sub: "Stays visible for future visits too", onClick: () => setPrivate(d.id, false) },
+          { label: "Just this visit", sub: "Hides again when the visit ends", primary: true, onClick: () => reveal(d.medical_document_id, "visit") },
+          { label: "Always", sub: "Stays visible for future visits too", onClick: () => setPrivate(d.medical_document_id, false) },
           { label: "Cancel" },
         ],
       });
@@ -321,7 +320,7 @@ export default function SharedRecordsPrivacyPage() {
       setDialog({
         title: "Show this to doctors again?",
         message: `Doctors you share with will be able to see ${name}.`,
-        actions: [{ label: "Cancel" }, { label: "Show", primary: true, onClick: () => setPrivate(d.id, false) }],
+        actions: [{ label: "Cancel" }, { label: "Show", primary: true, onClick: () => setPrivate(d.medical_document_id, false) }],
       });
     }
   }
@@ -353,8 +352,8 @@ export default function SharedRecordsPrivacyPage() {
   }
 
   function groupPill(g) {
-    const shownIds = g.list.filter((d) => stateOf(d) !== "off").map((d) => d.id);
-    const hiddenIds = g.list.filter((d) => stateOf(d) === "off").map((d) => d.id);
+    const shownIds = g.list.filter((d) => stateOf(d) !== "off").map((d) => d.medical_document_id);
+    const hiddenIds = g.list.filter((d) => stateOf(d) === "off").map((d) => d.medical_document_id);
     if (hiddenIds.length === 0) askHide(shownIds.length, `every report in ${g.label}`, () => bulkHide(shownIds));
     else bulkShow(hiddenIds);
   }
@@ -364,7 +363,6 @@ export default function SharedRecordsPrivacyPage() {
   return (
     <AppShell>
       <PageShell title="Shared records privacy">
-        <HospitalSharingCard key={selectedPatient.awpid || "self"} awpid={selectedPatient.awpid || ""} name={selectedPatient.isSelf ? "" : selectedPatient.name} />
         <p style={{ marginTop: -8, marginBottom: 16, fontSize: 13, color: "var(--color-text-secondary)", maxWidth: "62ch" }}>
           Choose what a doctor sees when you share your records. Nothing here is hidden from you, and nothing is deleted.
         </p>
@@ -487,11 +485,11 @@ export default function SharedRecordsPrivacyPage() {
                     <span style={{ fontFamily: "monospace", fontSize: 10.5, color: "var(--color-text-muted)" }}>{g.list.length}</span>
                     <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
                       <button style={{ ...linkBtn, fontSize: 11 }} onClick={() => setSel((prev) => {
-                        const ids = g.list.map((d) => d.id);
+                        const ids = g.list.map((d) => d.medical_document_id);
                         const all = ids.every((id) => prev.has(id));
                         const n = new Set(prev); ids.forEach((id) => (all ? n.delete(id) : n.add(id)));
                         return n;
-                      })}>{g.list.every((d) => sel.has(d.id)) ? "Deselect" : "Select"}</button>
+                      })}>{g.list.every((d) => sel.has(d.medical_document_id)) ? "Deselect" : "Select"}</button>
                       <button onClick={() => groupPill(g)}
                         style={{ font: "inherit", fontSize: 10, fontWeight: 600, borderRadius: 999, padding: "4px 11px", cursor: "pointer",
                           border: `1px solid ${allShown ? "var(--color-primary)" : "var(--color-border)"}`,
@@ -503,11 +501,11 @@ export default function SharedRecordsPrivacyPage() {
                   </div>
                   {g.list.map((d) => {
                     const Icon = KIND_ICON[d.doc_type] || FileText;
-                    const picked = sel.has(d.id);
+                    const picked = sel.has(d.medical_document_id);
                     return (
-                      <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 2px 10px 22px", borderTop: "1px solid var(--color-border)", background: picked ? "var(--color-primary-soft, rgba(21,119,74,.07))" : "transparent" }}>
+                      <div key={d.medical_document_id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 2px 10px 22px", borderTop: "1px solid var(--color-border)", background: picked ? "var(--color-primary-soft, rgba(21,119,74,.07))" : "transparent" }}>
                         <input type="checkbox" checked={picked}
-                          onChange={(e) => setSel((prev) => { const n = new Set(prev); e.target.checked ? n.add(d.id) : n.delete(d.id); return n; })} />
+                          onChange={(e) => setSel((prev) => { const n = new Set(prev); e.target.checked ? n.add(d.medical_document_id) : n.delete(d.medical_document_id); return n; })} />
                         <span style={{ width: 28, height: 28, borderRadius: 7, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--color-surface-2, #f2f4f2)", color: "var(--color-text-muted)" }}>
                           <Icon size={14} />
                         </span>

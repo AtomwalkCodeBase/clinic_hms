@@ -1,4 +1,4 @@
-"""core/tests/testing.py"""
+"""core/tests/testing.py — helpers shared by the tests of every app"""
 
 import unittest
 from types import SimpleNamespace
@@ -31,7 +31,7 @@ class HospitalDBMixin:
         self.addCleanup(set_hospital_db, None)
 
     def call_view(self, view, method, path, *, user_id, role, data=None, hospital_id=1,
-                  features=("feat_pharmacy",), view_kwargs=None):
+                  features=(), view_kwargs=None):
         """Invoke a DRF view the way JWTHospitalMiddleware + JWTHospitalAuthentication would:"""
         factory = APIRequestFactory()
         request = getattr(factory, method)(path, data or {}, format="json")
@@ -52,10 +52,10 @@ class HospitalDBTransactionTestCase(HospitalDBMixin, TransactionTestCase):
 
 
 def ensure_hospital(pk):
-    """A hospital row with this id (tests that stamp a fact with "hospital 3" need hospital 3 to exist, now that it is a link)."""
+    """A hospital row with this id (tests that stamp a fact with "hospital 3" need hospital 3 to exist, now that it is a link). It is inactive because it has no database."""
     from apps.hospital_master.models import Hospital
     return Hospital.objects.using("default").get_or_create(
-        id=int(pk), defaults={"name": f"Hospital {pk}", "hospital_code": f"hospital-{pk}", "db_name": f"hospital_db_{pk}"})[0]
+        pk=int(pk), defaults={"name": f"Hospital {pk}", "hospital_code": f"hospital-{pk}", "db_name": f"hospital_db_{pk}", "is_active": False})[0]
 
 
 # ── building blocks for tests: a branch with its place, staff in a user group, a patient with its shared record ──
@@ -69,11 +69,13 @@ def make_branch(db, name="Main"):
 
 
 def make_staff(db, role="doctor", *, place=None, **fields):
-    """A staff member of a system role (their user group), working at `place` (a branch_department) when given."""
+    """A staff member in the user group of `role` (doctor, nurse, front_desk, hospital_admin), working at `place` when given."""
     from apps.hospital_setup.branch_utils import set_primary_place
     from apps.hospital_setup.models import StaffUser
     from apps.hospital_setup.rbac import system_role
-    staff = StaffUser.objects.using(db).create(group=system_role(db, role), **fields)
+    fields.setdefault("user_group", system_role(db, role))
+    staff = StaffUser(**fields)
+    staff.save(using=db)
     if place is not None:
         set_primary_place(staff, place, db)
     return staff
@@ -81,9 +83,8 @@ def make_staff(db, role="doctor", *, place=None, **fields):
 
 def make_patient(db, awpid, *, branch=None, uhid=None, full_name="Test Patient", **fields):
     """A hospital patient and its shared patient record: who they are (name, birth date, gender...) is in the shared record, in `fields`;
-    the hospital's own row has the number and consents."""
-    from apps.opd.models import HospitalPatient
+    the hospital's own row has the number."""
+    from apps.hospital_patients.models import HospitalPatient
     from apps.patients.models import Patient
-    HospitalPatient_fields = {k: fields.pop(k) for k in ("dpdp_consent_captured", "dpdp_consent_at", "hie_consent_given", "hie_consent_at") if k in fields}
     Patient.objects.using("default").get_or_create(awpid=awpid, defaults={"full_name": full_name, **fields})
-    return HospitalPatient.objects.using(db).create(awpid=awpid, uhid=uhid or f"U-{awpid}"[:20], **HospitalPatient_fields)
+    return HospitalPatient.objects.using(db).create(awpid=awpid, uhid=uhid or f"U-{awpid}"[:20])

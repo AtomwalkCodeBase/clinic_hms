@@ -80,7 +80,6 @@ export default function PatientDoctorProfilePage() {
   const [booking, setBooking] = useState(false);
   const [confirmation, setConfirmation] = useState(null);
   // Set when the backend tells us this is the patient's first booking at
-  const [consentPrompt, setConsentPrompt] = useState(null);
 
   // Family members this account can book for, plus who the booking is for
   const [family, setFamily] = useState([]);
@@ -151,7 +150,7 @@ export default function PatientDoctorProfilePage() {
     return () => clearInterval(id);
   }, [hospitalId, doctorId, date, confirmation]);
 
-  async function book(sharing) {          // sharing: "share" the history from other hospitals, or "own" to keep only this hospital's own record
+  async function book() {
     if (!selectedSlot) return;
     setBooking(true);
     setConfirmation(null);
@@ -164,19 +163,11 @@ export default function PatientDoctorProfilePage() {
         chief_complaint: reason,
         payment_preference: paymentPreference,
         ...(bookingFor !== "self" ? { patient_awpid: bookingFor } : {}),
-        ...(sharing === "share" ? { data_sharing_consent: true } : {}),
-        ...(sharing === "own" ? { visit_record_consent: true } : {}),
       });
       setConfirmation(data);
-      setConsentPrompt(null);
       toastSuccess("Appointment booked!");
     } catch (err) {
-      // First booking at a new hospital — backend needs explicit consent
-      if (err?.status === 428 && err.data?.consent_required) {
-        setConsentPrompt(err.data);
-      } else {
-        toastApiError(err, "Could not book the appointment.");
-      }
+      toastApiError(err, "Could not book the appointment.");
     } finally {
       setBooking(false);
     }
@@ -650,7 +641,7 @@ export default function PatientDoctorProfilePage() {
                   transition: "all 140ms ease",
                 }}
                 disabled={!date || !selectedSlot || booking}
-                onClick={() => book(false)}
+                onClick={book}
               >
                 {booking ? "Booking…" : selectedSlot ? "Confirm booking" : "Pick a slot to continue"}
               </button>
@@ -658,47 +649,6 @@ export default function PatientDoctorProfilePage() {
           </div>
         )}
 
-        {consentPrompt && (() => {
-          const bookedFor = bookingFor === "self" ? null : family.find(m => m.awpid === bookingFor);
-          const subject = bookedFor ? bookedFor.full_name : "you";
-          const possessive = bookedFor ? `${bookedFor.full_name}'s` : "your";
-          return (
-          <div style={{
-            position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.45)",
-            display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
-          }}>
-            <div className="card" style={{ width: "100%", maxWidth: 460, padding: 28 }}>
-              <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 18, marginBottom: 8 }}>
-                Share {possessive} medical history with {consentPrompt.hospital_name}?
-              </div>
-              <div style={{ fontSize: 13, color: "var(--color-text-secondary)", marginBottom: 16, lineHeight: 1.5 }}>
-                This is {possessive} first booking at {consentPrompt.hospital_name}. With your permission, their doctors
-                will be able to see {subject === "you" ? "your" : `${subject}'s`} medical history from other hospitals {subject === "you" ? "you've" : `${subject} has`} visited — this often helps
-                with diagnosis and avoids repeating tests. Specifically, they'll be able to see:
-              </div>
-              <ul style={{ fontSize: 13, color: "var(--color-text-secondary)", margin: "0 0 20px", paddingLeft: 20, lineHeight: 1.8 }}>
-                {(consentPrompt.share_categories || []).map(c => <li key={c}>{c}</li>)}
-              </ul>
-              <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 20 }}>
-                They will not see which other hospital or doctor any of this came from. Sharing is your choice: you can
-                book without it, and then this hospital sees only what it records itself. You can change this at any time
-                under <b>Shared Records Privacy</b>.
-              </div>
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                <button className="btn-outline" disabled={booking} onClick={() => setConsentPrompt(null)}>
-                  Cancel
-                </button>
-                <button className="btn-outline" disabled={booking} onClick={() => book("own")}>
-                  {booking ? "Booking…" : "Book without sharing"}
-                </button>
-                <button className="btn-primary" disabled={booking} onClick={() => book("share")}>
-                  {booking ? "Booking…" : "Share & confirm booking"}
-                </button>
-              </div>
-            </div>
-          </div>
-          );
-        })()}
       </PageShell>
     </AppShell>
   );

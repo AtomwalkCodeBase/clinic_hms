@@ -11,13 +11,6 @@ import API_ENDPOINTS  from "../../config/api.config";
 import { CheckCircle2, Stethoscope, Baby, ChevronDown, ChevronRight } from "lucide-react";
 import { todayLocal } from "../../utils/dates";
 
-const MILESTONE_STATUS_STYLE = {
-  achieved:   { bg: "#ECFDF5", color: "#047857", label: "Achieved" },
-  not_yet:    { bg: "#F3F4F6", color: "#6B7280", label: "Not Yet" },
-  concern:    { bg: "#FEF2F2", color: "#B91C1C", label: "Concern" },
-  unassessed: { bg: "var(--color-bg)", color: "var(--color-text-muted)", label: "Not Assessed" },
-};
-
 // Read-only Birth History (nurses can view, per IsHospitalStaff on
 function PediatricPanel({ patientPk }) {
   const [open, setOpen] = useState(false);
@@ -25,41 +18,6 @@ function PediatricPanel({ patientPk }) {
   const { data: bh, isLoading: bhLoading } = useApi(
     patientPk ? API_ENDPOINTS.PATIENTS.BIRTH_HISTORY(patientPk) : null, { skip: !patientPk }
   );
-  const { data: milestoneData, isLoading: milestoneLoading, refetch: refetchMilestones } = useApi(
-    patientPk ? API_ENDPOINTS.PATIENTS.MILESTONES(patientPk) : null, { skip: !patientPk }
-  );
-
-  const [assessingKey, setAssessingKey] = useState(null);
-  const [assessForm, setAssessForm] = useState({ status: "achieved", notes: "" });
-  const [assessSaving, setAssessSaving] = useState(false);
-
-  function openAssess(item) {
-    const key = item.record_id ?? `${item.domain}:${item.milestone}`;
-    setAssessingKey(k => (k === key ? null : key));
-    setAssessForm({ status: "achieved", notes: "" });
-  }
-
-  async function submitAssessment(item) {
-    if (!patientPk) return;
-    setAssessSaving(true);
-    try {
-      await apiClient.post(API_ENDPOINTS.PATIENTS.MILESTONES(patientPk), {
-        domain: item.domain,
-        milestone: item.milestone,
-        scheduled_label: item.scheduled_label,
-        status: assessForm.status,
-        notes: assessForm.notes || undefined,
-      });
-      toastSuccess("Milestone assessment recorded.");
-      setAssessingKey(null);
-      refetchMilestones?.();
-    } catch (err) {
-      toastApiError(err, "Could not record the milestone assessment.");
-    } finally {
-      setAssessSaving(false);
-    }
-  }
-
   return (
     <div className="card" style={{ padding: 20, marginBottom: 16 }}>
       <button
@@ -97,72 +55,6 @@ function PediatricPanel({ patientPk }) {
         </div>
       )}
 
-      <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--color-text-muted)", marginBottom: 6 }}>
-        Developmental Milestones
-      </div>
-      {milestoneLoading ? (
-        <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>Loading milestone roadmap…</div>
-      ) : !milestoneData?.roadmap?.length ? (
-        <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>No milestone schedule available.</div>
-      ) : (
-        <div style={{ display: "grid", gap: 6 }}>
-          {milestoneData.roadmap.map((m, i) => {
-            const st = MILESTONE_STATUS_STYLE[m.status] || MILESTONE_STATUS_STYLE.unassessed;
-            const key = m.record_id ?? `${m.domain}:${m.milestone}`;
-            const isOpen = assessingKey === key;
-            return (
-              <div key={i} style={{
-                borderRadius: 8, border: "1px solid var(--color-border)", padding: "8px 10px",
-                background: "var(--color-bg)",
-              }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: "var(--color-text)" }}>{m.milestone}</span>
-                  <span style={{
-                    fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10,
-                    background: st.bg, color: st.color, whiteSpace: "nowrap",
-                  }}>{st.label}</span>
-                </div>
-                <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 3, textTransform: "capitalize" }}>
-                  {m.domain?.replace("_", " ")} · {m.scheduled_label}
-                  {m.assessed_date && ` · assessed ${new Date(m.assessed_date).toLocaleDateString("en-IN")}`}
-                  {m.status === "unassessed" && m.timing === "due_now" && " · recommended now"}
-                  {m.status === "unassessed" && m.timing === "past_window" && " · past the usual window"}
-                </div>
-                <button
-                  type="button" onClick={() => openAssess(m)}
-                  style={{
-                    marginTop: 6, fontSize: 10, fontWeight: 700, padding: "4px 8px", borderRadius: 6,
-                    border: "1px solid var(--color-primary)", background: isOpen ? "var(--color-primary-light)" : "var(--color-bg)",
-                    color: "var(--color-primary)", cursor: "pointer",
-                  }}
-                >
-                  {isOpen ? "− Cancel" : "Assess"}
-                </button>
-                {isOpen && (
-                  <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
-                    <select className="form-input" value={assessForm.status}
-                      onChange={e => setAssessForm(f => ({ ...f, status: e.target.value }))}
-                      style={{ fontSize: 12 }}>
-                      <option value="achieved">Achieved</option>
-                      <option value="not_yet">Not Yet</option>
-                      <option value="concern">Concern — flag for follow-up</option>
-                    </select>
-                    <input className="form-input" placeholder="Notes (optional)" value={assessForm.notes}
-                      onChange={e => setAssessForm(f => ({ ...f, notes: e.target.value }))}
-                      style={{ fontSize: 12 }} />
-                    <button
-                      type="button" onClick={() => submitAssessment(m)} disabled={assessSaving}
-                      className="btn-primary" style={{ fontSize: 11, padding: "5px 8px" }}
-                    >
-                      {assessSaving ? "Saving…" : "Save Assessment"}
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
       </>)}
     </div>
   );
@@ -269,11 +161,11 @@ export default function VitalsPage() {
       if (form.chief_complaint) vitals.chief_complaint = form.chief_complaint;
       if (form.nurse_notes)     vitals.nurse_notes     = form.nurse_notes;
 
-      await apiClient.post(API_ENDPOINTS.OPD.APPT_VITALS(selected.id), vitals);
+      await apiClient.post(API_ENDPOINTS.OPD.APPT_VITALS(selected.appointment_id), vitals);
       toastSuccess(`Vitals saved for ${selected.patient_name}.`);
 
       // Remove from waiting list
-      setAppointments(prev => prev.filter(a => a.id !== selected.id));
+      setAppointments(prev => prev.filter(a => a.appointment_id !== selected.appointment_id));
       setSelected(null);
     } catch (err) {
       toastApiError(err, "Failed to save vitals.");
@@ -308,15 +200,15 @@ export default function VitalsPage() {
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {appointments.map(appt => (
-                  <div key={appt.id}
+                  <div key={appt.appointment_id}
                     onClick={() => selectAppointment(appt)}
                     className="card"
                     style={{
                       padding: "12px 16px", cursor: "pointer",
-                      border: selected?.id === appt.id
+                      border: selected?.appointment_id === appt.appointment_id
                         ? "2px solid var(--color-primary)"
                         : "2px solid transparent",
-                      background: selected?.id === appt.id
+                      background: selected?.appointment_id === appt.appointment_id
                         ? "var(--color-primary-light)"
                         : "var(--color-surface)",
                     }}>

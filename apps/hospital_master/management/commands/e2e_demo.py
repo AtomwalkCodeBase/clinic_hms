@@ -10,7 +10,7 @@ from unittest import mock
 from django.core.management.base import BaseCommand
 from django.test import Client, override_settings
 
-ROLES = ["doctor", "nurse", "front_desk", "lab_tech", "pharmacist"]
+ROLES = ["doctor", "nurse", "front_desk"]
 
 
 def _password():
@@ -107,7 +107,7 @@ class Command(BaseCommand):
         cred = (h or {}).get("credentials") or {}
         r.note("Platform", "platform admin", "Hospital admin credentials returned", bool(cred.get("temp_password")), str(list(cred)))
         r.call("Platform", "platform admin", "Hospital list", "get", "/api/v1/platform/hospitals/", token=plat)
-        r.call("Platform", "platform admin", "Hospital detail", "get", f"/api/v1/platform/hospitals/{h['id']}/", token=plat)
+        r.call("Platform", "platform admin", "Hospital detail", "get", f"/api/v1/platform/hospitals/{h['hospital_id']}/", token=plat)
 
         # ---- hospital admin -------------------------------------------------------------------
         d = r.call("Login", "hospital admin", "Hospital admin logs in (mobile + temporary password)", "post", "/api/v1/auth/login/staff/",
@@ -120,11 +120,11 @@ class Command(BaseCommand):
         # ---- hospital set-up by the admin -----------------------------------------------------
         br = r.call("Hospital setup", "hospital admin", "List branches", "get", "/api/v1/org/branches/", token=adm)
         branches = br if isinstance(br, list) else (br or {}).get("results", [])
-        branch_id = branches[0]["id"] if branches else None
+        branch_id = branches[0]["branch_id"] if branches else None
         if branch_id is None:
             b = r.call("Hospital setup", "hospital admin", "Create a branch", "post", "/api/v1/org/branches/", token=adm,
                        body={"name": "Main", "city": "Bengaluru", "address": "1 Test Road"})
-            branch_id = (b or {}).get("id")
+            branch_id = (b or {}).get("branch_id")
         dep = r.call("Hospital setup", "hospital admin", "Create a department", "post", "/api/v1/org/departments/", token=adm,
                      body={"name": "Paediatrics", "branch": branch_id, "branch_id": branch_id})
         r.call("Hospital setup", "hospital admin", "Hospital settings", "get", "/api/v1/org/settings/", token=adm)
@@ -137,7 +137,7 @@ class Command(BaseCommand):
                 inv = r.call("Hospital setup", "hospital admin", f"Invite a {role}", "post", "/api/v1/org/staff/invite/", token=adm,
                              body={"first_name": role.title().replace("_", " "), "last_name": f"E2E{i + 1}", "phone": m,
                                    "email": f"{role}{i + 1}.{tag}@example.com", "role": role, "branch_id": branch_id,
-                                   **({"department_id": (dep or {}).get("id")} if role == "doctor" and dep else {})})
+                                   **({"department_id": (dep or {}).get("department_id")} if role == "doctor" and dep else {})})
                 temp = (inv or {}).get("temp_password") or ""
                 tokn = (inv or {}).get("invite_token") or ""
                 if tokn:
@@ -147,7 +147,7 @@ class Command(BaseCommand):
                 else:
                     pw = temp
                 lg = r.call("Login", role, f"{role} logs in", "post", "/api/v1/auth/login/staff/", body={"mobile": m, "password": pw})
-                staff.setdefault(role, []).append({"mobile": m, "token": (lg or {}).get("access"), "id": (inv or {}).get("id") or (inv or {}).get("staff_id")})
+                staff.setdefault(role, []).append({"mobile": m, "token": (lg or {}).get("access"), "id": (inv or {}).get("staff_user_id")})
                 logins.append((role, m, pw))
 
         # ---- doctor profile, schedule, billing catalogue --------------------------------------
@@ -162,22 +162,22 @@ class Command(BaseCommand):
         cats = cats if isinstance(cats, list) else (cats or {}).get("results", [])
         cat = cats[0] if cats else None
         r.call("Billing", "hospital admin", "Create a billable service", "post", "/api/v1/billing/services/", token=adm,
-               body={"name": "Paediatric consultation", "code": "CONS1", "unit_price": "500", "tax_rate": "0", "category": (cat or {}).get("id")})
+               body={"name": "Paediatric consultation", "code": "CONS1", "unit_price": "500", "tax_rate": "0", "category": (cat or {}).get("option_list_id")})
         # ---- patient portal: sign-up with e-mail OTP, login ------------------------------------
         pats = []
         for i in range(o["patients"]):
             pats.append(self.portal_patient(r, i, mob, tag, logins))
         for pt in pats:
-            self.patient_portal(r, pt, h["id"], doc, tag)
+            self.patient_portal(r, pt, h["hospital_id"], doc, tag)
         self.documents(r, pats[0])
         self.hospital_visit(r, pats, staff, adm, branch_id, tag, mob)
-        self.more_flows(r, pats, staff, adm, branch_id, h["id"], doc, (dep or {}).get("id"))
-        self.access_control(r, staff, adm, plat, pats, logins, h["id"])
+        self.more_flows(r, pats, staff, adm, branch_id, h["hospital_id"], doc, (dep or {}).get("department_id"))
+        self.access_control(r, staff, adm, plat, pats, logins, h["hospital_id"])
         r.call("Billing", "hospital admin", "Payment modes list", "get", "/api/v1/billing/payment-modes/", token=adm)
 
     def portal_patient(self, r, i, mob, tag, logins):
         email, m, pw = f"patient{i + 1}.{tag}@example.com", mob(), _password()
-        with mock.patch("core.messaging.otp.generate_code", return_value="123456"):
+        with mock.patch("core.auth.otp.generate_code", return_value="123456"):
             r.call("Patient sign-up", f"patient {i + 1}", "Ask for an e-mail OTP", "post", "/api/v1/auth/otp/request/",
                    body={"purpose": "registration_patient", "identifier": email})
             v = r.call("Patient sign-up", f"patient {i + 1}", "Verify the OTP", "post", "/api/v1/auth/otp/verify/",
@@ -203,7 +203,7 @@ class Command(BaseCommand):
                token=tk, query={"date": str(d)})
         bk = r.call("Appointments", who, "Book an appointment online", "post", "/api/v1/portal/book/", token=tk,
                     body={"hospital_id": hospital_id, "doctor_id": doc["id"], "scheduled_date": str(d), "scheduled_time": f"10:{15 * (len(self._booked)):02d}",
-                          "chief_complaint": "Fever and cough for two days", "data_sharing_consent": True})
+                          "chief_complaint": "Fever and cough for two days"})
         self._booked.append(1)
         pt["booking"] = bk
         r.call("Appointments", who, "My bookings", "get", "/api/v1/portal/my-bookings/", token=tk)
@@ -215,14 +215,12 @@ class Command(BaseCommand):
         r.call("Patient portal", who, "Health summary", "get", "/api/v1/portal/health-summary/", token=tk)
         r.call("Patient portal", who, "Vaccination roadmap", "get", "/api/v1/portal/vaccinations/", token=tk)
         r.call("Patient portal", who, "Growth", "get", "/api/v1/portal/growth/", token=tk)
-        r.call("Patient portal", who, "Milestones", "get", "/api/v1/portal/milestones/", token=tk)
         r.call("Patient portal", who, "Invoices", "get", "/api/v1/portal/invoices/", token=tk)
         r.call("Patient portal", who, "Notifications", "get", "/api/v1/portal/notifications/", token=tk)
-        r.call("Patient portal", who, "Emergency token", "post", "/api/v1/portal/emergency/token/", token=tk, body={"consent_confirmed": True})
+        r.call("Patient portal", who, "Emergency token", "post", "/api/v1/portal/emergency/token/", token=tk)
 
     def hospital_visit(self, r, pats, staff, adm, branch_id, tag, mob):
         fd, nu, dr = staff["front_desk"][0]["token"], staff["nurse"][0]["token"], staff["doctor"][0]["token"]
-        lab, ph = staff["lab_tech"][0]["token"], staff["pharmacist"][0]["token"]
         today = str(date.today())
         pt = pats[0]
         # front desk: find the online booking, check the patient in
@@ -230,7 +228,7 @@ class Command(BaseCommand):
                     check=lambda d: True if (d.get("results") if isinstance(d, dict) else d) else "no appointments")
         rows = (ap.get("results") if isinstance(ap, dict) else ap) or []
         appt = next((x for x in rows if x.get("patient_awpid") == pt["awpid"]), rows[0] if rows else {})
-        aid = appt.get("id")
+        aid = appt.get("appointment_id")
         r.call("Front desk", "front_desk", "OPD stats", "get", "/api/v1/opd/stats/", token=fd)
         r.call("Front desk", "front_desk", "Find a patient by mobile", "get", "/api/v1/patients/lookup/", token=fd, query={"mobile": pt["mobile"]})
         r.call("Front desk", "front_desk", "Search patients", "get", "/api/v1/patients/search/", token=fd, query={"q": "Asha"})
@@ -240,9 +238,9 @@ class Command(BaseCommand):
         atype = (tyrows[0].get("value") or tyrows[0].get("name")) if tyrows else "consultation"
         wm = mob()
         wi = r.call("Front desk", "front_desk", "Register a walk-in patient", "post", "/api/v1/patients/register/", token=fd,
-                    body={"full_name": f"Walk In {tag}", "mobile": wm, "branch_id": branch_id, "dpdp_consent": True, "gender": "M",
-                          "date_of_birth": str(date.today() - timedelta(days=3650)), "share_with_network": True, "hie_consent": True})
-        wid = (wi or {}).get("uuid")
+                    body={"full_name": f"Walk In {tag}", "mobile": wm, "branch_id": branch_id, "gender": "M",
+                          "date_of_birth": str(date.today() - timedelta(days=3650))})
+        wid = (wi or {}).get("patient_id")
         if wid:
             r.call("Appointments", "front_desk", "Book a walk-in appointment", "post", "/api/v1/opd/appointments/", token=fd,
                    body={"patient_id": wid, "doctor_id": appt.get("doctor_id"),
@@ -263,28 +261,16 @@ class Command(BaseCommand):
                            "subjective": "Fever and cough", "objective": "Chest clear", "assessment": "Viral URTI", "plan": "Supportive care",
                            "advice_to_patient": "Fluids and rest", "follow_up_in_days": 5,
                            "diagnoses": [{"code": "J06.9", "description": "Acute upper respiratory infection"}]})
-        eid = (enc or {}).get("id")
-        cat = r.call("Lab", "lab_tech", "Add a test to the lab catalogue", "post", "/api/v1/lab/catalog/", token=lab,
-                     body={"name": "CBC", "code": "CBC", "price": "300", "turnaround_hours": 4}, expect=(200, 201))
+        eid = (enc or {}).get("opd_encounter_id")
         rx = r.call("Doctor", "doctor", "Create a prescription", "post", "/api/v1/opd/prescriptions/", token=dr, body={"encounter_id": eid})
-        rid = (rx or {}).get("id")
+        rid = (rx or {}).get("opd_prescription_id")
         self.ctx = {"patient_pk": appt.get("patient_pk"), "appt": appt, "rid": rid, "eid": eid}
         if rid:
             r.call("Doctor", "doctor", "Add a medicine to it", "post", f"/api/v1/opd/prescriptions/{rid}/items/", token=dr,
                    body={"drug_name": "Paracetamol", "dosage": "250 mg", "frequency": "td", "duration_days": 3, "quantity": 9, "route": "oral"})
-        if cat and cat.get("id"):
-            r.call("Doctor", "doctor", "Order a lab test", "post", "/api/v1/lab/requests/", token=dr, body={"encounter_id": eid, "tests": [cat["id"]]})
         r.call("Doctor", "doctor", "Sign the encounter", "post", f"/api/v1/opd/encounters/{eid}/sign/", token=dr, body={})
         r.call("Doctor", "doctor", "Encounter summary PDF", "get", f"/api/v1/opd/encounters/{eid}/pdf/", token=dr)
         r.call("Doctor", "doctor", "Finish the appointment", "post", f"/api/v1/opd/appointments/{aid}/status/", token=dr, body={"status": "done"}, expect=(200, 400))
-        # lab
-        lr = r.call("Lab", "lab_tech", "Pending lab requests", "get", "/api/v1/lab/requests/", token=lab)
-        lrows = (lr.get("results") if isinstance(lr, dict) else lr) or []
-        if lrows:
-            r.call("Lab", "lab_tech", "Move a lab request to processing", "patch", f"/api/v1/lab/requests/{lrows[0]['id']}/status/", token=lab, body={"status": "processing"})
-        # pharmacy
-        r.call("Pharmacy", "pharmacist", "Prescriptions waiting", "get", "/api/v1/pharmacy/prescriptions/", token=ph)
-        r.call("Pharmacy", "pharmacist", "Stock list", "get", "/api/v1/pharmacy/stock/", token=ph)
         # billing
         inv = r.call("Billing", "front_desk", "Invoices", "get", "/api/v1/billing/invoices/", token=fd)
         r.call("Billing", "hospital admin", "Billing summary for the visit", "get", "/api/v1/billing/summary/", token=adm, query={"appointment_id": aid})
@@ -292,21 +278,19 @@ class Command(BaseCommand):
         # patient comes back
         tk, who = pt["token"], f"patient {pt['awpid'][-4:]}"
         r.call("Return visit", who, "Visit now in my records", "get", "/api/v1/portal/my-records/", token=tk)
-        r.call("Return visit", who, "Prescriptions from the hospital", "get", "/api/v1/portal/prescriptions/", token=tk)
-        r.call("Return visit", who, "Lab orders", "get", "/api/v1/portal/lab-orders/", token=tk)
         r.call("Return visit", who, "My bookings after the visit", "get", "/api/v1/portal/my-bookings/", token=tk)
         r.call("Return visit", who, "Timeline after the visit (vitals feed growth)", "get", f"/api/v1/peds/patients/{pt['awpid']}/growth/", token=tk)
 
     def more_flows(self, r, pats, staff, adm, branch_id, hospital_id, doc, dept_id):
         ctx = getattr(self, "ctx", {})
         pt = pats[0]
-        fd, dr, nu, ph = (staff[k][0]["token"] for k in ("front_desk", "doctor", "nurse", "pharmacist"))
+        fd, dr, nu = (staff[k][0]["token"] for k in ("front_desk", "doctor", "nurse"))
         who = f"patient {pt['awpid'][-4:]}"
         pk = ctx.get("patient_pk")
         if not pk:
             found = r.call("Front desk", "front_desk", "Find the patient's record id by AWPID", "get", "/api/v1/patients/search/", token=fd, query={"q": pt["awpid"]})
             rows = (found.get("results") if isinstance(found, dict) else found) or []
-            pk = (rows[0] or {}).get("id") if rows else None
+            pk = (rows[0] or {}).get("patient_id") if rows else None
 
         # a parent books for the child
         child = pt.get("child")
@@ -314,7 +298,7 @@ class Command(BaseCommand):
             day = str(date.today() + timedelta(days=3))
             r.call("Child booking", who, "Parent books a visit for the child", "post", "/api/v1/portal/book/", token=pt["token"],
                    body={"hospital_id": hospital_id, "doctor_id": doc["id"], "scheduled_date": day, "scheduled_time": "12:00",
-                         "chief_complaint": "Vaccination due", "patient_awpid": child, "data_sharing_consent": True}, expect=(201,))
+                         "chief_complaint": "Vaccination due", "patient_awpid": child}, expect=(201,))
             ap = r.call("Child booking", "front_desk", "Front desk sees the child's appointment", "get", "/api/v1/opd/appointments/upcoming/", token=fd)
             rows = (ap.get("results") if isinstance(ap, dict) else ap) or []
             kid = next((x for x in rows if x.get("patient_awpid") == child), None)
@@ -326,7 +310,7 @@ class Command(BaseCommand):
         if pk:
             inv = r.call("Billing", "front_desk", "Create an invoice with one line", "post", "/api/v1/billing/invoices/", token=fd,
                          body={"patient": pk, "items": [{"description": "Consultation", "quantity": 1, "unit_price": "500"}]}, expect=(200, 201))
-            iid = (inv or {}).get("id")
+            iid = (inv or {}).get("invoice_id")
             if iid:
                 pay = lambda what, amt, ref="", exp=(201,): r.call("Billing", "front_desk", what, "post", "/api/v1/billing/payments/", token=fd,
                                                                   body={"invoice": iid, "amount": amt, "payment_mode": "cash", "transaction_ref": ref}, expect=exp)
@@ -338,25 +322,6 @@ class Command(BaseCommand):
                 r.call("Billing", "front_desk", "Invoice is now paid in full", "get", f"/api/v1/billing/invoices/{iid}/", token=fd,
                        check=lambda d: True if d.get("status") == "paid" and str(d.get("paid_amount")) in ("500", "500.00") else f"status={d.get('status')} paid={d.get('paid_amount')}")
 
-        # pharmacy: drug, stock, dispense, over-dispense
-        drug = r.call("Pharmacy", "pharmacist", "Add a drug to the catalogue", "post", "/api/v1/prescriptions/drugs/", token=ph,
-                      body={"name": "Paracetamol 250", "generic_name": "paracetamol", "form": "Tablet", "strength": "250mg"}, expect=(200, 201))
-        did = (drug or {}).get("id")
-        if did:
-            stock = r.call("Pharmacy", "pharmacist", "Receive 50 units into stock", "post", "/api/v1/pharmacy/stock/", token=ph,
-                           body={"drug": did, "branch": branch_id, "batch_number": "B1", "quantity": 50, "mrp": "2", "unit_cost": "1", "expiry_date": "2028-01-01"},
-                           expect=(200, 201))
-            sid = (stock or {}).get("id")
-            rx = r.call("Pharmacy", "doctor", "Read the prescription written earlier", "get", f"/api/v1/opd/prescriptions/{ctx.get('rid')}/", token=dr) if ctx.get("rid") else {}
-            item = ((rx or {}).get("items") or [{}])[0].get("id")
-            if sid and item:
-                r.call("Pharmacy", "pharmacist", "Dispense 3 units against the prescription", "post", "/api/v1/pharmacy/dispense/", token=ph,
-                       body={"prescription_item": item, "stock": sid, "quantity": 3}, expect=(200, 201))
-                r.call("Pharmacy", "pharmacist", "Dispensing more than is in stock is refused", "post", "/api/v1/pharmacy/dispense/", token=ph,
-                       body={"prescription_item": item, "stock": sid, "quantity": 500}, expect=(400,))
-                r.call("Pharmacy", "pharmacist", "Stock fell to 47", "get", "/api/v1/pharmacy/stock/", token=ph,
-                       check=lambda d: True if any(x.get("quantity") == 47 for x in ((d.get("results") if isinstance(d, dict) else d) or [])) else "no stock row at 47")
-
         # vaccination actions by staff
         if pk:
             r.call("Vaccination", "doctor", "Doctor orders a vaccine", "post", f"/api/v1/patients/{pk}/vaccinations/order/", token=dr,
@@ -367,41 +332,11 @@ class Command(BaseCommand):
                    body={"vaccine_name": "Hepatitis B", "reason": "given elsewhere"}, expect=(200, 201))
             r.call("Vaccination", "doctor", "Vaccination schedule view", "get", f"/api/v1/patients/{pk}/vaccinations/", token=dr)
 
-        # inpatient: referral, registration, bed, discharge
-        types = r.call("Admission", "front_desk", "Admission types configured", "get", "/api/v1/ipd/admission-types/", token=fd)
-        srcs = r.call("Admission", "front_desk", "Admission sources configured", "get", "/api/v1/ipd/admission-sources/", token=fd)
-        first = lambda d: ((d if isinstance(d, list) else (d or {}).get("results")) or [{}])[0].get("value")
-        if pk and dept_id and first(types) and first(srcs):
-            rf = r.call("Admission", "doctor", "Doctor recommends admission", "post", "/api/v1/ipd/referrals/recommend/", token=dr,
-                        body={"patient_id": pk, "department_id": dept_id, "admission_type": first(types), "admission_source": first(srcs),
-                              "reason_for_admission": "Needs observation"}, expect=(200, 201))
-            rid2 = (rf or {}).get("id")
-            rtypes = r.call("Admission", "hospital admin", "Room types", "get", "/api/v1/billing/room-types/", token=adm)
-            bedtype = next((x.get("value") for x in ((rtypes if isinstance(rtypes, list) else (rtypes or {}).get("results")) or []) if x.get("is_bed_based")), None)
-            fls = r.call("Admission", "hospital admin", "Floors at the branch", "get", "/api/v1/org/floors/", token=adm, query={"branch_id": branch_id})
-            flrows = fls if isinstance(fls, list) else (fls or {}).get("results", [])
-            floor_id = flrows[0]["id"] if flrows else (r.call(
-                "Admission", "hospital admin", "Create a floor", "post", "/api/v1/org/floors/", token=adm,
-                body={"branch": branch_id, "name": "Ground"}, expect=(200, 201)) or {}).get("id")
-            room = r.call("Admission", "hospital admin", "Create a ward room", "post", "/api/v1/org/rooms/", token=adm,
-                          body={"branch": branch_id, "floor_obj": floor_id, "name": "Ward 1", "room_type": bedtype or "general_ward", "capacity": 4}, expect=(200, 201))
-            bed = r.call("Admission", "hospital admin", "Create a bed", "post", "/api/v1/org/beds/", token=adm,
-                         body={"room": (room or {}).get("id"), "bed_number": "1"}, expect=(200, 201))
-            if rid2:
-                ad = r.call("Admission", "front_desk", "Front desk registers the admission", "post", "/api/v1/ipd/admissions/register/", token=fd,
-                            body={"referral_id": rid2, "attendant_name": "Parent", "attendant_phone": "9000000002", "consent_given": True}, expect=(200, 201))
-                aid = (ad or {}).get("id")
-                if aid and (bed or {}).get("id"):
-                    r.call("Admission", "front_desk", "Assign the bed", "post", f"/api/v1/ipd/admissions/{aid}/assign-bed/", token=fd, body={"bed_id": bed["id"]}, expect=(200, 201))
-                    r.call("Admission", "front_desk", "Discharge", "post", f"/api/v1/ipd/admissions/{aid}/discharge/", token=fd, body={}, expect=(200, 201))
-
     def access_control(self, r, staff, adm, plat, pats, logins, hospital_id):
-        nu, fd, ph, lab = (staff[k][0]["token"] for k in ("nurse", "front_desk", "pharmacist", "lab_tech"))
+        nu, fd = (staff[k][0]["token"] for k in ("nurse", "front_desk"))
         pt = pats[0]["token"]
         r.call("Access control", "nurse", "Nurse cannot invite staff", "post", "/api/v1/org/staff/invite/", token=nu,
                body={"first_name": "X", "phone": "9000000001", "role": "nurse"}, expect=(401, 403))
-        r.call("Access control", "pharmacist", "Pharmacist cannot create a lab test", "post", "/api/v1/lab/catalog/", token=ph,
-               body={"name": "X"}, expect=(401, 403))
         r.call("Access control", "front_desk", "Front desk cannot write an encounter", "post", "/api/v1/opd/encounters/", token=fd, body={}, expect=(401, 403))
         r.call("Access control", "patient", "Patient cannot open the staff list", "get", "/api/v1/org/staff/", token=pt, expect=(401, 403))
         r.call("Access control", "patient", "Patient cannot open the platform", "get", "/api/v1/platform/hospitals/", token=pt, expect=(401, 403))
@@ -420,7 +355,7 @@ class Command(BaseCommand):
         r.call("Login", "patient", "Token refresh", "post", "/api/v1/auth/token/refresh/", body={"refresh": "bad"}, expect=(400, 401))
         r.call("Login", "doctor", "Wrong password is refused", "post", "/api/v1/auth/login/staff/", body={"mobile": staff["doctor"][0]["mobile"], "password": "nope-nope"}, expect=(400, 401))
         r.call("Login", "hospital admin", "Staff list after all invites", "get", "/api/v1/org/staff/", token=adm,
-               check=lambda d: True if len((d.get("results") if isinstance(d, dict) else d) or []) >= 6 else f"only {len((d.get('results') if isinstance(d, dict) else d) or [])} staff: {str(d)[:80]}")
+               check=lambda d: True if len((d.get("results") if isinstance(d, dict) else d) or []) >= 4 else f"only {len((d.get('results') if isinstance(d, dict) else d) or [])} staff: {str(d)[:80]}")
         with open(f"logs/e2e_logins_{r.tag}.txt", "w", encoding="utf-8") as fh:
             fh.write(f"hospital_code: e2e-{r.tag}\n")
             for role, ident, pw in logins:
@@ -461,7 +396,7 @@ class Command(BaseCommand):
         need = [x for x in rows if x.get("processing_status") == "review_required"]
         if need:
             r.call("Documents", who, "Review step: patient picks the type of a document the rules could not place", "post", "/api/v1/records/submit/",
-                   token=tk, body={"decisions": [{"document_id": x["id"], "document_type": "growth_chart"} for x in need]}, expect=(200, 201, 202, 400))
+                   token=tk, body={"decisions": [{"document_id": x["medical_document_id"], "document_type": "growth_chart"} for x in need]}, expect=(200, 201, 202, 400))
         r.call("Documents", who, "Document types offered", "get", "/api/v1/records/types/", token=tk)
         if up.get("batch_id"):
             r.call("Documents", who, "Batch status", "get", f"/api/v1/records/batches/{up['batch_id']}/", token=tk)

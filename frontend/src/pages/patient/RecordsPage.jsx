@@ -1,7 +1,7 @@
-/** My Health Journey: tabs for milestones, insights timeline, vaccine record, visits and growth, for the account owner or a linked family member. */
+/** My Health Journey: tabs for insights timeline, vaccine record, visits, medicines and growth, for the account owner or a linked family member. */
 import { useState, useEffect, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Syringe, Activity, Building2, TrendingUp, Baby } from "lucide-react";
+import { Syringe, Activity, Building2, TrendingUp, Baby, Pill } from "lucide-react";
 import { AppShell }  from "../../components/layout/AppShell";
 import { PageShell } from "../../components/common/PageShell";
 import { usePaginatedList } from "../../hooks/usePaginatedList";
@@ -13,14 +13,13 @@ import { usePatientContext } from "../../context/PatientContext";
 import HealthSummaryCard from "./components/HealthSummaryCard";
 import HealthJourney from "../../components/healthJourney/HealthJourney";
 import { openDocumentWith } from "../../components/healthJourney/openDocument";
-import MilestonesRoadmap from "./components/MilestonesRoadmap";
 import { PORTAL_APPOINTMENT_BADGE as BADGE } from "../../constants/badges";
 // Tab definitions — id maps to the rendered panel below.
 const ALL_TABS = [
-  { id: "milestones",      label: "Milestones",      icon: Baby,      pediatricOnly: true },
   { id: "health-timeline", label: "Insights Timeline", icon: Activity,  pediatricOnly: false },
   { id: "vaccine-record",  label: "Vaccine Record",   icon: Syringe,   pediatricOnly: true },
   { id: "visits",          label: "Visits",           icon: Building2, pediatricOnly: false },
+  { id: "medicines",       label: "Medicines",        icon: Pill,      pediatricOnly: false },
   { id: "growth",          label: "Growth",           icon: TrendingUp, pediatricOnly: false },
 ];
 
@@ -102,8 +101,6 @@ export default function PatientRecordsPage() {
   const ageYears = growth?.age_years ?? null;
   const isAdult  = ageYears !== null && ageYears >= 18;
 
-  const { data: milestones, isLoading: milestonesLoading } =
-    useApi(API_ENDPOINTS.PORTAL.MILESTONES, { params, skip: isAdult });
   const { data: profile } = useApi(API_ENDPOINTS.PORTAL.PROFILE, { skip: !selectedPatient.isSelf });
 
   const familyMember = !selectedPatient.isSelf
@@ -114,6 +111,8 @@ export default function PatientRecordsPage() {
 
   const { items: records, isLoading: recordsLoading, isLoadingMore, hasMore, loadMore } =
     usePaginatedList(API_ENDPOINTS.PORTAL.MY_RECORDS, { pageSize: 20, params });
+  const { items: prescriptions, isLoading: medicinesLoading } =
+    usePaginatedList(API_ENDPOINTS.PORTAL.PRESCRIPTIONS, { pageSize: 20, params });
 
   return (
     <AppShell>
@@ -132,14 +131,51 @@ export default function PatientRecordsPage() {
         {/* Tab switcher */}
         <TabBar active={activeTab} onChange={setActiveTab} isAdult={isAdult} />
 
-        {/* ── Milestones tab (children under 18 only) ─────────────── */}
-        {activeTab === "milestones" && !isAdult && (
-          <MilestonesRoadmap milestones={milestones} isLoading={milestonesLoading} />
-        )}
-
         {/* ── Health Timeline tab ────────────────────────────────── */}
         {activeTab === "health-timeline" && (
-          <InsightsPanel awpid={patientAwpid} name={patientName} section="timeline" />
+          <InsightsPanel awpid={patientAwpid || profile?.awpid || ""} name={patientName} section="timeline" />
+        )}
+
+        {/* ── Medicines tab: what each hospital prescribed, newest first ─────────── */}
+        {activeTab === "medicines" && (
+          medicinesLoading ? (
+            <div className="card" style={{ padding: 40, textAlign: "center", color: "var(--color-text-muted)" }}>Loading medicines…</div>
+          ) : prescriptions.length === 0 ? (
+            <div className="card" style={{ padding: 44, textAlign: "center" }}>
+              <div style={{ fontFamily: "var(--font-display)", fontSize: 18, fontWeight: 600, marginBottom: 6 }}>No medicines yet</div>
+              <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>Medicines a doctor prescribes will appear here after each visit.</div>
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 12 }}>
+              {prescriptions.map((rx) => (
+                <div key={rx.opd_prescription_id} style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: 16, overflow: "hidden" }}>
+                  <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--color-border)" }}>
+                    <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15 }}>{rx.hospital}</div>
+                    <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 2 }}>
+                      Dr. {rx.doctor_name} · {new Date(rx.created_at).toLocaleDateString()}{rx.rx_number ? ` · ${rx.rx_number}` : ""}
+                    </div>
+                  </div>
+                  <div style={{ padding: "8px 18px 14px", overflowX: "auto" }}>
+                    <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ textAlign: "left", color: "var(--color-text-muted)", fontSize: 11 }}>
+                          <th style={{ padding: "6px 8px 6px 0" }}>Medicine</th><th>Dose</th><th>Frequency</th><th>Quantity</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(rx.items || []).map((it, i) => (
+                          <tr key={i} style={{ borderTop: "1px solid var(--color-border)" }}>
+                            <td style={{ padding: "7px 8px 7px 0", fontWeight: 600 }}>{it.drug_name}</td>
+                            <td>{it.dosage || "–"}</td><td>{it.frequency || "–"}</td><td>{it.quantity ?? "–"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
         )}
 
         {/* ── Visits tab ────────────────────────────────────────── */}
@@ -241,8 +277,8 @@ export default function PatientRecordsPage() {
 
         {/* ── Growth tab ────────────────────────────────────────── */}
         {/* Same upgraded chart as the Vaccinations tab (gridlines, hover */}
-        {activeTab === "growth" && <InsightsPanel awpid={patientAwpid} name={patientName} section="growth" />}
-        {activeTab === "vaccine-record" && !isAdult && <InsightsPanel awpid={patientAwpid} name={patientName} section="vaccines" />}
+        {activeTab === "growth" && <InsightsPanel awpid={patientAwpid || profile?.awpid || ""} name={patientName} section="growth" />}
+        {activeTab === "vaccine-record" && !isAdult && <InsightsPanel awpid={patientAwpid || profile?.awpid || ""} name={patientName} section="vaccines" />}
       </PageShell>
     </AppShell>
   );

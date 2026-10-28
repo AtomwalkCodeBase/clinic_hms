@@ -8,7 +8,10 @@ from apps.patients.views import PortalRegisterView, PortalProfileView, PortalDoc
 from django.core.exceptions import FieldDoesNotExist
 from core.auth.otp_views import OTPRequestView
 from core.auth.views import PatientLoginView
-from apps.patients.models import OTPCode, Patient, ConsultSession, RecordsShareRequest
+from core.auth.otp import Purpose
+from apps.patients.models import Patient, RecordsShareRequest
+from apps.opd.models import ConsultSession
+from core.utils import new_pad_token
 from core.api.authentication import MockUser
 from django.urls import NoReverseMatch, reverse
 from apps.documents.models import CHOOSABLE_TYPES
@@ -17,9 +20,9 @@ from apps.documents.tests.tests import identity, make_doc, reload
 from datetime import timedelta
 from django.utils import timezone
 from apps.patients.views import ConsultPadView, _open_session_for_token
-from core.tests.testing import ensure_hospital
+from core.tests.testing import HospitalDBTestCase, ensure_hospital, make_branch, make_patient, make_staff, requires_hospital_db
 from apps.patients.views import _vault_documents
-from apps.opd.patient_services import PatientService
+from apps.hospital_patients.services import PatientService
 from apps.patients.services import accounts, create_account, set_password, check_password
 
 
@@ -29,8 +32,8 @@ class PortalAccountTests(TestCase):
 
     def register(self):
         request = APIRequestFactory().post("/api/v1/portal/register/", BODY, format="json")
-        with mock.patch("core.messaging.otp.decode_action_token", return_value={"identifier": "asha@example.com"}), \
-                mock.patch("core.utils.realworld_validation.validate_mobile_real", return_value=(True, "")):
+        with mock.patch("core.auth.otp.decode_action_token", return_value={"identifier": "asha@example.com"}), \
+                mock.patch("core.validation.validate_mobile_real", return_value=(True, "")):
             return PortalRegisterView.as_view()(request)
 
     def test_signing_up_creates_one_row_that_is_both_the_identity_and_the_login(self):
@@ -85,13 +88,13 @@ class MobileIsStoredAsTheNumberTests(TestCase):
 
     def test_the_profile_says_a_number_is_on_file_without_showing_it(self):
         request = APIRequestFactory().get("/x/")
-        force_authenticate(request, user=MockUser({"user_id": self.acct.id, "role": "patient", "awpid": "AWPID-LOGIN1"}))
+        force_authenticate(request, user=MockUser({"user_id": self.acct.pk, "role": "patient", "awpid": "AWPID-LOGIN1"}))
         data = PortalProfileView.as_view()(request).data["data"]
         self.assertEqual((data["mobile"], data["mobile_on_file"]), ("", True))
 
     def test_a_code_for_someone_who_typed_their_awpid_goes_to_their_email(self):
         with mock.patch("core.auth.otp_views._send_code", return_value=True) as send:
-            resp = self.post(OTPRequestView, {"purpose": OTPCode.PURPOSE_LOGIN_PATIENT, "identifier": "AWPID-LOGIN1"})
+            resp = self.post(OTPRequestView, {"purpose": Purpose.LOGIN_PATIENT, "identifier": "AWPID-LOGIN1"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(send.call_args.args[0], "asha@example.com")
         self.assertEqual(send.call_args.args[1], "email")
@@ -99,7 +102,7 @@ class MobileIsStoredAsTheNumberTests(TestCase):
     def test_an_account_with_no_email_is_asked_to_use_its_mobile_instead(self):
         accounts().filter(pk=self.acct.pk).update(email="")
         with mock.patch("core.auth.otp_views._send_code", return_value=True) as send:
-            resp = self.post(OTPRequestView, {"purpose": OTPCode.PURPOSE_LOGIN_PATIENT, "identifier": "AWPID-LOGIN1"})
+            resp = self.post(OTPRequestView, {"purpose": Purpose.LOGIN_PATIENT, "identifier": "AWPID-LOGIN1"})
         self.assertEqual(resp.status_code, 400)
         send.assert_not_called()
 
@@ -118,7 +121,7 @@ class PortalDocumentTests(TestCase):
         return make_doc(self.acct.awpid, status="completed", document_type="lab_report", by="rules", **kw)
 
     def user(self):
-        return MockUser({"user_id": self.acct.id, "role": "patient", "awpid": self.acct.awpid})
+        return MockUser({"user_id": self.acct.pk, "role": "patient", "awpid": self.acct.awpid})
 
     def call(self, view, method, data=None, **kwargs):
         factory = getattr(APIRequestFactory(), method)
@@ -127,11 +130,11 @@ class PortalDocumentTests(TestCase):
         return view.as_view()(request, **kwargs)
 
     def patch(self, doc, **body):
-        return self.call(PortalDocumentDetailView, "patch", body, doc_id=doc.id)
+        return self.call(PortalDocumentDetailView, "patch", body, doc_id=doc.pk)
 
     # ── only a failed file, or an upload still waiting for the patient's review, can be removed ──
     def dismiss(self, doc):
-        return self.call(PortalDocumentDetailView, "delete", doc_id=doc.id)
+        return self.call(PortalDocumentDetailView, "delete", doc_id=doc.pk)
 
     def test_a_document_in_the_patients_records_cannot_be_deleted(self):
         for status in ("completed", "review_required", "queued", "extracting"):
@@ -213,8 +216,8 @@ class PortalDocumentTests(TestCase):
     def test_the_list_shows_status_and_type(self):
         doc = self.make_doc(name="rx.pdf")
         results = self.call(PortalDocumentListCreateView, "get").data["results"]
-        self.assertEqual([(r["id"], r["file_name"], r["title"], r["processing_status"], r["doc_type"])
-                          for r in results], [(doc.id, "rx.pdf", "rx.pdf", "completed", "lab_report")])
+        self.assertEqual([(r["medical_document_id"], r["file_name"], r["title"], r["processing_status"], r["doc_type"])
+                          for r in results], [(doc.pk, "rx.pdf", "rx.pdf", "completed", "lab_report")])
 
     def test_someone_elses_documents_are_not_listed(self):
         make_doc("AW-OTHER", status="completed", document_type="lab_report")
@@ -270,7 +273,7 @@ class PortalDocumentTests(TestCase):
 
     def test_the_detail_offers_the_fixed_types(self):
         doc = self.make_doc()
-        data = self.call(PortalDocumentDetailView, "get", doc_id=doc.id).data["data"]
+        data = self.call(PortalDocumentDetailView, "get", doc_id=doc.pk).data["data"]
         self.assertEqual(sorted(data["doc_types"]), sorted(CHOOSABLE_TYPES))
 
     # ── retry ──
@@ -279,7 +282,7 @@ class PortalDocumentTests(TestCase):
         with mock.patch("apps.documents.tasks.extract_document_task.apply_async") as delay:
             resp = self.patch(doc, action="retry")
         self.assertEqual(resp.status_code, 200)
-        delay.assert_called_once_with(args=[doc.id, "instant"], queue="instant")
+        delay.assert_called_once_with(args=[doc.pk, "instant"], queue="instant")
         self.assertEqual((reload(doc).status, reload(doc).error_message), ("queued", ""))
 
     def test_only_a_failed_file_can_be_retried(self):
@@ -293,7 +296,7 @@ class PortalDocumentTests(TestCase):
 
     # ── the activity ──
     def events(self, doc):
-        return [e["text"] for e in self.call(PortalDocumentDetailView, "get", doc_id=doc.id).data["data"]["events"]]
+        return [e["text"] for e in self.call(PortalDocumentDetailView, "get", doc_id=doc.pk).data["data"]["events"]]
 
     def test_the_detail_tells_what_happened_to_the_report(self):
         doc = make_doc(self.acct.awpid, status="completed", document_type="lab_report", by="rules", name="x.pdf")
@@ -309,16 +312,24 @@ class PortalDocumentTests(TestCase):
         self.assertEqual(self.events(failed)[-1], "We couldn’t read it — The file is empty.")
 
 
-class ConsultPadTokenTests(TestCase):
-    databases = {"default"}
-
+@requires_hospital_db
+class ConsultPadTokenTests(HospitalDBTestCase):
     def setUp(self):
-        self.patient = Patient.objects.using("default").create(awpid="AW-PAD", full_name="Pad Patient", gender="F")
+        super().setUp()
+        from apps.hospital_master.models import Hospital
+        from apps.opd.models import Appointment, OPDEncounter
+        db = self.hospital_alias
+        self.hospital = Hospital.objects.using("default").update_or_create(
+            pk=1, defaults={"name": "Pad Hospital", "hospital_code": "pad-1", "db_name": db, "is_active": True})[0]
+        branch, place = make_branch(db)
+        doctor = make_staff(db, "doctor", phone="9000000071", place=place)
+        patient = make_patient(db, "AW-PAD", branch=branch, full_name="Pad Patient", gender="F")
+        appt = Appointment.objects.using(db).create(patient=patient, doctor=doctor, branch_department=place, scheduled_date=timezone.now().date())
+        self.encounter = OPDEncounter.objects.using(db).create(appointment=appt)
 
-    def session(self, hospital_id=1, **fields):
-        return ConsultSession.objects.using("default").create(
-            patient=self.patient, hospital=ensure_hospital(hospital_id), encounter_id=uuid.uuid4(),
-            expires_at=timezone.now() + timedelta(hours=12), **fields)
+    def session(self, **fields):
+        return ConsultSession.objects.using(self.hospital_alias).create(
+            encounter=self.encounter, token=f"{self.hospital.pk}.{new_pad_token()}", expires_at=timezone.now() + timedelta(hours=12), **fields)
 
     def test_every_session_gets_its_own_random_token(self):
         a, b = self.session(), self.session()
@@ -328,10 +339,11 @@ class ConsultPadTokenTests(TestCase):
     def test_an_open_session_is_found_by_its_token_with_the_patient(self):
         s = self.session()
         identity, found = _open_session_for_token(s.token)
-        self.assertEqual((identity.awpid, found.id), ("AW-PAD", s.id))
+        self.assertEqual((identity.awpid, found.pk), ("AW-PAD", s.pk))
 
     def test_an_unknown_token_is_not_valid(self):
         self.assertEqual(_open_session_for_token("nope"), (None, None))
+        self.assertEqual(_open_session_for_token("999.nope"), (None, None))           # no such hospital
 
     def test_a_closed_or_expired_session_still_names_the_patient_but_is_not_writable(self):
         signed = self.session(status=ConsultSession.STATUS_SIGNED)
@@ -339,26 +351,23 @@ class ConsultPadTokenTests(TestCase):
         self.assertEqual((identity.awpid, found), ("AW-PAD", None))
 
         stale = self.session()
-        ConsultSession.objects.using("default").filter(pk=stale.pk).update(expires_at=timezone.now() - timedelta(minutes=1))
+        ConsultSession.objects.using(self.hospital_alias).filter(pk=stale.pk).update(expires_at=timezone.now() - timedelta(minutes=1))
         self.assertEqual(_open_session_for_token(stale.token)[1], None)
-        self.assertEqual(ConsultSession.objects.using("default").get(pk=stale.pk).status, ConsultSession.STATUS_EXPIRED)
-
-    def test_two_hospitals_seeing_the_same_patient_at_once_each_keep_their_own_session(self):
-        here, there = self.session(hospital_id=1), self.session(hospital_id=2)
-        self.assertEqual(_open_session_for_token(here.token)[1].hospital_id, 1)
-        self.assertEqual(_open_session_for_token(there.token)[1].hospital_id, 2)
+        self.assertEqual(ConsultSession.objects.using(self.hospital_alias).get(pk=stale.pk).status, ConsultSession.STATUS_EXPIRED)
 
     def test_the_phone_page_reports_whether_a_consultation_is_active(self):
         view = ConsultPadView.as_view()
         open_session = self.session()
         data = view(APIRequestFactory().get("/x/"), token=open_session.token).data["data"]
-        self.assertEqual((data["active"], data["session_id"], data["patient_name"]), (True, open_session.id, "Pad Patient"))
+        self.assertEqual((data["active"], data["session_id"], data["patient_name"]), (True, open_session.pk, "Pad Patient"))
         closed = self.session(status=ConsultSession.STATUS_SIGNED)
         self.assertFalse(view(APIRequestFactory().get("/x/"), token=closed.token).data["data"]["active"])
         self.assertEqual(view(APIRequestFactory().get("/x/"), token="nope").status_code, 404)
 
 
 AWPID = "AW-SHARE-W1"
+
+
 @override_settings(RECORDS_REVIEW_FROM="2000-01-01T00:00:00+00:00")
 class WaitingUploadsAreNotSharedTests(TestCase):
     databases = {"default"}
@@ -375,29 +384,35 @@ class WaitingUploadsAreNotSharedTests(TestCase):
         )
 
     def test_the_vault_leaves_out_a_waiting_upload(self):
-        ids = {d["id"] for d in _vault_documents(AWPID)}
-        self.assertEqual(ids, {self.confirmed.id, self.issued.id})
+        ids = {d["medical_document_id"] for d in _vault_documents(AWPID)}
+        self.assertEqual(ids, {self.confirmed.pk, self.issued.pk})
 
     def test_a_waiting_upload_cannot_be_viewed_by_id(self):
-        res = APIClient().get(f"/api/v1/records-share/{self.grant.token}/documents/{self.waiting.id}/view/")
+        res = APIClient().get(f"/api/v1/records-share/{self.grant.token}/documents/{self.waiting.pk}/view/")
         self.assertEqual(res.status_code, 404)
 
     def test_a_waiting_upload_cannot_be_requested_for_download(self):
-        res = APIClient().post(f"/api/v1/records-share/{self.grant.token}/downloads/", {"doc_id": self.waiting.id}, format="json")
+        res = APIClient().post(f"/api/v1/records-share/{self.grant.token}/downloads/", {"doc_id": self.waiting.pk}, format="json")
         self.assertEqual(res.status_code, 404)
         self.grant.refresh_from_db()
         self.assertIsNone(self.grant.pending_download_id)
 
     def test_a_confirmed_upload_can_still_be_requested(self):
-        res = APIClient().post(f"/api/v1/records-share/{self.grant.token}/downloads/", {"doc_id": self.confirmed.id}, format="json")
+        res = APIClient().post(f"/api/v1/records-share/{self.grant.token}/downloads/", {"doc_id": self.confirmed.pk}, format="json")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["data"]["state"], "requested")
 
     def test_the_hospital_history_leaves_out_a_waiting_upload(self):
         docs = PatientService.get_shared_history(awpid=AWPID)["documents"]
-        self.assertEqual({d["id"] for d in docs}, {self.confirmed.id, self.issued.id})
+        self.assertEqual({d["medical_document_id"] for d in docs}, {self.confirmed.pk, self.issued.pk})
+
+    def test_the_hospital_history_lists_the_prescriptions_a_hospital_issued(self):
+        rx = make_doc(AWPID, status="completed", document_type="prescription", by="issued", name="rx.pdf", created_by_type="H",
+                      source_type="encounter", source_id=uuid.uuid4(), document_date=timezone.now().date())
+        history = PatientService.get_shared_history(awpid=AWPID)
+        self.assertEqual(history["prescriptions"], [{"prescribed_on": rx.document_date, "items": []}])
 
     @override_settings(RECORDS_REVIEW_FROM="")
     def test_with_the_review_step_off_everything_is_shared_as_before(self):
-        ids = {d["id"] for d in _vault_documents(AWPID)}
-        self.assertEqual(ids, {self.waiting.id, self.confirmed.id, self.issued.id})
+        ids = {d["medical_document_id"] for d in _vault_documents(AWPID)}
+        self.assertEqual(ids, {self.waiting.pk, self.confirmed.pk, self.issued.pk})

@@ -257,7 +257,7 @@ function HospitalCard({ hospital, onTierChange }) {
   useEffect(() => {
     if (expanded && auditLog === null && !auditLoading) {
       setAuditLoading(true);
-      fetchAuditLog(hospital.id)
+      fetchAuditLog(hospital.hospital_id)
         .then(setAuditLog)
         .catch(() => setAuditLog([]))
         .finally(() => setAuditLoading(false));
@@ -268,7 +268,7 @@ function HospitalCard({ hospital, onTierChange }) {
   async function toggleActive() {
     setToggling(true);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { is_active: !hospital.is_active });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.hospital_id), { is_active: !hospital.is_active });
       toastSuccess(`Hospital ${hospital.is_active ? "suspended" : "reactivated"}.`);
       setAuditLog(null);
       onTierChange();
@@ -283,7 +283,7 @@ function HospitalCard({ hospital, onTierChange }) {
     if (tierPick === hospital.subscription?.license_tier) return;
     setSavingTier(true);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { tier: tierPick });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.hospital_id), { tier: tierPick });
       toastSuccess(`Tier changed to ${TIER_LABEL[tierPick]?.label || tierPick}.`);
       setAuditLog(null);
       onTierChange();
@@ -298,7 +298,7 @@ function HospitalCard({ hospital, onTierChange }) {
     if (statusPick === hospital.subscription?.status) return;
     setSavingStatus(true);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { status: statusPick });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.hospital_id), { status: statusPick });
       toastSuccess(`Subscription status changed to ${SUB_STATUS_META[statusPick]?.label || statusPick}.`);
       setAuditLog(null);
       onTierChange();
@@ -314,7 +314,7 @@ function HospitalCard({ hospital, onTierChange }) {
     if (!cleaned || cleaned === hospital.hospital_code) return;
     setSavingHospitalCode(true);
     try {
-      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.id), { hospital_code: cleaned });
+      await api.patch(API_ENDPOINTS.PLATFORM.HOSPITAL(hospital.hospital_id), { hospital_code: cleaned });
       toastSuccess(`Hospital Code changed to "${cleaned}".`);
       setAuditLog(null);
       onTierChange();
@@ -345,13 +345,13 @@ function HospitalCard({ hospital, onTierChange }) {
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span
               style={{ fontWeight: 700, fontSize: 16, fontFamily: "var(--font-display)", cursor: "pointer" }}
-              onClick={e => { e.stopPropagation(); navigate(ROUTES.PLATFORM.HOSPITAL(hospital.id)); }}
+              onClick={e => { e.stopPropagation(); navigate(ROUTES.PLATFORM.HOSPITAL(hospital.hospital_id)); }}
               title="Open full profile"
             >
               {hospital.name}
             </span>
             <ExternalLink size={13} style={{ color: "var(--color-text-muted)", cursor: "pointer" }}
-              onClick={e => { e.stopPropagation(); navigate(ROUTES.PLATFORM.HOSPITAL(hospital.id)); }} />
+              onClick={e => { e.stopPropagation(); navigate(ROUTES.PLATFORM.HOSPITAL(hospital.hospital_id)); }} />
             <StatusBadge isActive={hospital.is_active} />
             <TierBadge tier={hospital.subscription?.license_tier} />
             <SubStatusBadge status={hospital.subscription?.status} />
@@ -607,7 +607,7 @@ export default function DashboardPage() {
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 9, maxHeight: 190, overflowY: "auto" }}>
                   {platformStats.recent_activity.map(a => (
-                    <div key={a.id} style={{ fontSize: 12.5 }}>
+                    <div key={a.hospital_audit_log_id} style={{ fontSize: 12.5 }}>
                       <strong>{a.hospital_name}</strong> — {a.action_label.toLowerCase()}
                       {a.before_value && a.after_value ? `: ${a.before_value} → ${a.after_value}` : ""}
                       <div style={{ color: "var(--color-text-muted)", fontSize: 11 }}>
@@ -663,7 +663,7 @@ export default function DashboardPage() {
           <>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {hospitals.map(t => (
-                <HospitalCard key={t.id} hospital={t} onTierChange={refetchCurrentPage} />
+                <HospitalCard key={t.hospital_id} hospital={t} onTierChange={refetchCurrentPage} />
               ))}
             </div>
 

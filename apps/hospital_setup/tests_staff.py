@@ -9,7 +9,7 @@ class HospitalSettingsAccessTests(HospitalDBTestCase):
         hospital = Hospital.objects.using("default").create(name="T", hospital_code="t", db_name="x")
         HospitalParameters.objects.using("default").create(hospital=hospital, fee_ownership="hospital")
         return self.call_view(HospitalSettingsView.as_view(), "get", "/api/v1/org/settings/",
-                              user_id=1, role=role, hospital_id=hospital.id)
+                              user_id=1, role=role, hospital_id=hospital.pk)
 
     def test_doctor_reads_only_fee_ownership(self):
         resp = self.get("doctor")

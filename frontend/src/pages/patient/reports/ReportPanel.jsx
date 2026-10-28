@@ -52,17 +52,17 @@ export default function ReportPanel({ doc, original, patientAwpid, priv, onLock,
   useEffect(() => {          // a different report: start again on Details
     setTab("details"); setChoosing(false); setNewType(doc.doc_type || ""); setDetail(null);
     let alive = true;
-    apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { params })
+    apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(doc.medical_document_id), { params })
       .then(res => { if (alive) setDetail(res.data?.data || res.data); })
       .catch(() => { if (alive) setDetail({ file_data: "", doc_types: [], events: [] }); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload only when another report (or its state) is shown
-  }, [doc.id, doc.processing_status, doc.doc_type]);
+  }, [doc.medical_document_id, doc.processing_status, doc.doc_type]);
 
   async function saveType() {
     setBusy(true);
     try {
-      await apiClient.patch(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { doc_type: newType }, { params });
+      await apiClient.patch(API_ENDPOINTS.PORTAL.DOCUMENT(doc.medical_document_id), { doc_type: newType }, { params });
       toastSuccess(`Filed under ${typeLabel(newType)}.`);
       setChoosing(false); onChanged();
     } catch (err) { toastApiError(err, "Could not change the type."); } finally { setBusy(false); }
@@ -71,7 +71,7 @@ export default function ReportPanel({ doc, original, patientAwpid, priv, onLock,
   const openInNewTab = () => { if (detail?.file_data) window.open(detail.file_data, "_blank", "noopener"); };
   async function download() {
     try {
-      const res = await apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(doc.id), { params: { ...params, download: 1 } });
+      const res = await apiClient.get(API_ENDPOINTS.PORTAL.DOCUMENT(doc.medical_document_id), { params: { ...params, download: 1 } });
       const url = (res.data?.data || res.data)?.file_data;
       if (url) window.open(url, "_blank", "noopener");
     } catch (err) { toastApiError(err, "Could not download the file."); }

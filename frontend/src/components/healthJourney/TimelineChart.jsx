@@ -53,15 +53,17 @@ function buildItems(payload, axisMode) {
         break;
       }
       case 'chronic': {
-        const ep = lane.episode;
-        const end = ep.end || payload.period.to;
-        items.push({
-          value: [x(ep.start), axisMode === 'age' ? (Math.min(toMs(end), periodEnd) - dobMs) / DAY_MS
-            : Math.min(toMs(end), periodEnd), i, 'bar', 'chronic'],
-          meta: { kind: 'chronic', label: lane.label, ...ep },
-        });
-        ep.events.forEach((e) => push(i, e.date, null, 'tick',
-          SEVERITY_STYLE[e.severity]?.token || 'text-primary', { kind: 'visit', label: lane.label, ...e }));
+        function addChronic(ep) {
+          const end = ep.end || payload.period.to;
+          items.push({
+            value: [x(ep.start), axisMode === 'age' ? (Math.min(toMs(end), periodEnd) - dobMs) / DAY_MS
+              : Math.min(toMs(end), periodEnd), i, 'bar', 'chronic'],
+            meta: { kind: 'chronic', label: lane.label, ...ep },
+          });
+          ep.events.forEach((e) => push(i, e.date, null, 'tick',
+            SEVERITY_STYLE[e.severity]?.token || 'text-primary', { kind: 'visit', label: lane.label, ...e }));
+        }
+        (lane.episodes || [lane.episode]).forEach(addChronic);
         break;
       }
       case 'acute':
@@ -167,6 +169,13 @@ export default function TimelineChart({ payload, axisMode = 'age', onOpenDocumen
   const option = useMemo(() => {
     const items = buildItems(payload, axisMode);
     const lanes = payload.lanes.map((l) => (l.is_recurrent ? `${l.label}  ↻` : l.label));
+    const laneKey = (l) => (l.is_recurrent ? `${l.label}  ↻` : l.label);
+    const laneTips = Object.fromEntries(payload.lanes.map((l) => [laneKey(l), l]));
+    const esc = (v) => String(v ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    const axisTip = (p) => {
+      const l = laneTips[p.name];
+      return l && l.full_label ? `<b>${esc(l.full_label)}</b>${l.codes?.length ? `<br/>${esc(l.codes.join(', '))}` : ''}` : esc(p.name);
+    };
     const dobMs = toMs(payload.patient.dob);
     const xFmt = axisMode === 'age' ? (v) => (v < 1 ? 'Birth' : formatAgeDays(v))
       : (v) => new Date(v).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
@@ -178,6 +187,10 @@ export default function TimelineChart({ payload, axisMode = 'age', onOpenDocumen
     const baseStep = spanM <= 8 ? 1 : spanM <= 30 ? 3 : spanM <= 72 ? 6 : spanM <= 144 ? 12 : 24;
     const stepM = narrow ? baseStep * 2 : baseStep;
     const zoomable = spanM > 36;                         // a long history can be zoomed and panned
+    const marks = items.map((it) => it.value[0]);
+    const twoYears = 24 * 30.4375;
+    const openOnTwoYears = axisMode === 'age' && zoomable && marks.length > 0 && marks.filter((v) => v <= twoYears).length / marks.length >= 0.6;
+    const zoomEnd = openOnTwoYears ? Math.min(100, Math.max(5, ((twoYears - xMin) / (xMax - xMin)) * 100)) : 100;
     const xMinAxis = axisMode === 'age' ? Math.floor(xMin / (stepM * 30.4375)) * stepM * 30.4375 : xMin;
 
     return {
@@ -185,8 +198,8 @@ export default function TimelineChart({ payload, axisMode = 'age', onOpenDocumen
       animation: false,
       grid: { left: narrow ? 104 : 220, right: narrow ? 16 : 36, top: 16, bottom: zoomable ? 78 : 40 },
       dataZoom: zoomable ? [
-        { type: 'inside', xAxisIndex: 0, filterMode: 'none', start: 0, end: 100 },
-        { type: 'slider', xAxisIndex: 0, filterMode: 'none', start: 0, end: 100, height: 22, bottom: 8, brushSelect: false, borderColor: t.grid,
+        { type: 'inside', xAxisIndex: 0, filterMode: 'none', start: 0, end: zoomEnd },
+        { type: 'slider', xAxisIndex: 0, filterMode: 'none', start: 0, end: zoomEnd, height: 22, bottom: 8, brushSelect: false, borderColor: t.grid,
           fillerColor: t['band-inner'], textStyle: { color: t['text-muted'], fontSize: 12 }, labelFormatter: (v) => xFmt(v) },
       ] : undefined,
       tooltip: {
@@ -204,8 +217,9 @@ export default function TimelineChart({ payload, axisMode = 'age', onOpenDocumen
       },
       yAxis: {
         type: 'category', data: lanes, inverse: true,
+        triggerEvent: true, tooltip: { show: true, confine: true, formatter: axisTip },
         axisTick: { show: false }, axisLine: { show: false },
-        axisLabel: { color: t['text-secondary'], fontSize: narrow ? 12 : 14, fontWeight: 500, width: narrow ? 96 : 200, overflow: 'break' },
+        axisLabel: { color: t['text-secondary'], fontSize: narrow ? 12 : 14, fontWeight: 500, width: narrow ? 96 : 200, overflow: 'truncate' },
         splitLine: { show: true, lineStyle: { color: t.grid, width: 1 } },
         splitArea: { show: true, areaStyle: { color: ['transparent', t['band-outer']] } },
       },

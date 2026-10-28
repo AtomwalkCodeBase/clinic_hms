@@ -45,8 +45,6 @@ export const API_ENDPOINTS = {
     USERS:            `${API_V1}/platform/users/`,
     VACCINATION_TEMPLATES:      `${API_V1}/platform/vaccination-templates/`,
     VACCINATION_TEMPLATE: (id) => `${API_V1}/platform/vaccination-templates/${id}/`,
-    MILESTONE_TEMPLATES:      `${API_V1}/platform/milestone-templates/`,
-    MILESTONE_TEMPLATE: (id) => `${API_V1}/platform/milestone-templates/${id}/`,
     RECORDS_REPORT:       `${API_V1}/platform/records/report/`,
     RECORDS_REPORT_ITEM: (id) => `${API_V1}/platform/records/report/${id}/`,
     RECORDS_RECLASSIFY:   `${API_V1}/platform/records/reclassify/`,
@@ -64,7 +62,6 @@ export const API_ENDPOINTS = {
     MY_STAFF_PROFILE:  `${API_V1}/org/me/staff-profile/`,
     MY_PROFILE:        `${API_V1}/org/me/profile/`,
     STAFF_BRANCHES: (id) => `${API_V1}/org/staff/${id}/branches/`,
-    STAFF_DOCTORS: (id) => `${API_V1}/org/staff/${id}/doctors/`,
     MY_BRANCHES:       `${API_V1}/org/me/branches/`,
     SETTINGS:          `${API_V1}/org/settings/`,
     PERMISSIONS:       `${API_V1}/org/permissions/`,
@@ -73,9 +70,6 @@ export const API_ENDPOINTS = {
     VACCINATION_SCHEDULES:        `${API_V1}/org/vaccination-schedules/`,
     VACCINATION_SCHEDULE:  (id) => `${API_V1}/org/vaccination-schedules/${id}/`,
     VACCINATION_SCHEDULE_ACTIVATE: (id) => `${API_V1}/org/vaccination-schedules/${id}/activate/`,
-    MILESTONE_SCHEDULES:        `${API_V1}/org/milestone-schedules/`,
-    MILESTONE_SCHEDULE:  (id) => `${API_V1}/org/milestone-schedules/${id}/`,
-    MILESTONE_SCHEDULE_ACTIVATE: (id) => `${API_V1}/org/milestone-schedules/${id}/activate/`,
     FLOORS:            `${API_V1}/org/floors/`,
     FLOOR:      (id) => `${API_V1}/org/floors/${id}/`,
     ROOMS:             `${API_V1}/org/rooms/`,
@@ -83,18 +77,12 @@ export const API_ENDPOINTS = {
     ROOM_ASSIGNMENTS:  `${API_V1}/org/room-assignments/`,
     ROOM_ASSIGNMENT: (id) => `${API_V1}/org/room-assignments/${id}/`,
     // Beds (IPD bed assignment) + front-desk triage availability — see
-    BEDS:              `${API_V1}/org/beds/`,
-    BED:        (id) => `${API_V1}/org/beds/${id}/`,
-    BED_BOARD:         `${API_V1}/org/beds/board/`,
-    BED_MARK_CLEAN: (id) => `${API_V1}/org/beds/${id}/mark-clean/`,
-    BED_MAINTENANCE: (id) => `${API_V1}/org/beds/${id}/maintenance/`,
     DEPARTMENTS_AVAILABILITY: `${API_V1}/org/departments/availability/`,
   },
 
   PATIENTS: {
     REGISTER:         `${API_V1}/patients/register/`,
     // Provisional/unidentified-patient registration (Emergency path) — no
-    REGISTER_EMERGENCY: `${API_V1}/patients/register-emergency/`,
     LOOKUP:           `${API_V1}/patients/lookup/`,
     ATTACH_NETWORK:   `${API_V1}/patients/attach-network/`,
     SEARCH:           `${API_V1}/patients/search/`,
@@ -109,7 +97,6 @@ export const API_ENDPOINTS = {
     VACCINATION_ADMINISTER:(id) => `${API_V1}/patients/${id}/vaccinations/administer/`,
     // ── Pediatric-only additions ────────────────────────────────────────
     BIRTH_HISTORY:     (id) => `${API_V1}/patients/${id}/birth-history/`,
-    MILESTONES:        (id) => `${API_V1}/patients/${id}/milestones/`,
   },
 
   // OPD module — appointment queue, encounters, prescriptions
@@ -153,7 +140,6 @@ export const API_ENDPOINTS = {
     DOCTOR_DETAIL: (hospitalId, doctorId) => `${API_V1}/portal/hospitals/${hospitalId}/doctors/${doctorId}/`,
     SLOTS: (hospitalId, doctorId) => `${API_V1}/portal/hospitals/${hospitalId}/doctors/${doctorId}/slots/`,
     BOOK:                  `${API_V1}/portal/book/`,
-    HOSPITAL_SHARING:      `${API_V1}/portal/hospital-sharing/`,   // which hospitals may see the history, and withdrawing it
     MY_BOOKINGS:           `${API_V1}/portal/my-bookings/`,
     CANCEL_BOOKING:  (id) => `${API_V1}/portal/my-bookings/${id}/cancel/`,
     RESCHEDULE_BOOKING:(id) => `${API_V1}/portal/my-bookings/${id}/reschedule/`,
@@ -163,11 +149,7 @@ export const API_ENDPOINTS = {
     DOCUMENTS:             `${API_V1}/portal/documents/`,
     DOCUMENT: (id) =>       `${API_V1}/portal/documents/${id}/`,
     DOCUMENTS_ZIP:         `${API_V1}/portal/documents/zip/`,
-    LAB_ORDERS:            `${API_V1}/portal/lab-orders/`,
-    LAB_ORDER_CHOICE:      `${API_V1}/portal/lab-orders/choice/`,
-    LAB_REPORT_FILE: (hospitalDb, requestId) => `${API_V1}/portal/lab-orders/${hospitalDb}/${requestId}/report/`,
     PRESCRIPTIONS:         `${API_V1}/portal/prescriptions/`,
-    PRESCRIPTION_CHOICE:   `${API_V1}/portal/prescriptions/choice/`,
     PRESCRIPTION_RECEIPT: (hospitalDb, id) => `${API_V1}/portal/prescriptions/${hospitalDb}/${id}/receipt/`,
     PROFILE:                `${API_V1}/portal/profile/`,
     CHANGE_PASSWORD:        `${API_V1}/portal/profile/change-password/`,
@@ -180,7 +162,6 @@ export const API_ENDPOINTS = {
     VACCINATION_UPLOAD:     `${API_V1}/portal/vaccinations/upload/`,
     VACCINATION_FILE: (recordId) => `${API_V1}/portal/vaccinations/${recordId}/file/`,
     GROWTH:                 `${API_V1}/portal/growth/`,
-    MILESTONES:             `${API_V1}/portal/milestones/`,
     TIMELINE:               `${API_V1}/portal/timeline/`,
     NOTIFICATIONS:          `${API_V1}/portal/notifications/`,
     NOTIFICATION_READ: (hospitalDb, id) => `${API_V1}/portal/notifications/${hospitalDb}/${id}/read/`,
@@ -225,27 +206,7 @@ export const API_ENDPOINTS = {
 
   // apps.clinical was retired (HMS-07c-1) — live consultation flow is
 
-  PRESCRIPTIONS: {
-    // LIST/DETAIL/FINALIZE (apps.prescriptions.Prescription) were retired
-    DRUGS:            `${API_V1}/prescriptions/drugs/`,
-    DRUG_ITEM:  (id) => `${API_V1}/prescriptions/drugs/${id}/`,
-    DRUG_SEARCH:      `${API_V1}/prescriptions/drugs/search/`,
-    DRUG_FORMS:       `${API_V1}/prescriptions/drug-forms/`,
-    DRUG_FORM_ITEM: (id) => `${API_V1}/prescriptions/drug-forms/${id}/`,
-  },
 
-  LAB: {
-    CATALOG:              `${API_V1}/lab/catalog/`,
-    CATALOG_ITEM:  (id) => `${API_V1}/lab/catalog/${id}/`,
-    SAMPLE_TYPES:         `${API_V1}/lab/sample-types/`,
-    SAMPLE_TYPE_ITEM: (id) => `${API_V1}/lab/sample-types/${id}/`,
-    REQUESTS:             `${API_V1}/lab/requests/`,
-    REQUEST_LOOKUP:       `${API_V1}/lab/requests/lookup/`,
-    REQUEST_CHOICE: (id) => `${API_V1}/lab/requests/${id}/choice/`,
-    REQUEST_ATTACH_DOCUMENT: (id) => `${API_V1}/lab/requests/${id}/attach-document/`,
-    REQUEST_STATUS: (id) => `${API_V1}/lab/requests/${id}/status/`,
-    REQUEST_REPORT: (id) => `${API_V1}/lab/requests/${id}/report/`,
-  },
 
   BILLING: {
     SERVICES:         `${API_V1}/billing/services/`,
@@ -268,12 +229,6 @@ export const API_ENDPOINTS = {
     REVENUE_REPORT:   `${API_V1}/billing/reports/revenue/`,
   },
 
-  PHARMACY: {
-    STOCK:            `${API_V1}/pharmacy/stock/`,
-    DISPENSE:         `${API_V1}/pharmacy/dispense/`,
-    PRESCRIPTIONS:    `${API_V1}/pharmacy/prescriptions/`,
-    PRESCRIPTION_LOOKUP: `${API_V1}/pharmacy/prescriptions/lookup/`,
-  },
 
   // apps.ai_pipeline was retired (HMS-07c-1) — its urls.py was never
 
@@ -283,36 +238,10 @@ export const API_ENDPOINTS = {
     AUDIT_LOG:            `${API_V1}/compliance/audit-log/`,
     AMENDMENTS:           `${API_V1}/compliance/amendments/`,
     AMENDMENT_RESOLVE: (id) => `${API_V1}/compliance/amendments/${id}/resolve/`,
-    CONSENTS:             `${API_V1}/compliance/consents/`,
     PORTAL_AMENDMENTS:    `${API_V1}/compliance/portal/amendments/`,
   },
 
   // IPD module — admission intake + bed assignment (immediate or
-  IPD: {
-    REFERRALS:                `${API_V1}/ipd/referrals/`,
-    REFERRALS_MINE:           `${API_V1}/ipd/referrals/mine/`,
-    REFERRAL_RECOMMEND:       `${API_V1}/ipd/referrals/recommend/`,
-    REFERRAL_REGISTER_EXTERNAL: `${API_V1}/ipd/referrals/register-external/`,
-    REFERRAL_ACCEPT:   (id) => `${API_V1}/ipd/referrals/${id}/accept/`,
-    ADMISSIONS:                `${API_V1}/ipd/admissions/`,
-    ADMISSIONS_MINE:           `${API_V1}/ipd/admissions/mine/`,
-    ADMISSION_REGISTER:        `${API_V1}/ipd/admissions/register/`,
-    ADMISSION_AWAITING_BED:    `${API_V1}/ipd/admissions/awaiting-bed/`,
-    ADMISSION:         (id) => `${API_V1}/ipd/admissions/${id}/`,
-    ADMISSION_DEPOSIT: (id) => `${API_V1}/ipd/admissions/${id}/deposit/`,
-    ADMISSION_ASSIGN_BED:  (id) => `${API_V1}/ipd/admissions/${id}/assign-bed/`,
-    ADMISSION_RELEASE_BED: (id) => `${API_V1}/ipd/admissions/${id}/release-bed/`,
-    ADMISSION_RESERVE_BED: (id) => `${API_V1}/ipd/admissions/${id}/reserve-bed/`,
-    ADMISSION_CANCEL_BED_RESERVATION: (id) => `${API_V1}/ipd/admissions/${id}/cancel-bed-reservation/`,
-    ADMISSION_TRANSFER_BED: (id) => `${API_V1}/ipd/admissions/${id}/transfer-bed/`,
-    ADMISSION_MOVEMENTS:    (id) => `${API_V1}/ipd/admissions/${id}/movements/`,
-    ADMISSION_DISCHARGE:        (id) => `${API_V1}/ipd/admissions/${id}/discharge/`,
-    ADMISSION_GENERATE_INVOICE: (id) => `${API_V1}/ipd/admissions/${id}/generate-invoice/`,
-    ADMISSION_TYPES:           `${API_V1}/ipd/admission-types/`,
-    ADMISSION_TYPE_ITEM: (id) => `${API_V1}/ipd/admission-types/${id}/`,
-    ADMISSION_SOURCES:         `${API_V1}/ipd/admission-sources/`,
-    ADMISSION_SOURCE_ITEM: (id) => `${API_V1}/ipd/admission-sources/${id}/`,
-  },
 };
 
 export default API_ENDPOINTS;
