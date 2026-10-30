@@ -58,7 +58,7 @@ class InvoiceItemSerializer(serializers.Serializer):
     def __init__(self, *args, db=None, **kwargs):
         super().__init__(*args, **kwargs)
         if db:
-            self.fields["service"].queryset = BillingItem.objects.using(db)
+            self.fields["service"].queryset = BillingItem.objects.using(db).filter(bill__isnull=True)
 
 
 class PaymentSerializer(serializers.Serializer):

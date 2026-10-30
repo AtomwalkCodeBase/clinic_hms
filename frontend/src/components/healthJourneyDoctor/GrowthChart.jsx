@@ -10,6 +10,12 @@ const INDICATORS = [
   { key: 'head_circ_cm', label: 'Head size', unit: 'cm' },
 ];
 
+// Life stages shown as a labelled bar across the top of the chart; the one holding the latest reading is highlighted.
+const AGE_STAGES = [
+  { name: 'Infant', from: 0, to: 12 }, { name: 'Toddler', from: 12, to: 36 }, { name: 'Pre-school', from: 36, to: 60 },
+  { name: 'School age', from: 60, to: 144 }, { name: 'Teen', from: 144, to: 216 },
+];
+
 const fmtAgeM = (m) => (m < 24 ? `${Math.round(m)} m` : `${Math.floor(m / 12)} y${Math.round(m % 12) ? ` ${Math.round(m % 12)} m` : ''}`);
 
 export default function GrowthChart({ api, patientId, onOpenDocument }) {
@@ -51,6 +57,26 @@ export default function GrowthChart({ api, patientId, onOpenDocument }) {
         })),
       }),
     };
+    const latestAge = Math.max(...data.points.map((p) => p.age_months));
+    // The age bar: one labelled block per life stage in a strip above the plot, the stage of the latest reading highlighted.
+    const stageBar = {
+      type: 'custom', silent: true, clip: false, z: 6, tooltip: { show: false },
+      encode: { x: [0, 1] },
+      data: AGE_STAGES.filter((g) => g.from < xMax).map((g) => [g.from, Math.min(g.to, xMax), latestAge >= g.from && latestAge < g.to ? 1 : 0, g.name]),
+      renderItem: (params, api) => {
+        const [x0, x1] = [api.coord([api.value(0), 0])[0], api.coord([api.value(1), 0])[0]];
+        const on = api.value(2) === 1;
+        return {
+          type: 'group',
+          children: [
+            { type: 'rect', shape: { x: x0 + 1, y: params.coordSys.y - 46, width: Math.max(x1 - x0 - 2, 0), height: 28, r: 6 },
+              style: { fill: on ? t['growth-line'] : t['band-outer'] } },
+            { type: 'text', style: { x: (x0 + x1) / 2, y: params.coordSys.y - 32, text: on ? `${api.value(3)} · now` : api.value(3), textAlign: 'center',
+              textVerticalAlign: 'middle', fill: on ? t['surface-1'] : t['text-muted'], fontSize: 12, fontWeight: on ? 700 : 500 } },
+          ],
+        };
+      },
+    };
     const pts = data.points.map((p) => ({
       value: [p.age_months, p.value], meta: p,
       itemStyle: { color: p.flag ? t[GROWTH_FLAG_STYLE[p.flag].token] : t['growth-line'], borderColor: t['surface-1'], borderWidth: 2 },
@@ -59,7 +85,7 @@ export default function GrowthChart({ api, patientId, onOpenDocument }) {
     return {
       backgroundColor: 'transparent',
       animation: false,
-      grid: { left: 52, right: 56, top: 32, bottom: 44 },
+      grid: { left: 52, right: 56, top: 64, bottom: 44 },
       tooltip: {
         trigger: 'item', confine: true, backgroundColor: t['surface-1'], borderColor: t.grid,
         textStyle: { color: t['text-primary'], fontSize: 12 },
@@ -90,7 +116,8 @@ export default function GrowthChart({ api, patientId, onOpenDocument }) {
           lineStyle: { color: t['band-median'], width: 1.5, type: 'dashed' }, tooltip: { show: false }, z: 2,
           endLabel: { show: false } },
         { name: 'Your child', type: 'line', data: pts, symbolSize: 9, z: 5,
-          lineStyle: { color: t['growth-line'], width: 2 } },
+          lineStyle: { color: t['growth-line'], width: 2 }},
+        stageBar,
       ],
     };
   }, [data, t, meta]);

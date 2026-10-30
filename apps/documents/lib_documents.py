@@ -730,11 +730,22 @@ def discardable_ids(docs):
         waiting = set(MedicalDocument.objects.using("default").filter(pk__in=unsure).filter(awaiting_review_q())
                       .values_list("pk", flat=True))
     return {d.pk for d in candidates if d.status == Status.FAILED or d.pk in waiting}
+def _drop_facts_read_from(doc):
+    """What was read from a removed upload goes with it. The rows only lose their link to the document when it is deleted, and a fact with no
+    document always counts for the timeline (see `confirmed_q`), so left behind they would show up without the patient ever confirming them."""
+    from .models import Admission, BirthHistory, ClinicalEvent, GrowthMeasurement, ImmunizationRecord, LabResult
+    for model in (Admission, BirthHistory, GrowthMeasurement, LabResult):
+        model.objects.filter(document=doc).delete()
+    ClinicalEvent.objects.filter(document=doc, source="EXTRACTED").delete()
+    ImmunizationRecord.objects.filter(document=doc, source=ImmunizationRecord.SOURCE_EXTRACTED).delete()
+
+
 def dismiss_document(doc):
     """The patient removes an upload (see `can_discard`): its stored copy and its rows. A document that is being read"""
     if not can_discard(doc):
         raise ValueError("Only a file that failed, or one you haven't confirmed yet, can be removed.")
     batch, name = doc.batch, (doc.file_name.name if doc.file_name else "")
+    _drop_facts_read_from(doc)
     doc.delete()
     _safe_delete(name)
     if batch:

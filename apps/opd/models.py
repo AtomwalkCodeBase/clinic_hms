@@ -1,7 +1,7 @@
 import uuid
 
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.utils import timezone
 from django.utils.functional import cached_property
 from apps.hospital_patients.models import HospitalPatient
@@ -72,14 +72,32 @@ class Appointment(models.Model):
     def __str__(self):
         return f"Appt #{self.token_number} — {self.patient_id} ({self.status})"
 
-    def clean(self):
-        db = self._state.db
+    PLACE_FIELDS = ("doctor", "branch_department", "room")
+
+    def clean(self, using=None):
+        db = using or self._state.db
         place = self.branch_department
-        if not StaffBranchAssignment.objects.using(db).filter(
-                staff_id=self.doctor_id, branch_id=place.branch_id, staff__department_id=place.department_id).exists():
+        works_here = models.Q(staff_id=self.doctor_id, branch_id=place.branch_id) & (
+            models.Q(department_id=place.department_id) | models.Q(department__isnull=True, staff__department_id=place.department_id))
+        if not StaffBranchAssignment.objects.using(db).filter(works_here).exists():
             raise ValidationError({"doctor": "The doctor does not work at this branch and department."})
         if self.room_id and self.room.branch_id != self.branch_department.branch_id:
             raise ValidationError({"room": "The room is at a different branch."})
+
+    def save(self, *args, **kwargs):
+        """The doctor, department and room are checked when the visit is made and when one of them changes; a status or time update is not rechecked."""
+        using = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        fields = kwargs.get("update_fields")
+        if self._state.adding:
+            check = True
+        elif fields is not None:
+            check = any(f in self.PLACE_FIELDS or f in ("doctor_id", "branch_department_id", "room_id") for f in fields)
+        else:
+            stored = type(self).objects.using(using).filter(pk=self.pk).values("doctor_id", "branch_department_id", "room_id").first()
+            check = stored is None or stored != {"doctor_id": self.doctor_id, "branch_department_id": self.branch_department_id, "room_id": self.room_id}
+        if check:
+            self.clean(using=using)
+        super().save(*args, **kwargs)
 
     @classmethod
     def next_token(cls, branch_department_id, scheduled_date, using):
@@ -229,21 +247,12 @@ def consult_note_path(instance, filename):
     return f"{hospital_folder(instance)}/patients/{instance.encounter.appointment.patient.uhid}/{instance.encounter.appointment_id}/{filename}"
 
 
+# not reviewed
 class ConsultSession(models.Model):
     """A doctor's handwritten-pad session for one encounter: the pages written, what was read from them, and the signed note. The patient and the
-    doctor are those of the encounter's appointment."""
-    STATUS_OPEN    = "open"
-    STATUS_SIGNED  = "signed"
-    STATUS_EXPIRED = "expired"
-    STATUS_CHOICES = [
-        (STATUS_OPEN,    "Open"),
-        (STATUS_SIGNED,  "Signed"),
-        (STATUS_EXPIRED, "Expired"),
-    ]
-
-    encounter       = models.ForeignKey(OPDEncounter, on_delete=models.CASCADE, related_name="e_consult_sessions")
+    doctor are those of the encounter's appointment. One encounter has one session and one QR; the pad is open while the encounter is a draft."""
+    encounter       = models.OneToOneField(OPDEncounter, on_delete=models.CASCADE, related_name="e_consult_session")
     token           = models.CharField(max_length=64, unique=True, default=new_pad_token)
-    status          = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_OPEN)
     rx_pages        = models.JSONField(default=list, blank=True)
     rx_recognised   = models.JSONField(null=True, blank=True)
     note_pages      = models.JSONField(default=list, blank=True)
@@ -251,12 +260,10 @@ class ConsultSession(models.Model):
     note_pdf        = models.FileField(upload_to=consult_note_path, blank=True)
     created_at      = models.DateTimeField(auto_now_add=True)
     updated_at      = models.DateTimeField(auto_now=True)
-    expires_at      = models.DateTimeField(null=True, blank=True)
-    signed_at       = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "consult_session"
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"Consult session {self.pk} of encounter {self.encounter_id} [{self.status}]"
+        return f"Consult session {self.pk} of encounter {self.encounter_id}"

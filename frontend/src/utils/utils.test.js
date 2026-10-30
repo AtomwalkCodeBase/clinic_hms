@@ -137,7 +137,6 @@ test("sorting and searching reports", () => {
   assert.deepEqual(ids("newest"), [2, 3, 1]);
   assert.deepEqual(ids("oldest"), [1, 3, 2]);
   assert.deepEqual(ids("name"), [2, 1, 3]);
-  assert.deepEqual(ids("size"), [2, 1, 3]);
   assert.deepEqual(docs.filter(d => matchesSearch(d, "lab")).map(d => d.id), [1]);          // by type
   assert.deepEqual(docs.filter(d => matchesSearch(d, "duplicate")).map(d => d.id), [3]);    // by state
   assert.deepEqual(docs.filter(d => matchesSearch(d, "scan")).map(d => d.id), [2]);         // by name

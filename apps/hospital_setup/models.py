@@ -29,8 +29,8 @@ ROLE_CHOICES = [
     (ROLE_ALL, "All (single user, every permission)"),
 ]
 
-# Modules: key -> (what it covers, the roles that always have it). The order is the position of the module in
-# UserPermission.modules: "0100010" gives access to the 2nd (opd) and 6th (compliance) module and to no other.
+# Modules: key -> (what it covers, the roles that always have it). UserPermission.modules stores the keys themselves,
+# so adding or reordering modules here never changes what a group was already given.
 MODULE_HEADERS = {
     "patients":   ("Patients: registration, search, history", (ROLE_DOCTOR, ROLE_NURSE, ROLE_FRONT_DESK)),
     "opd":        ("OPD: appointments, queue, vitals, consultation, prescriptions", (ROLE_DOCTOR, ROLE_NURSE, ROLE_FRONT_DESK)),
@@ -55,8 +55,12 @@ def hospital_folder(instance_or_alias):
 def staff_file_path(instance, filename):
     return f"{hospital_folder(instance)}/staff/{instance.user_id}/{filename}"
 
-# Password of a new login, changed at first sign-in
-INITIAL_PASSWORD = "atomwalk@123"
+def new_temp_password(length=12):
+    """A one-time password for a new or reset login (shown once to the admin and emailed); the staff member must change it at first sign-in."""
+    import secrets
+    import string
+    chars = string.ascii_letters + string.digits + "!@#$"
+    return "".join(secrets.choice(chars) for _ in range(length))
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -286,7 +290,7 @@ class StaffUser(models.Model):
         if self.user_id is None:
             self.user_id = uuid.uuid4()
             login = User.objects.db_manager("default").create_user(
-                username=str(self.user_id), email=pending.get("email") or "", password=INITIAL_PASSWORD,
+                username=str(self.user_id), email=pending.get("email") or "", password=new_temp_password(),
                 first_name=pending.get("first_name", ""), last_name=pending.get("last_name", ""))
             self.__dict__["login"] = login
             self.__dict__.pop("_new_login", None)
@@ -310,6 +314,9 @@ class StaffBranchAssignment(models.Model):
 
     staff      = models.ForeignKey(StaffUser, on_delete=models.CASCADE, related_name="u_branch_assignments")
     branch     = models.ForeignKey(Branch, on_delete=models.PROTECT, related_name="b_staff_assignments")
+    # The department worked in at this branch. A staff member who works in two departments has one assignment for each; StaffUser.department
+    # stays the primary one. Empty (older rows) means the staff member's primary department.
+    department = models.ForeignKey(Department, on_delete=models.PROTECT, null=True, blank=True, related_name="d_staff_assignments")
     is_primary = models.BooleanField(default=False)
     slot_duration_minutes = models.PositiveSmallIntegerField(default=15)
     weekly_hours          = models.JSONField(default=list, blank=True)
@@ -319,7 +326,8 @@ class StaffBranchAssignment(models.Model):
     class Meta:
         db_table = "staff_branch_assignment"
         constraints = [
-            models.UniqueConstraint(fields=["staff", "branch"], name="uniq_staff_branch"),
+            models.UniqueConstraint(fields=["staff", "branch", "department"], name="uniq_staff_branch_department"),
+            models.UniqueConstraint(fields=["staff", "branch"], condition=models.Q(department__isnull=True), name="uniq_staff_branch_no_department"),
             models.UniqueConstraint(fields=["staff"], condition=models.Q(is_primary=True), name="uniq_staff_primary_branch"),
             models.CheckConstraint(check=models.Q(slot_duration_minutes__gt=0), name="slot_duration_positive"),
         ]
@@ -327,29 +335,34 @@ class StaffBranchAssignment(models.Model):
     def __str__(self):
         return f"{self.staff.get_full_name()} @ {self.branch.name}"
 
+def _valid_module_keys(value):
+    unknown = [m for m in (value or []) if m not in MODULES]
+    if not isinstance(value, list) or unknown:
+        raise ValidationError(f"Unknown module(s): {unknown or value}. Allowed: {list(MODULES)}.")
+
+
 class UserPermission(models.Model):
-    """What a user group may use at one branch and department: one row, one 0/1 character per module (see MODULES for the order).
-    A ticked checkbox is a 1, an unticked one a 0; no row, or all zeros, means no access."""
+    """What a user group may use at one branch and department: the keys of the modules switched on (see MODULES); no row, or an empty list,
+    means no access."""
     user_group        = models.ForeignKey(UserGroup, on_delete=models.CASCADE, related_name="ug_permissions")
     branch_department = models.ForeignKey(BranchDepartment, on_delete=models.CASCADE, related_name="bdp_permissions")
-    modules           = models.CharField(max_length=len(MODULES), default="0" * len(MODULES),
-                                         validators=[RegexValidator(rf"^[01]{{{len(MODULES)}}}$", "One 0 or 1 for each module.")])
+    modules           = models.JSONField(default=list, blank=True, validators=[_valid_module_keys])
 
     class Meta:
         db_table = "user_permission"
         constraints = [models.UniqueConstraint(fields=["user_group", "branch_department"], name="uniq_group_place")]
 
     def __str__(self):
-        return f"{self.user_group.name}: {self.modules} at {self.branch_department}"
+        return f"{self.user_group.name}: {', '.join(self.modules) or 'no modules'} at {self.branch_department}"
 
     @staticmethod
     def pack(modules):
-        """The stored text for a list of module keys: pack(["opd", "billing"]) is "0110000"."""
-        return "".join("1" if module in modules else "0" for module in MODULES)
+        """The stored value for some module keys: pack(["billing", "opd"]) is ["opd", "billing"] (in the order of MODULES, unknown keys dropped)."""
+        return [module for module in MODULES if module in modules]
 
     def allowed(self):
         """The module keys this row gives access to."""
-        return [module for module, bit in zip(MODULES, self.modules) if bit == "1"]
+        return [module for module in MODULES if module in (self.modules or [])]
 
     def allows(self, module):
         return module in self.allowed()
@@ -430,8 +443,20 @@ class RecordAmendment(models.Model):
 
 
 # not reviewed
+class AuditLogQuerySet(models.QuerySet):
+    """An audit entry is never edited or deleted, not even in bulk (the database refuses it too: see migration 0003)."""
+    def update(self, **kwargs):
+        raise ValueError("An audit entry is never edited.")
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        raise ValueError("An audit entry is never edited.")
+
+    def delete(self):
+        raise ValueError("An audit entry is never deleted.")
+
+
 class AuditLog(models.Model):
-    actor_user_id = models.BigIntegerField(null=True, blank=True)
+    actor_user_id = models.BigIntegerField(null=True, blank=True)       # the id of the Django login (auth User), not StaffUser.user_id (a UUID)
     actor_email   = models.CharField(max_length=255, blank=True)
     actor_role    = models.CharField(max_length=30, blank=True)
     action        = models.CharField(max_length=50)
@@ -441,6 +466,8 @@ class AuditLog(models.Model):
     ip_address    = models.GenericIPAddressField(null=True, blank=True)
     metadata      = models.JSONField(default=dict, blank=True)
     created_at    = models.DateTimeField(auto_now_add=True)
+
+    objects = AuditLogQuerySet.as_manager()
 
     class Meta:
         db_table  = "audit_log"

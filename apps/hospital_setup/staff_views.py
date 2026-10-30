@@ -24,7 +24,7 @@ from apps.hospital_master.models import GlobalStaffUserIndexCatalog
 from apps.hospital_master.services import parameters_of
 
 from apps.hospital_setup.models import Branch, Room
-from apps.hospital_setup.models import INITIAL_PASSWORD, MODULE_HEADERS, ROLE_ADMIN, ROLE_ALL, ROLE_DOCTOR, BranchDepartment, StaffUser, UserGroup, UserPermission
+from apps.hospital_setup.models import MODULE_HEADERS, new_temp_password, ROLE_ADMIN, ROLE_ALL, ROLE_DOCTOR, BranchDepartment, StaffUser, UserGroup, UserPermission
 from apps.hospital_setup.rbac import ACTS_AS_ALL, GROUP_ROLE, ROLE_KEY, ROLE_LABELS, acts_as_q, api_role, modules_of, resolve_acts_as, role_q, system_role
 from apps.hospital_setup.staff_services import by_name, create_staff, last_logins, name_or_email_q, set_login_password, sync_catalog
 from apps.hospital_setup.branch_utils import (
@@ -165,14 +165,15 @@ class StaffInviteView(APIView):
                 existing.employee_id = next_employee_id(db)
             existing.must_change_password = True
             existing.save(using=db)
-            set_login_password(existing, INITIAL_PASSWORD)
+            temp_password = new_temp_password()
+            set_login_password(existing, temp_password)
             if "branch_ids" in d:
                 set_staff_branches(existing, d.get("branch_ids") or [], d.get("branch_id"), db)
             sync_catalog(existing, request.hospital_id)
-            _send_new_account_email(existing, INITIAL_PASSWORD)
+            _send_new_account_email(existing, temp_password)
             return created(data={
                 **StaffSerializer(existing).data,
-                "temp_password": INITIAL_PASSWORD,
+                "temp_password": temp_password,
                 "note": "Account reactivated. Share these credentials with the staff member."
                         + (" A copy was also emailed to them." if existing.email else ""),
             }, message=f"{existing.get_full_name()} reactivated.")
@@ -236,10 +237,12 @@ class StaffInviteView(APIView):
                 room_utils.set_hours(sched, d["schedule"].get("slot_duration_minutes", 15), d["schedule"]["days"], db)
 
         sync_catalog(staff, request.hospital_id)
-        _send_new_account_email(staff, INITIAL_PASSWORD)
+        temp_password = new_temp_password()
+        set_login_password(staff, temp_password)
+        _send_new_account_email(staff, temp_password)
         return created(data={
             **StaffSerializer(staff).data,
-            "temp_password": INITIAL_PASSWORD,
+            "temp_password": temp_password,
             "note": "Share these credentials with the staff member. They will be prompted to change the password on first login."
                     + (" A copy was also emailed to them." if staff.email else ""),
         }, message=f"{staff.get_full_name()} invited.")
@@ -448,10 +451,10 @@ class StaffResendInviteView(APIView):
         except StaffUser.DoesNotExist:
             return not_found("Staff member not found.")
 
-        set_login_password(staff, INITIAL_PASSWORD)
+        temp_password = new_temp_password()
+        set_login_password(staff, temp_password)
         staff.must_change_password = True
         staff.save(using=request.hospital_db, update_fields=["must_change_password", "updated_at"])
-        temp_password = INITIAL_PASSWORD
 
         _send_new_account_email(staff, temp_password)
         return success(data={

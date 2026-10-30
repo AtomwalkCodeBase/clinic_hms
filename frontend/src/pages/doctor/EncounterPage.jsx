@@ -773,7 +773,6 @@ export default function EncounterPage() {
           <ClinicalSummaryHeader
             enc={enc}
             history={history}
-            allergies={history?.allergies || []}
             activeProblems={
               diagnoses.length > 0
                 ? diagnoses.map(d => d.description)
@@ -787,13 +786,13 @@ export default function EncounterPage() {
           />
 
           {/* ── Vitals (read-only) ──────────────────────────────────────────── */}
-          <SectionCard title="Vitals (recorded by nurse)">
+          <SectionCard id="vitals" title="Vitals (recorded by nurse)">
             <VitalsDisplay vitals={vitals} />
           </SectionCard>
 
           {/* ── SOAP Notes + Diagnoses side by side ────────────────────────── */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
-          <SectionCard title="SOAP Notes"
+          <SectionCard id="soap" title="SOAP Notes"
             extra={
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <button
@@ -908,7 +907,7 @@ export default function EncounterPage() {
 
           {/* ── Right column: Diagnoses + Prescription ─────────────────────── */}
           <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
-          <SectionCard title="Diagnoses (ICD-10)" badge={diagnoses.length}
+          <SectionCard id="diagnoses" title="Diagnoses (ICD-10)" badge={diagnoses.length}
             extra={<DictateButton disabled={isClosed} onTranscript={t => openDictation("diagnoses", t)} />}>
             {!isClosed && (
               <div style={{ marginBottom: 14 }}>
@@ -1024,7 +1023,7 @@ export default function EncounterPage() {
           </SectionCard>
 
           {/* ── Prescription (under Diagnoses, right column) ───────────────── */}
-          <SectionCard title="Prescription" badge={rxItems.length}
+          <SectionCard id="prescription" title="Prescription" badge={rxItems.length}
             extra={<DictateButton disabled={isClosed} onTranscript={t => openDictation("prescription", t)} />}>
             <FavouritesBar currentItems={rxItems} onApply={applyFavourite} disabled={isClosed || addingRx} />
             {!isClosed && <DrugForm onSave={addDrug} disabled={addingRx} />}
@@ -1133,7 +1132,7 @@ export default function EncounterPage() {
 
           {/* ── Investigations + Referral + Advice, three across ───────────── */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, alignItems: "start" }}>
-          <SectionCard title="Investigations / Orders"
+          <SectionCard id="investigations" title="Investigations / Orders"
             extra={<DictateButton disabled={isClosed} onTranscript={t => openDictation("investigations", t)} />}>
             <Field label="Investigations / orders (lab tests, radiology, imaging)">
               <Textarea
@@ -1147,7 +1146,7 @@ export default function EncounterPage() {
           </SectionCard>
 
           {/* ── Referral ───────────────────────────────────────────────────── */}
-          <SectionCard title="Referral"
+          <SectionCard id="referral" title="Referral"
             extra={<DictateButton disabled={isClosed} onTranscript={t => openDictation("referral", t)} />}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 4 }}>
               <Field label="Refer to (specialty / doctor)">
@@ -1172,7 +1171,7 @@ export default function EncounterPage() {
           </SectionCard>
 
           {/* ── Advice + Follow-up ─────────────────────────────────────────── */}
-          <SectionCard title="Advice & Follow-up"
+          <SectionCard id="advice" title="Advice & Follow-up"
             extra={<DictateButton disabled={isClosed} onTranscript={t => openDictation("advice", t)} />}>
             <Field label="Advice to patient">
               <Textarea

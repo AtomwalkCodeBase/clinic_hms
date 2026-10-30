@@ -126,7 +126,7 @@ def generate_invoice_pdf(invoice, items, payments, patient, branch, hospital_nam
         c.drawString(col_desc + 2 * mm, y, (item['description'] or "—")[:60])
         c.drawCentredString(col_qty, y, str(item['quantity']))
         c.drawRightString(col_price + 12 * mm, y, _money(item['unit_price']))
-        c.drawCentredString(col_tax, y, f"{item.tax_rate}%")
+        c.drawCentredString(col_tax, y, f"{item['tax_rate']}%")
         c.drawRightString(col_total, y, _money(item['total']))
         y -= 7 * mm
 

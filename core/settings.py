@@ -151,7 +151,6 @@ BOOKING_WINDOW_DAYS = config("BOOKING_WINDOW_DAYS", default=62, cast=int)       
 NO_SHOW_GRACE_HOURS = config("NO_SHOW_GRACE_HOURS", default=2, cast=int)             # how long past its slot an appointment waits before it counts as a no-show
 DEFAULT_SLOT_MINUTES = config("DEFAULT_SLOT_MINUTES", default=15, cast=int)          # slot length for a doctor who has no schedule yet
 DEFAULT_CLINIC_HOURS = [tuple(int(h) for h in part.split("-")) for part in config("DEFAULT_CLINIC_HOURS", default="9-13,14-18").split(",")]
-CONSULT_PAD_EXPIRY_HOURS = config("CONSULT_PAD_EXPIRY_HOURS", default=12, cast=int)  # an idle consult-pad session lapses after this
 BILLING_REPORT_DAYS = config("BILLING_REPORT_DAYS", default=30, cast=int)            # the billing reports show this many days, today included
 USE_I18N = True
 USE_TZ = True

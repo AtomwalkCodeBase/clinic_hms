@@ -129,6 +129,7 @@ class GlobalStaffUserIndexCatalog(models.Model):
         return f"{self.mobile} -> {self.hospital_id}"
 
 
+# not reviewed
 class Schedule(models.Model):
     KIND_VACCINATION = "vaccination"
     KIND_CHOICES = [(KIND_VACCINATION, "Vaccination")]
@@ -149,6 +150,7 @@ class Schedule(models.Model):
         return f"{self.name} ({self.kind})"
 
 
+# not reviewed
 class ScheduleRule(models.Model):
     schedule        = models.ForeignKey(Schedule, on_delete=models.CASCADE, related_name="s_rules")
     item            = models.CharField(max_length=200)
@@ -162,6 +164,10 @@ class ScheduleRule(models.Model):
     class Meta:
         db_table = "immunization_schedule_rules"
         ordering = ["sort_order"]
+        constraints = [
+            models.UniqueConstraint(fields=["schedule", "item", "dose_number"], name="uniq_schedule_rule_item_dose"),
+            models.CheckConstraint(check=models.Q(max_age_days__isnull=True) | models.Q(max_age_days__gte=models.F("min_age_days")), name="schedule_rule_age_range"),
+        ]
 
     def __str__(self):
         return f"{self.item} dose {self.dose_number} ({self.scheduled_label})"

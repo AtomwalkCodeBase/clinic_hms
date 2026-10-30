@@ -1,4 +1,4 @@
-"""apps/billing/services.py — invoice lines and payments live on the invoice row as JSON (see models.py); the arithmetic is here."""
+"""apps/billing/services.py — invoice lines are BillingItem rows and payments live on the invoice row as JSON (see models.py); the arithmetic is here."""
 
 from decimal import ROUND_HALF_UP, Decimal
 

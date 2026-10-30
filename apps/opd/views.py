@@ -286,12 +286,12 @@ class AppointmentHistoryView(APIView):
             for d in (MedicalDocument.objects.using("default")
                       .filter(source_type__in=(Source.ENCOUNTER, Source.ENCOUNTER_HANDWRITTEN_RX),
                               source_id__in=[str(i) for i in enc_ids])
-                      .values("medical_document_id", "source_type", "source_id", "doc_classification")):
+                      .values("id", "source_type", "source_id", "doc_classification")):
                 eid = str(d["source_id"])
                 if d["source_type"] == Source.ENCOUNTER_HANDWRITTEN_RX:
-                    hw_rx_docs[eid] = d["medical_document_id"]
+                    hw_rx_docs[eid] = d["id"]
                 elif d["doc_classification"] == "prescription":
-                    typeset_rx_docs[eid] = d["medical_document_id"]
+                    typeset_rx_docs[eid] = d["id"]
             noted = {str(e) for e in ConsultSession.objects.using(db)
                      .filter(encounter_id__in=enc_ids)
                      .exclude(note_pdf="").values_list("encounter_id", flat=True)}
@@ -792,9 +792,9 @@ class EncounterDetailView(APIView):
 
 def _open_consult_session(encounter_id, db):
     from apps.opd.models import ConsultSession
+    """The encounter's pad session while the encounter is still a draft; signing the encounter closes the pad."""
     return (ConsultSession.objects.using(db)
-            .filter(encounter_id=encounter_id, status=ConsultSession.STATUS_OPEN)
-            .order_by("-created_at").first())
+            .filter(encounter_id=encounter_id, encounter__status=OPDEncounter.STATUS_DRAFT).first())
 
 
 def _fold_session_into_encounter(sess, enc, db):
@@ -978,7 +978,7 @@ class EncounterInternalNoteView(APIView):
         from apps.opd.models import ConsultSession
         from core import storage as blob_storage
 
-        sess = (ConsultSession.objects.using(request.hospital_db)
+        sess = (ConsultSession.objects.using(request.hospital_db).select_related("encounter")
                 .filter(encounter_id=pk).exclude(note_pdf="").first())
         if not sess:
             return api_not_found("No internal note was archived for this visit.")
@@ -986,7 +986,7 @@ class EncounterInternalNoteView(APIView):
         name = "Handwritten Consultation Note.pdf"
         return success(data={
             "medical_document_id": str(sess.encounter_id), "title": "Handwritten Consultation Note", "doc_type": "consultation_note",
-            "file_name": name, "mime_type": "application/pdf", "created_at": sess.signed_at or sess.updated_at,
+            "file_name": name, "mime_type": "application/pdf", "created_at": sess.encounter.signed_at or sess.updated_at,
             "file_data": blob_storage.signed_url(sess.note_pdf, download_name=name if want_download else None),
             "download": want_download,
         })
@@ -1018,16 +1018,15 @@ class EncounterConsultSessionView(APIView):
         if not identity:
             return api_not_found("This patient has no atomwalk identity yet.")
 
-        sess = _open_consult_session(enc.pk, request.hospital_db)
-        if not sess:
-            sess = ConsultSession.objects.using(request.hospital_db).create(
-                encounter=enc, token=f"{request.hospital_id}.{new_pad_token()}",
-                expires_at=timezone.now() + timedelta(hours=settings.CONSULT_PAD_EXPIRY_HOURS),
-            )
+        if enc.status == OPDEncounter.STATUS_SIGNED:
+            return api_error("This visit is already signed.")
+        sess, _ = ConsultSession.objects.using(request.hospital_db).get_or_create(
+            encounter=enc, defaults={"token": f"{request.hospital_id}.{new_pad_token()}"},
+        )
 
         pad_url = f"{settings.FRONTEND_URL.rstrip('/')}/consult-pad/{sess.token}"
         return success(data={
-            "session_id": sess.pk, "status": sess.status,
+            "session_id": sess.pk, "status": "open",
             "pad_url": pad_url, "qr_image": render_qr_data_uri(pad_url),
         })
 
@@ -1145,10 +1144,6 @@ class EncounterSignView(APIView):
         _store_consultation_note(enc, db, request.hospital_id)
         if sess:
             _store_handwriting_pdfs(enc, db, request.hospital_id, sess.pk)
-            from apps.opd.models import ConsultSession
-            ConsultSession.objects.using(db).filter(pk=sess.pk).update(
-                status=ConsultSession.STATUS_SIGNED, signed_at=timezone.now(),
-            )
 
         from apps.hospital_setup.compliance_services import log_action
         log_action(request, db, action="encounter.sign", resource_type="OPDEncounter",
@@ -1420,7 +1415,9 @@ class PrescriptionItemView(APIView):
     """POST   /api/v1/opd/prescriptions/<pk>/items/           — add drug item"""
     permission_classes = [IsDoctor]
 
-    def post(self, request, pk):
+    def post(self, request, pk, item_id=None):
+        if item_id is not None:
+            return Response({"detail": "Method not allowed."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
         db = request.hospital_db
         try:
             rx = Prescription.objects.using(db).get(pk=pk)
@@ -1434,7 +1431,9 @@ class PrescriptionItemView(APIView):
         )
         return Response(PrescriptionItemSerializer(item).data, status=201)
 
-    def delete(self, request, pk, item_id):
+    def delete(self, request, pk, item_id=None):
+        if item_id is None:
+            return Response({"detail": "Method not allowed."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
         db = request.hospital_db
         try:
             item = PrescriptionItem.objects.using(db).get(pk=item_id, prescription_id=pk)

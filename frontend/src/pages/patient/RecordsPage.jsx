@@ -65,6 +65,11 @@ function TabBar({ active, onChange, isAdult }) {
 // Sir's health-journey views (insights timeline, growth, immunisation record) for the patient being viewed, one section per tab.
 function InsightsPanel({ awpid, name, section }) {
   const navigate = useNavigate();
+  // Carries the vaccine to the booking form, which fills the reason from it.
+  const bookVaccine = (r) => {
+    try { sessionStorage.setItem("bookingReason", `Vaccination: ${r.vaccine} dose ${r.dose}`); } catch { /* the form is just left empty */ }
+    navigate(ROUTES.PATIENT.HOSPITALS);
+  };
   const children = useMemo(() => [{ id: awpid, name: name || "Your" }], [awpid, name]);
   const openDocument = useMemo(
     () => openDocumentWith(API_ENDPOINTS.PORTAL.DOCUMENT, { patient_awpid: awpid }),
@@ -73,6 +78,7 @@ function InsightsPanel({ awpid, name, section }) {
   if (!awpid) return null;
   return (
     <HealthJourney key={`${awpid}-${section}`} http={apiClient} children={children} section={section} onOpenDocument={openDocument}
+      onBookVaccine={bookVaccine}
       emptyAction={{ label: "Upload a report", onClick: () => navigate(ROUTES.PATIENT.MY_REPORTS) }} />
   );
 }

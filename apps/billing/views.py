@@ -44,7 +44,7 @@ class BillingServiceListView(APIView):
         return [IsAuthenticated(), IsHospitalAdmin()]
 
     def get(self, request):
-        services = BillingItem.objects.using(request.hospital_db).filter(is_active=True)
+        services = BillingItem.objects.using(request.hospital_db).filter(bill__isnull=True, is_active=True)
         return success(data=BillingServiceSerializer(services, many=True).data)
 
     def post(self, request):
@@ -82,7 +82,7 @@ class BillingServiceUploadView(APIView):
             for flag in ("tax_inclusive", "is_price_editable", "is_active"):
                 if flag in row:
                     row[flag] = str(row[flag]).lower() in ("true", "1", "yes", "y")
-            known = BillingItem.objects.using(db).filter(code=row["code"]).first() if row.get("code") else None
+            known = BillingItem.objects.using(db).filter(bill__isnull=True, code=row["code"]).first() if row.get("code") else None
             s = BillingServiceSerializer(known, data=row, partial=known is not None)
             if not s.is_valid():
                 problems[number] = s.errors
@@ -97,7 +97,7 @@ class BillingServiceUploadView(APIView):
         added = updated = 0
         with transaction.atomic(using=db):
             for data in parsed:
-                _, was_added = BillingItem.objects.using(db).update_or_create(code=data["code"], defaults=data)
+                _, was_added = BillingItem.objects.using(db).update_or_create(bill=None, code=data["code"], defaults=data)
                 added, updated = added + was_added, updated + (not was_added)
         return success(data={"added": added, "updated": updated}, message="Price list saved.")
 
@@ -108,7 +108,7 @@ class BillingServiceDetailView(APIView):
 
     def _get(self, request, pk):
         try:
-            return BillingItem.objects.using(request.hospital_db).get(pk=pk)
+            return BillingItem.objects.using(request.hospital_db).get(pk=pk, bill__isnull=True)
         except BillingItem.DoesNotExist:
             return None
 
@@ -206,7 +206,7 @@ class InvoiceListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsHospitalStaff]
 
     def get(self, request):
-        qs = Invoice.objects.using(request.hospital_db).select_related("patient").order_by("-created_at")
+        qs = Invoice.objects.using(request.hospital_db).select_related("patient").prefetch_related("i_items").order_by("-created_at")
         if pid := request.query_params.get("patient_id"):
             qs = qs.filter(patient_id=pid)
         if status_filter := request.query_params.get("status"):
@@ -260,7 +260,7 @@ class InvoiceListCreateView(APIView):
         # Optional lines in the same call — [{description, unit_price, quantity, service}]
         if request.data.get("items"):
             for item in request.data["items"]:
-                service = BillingItem.objects.using(db).filter(pk=item["service"]).first() if item.get("service") else None
+                service = BillingItem.objects.using(db).filter(bill__isnull=True, pk=item["service"]).first() if item.get("service") else None
                 inv.lines = [*inv.lines, line_from_request(item, service)]
             recompute_invoice_totals(inv, db)
             inv.refresh_from_db(using=db)

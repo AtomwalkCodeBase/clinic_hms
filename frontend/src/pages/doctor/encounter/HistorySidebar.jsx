@@ -3,7 +3,7 @@ import API_ENDPOINTS from "../../../config/api.config";
 import { useToast } from "../../../hooks/useToast";
 import { useState } from "react";
 import { encounterApi } from "../../../api";
-import { AlertTriangle, Stethoscope, Pill, FlaskConical, Paperclip, Activity, TrendingUp, Syringe, Check, X as XIcon, Baby, Clock } from "lucide-react";
+import { Stethoscope, Pill, FlaskConical, Paperclip, Activity, TrendingUp, Syringe, Check, X as XIcon, Baby, Clock } from "lucide-react";
 import { fileToDataUrl } from "../../../utils/files";
 import { EmptyNote, HistorySection } from "./HistorySection";
 import { todayLocal } from "../../../utils/dates";
@@ -248,7 +248,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
 
   const diagnoses    = history?.diagnoses     || [];
   const vitals       = history?.vitals        || [];
-  const allergies    = history?.allergies     || [];
   const labResults   = history?.lab_results   || [];
   // Grouped by calendar date (already newest-first from the API) so nine
   const labGroups = [];
@@ -300,36 +299,6 @@ export function HistorySidebar({ patientPk, patientUhid, history, isLoading, ope
       ) : (
         // Ordered by clinical priority, not alphabetically: what could hurt
         <div>
-          <HistorySection title="Allergies" icon={<AlertTriangle size={13} />} count={allergies.length} urgent defaultOpen>
-            {allergies.length === 0 ? <EmptyNote>No known allergies on record.</EmptyNote> : (
-              <div style={{ display: "grid", gap: 8 }}>
-                {allergies.map((a, i) => (
-                  <div key={i} style={{
-                    borderRadius: 8, background: "#FEF2F2", border: "1.5px solid #FCA5A5",
-                    padding: "10px 12px",
-                  }}>
-                    <div style={{
-                      display: "flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 800,
-                      color: "#B91C1C", letterSpacing: 0.4, marginBottom: 6, textTransform: "uppercase",
-                    }}>
-                      <AlertTriangle size={12} /> Allergy Alert
-                    </div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: "#7F1D1D", marginBottom: 4 }}>{a.substance}</div>
-                    <div style={{ fontSize: 11, color: "#991B1B" }}>
-                      {a.reaction || "Reaction not specified"}
-                      {a.severity && (
-                        <span style={{
-                          marginLeft: 6, padding: "1px 7px", borderRadius: 10, fontSize: 10, fontWeight: 700,
-                          background: "#FEE2E2", color: "#B91C1C", textTransform: "capitalize",
-                        }}>{a.severity}</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </HistorySection>
-
           <HistorySection title="Active diagnoses" icon={<Stethoscope size={13} />} count={diagnoses.length} defaultOpen={diagnoses.length > 0}>
             {diagnoses.length === 0 ? <EmptyNote>No prior diagnoses on record.</EmptyNote> : (
               <div>

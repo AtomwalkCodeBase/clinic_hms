@@ -63,14 +63,15 @@ export function chipsFor(doc) {
 }
 
 export const SORTS = [
-  ["newest", "Date (newest first)"], ["oldest", "Date (oldest first)"], ["name", "Name (A–Z)"], ["size", "Size (largest first)"],
+  ["newest", "Date (newest first)"], ["oldest", "Date (oldest first)"], ["name", "Name (A–Z)"],
 ];
+// A report is dated by the date read from it, else by when it was uploaded.
+const when = (d) => String(d.document_date || d.created_at);
 export function sortReports(docs, key) {
   const by = {
-    newest: (a, b) => String(b.created_at).localeCompare(String(a.created_at)) || b.medical_document_id - a.medical_document_id,
-    oldest: (a, b) => String(a.created_at).localeCompare(String(b.created_at)) || a.medical_document_id - b.medical_document_id,
+    newest: (a, b) => when(b).localeCompare(when(a)) || b.medical_document_id - a.medical_document_id,
+    oldest: (a, b) => when(a).localeCompare(when(b)) || a.medical_document_id - b.medical_document_id,
     name: (a, b) => (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" }),
-    size: (a, b) => (b.size || 0) - (a.size || 0),
   };
   return [...docs].sort(by[key] || by.newest);
 }

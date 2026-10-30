@@ -324,15 +324,24 @@ class ConsultPadTokenTests(HospitalDBTestCase):
         branch, place = make_branch(db)
         doctor = make_staff(db, "doctor", phone="9000000071", place=place)
         patient = make_patient(db, "AW-PAD", branch=branch, full_name="Pad Patient", gender="F")
-        appt = Appointment.objects.using(db).create(patient=patient, doctor=doctor, branch_department=place, scheduled_date=timezone.now().date())
-        self.encounter = OPDEncounter.objects.using(db).create(appointment=appt)
+        self.patient, self.doctor, self.place = patient, doctor, place
+        self.encounter = self.new_encounter()
 
-    def session(self, **fields):
+    def new_encounter(self):
+        from apps.opd.models import Appointment, OPDEncounter
+        db = self.hospital_alias
+        appt = Appointment.objects.using(db).create(patient=self.patient, doctor=self.doctor, branch_department=self.place, scheduled_date=timezone.now().date())
+        return OPDEncounter.objects.using(db).create(appointment=appt)
+
+    def sign(self, encounter):
+        encounter.sign(using=self.hospital_alias)
+
+    def session(self, encounter=None, **fields):
         return ConsultSession.objects.using(self.hospital_alias).create(
-            encounter=self.encounter, token=f"{self.hospital.pk}.{new_pad_token()}", expires_at=timezone.now() + timedelta(hours=12), **fields)
+            encounter=encounter or self.encounter, token=f"{self.hospital.pk}.{new_pad_token()}", **fields)
 
     def test_every_session_gets_its_own_random_token(self):
-        a, b = self.session(), self.session()
+        a, b = self.session(), self.session(self.new_encounter())
         self.assertNotEqual(a.token, b.token)
         self.assertGreaterEqual(len(a.token), 40)
 
@@ -345,24 +354,42 @@ class ConsultPadTokenTests(HospitalDBTestCase):
         self.assertEqual(_open_session_for_token("nope"), (None, None))
         self.assertEqual(_open_session_for_token("999.nope"), (None, None))           # no such hospital
 
-    def test_a_closed_or_expired_session_still_names_the_patient_but_is_not_writable(self):
-        signed = self.session(status=ConsultSession.STATUS_SIGNED)
+    def test_a_signed_encounters_session_still_names_the_patient_but_is_not_writable(self):
+        signed = self.session()
+        self.sign(self.encounter)
         identity, found = _open_session_for_token(signed.token)
         self.assertEqual((identity.awpid, found), ("AW-PAD", None))
 
-        stale = self.session()
-        ConsultSession.objects.using(self.hospital_alias).filter(pk=stale.pk).update(expires_at=timezone.now() - timedelta(minutes=1))
-        self.assertEqual(_open_session_for_token(stale.token)[1], None)
-        self.assertEqual(ConsultSession.objects.using(self.hospital_alias).get(pk=stale.pk).status, ConsultSession.STATUS_EXPIRED)
+    def test_an_old_untouched_session_stays_open_while_the_encounter_is_a_draft(self):
+        s = self.session()
+        ConsultSession.objects.using(self.hospital_alias).filter(pk=s.pk).update(updated_at=timezone.now() - timedelta(days=3))
+        self.assertEqual(_open_session_for_token(s.token)[1].pk, s.pk)
+
+    def test_an_encounter_cannot_have_two_sessions(self):
+        from django.db import IntegrityError, transaction
+        self.session()
+        with self.assertRaises(IntegrityError), transaction.atomic(using=self.hospital_alias):
+            self.session()
 
     def test_the_phone_page_reports_whether_a_consultation_is_active(self):
         view = ConsultPadView.as_view()
         open_session = self.session()
         data = view(APIRequestFactory().get("/x/"), token=open_session.token).data["data"]
         self.assertEqual((data["active"], data["session_id"], data["patient_name"]), (True, open_session.pk, "Pad Patient"))
-        closed = self.session(status=ConsultSession.STATUS_SIGNED)
+        closed_enc = self.new_encounter()
+        closed = self.session(closed_enc)
+        self.sign(closed_enc)
         self.assertFalse(view(APIRequestFactory().get("/x/"), token=closed.token).data["data"]["active"])
         self.assertEqual(view(APIRequestFactory().get("/x/"), token="nope").status_code, 404)
+
+    def test_autosave_from_the_phone_works_on_a_draft_and_not_after_signing(self):
+        view = ConsultPadView.as_view()
+        s = self.session()
+        res = view(APIRequestFactory().put("/x/", {"tab": "note", "pages": []}, format="json"), token=s.token)
+        self.assertEqual(res.status_code, 200)
+        self.sign(self.encounter)
+        res = view(APIRequestFactory().put("/x/", {"tab": "note", "pages": []}, format="json"), token=s.token)
+        self.assertEqual(res.status_code, 409)
 
 
 AWPID = "AW-SHARE-W1"
@@ -416,3 +443,31 @@ class WaitingUploadsAreNotSharedTests(TestCase):
     def test_with_the_review_step_off_everything_is_shared_as_before(self):
         ids = {d["medical_document_id"] for d in _vault_documents(AWPID)}
         self.assertEqual(ids, {self.waiting.pk, self.confirmed.pk, self.issued.pk})
+
+
+class PatientIntegrityRulesTests(TestCase):
+    databases = {"default"}
+
+    def test_a_patient_cannot_be_their_own_guardian(self):
+        from django.db import IntegrityError, transaction
+        from apps.patients.models import PatientRelationship
+        p = identity("AW-SELF-1")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            PatientRelationship.objects.create(dependent=p, guardian=p)
+
+    def test_two_main_accounts_cannot_share_a_mobile_but_dependents_can_use_their_guardians(self):
+        from django.db import IntegrityError, transaction
+        Patient.objects.create(awpid="AW-M-1", full_name="Parent", mobile="9000011111")
+        Patient.objects.create(awpid="AW-M-2", full_name="Child", mobile="9000011111", is_dependent=True)
+        Patient.objects.create(awpid="AW-M-3", full_name="Child 2", mobile="9000011111", is_dependent=True)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Patient.objects.create(awpid="AW-M-4", full_name="Other", mobile="9000011111")
+
+    def test_the_access_log_survives_the_patient_and_still_says_who_it_was_about(self):
+        from apps.patients.models import EmergencyAccessLog
+        p = identity("AW-LOG-1")
+        log = EmergencyAccessLog.objects.create(patient=p, event=EmergencyAccessLog.EVENT_VIEWED)
+        self.assertEqual(log.awpid, "AW-LOG-1")
+        p.delete()
+        log.refresh_from_db()
+        self.assertEqual((log.patient_id, log.awpid), (None, "AW-LOG-1"))

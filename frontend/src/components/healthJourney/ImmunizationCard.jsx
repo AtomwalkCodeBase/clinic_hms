@@ -4,7 +4,7 @@ import { useClientPaging } from '../../hooks/usePagedApi';
 import PaginationControls from '../../components/common/PaginationControls';
 import { VACCINE_STYLE } from './theme';
 
-export default function ImmunizationCard({ api, patientId, canAdd = true, onOpenDocument }) {
+export default function ImmunizationCard({ api, patientId, canAdd = true, onOpenDocument, onBook }) {
   const [data, setData] = useState(null);
   const [form, setForm] = useState(null);
   const [msg, setMsg] = useState('');
@@ -66,7 +66,7 @@ export default function ImmunizationCard({ api, patientId, canAdd = true, onOpen
       {msg && <p className="phj-muted" role="status">{msg}</p>}
 
       <table className="phj-table">
-        <thead><tr><th>Age</th><th>Vaccine</th><th>Status</th><th>Date</th></tr></thead>
+        <thead><tr><th>Age</th><th>Vaccine</th><th>Status</th><th>Date</th>{onBook && <th></th>}</tr></thead>
         <tbody>
           {paging.pageItems.map((g) => g.rows.map((r, idx) => {
             const st = VACCINE_STYLE[r.status] || VACCINE_STYLE.SCHEDULED;
@@ -79,6 +79,11 @@ export default function ImmunizationCard({ api, patientId, canAdd = true, onOpen
                 <td>{r.given_on
                   ? (r.document_id ? <button className="phj-link" onClick={() => onOpenDocument?.(r.document_id)}>{r.given_on}</button> : r.given_on)
                   : <span className="phj-muted">due {r.due_on}</span>}</td>
+                {onBook && (
+                  <td>{['OVERDUE', 'DUE'].includes(r.status) && (
+                    <button className="phj-btn" onClick={() => onBook(r)}>Book</button>
+                  )}</td>
+                )}
               </tr>
             );
           }))}

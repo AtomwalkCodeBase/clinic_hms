@@ -181,6 +181,7 @@ export default function MyReportsPage() {
   const [tab, setTab] = useState("all");
   const [q, setQ] = useState("");
   const [sort, setSort] = useState("newest");
+  const [year, setYear] = useState("all");
   const [selectMode, setSelectMode] = useState(false);
   const [sel, setSel] = useState(() => new Set());
   const [addOpen, setAddOpen] = useState(false);
@@ -199,9 +200,13 @@ export default function MyReportsPage() {
     ...Object.keys(counts).filter(k => k !== "all" && k !== ATTENTION).sort((a, b) => counts[b] - counts[a]).map(k => [k, typeLabel(k)]),
   ], [counts, attentionCount]);
   const activeTab = tabs.some(([id]) => id === tab) ? tab : "all";      // a tab that emptied out falls back to All
+  // years of the report dates (as read from the reports), newest first; a report with no date shows only under All years
+  const years = useMemo(() => [...new Set(docs.map(d => d.document_date && String(d.document_date).slice(0, 4)).filter(Boolean))].sort().reverse(), [docs]);
+  const activeYear = years.includes(year) ? year : "all";
   const shown = useMemo(() => sortReports(docs.filter(d =>
-    (activeTab === "all" || (activeTab === ATTENTION ? NEEDS_ATTENTION.has(stateOf(d)) : stateOf(d) === "ready" && d.doc_type === activeTab))
-    && matchesSearch(d, q)), sort), [docs, activeTab, q, sort]);
+    (activeYear === "all" || String(d.document_date || "").slice(0, 4) === activeYear)
+    && (activeTab === "all" || (activeTab === ATTENTION ? NEEDS_ATTENTION.has(stateOf(d)) : stateOf(d) === "ready" && d.doc_type === activeTab))
+    && matchesSearch(d, q)), sort), [docs, activeTab, activeYear, q, sort]);
   const byId = useMemo(() => new Map(docs.map(d => [d.medical_document_id, d])), [docs]);
   const paging = useClientPaging(shown, 10);
   const openDoc = openId ? byId.get(openId) || null : null;           // always the freshest copy from the list
@@ -291,6 +296,12 @@ export default function MyReportsPage() {
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by file name, document type or keyword…" aria-label="Search reports"
               style={{ border: "none", outline: "none", flex: 1, fontSize: 13, background: "transparent" }} />
           </div>
+          {years.length > 0 && (
+            <select aria-label="Filter by year" value={activeYear} onChange={e => setYear(e.target.value)} style={{ ...inputStyle, padding: "10px 12px", borderRadius: 10 }}>
+              <option value="all">All years</option>
+              {years.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          )}
           <select aria-label="Sort reports" value={sort} onChange={e => setSort(e.target.value)} style={{ ...inputStyle, padding: "10px 12px", borderRadius: 10 }}>
             {SORTS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
           </select>

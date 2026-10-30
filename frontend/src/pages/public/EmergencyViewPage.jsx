@@ -182,7 +182,7 @@ export default function EmergencyViewPage() {
               fontSize: 11, color: "#065F46", maxWidth: 260,
             }}>
               <div style={{ fontWeight: 800, marginBottom: 1 }}>Read top to bottom</div>
-              Vitals and allergies first, then diagnoses and treatment history.
+              Vitals first, then diagnoses and treatment history.
             </div>
           )}
         </div>
@@ -283,7 +283,7 @@ export default function EmergencyViewPage() {
               )}
             </PriorityCard>
 
-            {/* 2 / 3 — Diagnoses + Allergies, side by side */}
+            {/* 2 — Diagnoses */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, marginBottom: 0 }}>
               <PriorityCard n={next()} color="orange" icon={Stethoscope} title="Active Diagnoses" hint="Understand existing conditions"
                 count={data.diagnoses.length ? `${data.diagnoses.length} on record` : null}>
@@ -294,28 +294,6 @@ export default function EmergencyViewPage() {
                         {d.description || d.icd10_code}
                         {d.clinical_status && <span style={{ color: "#999", fontSize: 11 }}> · {d.clinical_status}</span>}
                         {d.onset_date && <span style={{ color: "#999", fontSize: 11 }}> · since {fmtDate(d.onset_date)}</span>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </PriorityCard>
-
-              <PriorityCard n={next()} color="green" icon={AlertTriangle} title="Allergies" hint="Check before prescribing">
-                {data.allergies.length === 0 ? (
-                  <div style={{
-                    display: "flex", alignItems: "flex-start", gap: 8, background: "#ECFDF5",
-                    border: "1px solid #A7F3D0", borderRadius: 8, padding: "9px 10px", fontSize: 12.5, color: "#065F46",
-                  }}>
-                    No known allergies on record.
-                  </div>
-                ) : (
-                  <div style={{ display: "grid", gap: 6 }}>
-                    {data.allergies.map((a, i) => (
-                      <div key={i} style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 10px" }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: "#991b1b" }}>
-                          {a.substance} {a.severity && <span style={{ fontWeight: 400, fontSize: 11 }}>({a.severity})</span>}
-                        </div>
-                        {a.reaction && <div style={{ fontSize: 12, color: "#7f1d1d" }}>{a.reaction}</div>}
                       </div>
                     ))}
                   </div>

@@ -4,7 +4,7 @@ import { Download, FileText, Image as ImageIcon, Lock, Unlock, X } from "lucide-
 import { useToast } from "../../../hooks/useToast";
 import apiClient from "../../../services/api.client";
 import API_ENDPOINTS from "../../../config/api.config";
-import { chipsFor, fileKind, fmtDate, formatSize, stateOf, typeLabel } from "../../../utils/reports";
+import { chipsFor, fileKind, fmtDate, stateOf, typeLabel } from "../../../utils/reports";
 import { FILE_TILE, TONE, chip, h3, iconBtn, inputStyle } from "./reportStyles";
 import { typeLook } from "./typeLook";
 
@@ -80,7 +80,7 @@ export default function ReportPanel({ doc, original, patientAwpid, priv, onLock,
   return (
     <div className="card" style={{ padding: 20 }}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 14 }}>
-        <div style={{ flex: 1, ...h3, wordBreak: "break-word" }}>{doc.title}</div>
+        <div style={{ flex: 1, ...h3, wordBreak: "break-word" }}>{chips.type.text}{doc.document_date ? ` · ${fmtDate(doc.document_date)}` : ""}</div>
         <button aria-label="Close details" onClick={onClose} style={iconBtn}><X size={18} /></button>
       </div>
 
@@ -112,7 +112,6 @@ export default function ReportPanel({ doc, original, patientAwpid, priv, onLock,
                 disabled={!detail?.file_data} onClick={openInNewTab}>Open in new tab</button>
             </div>
             <div style={{ flex: 1, minWidth: 260 }}>
-              <InfoRow label="File name">{doc.file_name || doc.title}</InfoRow>
               <InfoRow label="Document type">
                 <span style={chip(chips.type.tone)}>{chips.type.text}</span>
                 {doc.confirmed && !hospital && <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>Locked: you verified this type</span>}
@@ -135,10 +134,9 @@ export default function ReportPanel({ doc, original, patientAwpid, priv, onLock,
                 {chips.extra ? <span style={chip(chips.extra.tone)}>{chips.extra.text}</span> : <span style={{ color: "var(--color-text-muted)" }}>—</span>}
               </InfoRow>
               <InfoRow label="Source">{hospital ? "Issued by your hospital" : "Uploaded by you"}</InfoRow>
-              {doc.document_date ? <InfoRow label="Document date">{fmtDate(doc.document_date)}</InfoRow> : null}
+              {doc.document_date ? <InfoRow label="Report date">{fmtDate(doc.document_date)}</InfoRow> : null}
               {doc.public_document_id ? <InfoRow label="Document ID">{doc.public_document_id}</InfoRow> : null}
-              <InfoRow label="Added on">{fmtDate(doc.created_at)}</InfoRow>
-              {doc.size ? <InfoRow label="File size">{formatSize(doc.size)}</InfoRow> : null}
+              <InfoRow label="Uploaded on">{fmtDate(doc.created_at)}</InfoRow>
               <InfoRow label="Status">
                 <span style={{ width: 9, height: 9, borderRadius: "50%", background: state === "failed" ? "var(--color-error)" : state === "ready" ? "#1e8e3e" : "var(--color-warning, #b45309)" }} />
                 {STATE_LABEL[state]}

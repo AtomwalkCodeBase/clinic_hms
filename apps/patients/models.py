@@ -8,7 +8,8 @@ def patient_photo_path(instance, filename):
 class Patient(models.Model):
     GENDER_CHOICES = [("M", "Male"), ("F", "Female"), ("O", "Other")]
     BLOOD_GROUP_CHOICES = [(g, g) for g in ("A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-")]
-    CREATED_BY_CHOICES = [("patient", "Patient"), ("hospital", "Hospital")]
+    CREATED_BY_PATIENT, CREATED_BY_HOSPITAL = "patient", "hospital"
+    CREATED_BY_CHOICES = [(CREATED_BY_PATIENT, "Patient"), (CREATED_BY_HOSPITAL, "Hospital")]
 
     awpid               = models.CharField(max_length=30, unique=True)
     full_name           = models.CharField(max_length=100)
@@ -41,6 +42,11 @@ class Patient(models.Model):
 
     class Meta:
         db_table  = "patient"
+        constraints = [
+            # A parent's number is shared with their children's accounts (is_dependent), so only the main accounts must differ.
+            models.UniqueConstraint(fields=["mobile"], condition=models.Q(is_dependent=False, mobile__isnull=False) & ~models.Q(mobile=""),
+                                    name="uniq_patient_mobile_main_account"),
+        ]
 
     def __str__(self):
         return f"{self.full_name} ({self.awpid})"
@@ -58,7 +64,10 @@ class PatientRelationship(models.Model):
 
     class Meta:
         db_table  = "patient_relationship"
-        constraints = [models.UniqueConstraint(fields=["dependent", "guardian"], name="uniq_relationship_dependent_guardian")]
+        constraints = [
+            models.UniqueConstraint(fields=["dependent", "guardian"], name="uniq_relationship_dependent_guardian"),
+            models.CheckConstraint(check=~models.Q(dependent=models.F("guardian")), name="relationship_not_self"),
+        ]
 
     def __str__(self):
         return f"{self.guardian.awpid} -> {self.dependent.awpid} ({self.relationship})"
@@ -82,6 +91,7 @@ class PatientBooking(models.Model):
     class Meta:
         db_table  = "patient_booking"
         ordering  = ["-created_at"]
+        constraints = [models.UniqueConstraint(fields=["hospital", "appointment_id"], name="uniq_booking_hospital_appointment")]
 
     def __str__(self):
         return f"Booking {self.pk} for patient {self.patient_id} on {self.scheduled_date} - {self.status}"
@@ -116,7 +126,8 @@ class EmergencyAccessLog(models.Model):
         (EVENT_PRIVACY,    "Shared-records privacy changed"),
     ]
 
-    patient    = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_emergency_access_logs")
+    patient    = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.SET_NULL, related_name="p_emergency_access_logs")
+    awpid      = models.CharField(max_length=30, blank=True)      # copied from the patient, so the entry still says who it was about
     event      = models.CharField(max_length=24, choices=EVENT_CHOICES)
     generated_by = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.SET_NULL, related_name="p_generated_access_logs")
     ip_address = models.GenericIPAddressField(null=True, blank=True)
@@ -125,6 +136,11 @@ class EmergencyAccessLog(models.Model):
     class Meta:
         db_table  = "emergency_access_log"
         ordering  = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if self.patient_id and not self.awpid:
+            self.awpid = self.patient.awpid
+        super().save(*args, **kwargs)
 
 # not reviewed
 class RecordsShareRequest(models.Model):
@@ -149,7 +165,8 @@ class RecordsShareRequest(models.Model):
     opened_at   = models.DateTimeField(null=True, blank=True)
     device_hash = models.CharField(max_length=64, blank=True)
     pairing     = models.CharField(max_length=12, blank=True)
-    patient     = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.CASCADE, related_name="p_records_share_requests")
+    patient     = models.ForeignKey(Patient, null=True, blank=True, on_delete=models.SET_NULL, related_name="p_records_share_requests")
+    awpid       = models.CharField(max_length=30, blank=True)      # copied from the patient, so the record still says who it was about
     status      = models.CharField(max_length=12, choices=STATUS_CHOICES,
                                    default=STATUS_PENDING)
     created_at  = models.DateTimeField(auto_now_add=True)
@@ -170,6 +187,11 @@ class RecordsShareRequest(models.Model):
     class Meta:
         db_table  = "records_share_request"
         ordering  = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if self.patient_id and not self.awpid:
+            self.awpid = self.patient.awpid
+        super().save(*args, **kwargs)
 
 # not reviewed
 class RecordsPrivacy(models.Model):

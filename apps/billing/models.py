@@ -2,14 +2,18 @@
 
 Same conventions as hospital_setup/models.py. Deliberate exceptions: Invoice.status and BillingItem.category are plain text checked against OptionList, because each hospital edits those lists; an invoice is never deleted once it exists (PROTECT on its patient and branch).
 
-Invoice.lines   [{"item_id", "description", "quantity", "unit_price", "tax_rate", "tax_inclusive", "total"}]   amounts as strings
+Invoice lines are BillingItem rows with `bill` set (related name i_items); a BillingItem with no `bill` is a price-list entry. `Invoice.lines` reads
+and writes them as the list of dicts the API shows: [{"item_id", "description", "quantity", "unit_price", "tax_rate", "tax_inclusive", "total"}],
+where item_id is the price-list entry the line came from.
 Invoice.payments [{"payment_id", "amount", "payment_mode", "transaction_ref", "recorded_by_id", "paid_at"}]  payment_id counts 1, 2, 3 within the invoice
 """
+
+from decimal import Decimal
 
 from django.conf import settings
 from django.db import models
 from apps.hospital_setup.models import StaffUser
-from apps.hospital_setup.models import Branch, BranchDepartment
+from apps.hospital_setup.models import Branch
 from apps.hospital_patients.models import HospitalPatient
 
 
@@ -33,7 +37,6 @@ class Invoice(models.Model):
     discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total_amount    = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     paid_amount     = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    lines           = models.JSONField(default=list, blank=True)
     payments        = models.JSONField(default=list, blank=True)
     notes           = models.TextField(blank=True)
     created_by      = models.ForeignKey(StaffUser, on_delete=models.SET_NULL,
@@ -54,6 +57,35 @@ class Invoice(models.Model):
     def __str__(self):
         return f"{self.invoice_number} — {self.patient.uhid} ({settings.CURRENCY_SYMBOL}{self.total_amount})"
 
+    _pending_lines = None
+
+    @property
+    def lines(self):
+        """The invoice's lines as dicts (see the module text). Lines set but not yet saved are returned as they were set."""
+        if self._pending_lines is not None:
+            return list(self._pending_lines)
+        if self.pk is None:
+            return []
+        return [item.as_line() for item in self.i_items.all()]
+
+    @lines.setter
+    def lines(self, value):
+        self._pending_lines = list(value)
+
+    def save(self, *args, **kwargs):
+        """Lines set on the invoice are written as BillingItem rows with it (replacing the old ones), also when `update_fields` names "lines"."""
+        fields = kwargs.get("update_fields")
+        if fields is not None:
+            kwargs["update_fields"] = [f for f in fields if f != "lines"]
+        super().save(*args, **kwargs)
+        if self._pending_lines is not None:
+            db = kwargs.get("using") or self._state.db
+            BillingItem.objects.using(db).filter(bill=self).delete()
+            BillingItem.objects.using(db).bulk_create([BillingItem.from_line(self, line) for line in self._pending_lines])
+            self._pending_lines = None
+            if hasattr(self, "_prefetched_objects_cache"):
+                self._prefetched_objects_cache.pop("i_items", None)
+
 
 class BillingItem(models.Model):
     """Hospital-configured price list for services, procedures, etc."""
@@ -62,6 +94,8 @@ class BillingItem(models.Model):
     code          = models.CharField(max_length=30, blank=True)
     category      = models.CharField(max_length=50, blank=True)    # validated against OptionList(list_type="service_category")
     description   = models.CharField(max_length=100, blank=True)
+    price_list_item = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True, related_name="used_on_lines")    # a line: the entry it was priced from
+    quantity      = models.PositiveIntegerField(default=1)    # a line's quantity; 1 on a price-list entry
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     tax_rate   = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     tax_inclusive = models.BooleanField(default=False)
@@ -77,4 +111,16 @@ class BillingItem(models.Model):
 
     def __str__(self):
         return f"{self.name} ({settings.CURRENCY_SYMBOL}{self.unit_price})"
+
+    def as_line(self):
+        """This row as an invoice line dict (see the module text)."""
+        return {"item_id": self.price_list_item_id, "description": self.name, "quantity": self.quantity, "unit_price": str(self.unit_price),
+                "tax_rate": str(self.tax_rate), "tax_inclusive": self.tax_inclusive, "total": str(self.unit_price * self.quantity)}
+
+    @classmethod
+    def from_line(cls, invoice, line):
+        """An unsaved row for one invoice line dict."""
+        return cls(bill=invoice, price_list_item_id=line.get("item_id"), name=(line.get("description") or "")[:200], quantity=int(line.get("quantity", 1)),
+                   unit_price=Decimal(str(line.get("unit_price") or 0)), tax_rate=Decimal(str(line.get("tax_rate") or 0)),
+                   tax_inclusive=bool(line.get("tax_inclusive", False)), is_price_editable=False)
 

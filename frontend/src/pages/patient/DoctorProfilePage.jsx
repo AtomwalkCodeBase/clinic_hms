@@ -71,7 +71,9 @@ export default function PatientDoctorProfilePage() {
   const { data: doctor, isLoading } = useApi(API_ENDPOINTS.PORTAL.DOCTOR_DETAIL(hospitalId, doctorId));
 
   const [date,   setDate]   = useState(TODAY);
-  const [reason, setReason] = useState("");
+  const [reason, setReason] = useState(() => {
+    try { const r = sessionStorage.getItem("bookingReason") || ""; sessionStorage.removeItem("bookingReason"); return r; } catch { return ""; }
+  });
   const [slots, setSlots] = useState([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState(null);

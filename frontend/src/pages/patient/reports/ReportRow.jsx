@@ -1,7 +1,7 @@
 /** One report in the list: file icon, name, date and size, what it is, how sure we are, and a menu. */
 import { useEffect, useRef, useState } from "react";
 import { FileText, Image as ImageIcon, MoreVertical } from "lucide-react";
-import { NEEDS_ATTENTION, chipsFor, fileKind, fmtDate, formatSize, stateOf, statusLine } from "../../../utils/reports";
+import { NEEDS_ATTENTION, chipsFor, fileKind, fmtDate, stateOf, statusLine } from "../../../utils/reports";
 import { FILE_TILE, TONE, chip, iconBtn } from "./reportStyles";
 import { typeLook } from "./typeLook";
 
@@ -55,14 +55,14 @@ export default function ReportRow({ doc, active, selectMode, selected, onClick, 
       style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", marginBottom: 8, cursor: "pointer",
                borderColor: active || selected ? "var(--color-primary)" : undefined,
                background: active ? "var(--color-primary-light, #eef7f3)" : undefined }}>
-      {selectMode && <input type="checkbox" checked={selected} readOnly aria-label={`Select ${doc.title}`} />}
+      {selectMode && <input type="checkbox" checked={selected} readOnly aria-label={`Select ${chips.type.text}${doc.document_date ? ` ${fmtDate(doc.document_date)}` : ""}`} />}
       <span style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", ...(look ? { background: look.background, color: look.color } : FILE_TILE[kind]) }}>
         <Icon size={19} />
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{doc.title}</div>
+        <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{chips.type.text}{doc.document_date ? ` · ${fmtDate(doc.document_date)}` : ""}</div>
         <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
-          {fmtDate(doc.created_at)}{doc.size ? ` • ${formatSize(doc.size)}` : ""}
+          Uploaded {fmtDate(doc.created_at)}
         </div>
         {NEEDS_ATTENTION.has(state) && state !== "unclassified" && (
           <div style={{ fontSize: 12, color: TONE[line.tone], marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{line.text}</div>

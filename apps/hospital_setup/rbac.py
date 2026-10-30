@@ -54,9 +54,9 @@ def default_modules(role_key):
     return {module for module, (_header, roles) in MODULE_HEADERS.items() if role in roles}
 
 
-def modules_of(bits_rows):
-    """The module keys switched on in any of these 0/1 texts (the `modules` of UserPermission rows)."""
-    return {module for bits in bits_rows for module, bit in zip(MODULES, bits) if bit == "1"}
+def modules_of(rows):
+    """The module keys switched on in any of these lists (the `modules` of UserPermission rows)."""
+    return {module for keys in rows for module in keys if module in MODULES}
 
 
 def granted_module_names(staff, db_name):

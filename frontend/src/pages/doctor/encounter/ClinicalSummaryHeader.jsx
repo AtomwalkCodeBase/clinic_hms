@@ -1,9 +1,9 @@
 import DependentBadge from "../../../components/common/DependentBadge";
-import { User, Cake, CalendarClock, AlertTriangle, Stethoscope, Activity } from "lucide-react";
+import { User, Cake, CalendarClock, Stethoscope, Activity } from "lucide-react";
 import { formatYearsMonths } from "../../../utils/age";
 
 // ─── Compact clinical summary header ─────────────────────────────────────────
-export function ClinicalSummaryHeader({ enc, history, allergies, activeProblems, vitals, isClosed }) {
+export function ClinicalSummaryHeader({ enc, history, activeProblems, vitals, isClosed }) {
   const genderLabel = { M: "Male", F: "Female", O: "Other" }[enc.patient_gender] || null;
   return (
     <div className="card" style={{ padding: "16px 20px", background: "var(--color-primary-light)", border: "1.5px solid var(--color-primary)" }}>
@@ -46,14 +46,6 @@ export function ClinicalSummaryHeader({ enc, history, allergies, activeProblems,
       </div>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
-        {allergies.length > 0 && (
-          <span style={{
-            display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700,
-            background: "#FEE2E2", color: "#B91C1C", padding: "4px 10px", borderRadius: 20,
-          }}>
-            <AlertTriangle size={12} /> {allergies.map(a => a.substance).join(", ")}
-          </span>
-        )}
         {activeProblems.map((p, i) => (
           <span key={i} style={{
             display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700,
@@ -75,8 +67,8 @@ export function ClinicalSummaryHeader({ enc, history, allergies, activeProblems,
             {vitals.spo2 && `  SpO₂ ${vitals.spo2}%`}
           </span>
         )}
-        {allergies.length === 0 && activeProblems.length === 0 && !vitals && (
-          <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>No known allergies or active problems on record.</span>
+        {activeProblems.length === 0 && !vitals && (
+          <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>No active problems on record.</span>
         )}
       </div>
     </div>

@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  ShieldCheck, CalendarPlus, Building2, Droplet, CalendarClock, AlertTriangle,
+  ShieldCheck, CalendarPlus, Building2, Droplet, CalendarClock,
   Smartphone, User, Cake, Fingerprint, Mail, Phone, HeartPulse, Stethoscope,
   Baby, Heart, Users, UserRound,
 } from "lucide-react";
@@ -525,10 +525,6 @@ export default function MyProfilePage() {
                       ? new Date(health.last_visit).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
                       : "No visits yet"}
                     sub={health.last_hospital}
-                  />
-                  <StatTile
-                    icon={AlertTriangle} chip="gold" label="Allergies"
-                    value={health.active_allergies?.length > 0 ? health.active_allergies.map(a => a.substance).join(", ") : "None recorded"}
                   />
                 </div>
                 {health.active_diagnoses?.length > 0 && (

@@ -110,7 +110,7 @@ export default function CorrectionRequestsPage() {
 
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, marginBottom: 4, display: "block" }}>Which field is wrong?</label>
-            <input className="form-input" placeholder="e.g. Date of birth, Phone number, Allergy list…"
+            <input className="form-input" placeholder="e.g. Date of birth, Phone number, Address…"
               value={form.field_name} onChange={set("field_name")} required />
           </div>
 

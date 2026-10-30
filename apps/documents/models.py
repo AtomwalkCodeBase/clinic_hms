@@ -101,7 +101,8 @@ class MedicalDocument(models.Model):
             LAB_REPORT = "lab_report"
     
     IN_PROGRESS = (Status.QUEUED, Status.EXTRACTING, Status.CLASSIFYING)
-    CREATED_BY_CHOICES = [("P", "Patient"), ("H", "Hospital")]
+    CREATED_BY_PATIENT, CREATED_BY_HOSPITAL = "P", "H"
+    CREATED_BY_CHOICES = [(CREATED_BY_PATIENT, "Patient"), (CREATED_BY_HOSPITAL, "Hospital")]
 
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_documents")
     batch = models.ForeignKey(DocumentBatch, null=True, blank=True, on_delete=models.SET_NULL, related_name="b_documents")
@@ -267,7 +268,7 @@ class GrowthMeasurement(models.Model):
     SOURCE_GROWTH_CHOICES = [("clinic", "Clinic"), ("extracted", "Read from a document"), ("manual", "Entered by staff")]
 
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, related_name="p_growth_measurements")
-    document = models.ForeignKey(MedicalDocument, null=True, blank=True, on_delete=models.CASCADE, related_name="d_growth_measurements")
+    document = models.ForeignKey(MedicalDocument, null=True, blank=True, on_delete=models.SET_NULL, related_name="d_growth_measurements")
     source_hospital = models.ForeignKey(Hospital, null=True, blank=True, on_delete=models.SET_NULL, related_name="h_growth_measurements")
     source = models.CharField(max_length=10, choices=SOURCE_GROWTH_CHOICES, default="clinic")
     source_id = models.UUIDField(null=True, blank=True)
@@ -290,6 +291,9 @@ class GrowthMeasurement(models.Model):
             
     class Meta:
         db_table = "growth_measurement"
+        constraints = [
+            models.UniqueConstraint(fields=["patient", "source", "source_id"], condition=models.Q(source_id__isnull=False), name="uniq_growth_per_source_record"),
+        ]
     
     def __str__(self):
         return f"Growth Measurement {self.pk} for Patient {self.patient.awpid} - Measured on: {self.measured_on}"
@@ -341,6 +345,11 @@ class ImmunizationRecord(models.Model):
     class Meta:
         db_table  = "immunization_record"
         ordering  = ["administered_date"]
+        constraints = [
+            models.UniqueConstraint(fields=["patient", "vaccine_name", "dose_number"],
+                                    condition=models.Q(dose_number__isnull=False) & ~models.Q(verification_status="rejected"),
+                                    name="uniq_immunization_patient_vaccine_dose"),
+        ]
 
     def __str__(self):
         return f"Immunization Record {self.pk} for Patient {self.patient.awpid} - Vaccine: {self.vaccine_name}"

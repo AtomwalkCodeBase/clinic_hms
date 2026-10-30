@@ -850,7 +850,6 @@ function RecordsView({ token }) {
               <ClinScreen title="Patient summary" lead="Cross-hospital snapshot the patient shared. Read-only.">
                 <KV rows={[
                   ["Blood group", p.blood_group],
-                  ["Allergies", (data.allergies || []).map((a) => a.substance + (a.reaction ? ` (${a.reaction})` : "")).join(" · ")],
                   ["Active diagnoses", (data.diagnoses || []).map((d) => d.description || d.icd10_code).join(" · ")],
                   ["Current meds", (sum.current_meds || []).join(" · ")],
                   ["Emergency contact", ec ? `${ec.name}${ec.relation ? ` (${ec.relation})` : ""}${ec.phone ? ` · ${ec.phone}` : ""}` : ""],

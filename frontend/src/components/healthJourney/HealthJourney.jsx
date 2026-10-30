@@ -95,7 +95,7 @@ function EmptyState({ view, emptyAction }) {
 }
 
 export default function HealthJourney({
-  http, children, initialChildId, initialPeriod = 'all', view = 'guardian', onOpenDocument, emptyAction, section,
+  http, children, initialChildId, initialPeriod = 'all', view = 'guardian', onOpenDocument, emptyAction, section, onBookVaccine,
 }) {
   const api = useMemo(() => makePedsApi(http), [http]);
   const [childId, setChildId] = useState(initialChildId || children?.[0]?.id);
@@ -103,6 +103,7 @@ export default function HealthJourney({
   const [axisMode, setAxisMode] = useState('age');
   const [tab, setTab] = useState(section || 'timeline');
   const [showList, setShowList] = useState(false);
+  const [showDetails, setShowDetails] = useState(true);
   const [payload, setPayload] = useState(null);
   const [error, setError] = useState(null);
   const child = children?.find((c) => c.id === childId) || children?.[0];
@@ -183,8 +184,10 @@ export default function HealthJourney({
                       <button className={axisMode === 'date' ? 'on' : ''} onClick={() => setAxisMode('date')}>By date</button>
                     </div>
                     <button className="phj-link" onClick={() => setShowList((v) => !v)}>{showList ? 'Show chart' : 'Show as list'}</button>
+                <button className="phj-link" onClick={() => setShowDetails((v) => !v)} aria-expanded={showDetails}>{showDetails ? 'Hide details' : 'Show details'}</button>
                   </div>
                 </div>
+                {showDetails && (<>
                 {showList ? <TimelineList payload={payload} />
                   : <TimelineChart payload={payload} axisMode={axisMode} onOpenDocument={onOpenDocument} />}
                 <div className="phj-legend">
@@ -196,10 +199,11 @@ export default function HealthJourney({
                   <span><span className="phj-c-critical-t">✕</span> Vaccine overdue</span>
                 </div>
                 <p className="phj-note">Built automatically from uploaded reports. Tap any mark to open the report it came from.</p>
+              </>)}
               </section>
             ))}
           {tab === 'growth' && <GrowthChart api={api} patientId={childId} onOpenDocument={onOpenDocument} />}
-          {tab === 'vaccines' && <ImmunizationCard api={api} patientId={childId} onOpenDocument={onOpenDocument} canAdd />}
+          {tab === 'vaccines' && <ImmunizationCard api={api} patientId={childId} onOpenDocument={onOpenDocument} canAdd onBook={onBookVaccine} />}
         </>
       )}
     </div>

@@ -1,6 +1,6 @@
 """The database side of the pediatric health timeline: the services folder judges, this saves and reads."""
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from django.db import transaction
 from django.utils import timezone
@@ -24,7 +24,7 @@ from .services.clinical_rules import (
 )
 from .services.config import load_config
 from .services.episodes import EventIn, build_episodes, detect_recurrence
-from .services.extraction import EXTRACTOR_VERSION, extract_document
+from .services.extraction import EXTRACTOR_VERSION, extract_document, parse_date
 from .services.growth import detect_faltering, score_measurement
 from .services.immunization import immunization_status, resolve_vaccines
 from .services.timeline import build_timeline
@@ -104,9 +104,45 @@ def process_document(document, llm=None, force=False):
     return {"status": "DONE", "patient_id": patient.pk, "counts": counts, "warnings": result["warnings"]}
 
 
+_TEXT_DATE = re.compile(r"\b(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{1,2}[ -][A-Za-z]{3,9}[ -]\d{4})\b")
+
+
+def _read_date(raw):
+    d = parse_date(raw)
+    if d:
+        return d
+    for fmt in ("%d %B %Y", "%d-%B-%Y"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def any_date_in(text, dob=None):
+    """The first date written anywhere in the text that could be this report's (not in the future, not before the child was born), or None."""
+    today = date.today()
+    for raw in _TEXT_DATE.findall(text or ""):
+        d = _read_date(raw)
+        if d and d <= today and (not dob or d >= dob):
+            return d
+    return None
+
+
 @transaction.atomic
 def persist_extraction(document, dob, dtype, text, result, cfg):
     patient, hospital_id, doc_date = document.patient, document.source_hospital_id, result["document_date"]
+    # The date read from the report itself (not the upload-date fallback) is what the report list shows.
+    # A discharge summary has no single date of its own: it is dated by the day the child went home (or came in).
+    shown = doc_date if result.get("date_source") == "DOCUMENT" else None
+    adm = result.get("admission") or {}
+    if shown is None and dtype == "DISCHARGE_SUMMARY":
+        shown = next((d for d in (adm.get("discharged_on"), adm.get("admitted_on")) if d and d != doc_date), None)
+    if shown is None:
+        shown = any_date_in(text, dob)      # no date of its own: any date written in the report will do
+    if shown and document.document_date != shown:
+        document.document_date = shown
+        document.save(update_fields=["document_date", "updated_at"])
     ClinicalEvent.objects.filter(document=document, source="EXTRACTED", verification_status="pending").delete()
     Admission.objects.filter(document=document).delete()
     GrowthMeasurement.objects.filter(document=document, source="extracted", is_rejected=False).delete()

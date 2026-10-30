@@ -196,10 +196,11 @@ export default function TimelineChart({ payload, axisMode = 'age', onOpenDocumen
     return {
       backgroundColor: 'transparent',
       animation: false,
-      grid: { left: narrow ? 104 : 220, right: narrow ? 16 : 36, top: 16, bottom: zoomable ? 78 : 40 },
+      // the age bar (zoom slider) sits on top of the chart, the age scale right under it
+      grid: { left: narrow ? 104 : 220, right: narrow ? 16 : 36, top: zoomable ? 70 : 40, bottom: 16 },
       dataZoom: zoomable ? [
         { type: 'inside', xAxisIndex: 0, filterMode: 'none', start: 0, end: zoomEnd },
-        { type: 'slider', xAxisIndex: 0, filterMode: 'none', start: 0, end: zoomEnd, height: 22, bottom: 8, brushSelect: false, borderColor: t.grid,
+        { type: 'slider', xAxisIndex: 0, filterMode: 'none', start: 0, end: zoomEnd, height: 22, top: 6, brushSelect: false, borderColor: t.grid,
           fillerColor: t['band-inner'], textStyle: { color: t['text-muted'], fontSize: 12 }, labelFormatter: (v) => xFmt(v) },
       ] : undefined,
       tooltip: {
@@ -209,7 +210,7 @@ export default function TimelineChart({ payload, axisMode = 'age', onOpenDocumen
         formatter: (p) => tooltipHtml(p.data.meta, xFmt(p.value[0])),
       },
       xAxis: {
-        type: axisMode === 'age' ? 'value' : 'time', min: xMinAxis, max: xMax,
+        type: axisMode === 'age' ? 'value' : 'time', position: 'top', min: xMinAxis, max: xMax,
         ...(axisMode === 'age' ? { interval: stepM * 30.4375 } : {}),
         axisLabel: { color: t['text-muted'], fontSize: 13, formatter: xFmt, hideOverlap: true, showMaxLabel: false },
         axisLine: { lineStyle: { color: t.axis } },

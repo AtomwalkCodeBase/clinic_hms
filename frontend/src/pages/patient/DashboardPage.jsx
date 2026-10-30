@@ -25,7 +25,7 @@ const CHIP_COLORS = {
 const QUICK_LINKS = [
   { label: "Browse Hospitals",  icon: Building2,     chip: "icon-chip--green", to: ROUTES.PATIENT.HOSPITALS,     desc: "See every hospital on the platform" },
   { label: "My Appointments",   icon: Calendar,      chip: "icon-chip--blue",  to: ROUTES.PATIENT.APPOINTMENTS,  desc: "Upcoming and past visits" },
-  { label: "My Health Journey", icon: ClipboardList, chip: "icon-chip--gold",  to: ROUTES.PATIENT.RECORDS,       desc: "Diagnoses, allergies, vitals" },
+  { label: "My Health Journey", icon: ClipboardList, chip: "icon-chip--gold",  to: ROUTES.PATIENT.RECORDS,       desc: "Diagnoses, vitals, vaccines" },
   { label: "Prescriptions",     icon: Pill,          chip: "icon-chip--rose",  to: ROUTES.PATIENT.PRESCRIPTIONS, desc: "Medicines prescribed to you" },
 ];
 

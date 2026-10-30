@@ -32,7 +32,7 @@ from apps.patients.models import (
     RecordsShareRequest,
     RecordsPrivacy,
 )
-from apps.opd.models import ConsultSession
+from apps.opd.models import ConsultSession, OPDEncounter
 from apps.patients.emergency_access import decode_emergency_token, EmergencyTokenError
 from apps.documents.models import LabResult, ImmunizationRecord, MedicalDocument
 from core.utils import age_years_months as _age_years_months
@@ -3471,17 +3471,13 @@ def _pad_database(token: str):
 
 
 def _open_session_for_token(token: str):
-    """token -> (identity, the ConsultSession while it is still open, else None). A token belongs to ONE consultation."""
+    """token -> (identity, the ConsultSession while its encounter is still a draft, else None). A token belongs to ONE consultation."""
     db = _pad_database(token)
     session = ConsultSession.objects.using(db).select_related("encounter__appointment__patient").filter(token=token).first() if db else None
     identity = Patient.objects.using("default").filter(awpid=session.encounter.appointment.patient.awpid).first() if session else None
     if not identity:
         return None, None
-    if session.status != ConsultSession.STATUS_OPEN:
-        return identity, None
-    # Auto-expire a stale session so the phone doesn't keep writing to it.
-    if session.expires_at and session.expires_at < timezone.now():
-        ConsultSession.objects.using(db).filter(pk=session.pk).update(status=ConsultSession.STATUS_EXPIRED)
+    if session.encounter.status != OPDEncounter.STATUS_DRAFT:      # signing the encounter closes the pad
         return identity, None
     return identity, session
 class ConsultPadView(APIView):
@@ -3556,8 +3552,6 @@ class ConsultPadView(APIView):
         ConsultSession.objects.using(sess._state.db).filter(pk=sess.pk).update(**{
             pages_field: pages,
             recog_field: new_recog,
-            # Sliding expiry — an actively-used pad shouldn't lapse mid-write.
-            "expires_at": now + timedelta(hours=settings.CONSULT_PAD_EXPIRY_HOURS),
             "updated_at": now,
         })
 

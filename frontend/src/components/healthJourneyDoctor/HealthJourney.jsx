@@ -82,6 +82,7 @@ export default function HealthJourney({ http, children, initialChildId, initialP
   const [axisMode, setAxisMode] = useState('age');
   const [tab, setTab] = useState(doctor ? 'clinical' : 'timeline');
   const [showList, setShowList] = useState(false);
+  const [showDetails, setShowDetails] = useState(true);
   const [payload, setPayload] = useState(null);
   const [error, setError] = useState(null);
   const [version, setVersion] = useState(0);      // bumped after a clinician confirms / rejects / acknowledges
@@ -149,8 +150,10 @@ export default function HealthJourney({ http, children, initialChildId, initialP
                   <button className={axisMode === 'date' ? 'on' : ''} onClick={() => setAxisMode('date')}>By date</button>
                 </div>
                 <button className="dhj-link" onClick={() => setShowList((v) => !v)}>{showList ? 'Show chart' : 'Show as list'}</button>
+                <button className="dhj-link" onClick={() => setShowDetails((v) => !v)} aria-expanded={showDetails}>{showDetails ? 'Hide details' : 'Show details'}</button>
               </div>
-              {payload.lanes.length === 0
+              {showDetails && (<>
+                {payload.lanes.length === 0
                 ? <p className="dhj-muted">Nothing recorded in this period.</p>
                 : showList ? <TimelineList payload={payload} />
                   : <TimelineChart payload={payload} axisMode={axisMode} onOpenDocument={onOpenDocument} />}
@@ -163,6 +166,7 @@ export default function HealthJourney({ http, children, initialChildId, initialP
                 <span><span className="dhj-c-critical-t">✕</span> Vaccine overdue</span>
               </div>
               <p className="dhj-note">Built automatically from uploaded reports. Tap any mark to open the report it came from.</p>
+              </>)}
             </section>
           )}
           {tab === 'growth' && <GrowthChart api={api} patientId={childId} onOpenDocument={onOpenDocument} />}
