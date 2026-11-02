@@ -629,6 +629,10 @@ class PortalBookView(APIView):
 
         if not hospital_id or not doctor_id:
             return Response({"error": "hospital_id and doctor_id are required."}, status=400)
+        try:
+            hospital_id, doctor_id = int(hospital_id), int(doctor_id)
+        except (TypeError, ValueError):
+            return Response({"error": "hospital_id and doctor_id must be numbers."}, status=400)
 
         # Booking window capped at 2 months out (mirrors the date picker's
         try:
@@ -690,6 +694,11 @@ class PortalBookView(APIView):
                 uhid, _ = NextNumber.next(branch.pk, "uhid", db)
                 # The hospital keeps its own number; who the patient is stays in the shared record
                 patient = HospitalPatient.objects.using(db).create(awpid=target_awpid, uhid=uhid)
+
+            if Appointment.objects.using(db).filter(
+                patient_id=patient.pk, doctor_id=doctor.pk, scheduled_date=scheduled_date,
+            ).exclude(status__in=[Appointment.STATUS_CANCELLED, Appointment.STATUS_NO_SHOW]).exists():
+                return Response({"error": "You already have an appointment with this doctor on that day."}, status=409)
 
             # ── If a specific time was given (front-desk flow), it must still be free ──
             if scheduled_time:
@@ -1448,6 +1457,8 @@ class PortalDocumentZipView(APIView):
             return error("Select at least one document.")
         if len(ids) > self._MAX_IDS:
             return error(f"Select at most {self._MAX_IDS} documents.")
+        if not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+            return error("Document ids must be numbers.")
         docs = (MedicalDocument.objects.using("default")
                 .filter(pk__in=ids, patient__awpid=target_awpid))
 
@@ -1665,6 +1676,8 @@ class PortalProfileView(APIView):
             full_name = (d.get("full_name") or "").strip()
             if not full_name:
                 return error("Name cannot be blank.", errors={"full_name": "Required."})
+            if len(full_name) > 100:
+                return error("Name can be at most 100 characters.", errors={"full_name": "Too long."})
             acct.full_name = full_name
             fields.append("full_name")
         if "mobile" in d:

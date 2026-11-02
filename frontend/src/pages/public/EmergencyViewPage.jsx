@@ -1,9 +1,11 @@
 /** pages/public/EmergencyViewPage.jsx */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import { publicClient } from "../../services/api.client";
 import API_ENDPOINTS from "../../config/api.config";
 import { formatYearsMonths } from "../../utils/age";
+import HealthJourney from "../../components/healthJourneyDoctor/HealthJourney";
+import DoctorInsights from "../../components/healthJourneyDoctor/DoctorInsights";
 import {
   ShieldAlert, AlertTriangle, Pill, Stethoscope, Phone, User,
   Activity, Syringe, FileText, FlaskConical, ExternalLink, Baby,
@@ -137,8 +139,26 @@ function DataTable({ columns, rows }) {
   );
 }
 
+// The health journey asks for /peds/patients/<id>/<part>/ with a signed-in client. Here the emergency code takes the place of the id and the
+// public client is used: each call is sent to the code's own read-only endpoint, and anything that would change data is refused.
+function emergencyHttp(token) {
+  const refuse = () => Promise.reject({ response: { data: { detail: "Not available with an emergency code." } }, message: "Not available with an emergency code." });
+  return {
+    get: (url, config) => publicClient.get(url.replace(/\/peds\/patients\/[^/]+\//, `/emergency/${token}/`), config),
+    post: refuse, put: refuse, patch: refuse, delete: refuse,
+  };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+function daysAgo(d) {
+  if (!d) return "";
+  const n = Math.floor((Date.now() - new Date(d).getTime()) / DAY_MS);
+  return n <= 0 ? "today" : n === 1 ? "yesterday" : `${n} days ago`;
+}
+
 export default function EmergencyViewPage() {
   const { token } = useParams();
+  const http = useMemo(() => emergencyHttp(token), [token]);
   const [state, setState] = useState({ loading: true, data: null, error: null });
   const [loadedAt] = useState(() => new Date());
 
@@ -157,7 +177,7 @@ export default function EmergencyViewPage() {
       minHeight: "100vh", background: "#f4f6f5", display: "flex", justifyContent: "center",
       padding: "16px 12px 32px", fontFamily: "system-ui, -apple-system, sans-serif",
     }}>
-      <div style={{ width: "100%", maxWidth: 720 }}>
+      <div style={{ width: "100%", maxWidth: 1600 }}>
 
         {/* ── Header ─────────────────────────────────────────────── */}
         <div style={{
@@ -181,8 +201,8 @@ export default function EmergencyViewPage() {
               background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 10, padding: "8px 12px",
               fontSize: 11, color: "#065F46", maxWidth: 260,
             }}>
-              <div style={{ fontWeight: 800, marginBottom: 1 }}>Read top to bottom</div>
-              Vitals first, then diagnoses and treatment history.
+              <div style={{ fontWeight: 800, marginBottom: 1 }}>Health journey below</div>
+              Illnesses, hospital stays, vaccines and growth over time.
             </div>
           )}
         </div>
@@ -203,8 +223,6 @@ export default function EmergencyViewPage() {
 
         {!loading && data && (() => {
           const isMinor = data.age_years != null && data.age_years < 18;
-          const latestVital = data.vitals?.[0] || null;
-          const earlierVitals = data.vitals?.slice(1, 5) || [];
           let step = 0;
           const next = () => ++step;
 
@@ -245,183 +263,25 @@ export default function EmergencyViewPage() {
               </div>
             </div>
 
-            {/* 1 — Vitals */}
-            <PriorityCard n={next()} color="red" icon={Activity} title="Current Vitals" hint="Assess immediate condition">
-              {!latestVital ? <Empty text="No vitals on record." /> : (
-                <>
-                  <div style={{ fontSize: 10.5, color: "#999", marginBottom: 8 }}>Latest: {fmtDateTime(latestVital.recorded_at)}</div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: earlierVitals.length ? 10 : 0 }}>
-                    <StatTile icon={HeartPulse} label="BP" color="red"
-                      value={latestVital.bp_systolic && latestVital.bp_diastolic ? `${latestVital.bp_systolic}/${latestVital.bp_diastolic}` : null} unit="mmHg" />
-                    <StatTile icon={HeartPulse} label="Pulse" color="orange" value={latestVital.pulse_rate} unit="bpm" />
-                    <StatTile icon={Wind} label="SpO2" color="green" value={latestVital.spo2} unit="%" />
-                    <StatTile icon={Thermometer} label="Temp" color="orange" value={latestVital.temperature} unit="°F" />
-                    <StatTile icon={Droplet} label="Sugar" color="red" value={latestVital.blood_sugar_mgdl} unit="mg/dL" />
-                    <StatTile icon={Weight} label="Weight" color="blue" value={latestVital.weight_kg} unit="kg" />
-                    <StatTile icon={Ruler} label="Height" color="blue" value={latestVital.height_cm} unit="cm" />
-                    <StatTile icon={Ruler} label="Head circ." color="violet" value={latestVital.head_circumference_cm} unit="cm" />
-                  </div>
-                  {earlierVitals.length > 0 && (
-                    <div style={{ display: "grid", gap: 4, paddingTop: 8, borderTop: "1px dashed #eee" }}>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, color: "#999", textTransform: "uppercase", letterSpacing: 0.3 }}>Earlier readings</div>
-                      {earlierVitals.map((v, i) => (
-                        <div key={i} style={{ fontSize: 11.5, color: "#666" }}>
-                          <span style={{ color: "#aaa" }}>{fmtDateTime(v.recorded_at)} — </span>
-                          {[
-                            v.bp_systolic && v.bp_diastolic ? `BP ${v.bp_systolic}/${v.bp_diastolic}` : null,
-                            v.pulse_rate ? `Pulse ${v.pulse_rate}` : null,
-                            v.spo2 ? `SpO2 ${v.spo2}%` : null,
-                            v.temperature ? `Temp ${v.temperature}°` : null,
-                            v.blood_sugar_mgdl ? `Sugar ${v.blood_sugar_mgdl}` : null,
-                            v.weight_kg ? `Weight ${v.weight_kg}kg` : null,
-                          ].filter(Boolean).join(" · ") || "—"}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-            </PriorityCard>
-
-            {/* 2 — Diagnoses */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, marginBottom: 0 }}>
-              <PriorityCard n={next()} color="orange" icon={Stethoscope} title="Active Diagnoses" hint="Understand existing conditions"
-                count={data.diagnoses.length ? `${data.diagnoses.length} on record` : null}>
-                {data.diagnoses.length === 0 ? <Empty text="None on record." /> : (
-                  <div style={{ display: "grid", gap: 6 }}>
-                    {data.diagnoses.map((d, i) => (
-                      <div key={i} style={{ fontSize: 13 }}>
-                        {d.description || d.icd10_code}
-                        {d.clinical_status && <span style={{ color: "#999", fontSize: 11 }}> · {d.clinical_status}</span>}
-                        {d.onset_date && <span style={{ color: "#999", fontSize: 11 }}> · since {fmtDate(d.onset_date)}</span>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </PriorityCard>
+            {/* Health journey: the same timeline, vaccine record and growth the patient and their doctors see, read through the emergency code */}
+            <div style={{ marginBottom: 14 }}>
+              <HealthJourney
+                http={http}
+                children={[{ id: token, name: data.full_name }]}
+                view="doctor"
+                initialPeriod="all"
+                canAddVaccine={false}
+                canReview={false}
+                onOpenDocument={(id) => {
+                  const doc = (data.documents || []).find((d) => d.medical_document_id === id);
+                  if (doc?.file_url) window.open(doc.file_url, "_blank", "noopener");
+                }}
+                clinicalExtra={<DoctorInsights http={http} awpid={token} onOpenDocument={(id) => {
+                  const doc = (data.documents || []).find((d) => d.medical_document_id === id);
+                  if (doc?.file_url) window.open(doc.file_url, "_blank", "noopener");
+                }} />}
+              />
             </div>
-
-            {/* 4 — Medications */}
-            <PriorityCard n={next()} color="blue" icon={Pill} title="Current / Recent Medications" hint="Check recent treatment history"
-              count={data.prescriptions.length ? `${data.prescriptions.length} prescription${data.prescriptions.length === 1 ? "" : "s"}` : null}>
-              {data.prescriptions.length === 0 ? <Empty text="None on record." /> : (
-                <DataTable
-                  columns={[
-                    { key: "drug", label: "Drug / Item", render: r => <strong>{r.drug_name}</strong> },
-                    { key: "dose", label: "Dose", render: r => r.dose ? `${r.dose}${r.unit || ""}` : "—" },
-                    { key: "freq", label: "Frequency", render: r => r.frequency || "—" },
-                    { key: "prescribed", label: "Prescribed On", render: r => fmtDate(r.prescribed_on) },
-                  ]}
-                  rows={data.prescriptions.flatMap(rx => rx.items.map(it => ({ ...it, prescribed_on: rx.prescribed_on })))}
-                />
-              )}
-            </PriorityCard>
-
-            {/* 5 — Lab reports */}
-            <PriorityCard n={next()} color="purple" icon={FlaskConical} title="Recent Lab Reports" hint="Check for abnormal results"
-              count={data.lab_results.length ? `${data.lab_results.length} report${data.lab_results.length === 1 ? "" : "s"}` : null}>
-              {data.lab_results.length === 0 ? <Empty text="None on record." /> : (
-                <div style={{ display: "grid", gap: 8 }}>
-                  {data.lab_results.map((r, i) => (
-                    <div key={i} style={{ fontSize: 13, borderTop: i ? "1px solid #f1f1f1" : "none", paddingTop: i ? 8 : 0 }}>
-                      <div>
-                        <span style={{ fontWeight: 700 }}>{r.test_name}</span>
-                        <span style={{ color: "#999", fontSize: 11 }}> · {fmtDate(r.delivered_at)}</span>
-                      </div>
-                      {r.result_summary && <div style={{ fontSize: 12, color: "#555", marginTop: 2 }}>{r.result_summary}</div>}
-                      <FileLink url={r.file_url} label="View report" />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </PriorityCard>
-
-            {/* 6 — Vaccinations */}
-            <PriorityCard n={next()} color="teal" icon={Syringe} title="Vaccinations" hint="Immunization history"
-              count={data.vaccinations.length ? `${data.vaccinations.length} on record` : null}>
-              {data.vaccinations.length === 0 ? <Empty text="None on record." /> : (
-                <div style={{ display: "grid", gap: 6 }}>
-                  {data.vaccinations.map((v, i) => (
-                    <div key={i} style={{ fontSize: 13 }}>
-                      <span style={{ fontWeight: 600 }}>{v.vaccine_name}</span>
-                      {v.dose_number ? ` (dose ${v.dose_number})` : ""}
-                      <span style={{ color: "#999", fontSize: 11 }}>
-                        {" "}· {VACCINE_STATUS_LABEL[v.verification_status] || v.verification_status}
-                        {v.administered_date && ` · ${fmtDate(v.administered_date)}`}
-                      </span>
-                      <div><FileLink url={v.certificate_url} label="View certificate" /></div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </PriorityCard>
-
-            {/* 7 — Pediatric context (minor patients only) */}
-            {isMinor && (
-              <PriorityCard n={next()} color="violet" icon={Baby} title="Pediatric History" hint="Birth history and flagged developmental concerns">
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#999", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 6 }}>
-                  Birth history
-                </div>
-                {!data.birth_history ? <Empty text="None on record." /> : (
-                  <div style={{ display: "grid", gap: 3, fontSize: 13, marginBottom: 14 }}>
-                    {data.birth_history.gestational_age_weeks != null && (
-                      <div>Gestational age: <strong>{data.birth_history.gestational_age_weeks} weeks</strong></div>
-                    )}
-                    {data.birth_history.birth_weight_kg != null && (
-                      <div>Birth weight: <strong>{data.birth_history.birth_weight_kg} kg</strong></div>
-                    )}
-                    {data.birth_history.delivery_mode && (
-                      <div>Delivery: <strong>{DELIVERY_MODE_LABEL[data.birth_history.delivery_mode] || data.birth_history.delivery_mode}</strong></div>
-                    )}
-                    {data.birth_history.multiple_birth && <div>Multiple birth: <strong>{data.birth_history.multiple_birth}</strong></div>}
-                    {data.birth_history.nicu_admission && (
-                      <div>NICU: <strong>Yes{data.birth_history.nicu_days ? ` — ${data.birth_history.nicu_days} days` : ""}</strong></div>
-                    )}
-                    {(data.birth_history.apgar_score_1min != null || data.birth_history.apgar_score_5min != null) && (
-                      <div>APGAR: <strong>{data.birth_history.apgar_score_1min ?? "—"} / {data.birth_history.apgar_score_5min ?? "—"}</strong></div>
-                    )}
-                    {data.birth_history.birth_complications && (
-                      <div style={{ color: "#b91c1c" }}>Birth complications: {data.birth_history.birth_complications}</div>
-                    )}
-                    {data.birth_history.congenital_conditions && (
-                      <div style={{ color: "#b91c1c" }}>Congenital conditions: {data.birth_history.congenital_conditions}</div>
-                    )}
-                  </div>
-                )}
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#999", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 6 }}>
-                  Developmental concerns flagged
-                </div>
-                {!data.milestone_concerns?.length ? <Empty text="None flagged." /> : (
-                  <div style={{ display: "grid", gap: 6 }}>
-                    {data.milestone_concerns.map((m, i) => (
-                      <div key={i} style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 10px" }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: "#991b1b" }}>{m.milestone}</div>
-                        <div style={{ fontSize: 11, color: "#7f1d1d" }}>
-                          {m.domain?.replace("_", " ")}{m.assessed_date && ` · flagged ${fmtDate(m.assessed_date)}`}
-                        </div>
-                        {m.notes && <div style={{ fontSize: 12, color: "#7f1d1d", marginTop: 2 }}>{m.notes}</div>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </PriorityCard>
-            )}
-
-            {/* 8 — Documents */}
-            <PriorityCard n={next()} color="slate" icon={FileText} title="Uploaded Documents" hint="Old reports, scans, discharge summaries"
-              count={data.documents.length ? `${data.documents.length} file${data.documents.length === 1 ? "" : "s"}` : null}>
-              {data.documents.length === 0 ? <Empty text="None on record." /> : (
-                <div style={{ display: "grid", gap: 8 }}>
-                  {data.documents.map((doc, i) => (
-                    <div key={i} style={{ fontSize: 13 }}>
-                      <span style={{ fontWeight: 600 }}>{doc.title}</span>
-                      <span style={{ color: "#999", fontSize: 11 }}> · {fmtDate(doc.created_at)}</span>
-                      <div><FileLink url={doc.file_url} label="View document" /></div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </PriorityCard>
 
             {/* Emergency contact — utility footer card, not part of the numbered clinical flow */}
             <div style={{

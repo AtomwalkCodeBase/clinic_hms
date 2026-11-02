@@ -41,6 +41,8 @@ class DropdownListCreateView(APIView):
         # For the three list types with no distinct "value" concept
         if "value" not in data:
             data["value"] = data.get("label", "")
+        if len(data["value"]) > OptionList._meta.get_field("value").max_length:
+            return error(f"The name can be at most {OptionList._meta.get_field('value').max_length} characters.", errors={self.identity_field: "Too long."})
         lookup = {self.model_field: data.get(self.model_field), "list_type": self.list_type}
         if OptionList.objects.using(request.hospital_db).filter(**lookup).exists():
             return error("This value already exists.", errors={self.identity_field: "Already in use."})

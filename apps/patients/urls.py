@@ -1,5 +1,8 @@
 """Patient portal, emergency summary, consult pad and record-sharing routes, all under /api/v1/."""
 from django.urls import include, path
+from apps.documents.views_timeline import (
+    EmergencyClinicalSummaryView, EmergencyGrowthView, EmergencyHealthTimelineView, EmergencyImmunizationView,
+)
 from apps.patients.views import (
     PortalRegisterView,
     PortalHospitalListView,
@@ -117,6 +120,10 @@ portal_urlpatterns = [
 
 emergency_urlpatterns = [
     path("<str:token>/", EmergencySummaryView.as_view(), name="emergency-summary"),
+    path("<str:awpid>/health-timeline/", EmergencyHealthTimelineView.as_view(), name="emergency-health-timeline"),
+    path("<str:awpid>/clinical-summary/", EmergencyClinicalSummaryView.as_view(), name="emergency-clinical-summary"),
+    path("<str:awpid>/growth/", EmergencyGrowthView.as_view(), name="emergency-growth"),
+    path("<str:awpid>/immunization/", EmergencyImmunizationView.as_view(), name="emergency-immunization"),
 ]
 
 

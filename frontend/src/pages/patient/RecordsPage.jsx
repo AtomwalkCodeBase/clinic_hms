@@ -20,7 +20,7 @@ const ALL_TABS = [
   { id: "vaccine-record",  label: "Vaccine Record",   icon: Syringe,   pediatricOnly: true },
   { id: "visits",          label: "Visits",           icon: Building2, pediatricOnly: false },
   { id: "medicines",       label: "Medicines",        icon: Pill,      pediatricOnly: false },
-  { id: "growth",          label: "Growth",           icon: TrendingUp, pediatricOnly: false },
+  { id: "growth",          label: "Growth",           icon: TrendingUp, pediatricOnly: true  },
 ];
 
 function TabBar({ active, onChange, isAdult }) {
@@ -63,7 +63,7 @@ function TabBar({ active, onChange, isAdult }) {
 }
 
 // Sir's health-journey views (insights timeline, growth, immunisation record) for the patient being viewed, one section per tab.
-function InsightsPanel({ awpid, name, section }) {
+function InsightsPanel({ awpid, name, section, isAdult = false }) {
   const navigate = useNavigate();
   // Carries the vaccine to the booking form, which fills the reason from it.
   const bookVaccine = (r) => {
@@ -77,7 +77,7 @@ function InsightsPanel({ awpid, name, section }) {
   );
   if (!awpid) return null;
   return (
-    <HealthJourney key={`${awpid}-${section}`} http={apiClient} children={children} section={section} onOpenDocument={openDocument}
+    <HealthJourney key={`${awpid}-${section}`} http={apiClient} children={children} section={section} isAdult={isAdult} onOpenDocument={openDocument}
       onBookVaccine={bookVaccine}
       emptyAction={{ label: "Upload a report", onClick: () => navigate(ROUTES.PATIENT.MY_REPORTS) }} />
   );
@@ -139,7 +139,7 @@ export default function PatientRecordsPage() {
 
         {/* ── Health Timeline tab ────────────────────────────────── */}
         {activeTab === "health-timeline" && (
-          <InsightsPanel awpid={patientAwpid || profile?.awpid || ""} name={patientName} section="timeline" />
+          <InsightsPanel awpid={patientAwpid || profile?.awpid || ""} name={patientName} section="timeline" isAdult={isAdult} />
         )}
 
         {/* ── Medicines tab: what each hospital prescribed, newest first ─────────── */}
@@ -283,7 +283,7 @@ export default function PatientRecordsPage() {
 
         {/* ── Growth tab ────────────────────────────────────────── */}
         {/* Same upgraded chart as the Vaccinations tab (gridlines, hover */}
-        {activeTab === "growth" && <InsightsPanel awpid={patientAwpid || profile?.awpid || ""} name={patientName} section="growth" />}
+        {activeTab === "growth" && !isAdult && <InsightsPanel awpid={patientAwpid || profile?.awpid || ""} name={patientName} section="growth" />}
         {activeTab === "vaccine-record" && !isAdult && <InsightsPanel awpid={patientAwpid || profile?.awpid || ""} name={patientName} section="vaccines" />}
       </PageShell>
     </AppShell>

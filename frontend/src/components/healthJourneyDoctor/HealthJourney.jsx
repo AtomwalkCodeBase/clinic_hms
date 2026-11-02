@@ -74,13 +74,13 @@ function TimelineList({ payload }) {
   );
 }
 
-export default function HealthJourney({ http, children, initialChildId, initialPeriod = '1y', view = 'guardian', onOpenDocument, clinicalExtra }) {
+export default function HealthJourney({ http, children, initialChildId, initialPeriod = '1y', view = 'guardian', onOpenDocument, clinicalExtra, initialTab, canAddVaccine = true, canReview = true }) {
   const doctor = view === 'doctor';
   const api = useMemo(() => makePedsApi(http), [http]);
   const [childId, setChildId] = useState(initialChildId || children?.[0]?.id);
   const [period, setPeriod] = useState(initialPeriod);
   const [axisMode, setAxisMode] = useState('age');
-  const [tab, setTab] = useState(doctor ? 'clinical' : 'timeline');
+  const [tab, setTab] = useState(initialTab || (doctor ? 'clinical' : 'timeline'));
   const [showList, setShowList] = useState(false);
   const [showDetails, setShowDetails] = useState(true);
   const [payload, setPayload] = useState(null);
@@ -138,7 +138,7 @@ export default function HealthJourney({ http, children, initialChildId, initialP
 
           {tab === 'clinical' && doctor && (
             <>
-              <ClinicalPanel api={api} payload={payload} onChanged={() => setVersion((v) => v + 1)} onOpenDocument={onOpenDocument} />
+              <ClinicalPanel api={api} payload={payload} onChanged={() => setVersion((v) => v + 1)} onOpenDocument={onOpenDocument} canReview={canReview} />
               {clinicalExtra}
             </>
           )}
@@ -170,7 +170,7 @@ export default function HealthJourney({ http, children, initialChildId, initialP
             </section>
           )}
           {tab === 'growth' && <GrowthChart api={api} patientId={childId} onOpenDocument={onOpenDocument} />}
-          {tab === 'vaccines' && <ImmunizationCard api={api} patientId={childId} onOpenDocument={onOpenDocument} />}
+          {tab === 'vaccines' && <ImmunizationCard api={api} patientId={childId} canAdd={canAddVaccine} onOpenDocument={onOpenDocument} />}
         </>
       )}
     </div>

@@ -31,6 +31,35 @@ def _normalize_gender(gender_raw: str) -> str:
 class PatientService:
 
     @staticmethod
+    def prescriptions_everywhere(awpid, limit=10):
+        """What every hospital prescribed to this patient, newest visit first: [{"prescribed_on", "items": [{drug_name, dose, unit, frequency,
+        route, duration_days}]}]. Each hospital keeps its own prescriptions in its own database."""
+        from apps.hospital_master.models import Hospital
+        from apps.hospital_master.services import ensure_hospital_db
+        from apps.opd.models import PrescriptionItem
+
+        found = []
+        for hospital in Hospital.objects.using("default").filter(is_active=True):
+            db = hospital.db_name
+            try:
+                ensure_hospital_db(db)
+                items = (PrescriptionItem.objects.using(db)
+                         .filter(prescription__encounter__appointment__patient__awpid=awpid)
+                         .select_related("prescription__encounter__appointment")
+                         .order_by("-prescription__encounter__appointment__scheduled_date", "-prescription__created_at", "pk"))
+                by_prescription = {}
+                for item in items:
+                    row = by_prescription.setdefault(item.prescription_id, {
+                        "prescribed_on": item.prescription.encounter.appointment.scheduled_date, "items": []})
+                    row["items"].append({"drug_name": item.drug_name, "dose": item.dosage, "unit": "", "frequency": item.frequency,
+                                         "route": item.route, "duration_days": item.duration_days})
+                found.extend(by_prescription.values())
+            except Exception:
+                logger.warning("prescriptions: skipped %s for %s", db, awpid, exc_info=True)
+        found.sort(key=lambda row: row["prescribed_on"], reverse=True)
+        return found[:limit]
+
+    @staticmethod
     def attach_network_patient(mobile_raw: str, branch_id: int, db_name: str) -> HospitalPatient:
         """Create this hospital's operational record for an existing Atomwalk identity."""
         mobile_norm = normalize_mobile(mobile_raw)
@@ -445,14 +474,7 @@ class PatientService:
         for r in lab_results:
             r["has_file"] = bool(r.pop("document_id", None))
 
-        prescriptions = []
-        for rx in (
-            MedicalDocument.objects.using("default")
-            .filter(patient__awpid=awpid, source_type=MedicalDocument.Source.ENCOUNTER, doc_classification="prescription")
-            .order_by("-document_date")[:10]
-        ):
-            # The medicines are in the prescription's own PDF; the drug catalog table that once listed them here was removed
-            prescriptions.append({"prescribed_on": rx.document_date, "items": []})
+        prescriptions = PatientService.prescriptions_everywhere(awpid)
 
         # Lightweight only — no file_data here, so this history payload stays
         from apps.documents.lib_documents import awaiting_review_q

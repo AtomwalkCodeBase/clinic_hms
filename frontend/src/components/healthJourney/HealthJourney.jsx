@@ -22,7 +22,7 @@ const monthsAgo = (n) => { const d = new Date(); d.setMonth(d.getMonth() - n); r
 // What the reports have contributed; a lane that comes from the vaccine schedule alone says nothing about the child's history.
 const REPORT_LANES = ['birth', 'growth', 'chronic', 'acute', 'hospital'];
 
-function SummaryTiles({ s }) {
+function SummaryTiles({ s, isAdult }) {
   const tiles = [
     { label: 'Ongoing conditions', value: s.chronic_conditions, Icon: HeartPulse, tone: 'info' },
     { label: 'Short illnesses', value: s.acute_episodes, Icon: Stethoscope, tone: 'muted' },
@@ -30,7 +30,7 @@ function SummaryTiles({ s }) {
     { label: 'Hospital stays', value: s.hospital_stays, Icon: Building2, tone: s.critical_events ? 'critical' : 'muted' },
     { label: 'Vaccines overdue', value: s.vaccines_overdue, Icon: Syringe, tone: s.vaccines_overdue ? 'critical' : 'good' },
     { label: 'Growth checks to discuss', value: s.growth_flags, Icon: TrendingUp, tone: s.growth_flags ? 'serious' : 'muted' },
-  ];
+  ].filter((t) => !(isAdult && (t.label === 'Vaccines overdue' || t.label === 'Growth checks to discuss')));    // the vaccine schedule and growth charts are for children
   return (
     <div className="phj-tiles">
       {tiles.map(({ label, value, Icon, tone }) => (
@@ -95,7 +95,7 @@ function EmptyState({ view, emptyAction }) {
 }
 
 export default function HealthJourney({
-  http, children, initialChildId, initialPeriod = 'all', view = 'guardian', onOpenDocument, emptyAction, section, onBookVaccine,
+  http, children, initialChildId, initialPeriod = 'all', view = 'guardian', onOpenDocument, emptyAction, section, onBookVaccine, isAdult = false,
 }) {
   const api = useMemo(() => makePedsApi(http), [http]);
   const [childId, setChildId] = useState(initialChildId || children?.[0]?.id);
@@ -160,7 +160,7 @@ export default function HealthJourney({
 
       {payload && (
         <>
-          {(!section || section === 'timeline') && <SummaryTiles s={payload.summary} />}
+          {(!section || section === 'timeline') && <SummaryTiles s={payload.summary} isAdult={isAdult} />}
           {payload.notes.map((n) => <p key={n} className="phj-callout">{n}</p>)}
 
           {!section && <div className="phj-tabs" role="tablist">

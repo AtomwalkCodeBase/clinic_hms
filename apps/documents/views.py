@@ -171,6 +171,7 @@ class DocumentViewView(APIView):
 class _InvalidRule(ValueError):
     """A rule in the request has a number that can't be right; the message says which."""
 _NUMBERS = ("min_age_days", "max_age_days", "dose_number", "sort_order")
+_MAX_AGE_DAYS = 36500
 def _whole_number(value, key):
     """The value as a whole number of 0 or more, or _InvalidRule."""
     try:
@@ -179,6 +180,8 @@ def _whole_number(value, key):
         number = None
     if number is None or number < 0:
         raise _InvalidRule(f"{key.replace('_', ' ').capitalize()} must be a whole number of 0 or more.")
+    if key.endswith("age_days") and number > _MAX_AGE_DAYS:
+        raise _InvalidRule(f"{key.replace('_', ' ').capitalize()} can be at most {_MAX_AGE_DAYS} (100 years).")
     return number
 def _checked_numbers(rd, current=None):
     """The numeric fields given in `rd` as whole numbers, checked against each other (the maximum age may not be below the"""
@@ -231,7 +234,9 @@ def _edit(kind, schedule, d):
             raise _InvalidRule("Minimum age is required.")
         checked[id(rd)] = _checked_numbers(rd, current) if (current or rd.get("min_age_days") is not None) else {}
         if not rd.get("immunization_schedule_rule_id"):
-            kind.new_rule(rd, 0)                                    # also checks the rest of a new rule
+            new = kind.new_rule(rd, 0)                              # also checks the rest of a new rule
+            if new and schedule.s_rules.filter(item=new["item"], **{kind.extra_key: new[kind.extra_key]}).exists():
+                raise _InvalidRule("That item and dose are already in this schedule.")
 
     changed = []
     if "name" in d and (d["name"] or "").strip():
@@ -709,26 +714,20 @@ class PortalVaccinationUploadView(APIView):
         if err:
             return err
 
-        file_name, mime_type, file_key = text(d, "file_name"), text(d, "mime_type"), d.get("file_data") or ""
+        file_key = d.get("file_data") or ""
         if file_key:
             if len(file_key) > _MAX_CERTIFICATE_CHARS:
                 return error("File is too large. Please upload a smaller file (under ~11MB).")
-            owner = Patient.objects.using("default").filter(awpid=awpid).first()
-            owner_name = owner.full_name if owner else ""
             try:
-                mime_type = validate_data_uri(file_key)
-                file_key = blob_storage.upload_data_uri(
-                    file_key, prefix="vaccination-certs", mime_type=mime_type, category="vaccination-certificate",
-                    identity=blob_storage.identity_slug(name=owner_name, identifier=awpid))
-            except (FileValidationError, blob_storage.StorageError) as exc:
+                validate_data_uri(file_key)
+            except FileValidationError as exc:
                 return error(str(exc), errors={"file_data": str(exc)})
-            file_name = blob_storage.display_file_name("vaccination-certificate", mime_type, detail=name,
-                                                       name=owner_name, identifier=awpid)
+            # a dose record keeps no file of its own (the roadmap reads record.document), so a certificate is refused rather than dropped
+            return error("A certificate can't be attached to a dose record.", errors={"file_data": "Not supported."})
 
         record = ImmunizationRecord.objects.using("default").create(
             patient=Patient.objects.using("default").filter(awpid=awpid).first(), vaccine_name=name, scheduled_label=text(d, "scheduled_label"), administered_date=given_on,
-            source=ImmunizationRecord.SOURCE_SELF_REPORTED, verification_status=ImmunizationRecord.STATUS_PENDING,
-            file_name=file_name, mime_type=mime_type, file_data=file_key)
+            source=ImmunizationRecord.SOURCE_SELF_REPORTED, verification_status=ImmunizationRecord.STATUS_PENDING)
         return success(data={"immunization_record_id": record.pk, "vaccine_name": record.vaccine_name,
                              "administered_date": str(record.administered_date),
                              "verification_status": record.verification_status},

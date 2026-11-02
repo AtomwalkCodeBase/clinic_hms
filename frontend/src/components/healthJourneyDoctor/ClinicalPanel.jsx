@@ -46,7 +46,7 @@ const HEADING = /^(final |provisional |primary |principal |discharge )?(diagnosi
 const evidenceOf = (e) => (e.evidence && !HEADING.test(e.evidence.trim()) ? `“${e.evidence}”` : '–');
 const sevClass = (s) => (s === 'CRITICAL' ? 'critical' : s === 'ABNORMAL' ? 'serious' : 'muted');
 
-export default function ClinicalPanel({ api, payload, onChanged, onOpenDocument }) {
+export default function ClinicalPanel({ api, payload, onChanged, onOpenDocument, canReview = true }) {
   const a = useActions(api, onChanged);
   const queue = reviewQueue(payload).filter((q) => q.kind !== 'flag');       // recurrence is already shown on the chart and in the problem list
   const problems = problemList(payload);
@@ -75,12 +75,12 @@ export default function ClinicalPanel({ api, payload, onChanged, onOpenDocument 
                 <div className="dhj-row">
                   {q.kind === 'provisional' ? (
                     <>
-                      <button type="button" className="dhj-btn dhj-btn-good" disabled={a.busy === q.id} onClick={() => a.verify(q.eventId)}>✓ Confirm</button>
-                      <button type="button" className="dhj-btn dhj-btn-danger" disabled={a.busy === q.id} onClick={() => a.reject(q.eventId)}>✕ Reject</button>
+                      {canReview && <button type="button" className="dhj-btn dhj-btn-good" disabled={a.busy === q.id} onClick={() => a.verify(q.eventId)}>✓ Confirm</button>}
+                      {canReview && <button type="button" className="dhj-btn dhj-btn-danger" disabled={a.busy === q.id} onClick={() => a.reject(q.eventId)}>✕ Reject</button>}
                       {q.documentId && <button type="button" className="dhj-link" onClick={() => onOpenDocument?.(q.documentId)}>Open report</button>}
                     </>
                   ) : (
-                    <button type="button" className="dhj-btn" disabled={a.busy === q.id} onClick={() => a.acknowledge(q.flagId)}>✓ Acknowledge</button>
+                    canReview && <button type="button" className="dhj-btn" disabled={a.busy === q.id} onClick={() => a.acknowledge(q.flagId)}>✓ Acknowledge</button>
                   )}
                 </div>
               </div>

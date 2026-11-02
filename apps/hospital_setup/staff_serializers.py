@@ -78,7 +78,7 @@ class DoctorDaySerializer(serializers.Serializer):
 
 class DoctorScheduleSerializer(serializers.Serializer):
     """Input for a doctor's working hours: the slot length and up to one window per weekday. Stored by room_utils.set_hours."""
-    slot_duration_minutes = serializers.IntegerField(min_value=1, required=False, default=15)
+    slot_duration_minutes = serializers.IntegerField(min_value=1, max_value=480, required=False, default=15)
     days = DoctorDaySerializer(many=True)
 
     def validate_days(self, days):

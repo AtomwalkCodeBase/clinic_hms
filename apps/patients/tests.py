@@ -433,12 +433,6 @@ class WaitingUploadsAreNotSharedTests(TestCase):
         docs = PatientService.get_shared_history(awpid=AWPID)["documents"]
         self.assertEqual({d["medical_document_id"] for d in docs}, {self.confirmed.pk, self.issued.pk})
 
-    def test_the_hospital_history_lists_the_prescriptions_a_hospital_issued(self):
-        rx = make_doc(AWPID, status="completed", document_type="prescription", by="issued", name="rx.pdf", created_by_type="H",
-                      source_type="encounter", source_id=uuid.uuid4(), document_date=timezone.now().date())
-        history = PatientService.get_shared_history(awpid=AWPID)
-        self.assertEqual(history["prescriptions"], [{"prescribed_on": rx.document_date, "items": []}])
-
     @override_settings(RECORDS_REVIEW_FROM="")
     def test_with_the_review_step_off_everything_is_shared_as_before(self):
         ids = {d["medical_document_id"] for d in _vault_documents(AWPID)}
@@ -471,3 +465,53 @@ class PatientIntegrityRulesTests(TestCase):
         p.delete()
         log.refresh_from_db()
         self.assertEqual((log.patient_id, log.awpid), (None, "AW-LOG-1"))
+
+
+class EmergencyCodeReadsTests(TestCase):
+    """The emergency page reads the patient's health journey with the code alone: no sign-in, read-only, and only while the code is valid."""
+    databases = {"default"}
+
+    def setUp(self):
+        from apps.patients.emergency_access import make_emergency_token
+        Patient.objects.using("default").create(awpid="AW-EMERG", full_name="Emergency Kid", gender="F", date_of_birth=timezone.now().date().replace(year=2018))
+        self.token = make_emergency_token("AW-EMERG")
+
+    def get(self, part, **params):
+        return APIClient().get(f"/api/v1/emergency/{self.token}/{part}", params)
+
+    def test_the_timeline_growth_vaccines_and_clinical_detail_open_with_the_code_alone(self):
+        timeline = self.get("health-timeline/")
+        self.assertEqual((timeline.status_code, timeline.json()["audience"]), (200, "doctor"))
+        self.assertEqual(self.get("growth/", indicator="weight_kg").status_code, 200)
+        self.assertEqual(self.get("immunization/").status_code, 200)
+        clinical = self.get("clinical-summary/")
+        self.assertEqual(clinical.status_code, 200)
+        self.assertEqual(set(clinical.json()), {"labs", "medications", "gaps"})
+
+    def test_a_wrong_code_opens_nothing(self):
+        response = APIClient().get("/api/v1/emergency/not-a-code/health-timeline/")
+        self.assertEqual(response.status_code, 400)
+
+    def test_nothing_can_be_changed_with_the_code(self):
+        for part in ("growth/", "immunization/", "health-timeline/"):
+            self.assertEqual(APIClient().post(f"/api/v1/emergency/{self.token}/{part}", {"x": 1}, format="json").status_code, 405, part)
+
+
+@requires_hospital_db
+class PrescriptionsEverywhereTests(HospitalDBTestCase):
+    def test_every_hospitals_prescriptions_of_a_patient_are_listed_newest_first(self):
+        from apps.hospital_master.models import Hospital
+        from apps.opd.models import Appointment, OPDEncounter, Prescription, PrescriptionItem
+        db = self.hospital_alias
+        Hospital.objects.using("default").update_or_create(
+            pk=1, defaults={"name": "Rx Hospital", "hospital_code": "rx-1", "db_name": db, "is_active": True})
+        branch, place = make_branch(db)
+        doctor = make_staff(db, "doctor", phone="9000000061", place=place)
+        patient = make_patient(db, "AW-RXALL", branch=branch)
+        for day, drug in ((1, "Paracetamol"), (5, "Amoxicillin")):
+            appt = Appointment.objects.using(db).create(patient=patient, doctor=doctor, branch_department=place, scheduled_date=timezone.now().date().replace(day=day))
+            rx = Prescription.objects.using(db).create(encounter=OPDEncounter.objects.using(db).create(appointment=appt))
+            PrescriptionItem.objects.using(db).create(prescription=rx, drug_name=drug, dosage="500 mg", frequency="bd")
+        rows = PatientService.prescriptions_everywhere("AW-RXALL")
+        self.assertEqual([r["items"][0]["drug_name"] for r in rows], ["Amoxicillin", "Paracetamol"])
+        self.assertEqual(rows[0]["items"][0], {"drug_name": "Amoxicillin", "dose": "500 mg", "unit": "", "frequency": "bd", "route": "oral", "duration_days": None})

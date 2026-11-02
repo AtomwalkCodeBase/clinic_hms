@@ -208,8 +208,11 @@ class PatientLoginView(APIView):
 
     def post(self, request):
 
-        login_id = (request.data.get("mobile") or request.data.get("awpid") or "").strip()
+        login_id = request.data.get("mobile") or request.data.get("awpid") or ""
         password = request.data.get("password") or ""
+        if not isinstance(login_id, str) or not isinstance(password, str):
+            return error("Mobile number and password must be text.")
+        login_id = login_id.strip()
         if not login_id or not password:
             return error("Mobile number and password are required.")
 

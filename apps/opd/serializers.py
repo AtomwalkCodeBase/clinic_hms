@@ -1,3 +1,6 @@
+from decimal import Decimal
+
+from django.core.validators import MaxValueValidator, MinValueValidator
 from rest_framework import serializers
 from core.api.serializers import PkModelSerializer
 from core.utils import age_years_months as _age_years_months
@@ -5,22 +8,32 @@ from apps.hospital_setup.models import OptionList
 from apps.opd.models import Appointment, OPDEncounter, Prescription, PrescriptionItem
 
 
+def _within(low, high):
+    return [MinValueValidator(low), MaxValueValidator(high)]
+
+
 class VitalsSerializer(serializers.Serializer):
-    """The vitals of one visit: what a nurse enters, and what the screens read back."""
+    """The vitals of one visit: what a nurse enters, and what the screens read back. Limits are the widest a living person can show, so only a typing slip is refused."""
     recorded_at = serializers.DateTimeField(read_only=True)
     recorded_by_id = serializers.IntegerField(read_only=True)
-    systolic_bp = serializers.IntegerField(required=False, allow_null=True)
-    diastolic_bp = serializers.IntegerField(required=False, allow_null=True)
-    pulse_rate = serializers.IntegerField(required=False, allow_null=True)
-    temperature = serializers.DecimalField(max_digits=4, decimal_places=1, required=False, allow_null=True)
-    spo2 = serializers.IntegerField(required=False, allow_null=True)
-    respiratory_rate = serializers.IntegerField(required=False, allow_null=True)
-    weight_kg = serializers.DecimalField(max_digits=5, decimal_places=1, required=False, allow_null=True)
-    height_cm = serializers.DecimalField(max_digits=5, decimal_places=1, required=False, allow_null=True)
+    systolic_bp = serializers.IntegerField(required=False, allow_null=True, validators=_within(40, 300))
+    diastolic_bp = serializers.IntegerField(required=False, allow_null=True, validators=_within(20, 200))
+    pulse_rate = serializers.IntegerField(required=False, allow_null=True, validators=_within(20, 300))
+    temperature = serializers.DecimalField(max_digits=4, decimal_places=1, required=False, allow_null=True, validators=_within(80, 115))    # degrees F
+    spo2 = serializers.IntegerField(required=False, allow_null=True, validators=_within(30, 100))
+    respiratory_rate = serializers.IntegerField(required=False, allow_null=True, validators=_within(4, 90))
+    weight_kg = serializers.DecimalField(max_digits=5, decimal_places=1, required=False, allow_null=True, validators=_within(Decimal("0.3"), Decimal("500")))
+    height_cm = serializers.DecimalField(max_digits=5, decimal_places=1, required=False, allow_null=True, validators=_within(Decimal("20"), Decimal("260")))
     bmi = serializers.DecimalField(max_digits=4, decimal_places=1, read_only=True)
-    blood_sugar_rbs = serializers.IntegerField(required=False, allow_null=True)
-    head_circumference_cm = serializers.DecimalField(max_digits=4, decimal_places=1, required=False, allow_null=True)
+    blood_sugar_rbs = serializers.IntegerField(required=False, allow_null=True, validators=_within(10, 1500))
+    head_circumference_cm = serializers.DecimalField(max_digits=4, decimal_places=1, required=False, allow_null=True, validators=_within(Decimal("15"), Decimal("80")))
     nurse_notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, data):
+        high, low = data.get("systolic_bp"), data.get("diastolic_bp")
+        if high is not None and low is not None and high <= low:
+            raise serializers.ValidationError({"systolic_bp": "The upper blood pressure must be higher than the lower."})
+        return data
 
 
 class AppointmentSerializer(PkModelSerializer):
@@ -159,6 +172,7 @@ class PrescriptionItemSerializer(PkModelSerializer):
         model = PrescriptionItem
         exclude = ["prescription"]
         read_only_fields = ["opd_prescription_item_id"]
+        extra_kwargs = {"duration_days": {"min_value": 1}, "quantity": {"min_value": 1}}
 
 
 class PrescriptionSerializer(PkModelSerializer):

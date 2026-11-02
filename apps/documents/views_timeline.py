@@ -4,12 +4,15 @@ from datetime import date
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.hospital_master.models import Hospital
 from apps.hospital_patients.models import HospitalPatient
+from apps.hospital_patients.services import PatientService
+from apps.patients.emergency_access import EmergencyTokenError, decode_emergency_token
 from apps.patients.models import Patient, RecurrenceFlag
 
 from . import integration as ig
@@ -31,6 +34,23 @@ def _patient_or_403(request, awpid):
     if not ig.can_view_patient(request.user, patient):
         return None, Response({"detail": "Not allowed"}, status=status.HTTP_403_FORBIDDEN)
     return patient, None
+
+
+class PatientAccess:
+    """How a view finds the patient it was asked about. By default the signed-in user must be allowed to see them; the emergency versions
+    below find the patient from an emergency code instead."""
+
+    def resolve_patient(self, request, ident):
+        return _patient_or_403(request, ident)
+
+    def audience_of(self, request):
+        return "doctor" if (request.query_params.get("view") == "doctor" and ig.is_clinician(request.user)) else "guardian"
+
+    def clinician_error(self, request):
+        return _clinician_or_403(request)
+
+    def medications(self, request, patient):
+        return _medications_prescribed_here(request, patient)
 
 
 def _clinician_or_403(request):
@@ -81,19 +101,18 @@ def _parse_period(request, dob):
 
 
 # ----------------------------------------------------------------- timeline
-class PatientHealthTimelineView(APIView):
+class PatientHealthTimelineView(PatientAccess, APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, awpid):
-        patient, err = _patient_or_403(request, awpid)
+        patient, err = self.resolve_patient(request, awpid)
         if err:
             return err
         dob, _ = ig.patient_dob_sex(patient)
         p_from, p_to = _parse_period(request, dob)
         if not p_from or p_from > p_to:
             return Response({"detail": "Invalid period"}, status=status.HTTP_400_BAD_REQUEST)
-        audience = "doctor" if (request.query_params.get("view") == "doctor"
-                                and ig.is_clinician(request.user)) else "guardian"
+        audience = self.audience_of(request)
         return Response(build_timeline_payload(patient, p_from, p_to, audience, hospital_id=None))
 
 
@@ -119,19 +138,19 @@ def _medications_prescribed_here(request, patient):
 
 
 # ------------------------------------------------- doctor detail
-class PatientClinicalSummaryView(APIView):
+class PatientClinicalSummaryView(PatientAccess, APIView):
     """Doctors only: lab trends with reference ranges, the medicines this hospital prescribed, and what the timeline does not know."""
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, awpid):
-        patient, err = _patient_or_403(request, awpid)
+        patient, err = self.resolve_patient(request, awpid)
         if err:
             return err
-        err = _clinician_or_403(request)
+        err = self.clinician_error(request)
         if err:
             return err
         hospital_id = None
-        return Response({"labs": lib_clinical.lab_trends(patient, hospital_id), "medications": _medications_prescribed_here(request, patient),
+        return Response({"labs": lib_clinical.lab_trends(patient, hospital_id), "medications": self.medications(request, patient),
                          "gaps": lib_clinical.data_gaps(patient, hospital_id)})
 
 
@@ -155,17 +174,19 @@ class GrowthMeasurementIn(serializers.Serializer):
         return attrs
 
 
-class PatientGrowthView(APIView):
+class PatientGrowthView(PatientAccess, APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, awpid):
-        patient, err = _patient_or_403(request, awpid)
+        patient, err = self.resolve_patient(request, awpid)
         if err:
             return err
         indicator = request.query_params.get("indicator", "weight_kg")
         if indicator not in INDICATORS:
             return Response({"detail": f"indicator must be one of {list(INDICATORS)}"}, status=400)
         dob, sex = ig.patient_dob_sex(patient)
+        if dob is None:
+            return Response({"detail": "No date of birth is on record for this patient."}, status=400)
         hospital_id = None
         own = {"source_hospital_id": hospital_id} if hospital_id is not None else {}
         bh = BirthHistory.objects.filter(confirmed_q(), patient=patient).first()
@@ -193,10 +214,10 @@ class PatientGrowthView(APIView):
         })
 
     def post(self, request, awpid):
-        patient, err = _patient_or_403(request, awpid)
+        patient, err = self.resolve_patient(request, awpid)
         if err:
             return err
-        err = _clinician_or_403(request)
+        err = self.clinician_error(request)
         if err:
             return err
         ser = GrowthMeasurementIn(data=request.data)
@@ -221,14 +242,16 @@ class ImmunizationIn(serializers.Serializer):
         return attrs
 
 
-class PatientImmunizationView(APIView):
+class PatientImmunizationView(PatientAccess, APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, awpid):
-        patient, err = _patient_or_403(request, awpid)
+        patient, err = self.resolve_patient(request, awpid)
         if err:
             return err
         dob, _ = ig.patient_dob_sex(patient)
+        if dob is None:
+            return Response({"detail": "No date of birth is on record for this patient."}, status=400)
         given = [{"vaccine_text": v.vaccine_name, "given_on": v.administered_date, "document_id": v.document_id,
                   "immunization_record_id": v.pk, "source": v.source}
                  for v in ImmunizationRecord.objects.filter(confirmed_q(), patient_id=patient.pk, verification_status__in=SHOWN_VACCINES,
@@ -241,7 +264,7 @@ class PatientImmunizationView(APIView):
         return Response(st)
 
     def post(self, request, awpid):
-        patient, err = _patient_or_403(request, awpid)
+        patient, err = self.resolve_patient(request, awpid)
         if err:
             return err
         ser = ImmunizationIn(data=request.data)
@@ -323,3 +346,52 @@ class PatientRebuildView(APIView):
             return err
         rebuild_patient_task.delay(patient.pk)
         return Response({"status": "queued"}, status=status.HTTP_202_ACCEPTED)
+
+
+# ------------------------------------------------------------- emergency code
+# The same four read views, opened by an emergency code (the QR a patient shows) instead of a sign-in. The code names the patient and expires
+# after a short while; nothing can be changed through it.
+
+class EmergencyAccess(PatientAccess):
+    permission_classes = (AllowAny,)
+    authentication_classes = ()
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "emergency"
+    http_method_names = ["get", "head", "options"]
+
+    def resolve_patient(self, request, token):
+        try:
+            awpid = decode_emergency_token(token)
+        except EmergencyTokenError as exc:
+            return None, Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        patient = Patient.objects.filter(awpid=awpid).first()
+        if patient is None:
+            return None, Response({"detail": "This emergency code is no longer valid."}, status=status.HTTP_404_NOT_FOUND)
+        return patient, None
+
+    def audience_of(self, request):
+        return "doctor"
+
+    def clinician_error(self, request):
+        return None
+
+    def medications(self, request, patient):
+        return [{"date": rx["prescribed_on"], "drug_name": it["drug_name"], "dose": it["dose"], "unit": it["unit"], "frequency": it["frequency"],
+                 "route": it["route"], "duration_days": it["duration_days"], "document_id": None}
+                for rx in PatientService.prescriptions_everywhere(patient.awpid, limit=50) for it in rx["items"]]
+
+
+class EmergencyHealthTimelineView(EmergencyAccess, PatientHealthTimelineView):
+    pass
+
+
+class EmergencyClinicalSummaryView(EmergencyAccess, PatientClinicalSummaryView):
+    pass
+
+
+class EmergencyGrowthView(EmergencyAccess, PatientGrowthView):
+    pass
+
+
+class EmergencyImmunizationView(EmergencyAccess, PatientImmunizationView):
+    pass

@@ -60,6 +60,12 @@ class PatientRegisterSerializer(serializers.Serializer):
 
     preferred_language = serializers.CharField(max_length=10, default="en")
 
+    def validate_date_of_birth(self, value):
+        from datetime import date
+        if value is not None and (value > date.today() or value.year < date.today().year - 130):
+            raise serializers.ValidationError("Enter a real date of birth: not in the future and not more than 130 years ago.")
+        return value
+
     def validate(self, data):
         if data.get("is_dependent"):
             if not data.get("guardian_awpid", "").strip():

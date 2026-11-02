@@ -3,8 +3,8 @@ import io
 import logging
 
 from django.conf import settings
-from decimal import Decimal
-from datetime import timedelta
+from decimal import Decimal, InvalidOperation
+from datetime import date, timedelta
 
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
@@ -248,6 +248,14 @@ class InvoiceListCreateView(APIView):
                 errors={"branch": "Required."},
             )
 
+        from apps.hospital_patients.models import HospitalPatient
+        try:
+            patient_known = HospitalPatient.objects.using(db).filter(pk=patient_pk).exists()
+        except (TypeError, ValueError):
+            return error("patient must be a patient id.", errors={"patient": "Not a number."})
+        if not patient_known:
+            return not_found("Patient not found.")
+
         inv_number, _ = NextNumber.next(branch_id, "invoice", db)
         inv = Invoice.objects.using(db).create(
             patient_id=patient_pk,
@@ -291,7 +299,17 @@ class InvoiceDetailView(APIView):
         db = request.hospital_db
 
         if "discount_amount" in request.data:
-            inv.discount_amount = Decimal(str(request.data["discount_amount"]))
+            if inv.status not in ("draft", "issued"):
+                return error(f"The discount of a {inv.status} invoice cannot be changed.")
+            try:
+                discount = Decimal(str(request.data["discount_amount"]))
+            except InvalidOperation:
+                return error("Enter the discount as a number.", errors={"discount_amount": "Not a number."})
+            if not discount.is_finite() or discount < 0 or discount != discount.quantize(Decimal("0.01")):
+                return error("The discount must be zero or more, with at most 2 decimals.", errors={"discount_amount": "Invalid amount."})
+            if discount > inv.subtotal + inv.tax_amount:
+                return error("The discount cannot be more than the invoice total.", errors={"discount_amount": "More than the invoice total."})
+            inv.discount_amount = discount
             inv.save(using=db, update_fields=["discount_amount"])
             recompute_invoice_totals(inv, db)
             inv.refresh_from_db(using=db)
@@ -309,6 +327,8 @@ class InvoiceDetailView(APIView):
             )
             if status_val not in valid_statuses:
                 return error("Invalid status.", errors={"status": "Invalid choice."})
+            if status_val == "cancelled" and inv.paid_amount > 0:
+                return error("An invoice with payments on it cannot be cancelled.", errors={"status": "Payments were already taken."})
             inv.status = status_val
             if status_val == "issued" and not inv.issued_at:
                 inv.issued_at = timezone.now()
@@ -448,6 +468,8 @@ class PaymentCreateView(APIView):
         # The payment and the invoice's running total in one transaction, with the invoice row locked
         with transaction.atomic(using=db):
             inv = Invoice.objects.using(db).select_for_update().get(pk=d["invoice"].pk)
+            if inv.status == "cancelled":
+                return error("A cancelled invoice cannot take a payment.")
             outstanding = inv.total_amount - inv.paid_amount
             if d["amount"] > outstanding:
                 return error("That is more than the invoice still owes.", errors={"amount": f"At most {outstanding} is outstanding."})
@@ -470,6 +492,10 @@ class RevenueReportView(APIView):
         date_from = request.query_params.get("date_from") or (
             timezone.localdate() - timedelta(days=settings.BILLING_REPORT_DAYS - 1)
         ).isoformat()
+        try:
+            date.fromisoformat(date_to), date.fromisoformat(date_from)
+        except ValueError:
+            return error("Use the date format YYYY-MM-DD.", errors={"date": "Invalid date."})
 
         invoices = Invoice.objects.using(db).filter(
             created_at__date__gte=date_from, created_at__date__lte=date_to,

@@ -6,6 +6,7 @@ from django.db import transaction
 from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
@@ -43,6 +44,17 @@ logger = logging.getLogger(__name__)
 
 
 # ── Appointment Type catalog — "make it configurable" ───────────────────────
+def _query_date(request, key, default=None):
+    """A date from the query string (YYYY-MM-DD); anything else is a 400, not a server error."""
+    raw = request.query_params.get(key)
+    if not raw:
+        return default
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        raise DRFValidationError({key: "Use the date format YYYY-MM-DD."})
+
+
 class AppointmentTypeListCreateView(DropdownListCreateView):
     list_type = OptionList.LIST_APPOINTMENT_TYPE
     serializer_class = AppointmentTypeSerializer
@@ -94,7 +106,7 @@ class AppointmentListCreateView(APIView):
         qs = _appointments(db)
 
         # Filter by date
-        appt_date = request.query_params.get("date", str(date.today()))
+        appt_date = _query_date(request, "date", date.today())
         qs = qs.filter(scheduled_date=appt_date)
 
         # Doctor sees only their queue unless admin. Checks acts_as too, not
@@ -189,6 +201,8 @@ class AppointmentListCreateView(APIView):
                 return api_error(message="That slot was just taken. Please pick another.", status=409)
 
         appt_date = data.get("scheduled_date", date.today())
+        if appt_date < date.today():
+            return api_error("Can't book a date in the past.")
 
         # An appointment belongs to the branch the request names (or the requester works at); the place is the department at that branch
         # where this doctor sits, else the doctor's primary place.
@@ -196,6 +210,10 @@ class AppointmentListCreateView(APIView):
         patient = HospitalPatient.objects.using(db).filter(pk=data.pop("patient_id")).first()
         if patient is None:
             return api_not_found("Patient not found.")
+        if Appointment.objects.using(db).filter(
+            patient_id=patient.pk, doctor_id=doctor.pk, scheduled_date=appt_date,
+        ).exclude(status__in=[Appointment.STATUS_CANCELLED, Appointment.STATUS_NO_SHOW]).exists():
+            return api_error("This patient already has an appointment with this doctor on that day.", status=409)
         branch_id = request.query_params.get("branch_id") or getattr(request.user, "branch_id", None)
         place = (staff_place_at(doctor, branch_id, db) if branch_id else None) or primary_place(doctor, db)
         if place is None:
@@ -250,8 +268,8 @@ class AppointmentHistoryView(APIView):
         if patient_q:
             qs = qs.filter(patient__awpid__in=PatientService.matching_awpids(db, patient_q))
 
-        date_from = request.query_params.get("date_from")
-        date_to   = request.query_params.get("date_to")
+        date_from = _query_date(request, "date_from")
+        date_to   = _query_date(request, "date_to")
         if date_from:
             qs = qs.filter(scheduled_date__gte=date_from)
         if date_to:
@@ -332,9 +350,9 @@ class AppointmentUpcomingView(APIView):
             qs = qs.filter(doctor_id=request.user.pk)
 
 
-        date_from = request.query_params.get("date_from") or str(date.today())
+        date_from = _query_date(request, "date_from", date.today())
         qs = qs.filter(scheduled_date__gte=date_from)
-        date_to = request.query_params.get("date_to")
+        date_to = _query_date(request, "date_to")
         if date_to:
             qs = qs.filter(scheduled_date__lte=date_to)
 
@@ -624,6 +642,9 @@ class AppointmentRescheduleView(APIView):
         except ValueError:
             return api_error("Invalid date.")
 
+        if new_date < date.today():
+            return api_error("Can't reschedule to a date in the past.")
+
         if new_time:
             taken = Appointment.objects.using(db).filter(
                 scheduled_date=new_date,
@@ -661,6 +682,9 @@ class VitalsView(APIView):
         except Appointment.DoesNotExist:
             return api_not_found("Appointment not found.")
 
+        if appt.status in (Appointment.STATUS_CANCELLED, Appointment.STATUS_NO_SHOW, Appointment.STATUS_DONE):
+            return api_error(f"Vitals cannot be recorded for an appointment that is already '{appt.status}'.")
+
         # Extract appointment-level fields before passing to Vitals serializer
         chief_complaint = request.data.get("chief_complaint", "").strip()
 
@@ -670,6 +694,8 @@ class VitalsView(APIView):
 
         serializer = VitalsSerializer(data=vitals_data)
         serializer.is_valid(raise_exception=True)
+        if not chief_complaint and not any(v not in (None, "") for v in serializer.validated_data.values()):
+            return api_error("Enter at least one reading.")
 
         vitals, created = record_vitals(appt, db, request.hospital_id, request.user.pk, serializer.validated_data)
 
@@ -725,6 +751,11 @@ class EncounterCreateView(APIView):
             return api_not_found("Appointment not found.")
         if appointment.doctor_id != request.user.pk:
             return api_forbidden("This appointment is with another doctor.")
+        if appointment.status in (Appointment.STATUS_CANCELLED, Appointment.STATUS_NO_SHOW):
+            return api_error(f"An encounter cannot be started for an appointment that is '{appointment.status}'.")
+        existing = OPDEncounter.objects.using(db).filter(appointment_id=appointment.pk).first()
+        if existing is not None:
+            return Response(_serialize_encounter(_encounter(db).get(pk=existing.pk), db), status=status.HTTP_200_OK)
         encounter = serializer.save()
         # Move appointment to IN_PROGRESS
         try:
@@ -1328,6 +1359,11 @@ class FollowupMarkBookedView(APIView):
             enc = _encounter(db).get(pk=pk)
         except OPDEncounter.DoesNotExist:
             return api_not_found("Encounter not found.")
+
+        if not enc.followup_ask_nurse:
+            return api_error("The doctor did not ask the nurse to book a follow-up for this visit.")
+        if enc.followup_nurse_booked:
+            return api_error("This follow-up is already marked as booked.", status=409)
 
         enc.followup_nurse_booked = True
         enc.followup_nurse_booked_at = timezone.now()

@@ -921,8 +921,10 @@ class HospitalSettingsView(APIView):
                 amt = Decimal(str(request.data["registration_fee_amount"]))
             except Exception:
                 return error("registration_fee_amount must be a number.")
-            if amt < 0:
+            if not amt.is_finite() or amt < 0:
                 return error("registration_fee_amount can't be negative.")
+            if amt >= Decimal("100000000"):
+                return error("registration_fee_amount is too large.")
             params.registration_fee_amount = amt
         if "default_tax_rate" in request.data:
             try:
