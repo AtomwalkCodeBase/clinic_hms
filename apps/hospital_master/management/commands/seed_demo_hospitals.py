@@ -6,10 +6,13 @@ patient app. Idempotent: re-running only creates what is missing, and never touc
     python manage.py seed_demo_hospitals --limit 2     # first two only
     python manage.py seed_demo_hospitals --dry-run     # print the plan, change nothing
 
-A hospital that does not exist yet is provisioned the same way `provision_hospital` does it (Hospital row,
-parameters, enterprise subscription, its own Postgres database, migrations). Logins are the mobile number
-printed at the end + DEMO_PASSWORD."""
+A hospital that does not exist yet is provisioned the way `provision_hospital` does it (Hospital row,
+parameters, enterprise subscription, its own Postgres database, migrations); staff are made with the app's own
+`create_staff`, so the login and the shared sign-in catalog are filled in as for any staff member. Logins are the
+mobile number printed at the end + DEMO_PASSWORD."""
 from decimal import Decimal
+
+from django.conf import settings
 
 from django.core.management.base import BaseCommand, CommandError
 
@@ -58,8 +61,8 @@ FLOORS = [("Ground", 0), ("First Floor", 1), ("Second Floor", 2)]
 COUNCILS = ["Karnataka Medical Council", "Telangana Medical Council", "Maharashtra Medical Council", "Tamil Nadu Medical Council",
             "West Bengal Medical Council", "Delhi Medical Council", "Gujarat Medical Council", "Kerala State Medical Council",
             "Odisha Council of Medical Registration"]
-# (start, end) windows Monday to Saturday; the pattern depends on the doctor so the rota is not identical
-SHIFTS = [[("09:00", "13:00"), ("16:00", "19:00")], [("10:00", "14:00")], [("09:00", "12:30"), ("15:00", "17:30")], [("14:00", "20:00")]]
+# (start, end) Monday to Saturday; the hours depend on the doctor so the rota is not identical
+SHIFTS = [("09:00", "17:00"), ("10:00", "14:00"), ("08:00", "13:00"), ("14:00", "20:00")]
 
 
 def _doctor(h, d):
@@ -96,13 +99,11 @@ class Command(BaseCommand):
         if options["dry_run"]:
             for h in range(limit):
                 code, name, city = HOSPITALS[h][:3]
-                self.stdout.write(f"{name} [{code}] {city}: admin 97{h + 1:02d}000000, doctors 97{h + 1:02d}000001..12")
+                self.stdout.write(f"{name} [{code}] {city}: db {self._db_name(code)}, admin 97{h + 1:02d}000000, doctors 97{h + 1:02d}000001..12")
             self.stdout.write("Dry run: nothing changed.")
             return
 
-        summary = []
-        for h in range(limit):
-            summary.append(self._seed_hospital(h))
+        summary = [self._seed_hospital(h) for h in range(limit)]
 
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS(f"Done. {limit} hospital(s). Password for every login below: {DEMO_PASSWORD}"))
@@ -110,19 +111,20 @@ class Command(BaseCommand):
             self.stdout.write(f"  {name} [{code}]  admin mobile {admin}  ({created} new doctor(s))")
         self.stdout.write("  Doctor mobiles: 97<hospital 01-10>00<doctor 0001-0012>, e.g. 9701000001.")
 
+    @staticmethod
+    def _db_name(code):
+        return settings.HOSPITAL_DB_PREFIX + code.replace("-", "_").lower()
+
     # ── one hospital ─────────────────────────────────────────────────────────
     def _seed_hospital(self, h):
         code, name, city, state, pincode, _fee = HOSPITALS[h]
         self.stdout.write(f"\n== {name} ({city})")
         hospital, db_name = self._hospital(code, name, city, state)
-        branch = self._branch(db_name, name, city, state, pincode, h)
-        places = self._places(db_name, branch)
+        branch = self._branch(db_name, city, state, pincode, h)
+        departments = self._departments(db_name, branch)
         admin_phone = self._admin(hospital, db_name, h, code)
 
-        created = 0
-        for d in range(12):
-            if self._doctor_staff(hospital, db_name, branch, places, h, d, code):
-                created += 1
+        created = sum(1 for d in range(12) if self._doctor_staff(hospital, db_name, branch, departments, h, d, code))
         self.stdout.write(self.style.SUCCESS(f"   {created} doctor(s) created, {12 - created} already there"))
         return name, code, admin_phone, created
 
@@ -134,7 +136,7 @@ class Command(BaseCommand):
 
         hospital = Hospital.objects.using("default").filter(hospital_code=code).first()
         if hospital is None:
-            db_name = "aw_" + code.replace("-", "_").lower()
+            db_name = self._db_name(code)
             if Hospital.objects.using("default").filter(db_name=db_name).exists():
                 raise CommandError(f"db_name '{db_name}' is already used by another hospital.")
             hospital = Hospital.objects.using("default").create(
@@ -150,11 +152,11 @@ class Command(BaseCommand):
 
     def _database(self, db_name):
         from apps.hospital_master.services import create_hospital_database, ensure_hospital_db, run_hospital_migrations
-        from apps.hospital_setup.models import Role
+        from apps.hospital_setup.models import UserGroup
 
         ensure_hospital_db(db_name)
         try:
-            Role.objects.using(db_name).exists()
+            UserGroup.objects.using(db_name).exists()
             self.stdout.write(f"   database {db_name} ready")
             return
         except Exception:
@@ -169,66 +171,64 @@ class Command(BaseCommand):
             raise CommandError(f"Could not set up database {db_name}: {exc}")
         self.stdout.write(f"   database {db_name} created and migrated")
 
-    def _branch(self, db_name, name, city, state, pincode, h):
+    def _branch(self, db_name, city, state, pincode, h):
         from apps.hospital_setup.models import Branch
+        from apps.hospital_setup.staff_services import seed_next_numbers
 
         branch = Branch.objects.using(db_name).filter(is_active=True).order_by("id").first()
-        if branch is not None:
-            return branch
-        return Branch.objects.using(db_name).create(
-            name="Main Campus", address=f"{10 + h} Hospital Road, {city}", city=city, state=state, pincode=pincode,
-            phone=f"080{h + 1:02d}0000{h + 1:02d}"[:12])
+        if branch is None:
+            branch = Branch.objects.using(db_name).create(
+                name="Main Campus", address=f"{10 + h} Hospital Road, {city}", city=city, state=state, pincode=pincode,
+                phone=f"080{h + 1:02d}0000{h + 1:02d}"[:12])
+        seed_next_numbers(branch.id, db_name)
+        return branch
 
-    def _places(self, db_name, branch):
-        """{department name: BranchDepartment} for all twelve departments, spread over three floors."""
+    def _departments(self, db_name, branch):
+        """{department name: Department}, all twelve offered at the branch and spread over three floors."""
         from apps.hospital_setup.models import BranchDepartment, Department, Floor
 
         floors = [Floor.objects.using(db_name).get_or_create(branch=branch, name=n, defaults={"level": lv})[0] for n, lv in FLOORS]
-        places = {}
+        departments = {}
         for i, (dept_name, *_rest) in enumerate(SPECIALITIES):
-            dept, _ = Department.objects.using(db_name).get_or_create(name=dept_name)
-            place, _ = BranchDepartment.objects.using(db_name).get_or_create(
+            dept = Department.objects.using(db_name).filter(name=dept_name).first() or Department.objects.using(db_name).create(name=dept_name)
+            BranchDepartment.objects.using(db_name).get_or_create(
                 branch=branch, department=dept, defaults={"floor": floors[i % 3], "is_active": True})
-            places[dept_name] = place
-        return places
+            departments[dept_name] = dept
+        return departments
 
-    def _staff(self, hospital, db_name, phone, email, first, last, role, extra):
-        from apps.hospital_setup.rbac import system_role
+    def _staff(self, hospital, db_name, role, phone, **fields):
+        """The staff member with this mobile in the hospital's database, made with the app's own create_staff when missing; either way the
+        shared sign-in catalog row is brought up to date (an earlier run may have stopped before writing it)."""
         from apps.hospital_setup.models import StaffUser
-        from apps.hospital_setup.staff_services import next_employee_id
-        from apps.patients.models import StaffMobileIndex
+        from apps.hospital_setup.staff_services import create_staff, next_employee_id, sync_catalog
 
         staff = StaffUser.objects.using(db_name).filter(phone=phone).first()
-        created = staff is None
-        if created:
-            staff = StaffUser(
-                phone=phone, email=email, first_name=first, last_name=last, group=system_role(db_name, role),
-                employee_id=next_employee_id(db_name), must_change_password=False, **extra)
-            staff.set_password(DEMO_PASSWORD)
-            staff.save(using=db_name)
-        # also for a member made by an earlier run that stopped before this row was written: login finds the hospital through it
-        StaffMobileIndex.objects.using("default").update_or_create(
-            mobile=phone, defaults={"hospital_id": hospital.id, "email": staff.email})
-        return staff, created
+        if staff is not None:
+            sync_catalog(staff, hospital.id)
+            return staff, False
+        staff = create_staff(
+            db_name, hospital.id, role, password=DEMO_PASSWORD, phone=phone, employee_id=next_employee_id(db_name),
+            must_change_password=False, **fields)
+        return staff, True
 
     def _admin(self, hospital, db_name, h, code):
         phone = f"97{h + 1:02d}000000"
-        self._staff(hospital, db_name, phone, f"admin@{code}.demo", "Hospital", "Admin", "hospital_admin", {})
+        self._staff(hospital, db_name, "hospital_admin", phone, first_name="Hospital", last_name="Admin", email=f"admin@{code}.demo")
         return phone
 
-    def _doctor_staff(self, hospital, db_name, branch, places, h, d, code):
-        from apps.hospital_setup.models import DoctorSchedule, StaffBranchDepartment
+    def _doctor_staff(self, hospital, db_name, branch, departments, h, d, code):
+        from apps.hospital_setup.models import StaffBranchAssignment
 
         p = _doctor(h, d)
         email = f"{p['first_name']}.{p['last_name']}.{h + 1:02d}{d + 1:02d}@{code}.demo".lower()
         staff, created = self._staff(
-            hospital, db_name, p["phone"], email, p["first_name"], p["last_name"], "doctor",
-            {k: p[k] for k in ("gender", "registration_no", "council_name", "qualification", "experience_years", "specialisation",
-                               "consultation_fee", "followup_fee", "known_for", "languages", "bio")})
-        link, _ = StaffBranchDepartment.objects.using(db_name).get_or_create(
-            staff=staff, branch_department=places[p["department"]], defaults={"is_primary": True})
-        weekly = [{"day_of_week": day, "start_time": s, "end_time": e, "is_active": True}
-                  for day in range(6) for s, e in p["shift"]]
-        DoctorSchedule.objects.using(db_name).get_or_create(
-            staff_branch_department=link, defaults={"slot_duration_minutes": p["slot"], "weekly_hours": weekly})
+            hospital, db_name, "doctor", p["phone"], first_name=p["first_name"], last_name=p["last_name"], email=email,
+            department=departments[p["department"]],
+            **{k: p[k] for k in ("gender", "registration_no", "council_name", "qualification", "experience_years", "specialisation",
+                                 "consultation_fee", "followup_fee", "known_for", "languages", "bio")})
+        start, end = p["shift"]
+        weekly = [{"day_of_week": day, "start_time": start, "end_time": end, "is_active": True} for day in range(6)]
+        StaffBranchAssignment.objects.using(db_name).get_or_create(
+            staff=staff, branch=branch, department=departments[p["department"]],
+            defaults={"is_primary": True, "slot_duration_minutes": p["slot"], "weekly_hours": weekly})
         return created
