@@ -127,32 +127,47 @@ class Command(BaseCommand):
         return name, code, admin_phone, created
 
     def _hospital(self, code, name, city, state):
+        """Get or create the hospital, its subscription and its database. Every step is skipped when already done, so a run that
+        stopped half way (the hospital row exists but not its database) is finished by running the command again."""
         from apps.hospital_master.models import Hospital, Subscription
-        from apps.hospital_master.services import (
-            TIER_FEATURE_DEFAULTS, create_hospital_database, ensure_hospital_db, parameters_of, run_hospital_migrations)
+        from apps.hospital_master.services import TIER_FEATURE_DEFAULTS, parameters_of
 
         hospital = Hospital.objects.using("default").filter(hospital_code=code).first()
-        if hospital is not None:
-            ensure_hospital_db(hospital.db_name)
-            self.stdout.write(f"   hospital exists (db {hospital.db_name})")
-            return hospital, hospital.db_name
-
-        db_name = "aw_" + code.replace("-", "_").lower()
-        if Hospital.objects.using("default").filter(db_name=db_name).exists():
-            raise CommandError(f"db_name '{db_name}' is already used by another hospital.")
-        hospital = Hospital.objects.using("default").create(
-            hospital_code=code, name=name, db_name=db_name, city=city, state=state, is_active=True)
+        if hospital is None:
+            db_name = "aw_" + code.replace("-", "_").lower()
+            if Hospital.objects.using("default").filter(db_name=db_name).exists():
+                raise CommandError(f"db_name '{db_name}' is already used by another hospital.")
+            hospital = Hospital.objects.using("default").create(
+                hospital_code=code, name=name, db_name=db_name, city=city, state=state, is_active=True)
+            self.stdout.write("   hospital record created")
         parameters_of(hospital)
-        Subscription.objects.using("default").create(
-            hospital=hospital, license_tier="enterprise", status="active", **TIER_FEATURE_DEFAULTS["enterprise"])
+        if not Subscription.objects.using("default").filter(hospital=hospital).exists():
+            Subscription.objects.using("default").create(
+                hospital=hospital, license_tier="enterprise", status="active", **TIER_FEATURE_DEFAULTS["enterprise"])
+            self.stdout.write("   enterprise subscription created")
+        self._database(hospital.db_name)
+        return hospital, hospital.db_name
+
+    def _database(self, db_name):
+        from apps.hospital_master.services import create_hospital_database, ensure_hospital_db, run_hospital_migrations
+        from apps.hospital_setup.models import Role
+
+        ensure_hospital_db(db_name)
+        try:
+            Role.objects.using(db_name).exists()
+            self.stdout.write(f"   database {db_name} ready")
+            return
+        except Exception:
+            pass
         try:
             create_hospital_database(db_name)
+        except Exception as exc:
+            self.stdout.write(f"   (database not created, assuming it exists: {str(exc)[:80]})")
+        try:
             run_hospital_migrations(db_name)
         except Exception as exc:
-            hospital.delete()
-            raise CommandError(f"Could not create the database for {name}: {exc}")
-        self.stdout.write(f"   hospital provisioned (db {db_name})")
-        return hospital, db_name
+            raise CommandError(f"Could not set up database {db_name}: {exc}")
+        self.stdout.write(f"   database {db_name} created and migrated")
 
     def _branch(self, db_name, name, city, state, pincode, h):
         from apps.hospital_setup.models import Branch
