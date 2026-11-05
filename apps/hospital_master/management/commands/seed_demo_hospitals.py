@@ -199,16 +199,17 @@ class Command(BaseCommand):
         from apps.patients.models import StaffMobileIndex
 
         staff = StaffUser.objects.using(db_name).filter(phone=phone).first()
-        if staff is not None:
-            return staff, False
-        staff = StaffUser(
-            phone=phone, email=email, first_name=first, last_name=last, group=system_role(db_name, role),
-            employee_id=next_employee_id(db_name), must_change_password=False, **extra)
-        staff.set_password(DEMO_PASSWORD)
-        staff.save(using=db_name)
+        created = staff is None
+        if created:
+            staff = StaffUser(
+                phone=phone, email=email, first_name=first, last_name=last, group=system_role(db_name, role),
+                employee_id=next_employee_id(db_name), must_change_password=False, **extra)
+            staff.set_password(DEMO_PASSWORD)
+            staff.save(using=db_name)
+        # also for a member made by an earlier run that stopped before this row was written: login finds the hospital through it
         StaffMobileIndex.objects.using("default").update_or_create(
-            mobile=phone, defaults={"hospital_id": hospital.id, "email": email})
-        return staff, True
+            mobile=phone, defaults={"hospital_id": hospital.id, "email": staff.email})
+        return staff, created
 
     def _admin(self, hospital, db_name, h, code):
         phone = f"97{h + 1:02d}000000"
